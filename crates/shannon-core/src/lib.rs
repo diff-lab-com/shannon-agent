@@ -15,6 +15,7 @@ pub mod tools;
 pub mod permissions;
 pub mod state;
 pub mod api;
+pub mod claude_md;
 
 // Re-export key types for convenience
 pub use query_engine::{QueryEngine, QueryContext, QueryEvent};

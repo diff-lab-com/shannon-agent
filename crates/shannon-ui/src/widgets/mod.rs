@@ -142,19 +142,39 @@ impl ChatWidget {
         }
     }
 
-    /// Add a message to the chat
-    pub fn add_message(&mut self, role: ChatRole, content: String) {
+    /// Add a message to the chat, returns the message index
+    pub fn add_message(&mut self, role: ChatRole, content: String) -> usize {
         let message = ChatMessage {
             role,
             content,
             timestamp: chrono::Utc::now(),
         };
 
+        let index = self.messages.len();
         self.messages.push_back(message);
 
         // Auto-scroll to bottom
         if self.messages.len() > 0 {
             self.scroll_offset = self.messages.len() - 1;
+        }
+
+        index
+    }
+
+    /// Update an existing message by index (for streaming updates)
+    pub fn update_message(&mut self, index: usize, content: String) {
+        if let Some(msg) = self.messages.get_mut(index) {
+            msg.content = content;
+            // Update timestamp to reflect the update time
+            msg.timestamp = chrono::Utc::now();
+        }
+    }
+
+    /// Update the last message (convenience method for streaming)
+    pub fn update_last_message(&mut self, content: String) {
+        if !self.messages.is_empty() {
+            let last_index = self.messages.len() - 1;
+            self.update_message(last_index, content);
         }
     }
 

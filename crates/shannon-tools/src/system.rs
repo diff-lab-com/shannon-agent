@@ -12,6 +12,255 @@ use std::collections::HashMap;
 use std::process::Stdio;
 use tokio::process::Command;
 
+/// Security level for command execution
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SecurityLevel {
+    /// Safe operations (read-only, informational)
+    Safe = 0,
+    /// Low risk (write to user directories, git operations)
+    Low = 1,
+    /// Medium risk (package installation, system config)
+    Medium = 2,
+    /// High risk (file deletion, system modifications)
+    High = 3,
+    /// Critical (data destruction, system compromise)
+    Critical = 4,
+}
+
+/// Security analysis result
+#[derive(Debug, Clone)]
+pub struct SecurityAnalysis {
+    pub risk_level: SecurityLevel,
+    pub warnings: Vec<String>,
+    pub is_destructive: bool,
+    pub is_read_only: bool,
+    pub contains_path_traversal: bool,
+    pub requires_confirmation: bool,
+}
+
+/// Dangerous command patterns that should trigger warnings
+const DESTRUCTIVE_PATTERNS: &[&str] = &[
+    "rm -rf /",           // Delete root filesystem
+    "rm -rf /*",          // Delete all files
+    ":>",                  // Zero out files
+    "dd if=/dev/zero",    // Disk destruction
+    "mkfs",               // Format filesystem
+    "fdisk",              // Partition manipulation
+    "shutdown",           // System shutdown
+    "reboot",             // System reboot
+    "init 0",             // Switch to runlevel 0
+    "kill -9",            // Force kill processes
+    "chmod 000",          // Remove all permissions
+];
+
+/// Confirmation-required patterns
+const CONFIRMATION_PATTERNS: &[&str] = &[
+    "rm -rf",             // Recursive force delete
+    "del /q",             // Windows quiet delete
+    "format",             // Windows format
+    "shred",              // Secure delete
+];
+
+/// Path traversal patterns
+const PATH_TRAVERSAL_PATTERNS: &[&str] = &[
+    "../",                  // Parent directory traversal
+    "./../",                // Multiple parent traversal
+    "~/../",                // From home parent traversal
+    "/../",                 // Root parent traversal
+    "..\\",                 // Windows-style traversal
+];
+
+/// Sed injection patterns (command injection through sed)
+const SED_INJECTION_PATTERNS: &[&str] = &[
+    "sed.*e.*;",          // Command execution via sed
+    "sed.*s/.*/[command]",  // Replace with command
+    "sed.*y/.*/[command]",  // Translate with command
+    "|.*sh",               // Pipe to shell
+    "|.*bash",             // Pipe to bash
+    "|.*python",           // Pipe to python
+    ";.*rm",               // Command chaining
+    "&.*rm",               // Background command chaining
+    "`.*rm",               // Backtick execution
+    "$(*rm",               // Command substitution
+];
+
+/// Read-only command patterns
+const READ_ONLY_PATTERNS: &[&str] = &[
+    "ls", "ll", "la",       // List operations
+    "cat", "head", "tail",  // File reading
+    "grep", "egrep", "fgrep", // Search
+    "find", "locate",      // File search
+    "file", "stat", "du",    // File info
+    "echo", "pwd", "whoami", // System info
+    "git status", "git log", // Git read ops
+    "git diff",            // Git diff
+];
+
+/// Analyze a bash command for security risks
+pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
+    let mut warnings = Vec::new();
+    let mut risk_level = SecurityLevel::Safe;
+    let mut is_destructive = false;
+    let mut is_read_only = false;
+    let mut contains_path_traversal = false;
+    let mut requires_confirmation = false;
+
+    let lower_command = command.to_lowercase();
+
+    // Check for destructive patterns
+    for pattern in DESTRUCTIVE_PATTERNS {
+        if lower_command.contains(pattern) {
+            risk_level = SecurityLevel::Critical;
+            is_destructive = true;
+            warnings.push(format!("Destructive pattern detected: {}", pattern));
+            break;
+        }
+    }
+
+    // Check for confirmation-required patterns
+    for pattern in CONFIRMATION_PATTERNS {
+        if lower_command.contains(pattern) {
+            if risk_level < SecurityLevel::High {
+                risk_level = SecurityLevel::High;
+            }
+            is_destructive = true;
+            requires_confirmation = true;
+            warnings.push(format!("Confirmation required: {}", pattern));
+        }
+    }
+
+    // Check for path traversal
+    for pattern in PATH_TRAVERSAL_PATTERNS {
+        if lower_command.contains(pattern) {
+            contains_path_traversal = true;
+            if risk_level < SecurityLevel::Medium {
+                risk_level = SecurityLevel::Medium;
+            }
+            warnings.push(format!("Path traversal pattern detected: {}", pattern));
+            // Don't break, collect all warnings
+        }
+    }
+
+    // Check for sed injection
+    for pattern in SED_INJECTION_PATTERNS {
+        if lower_command.contains(pattern) {
+            risk_level = SecurityLevel::Critical;
+            warnings.push(format!("Sed injection pattern detected: {}", pattern));
+            break;
+        }
+    }
+
+    // Check if read-only
+    for pattern in READ_ONLY_PATTERNS {
+        if lower_command.starts_with(pattern) || lower_command.contains(&format!(" {}", pattern)) {
+            is_read_only = true;
+            // Read-only commands are safe unless already marked risky
+            if risk_level == SecurityLevel::Safe {
+                risk_level = SecurityLevel::Low;
+            }
+            break;
+        }
+    }
+
+    // Additional heuristic: commands with sudo are higher risk
+    if lower_command.starts_with("sudo ") {
+        if risk_level < SecurityLevel::Medium {
+            risk_level = SecurityLevel::Medium;
+        }
+        warnings.push("Elevated privileges requested (sudo)".to_string());
+    }
+
+    // Pipe chains are medium risk
+    if command.contains('|') && !is_read_only {
+        if risk_level < SecurityLevel::Medium {
+            risk_level = SecurityLevel::Medium;
+        }
+    }
+
+    // Redirects that overwrite files are medium risk
+    if command.contains(">") && !is_read_only {
+        if risk_level < SecurityLevel::Medium {
+            risk_level = SecurityLevel::Medium;
+        }
+    }
+
+    SecurityAnalysis {
+        risk_level,
+        warnings,
+        is_destructive,
+        is_read_only,
+        contains_path_traversal,
+        requires_confirmation,
+    }
+}
+
+/// Validate a path is safe for execution
+pub fn validate_path(path: &str, allowed_paths: &[String]) -> Result<(), String> {
+    // Normalize the path
+    let normalized = if path.starts_with('~') {
+        // Expand home directory (simplified)
+        if let Ok(home) = std::env::var("HOME") {
+            path.replacen('~', &home, 1)
+        } else {
+            path.to_string()
+        }
+    } else if path.starts_with('.') {
+        // Resolve relative path against current directory
+        if let Ok(current) = std::env::current_dir() {
+            current.join(path).to_string_lossy().to_string()
+        } else {
+            path.to_string()
+        }
+    } else {
+        path.to_string()
+    };
+
+    // Check for path traversal in normalized path
+    for pattern in PATH_TRAVERSAL_PATTERNS {
+        if normalized.contains(pattern) {
+            return Err(format!("Path traversal detected in: {}", path));
+        }
+    }
+
+    // Check against allowed paths if provided
+    if !allowed_paths.is_empty() {
+        let is_allowed = allowed_paths.iter().any(|allowed| {
+            normalized.starts_with(allowed) || normalized == *allowed
+        });
+
+        if !is_allowed {
+            return Err(format!("Path not in allowed list: {}", path));
+        }
+    }
+
+    // Check for dangerous system paths
+    let dangerous_prefixes = &[
+        "/bin/", "/sbin/", "/usr/bin/", "/usr/sbin/",
+        "/etc/", "/boot/", "/sys/", "/dev/",
+        "/proc/", "/root/", "/var/run/",
+    ];
+
+    for prefix in dangerous_prefixes {
+        if normalized.starts_with(prefix) {
+            // Only allow read operations on system paths
+            return Err(format!("System path modification blocked: {}", path));
+        }
+    }
+
+    Ok(())
+}
+
+/// Get a human-readable description of the risk level
+pub fn describe_risk_level(level: SecurityLevel) -> &'static str {
+    match level {
+        SecurityLevel::Safe => "✓ Safe - Read-only or informational",
+        SecurityLevel::Low => "⚠ Low Risk - File operations in user space",
+        SecurityLevel::Medium => "⚡ Medium Risk - System modifications or multi-step operations",
+        SecurityLevel::High => "🔥 High Risk - Destructive operations",
+        SecurityLevel::Critical => "☢️ Critical - Data destruction or system compromise",
+    }
+}
+
 /// Shell command types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "shell_type")]
@@ -164,23 +413,80 @@ impl Tool for BashTool {
         })
     }
 
-    async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
-        let bash_input: BashInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid bash input: {}", e)))?;
+    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, shannon_core::tools::ToolError> {
+        let bash_input: BashInput = match serde_json::from_value(input) {
+            Ok(input) => input,
+            Err(e) => return Ok(ToolOutput {
+                content: format!("Invalid bash input: {}", e),
+                is_error: true,
+                metadata: HashMap::new(),
+            })
+        };
 
-        let output = Self::execute_command(
+        // Perform security analysis before execution
+        let analysis = analyze_command_security(&bash_input.command);
+
+        // Reject critical risk commands
+        if analysis.risk_level >= SecurityLevel::Critical {
+            let error_msg = format!(
+                "Command rejected due to critical security risk:\n{}\n\nRisk Level: {}\n\nWarnings:\n  - {}",
+                bash_input.command,
+                describe_risk_level(analysis.risk_level),
+                analysis.warnings.join("\n  - ")
+            );
+            return Ok(ToolOutput {
+                content: error_msg,
+                is_error: true,
+                metadata: {
+                    let mut map = HashMap::new();
+                    map.insert("security_rejected".to_string(), json!(true));
+                    map.insert("risk_level".to_string(), json!(analysis.risk_level as i32));
+                    map.insert("warnings".to_string(), json!(analysis.warnings));
+                    map
+                },
+            });
+        }
+
+        // For medium/high risk commands, add security warnings to the output
+        let command_description = if analysis.risk_level >= SecurityLevel::Medium {
+            format!(
+                "\n[SECURITY WARNING]\nRisk: {}\nCommand: {}\nWarnings:\n  - {}\n",
+                describe_risk_level(analysis.risk_level),
+                bash_input.command,
+                analysis.warnings.join("\n  - ")
+            )
+        } else {
+            String::new()
+        };
+
+        // Execute the command
+        let output_result = Self::execute_command(
             &bash_input.command,
             bash_input.cwd.as_deref(),
             bash_input.env.as_ref(),
             bash_input.timeout,
         )
-        .await
-        .map_err(|e| ToolError::ExecutionFailed(format!("Command failed: {}", e)))?;
+        .await;
+
+        let output = match output_result {
+            Ok(output) => output,
+            Err(e) => {
+                return Ok(ToolOutput {
+                    content: format!("Command execution failed: {}", e),
+                    is_error: true,
+                    metadata: HashMap::new(),
+                });
+            }
+        };
 
         let content = if output.success {
-            output.stdout
+            format!("{}{}", output.stdout, command_description)
         } else {
-            format!("Command failed with exit code {}: {}", output.exit_code, output.stderr)
+            format!("{}Command failed with exit code {}: {}{}",
+                command_description,
+                output.exit_code,
+                output.stderr,
+                if command_description.is_empty() { "\n" } else { "" })
         };
 
         Ok(ToolOutput {
@@ -189,6 +495,12 @@ impl Tool for BashTool {
             metadata: {
                 let mut map = HashMap::new();
                 map.insert("exit_code".to_string(), json!(output.exit_code));
+                map.insert("risk_level".to_string(), json!(analysis.risk_level as i32));
+                map.insert("is_destructive".to_string(), json!(analysis.is_destructive));
+                map.insert("is_read_only".to_string(), json!(analysis.is_read_only));
+                if !analysis.warnings.is_empty() {
+                    map.insert("warnings".to_string(), json!(analysis.warnings));
+                }
                 if !output.stderr.is_empty() {
                     map.insert("stderr".to_string(), json!(output.stderr));
                 }

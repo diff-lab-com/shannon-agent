@@ -27,6 +27,7 @@ tokio-stream = "0.1"
 
 # State management
 dashmap = "6.1"
+serde_yaml = "0.9.34"
 
 [dev-dependencies]
 tokio-test = "0.4"
