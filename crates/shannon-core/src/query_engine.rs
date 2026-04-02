@@ -2,7 +2,7 @@
 //!
 //! Main orchestrator for streaming query processing with tool orchestration.
 
-use crate::api::{ClaudeClient, ContentBlock, ContentDelta, Message, MessageContent, StreamEvent};
+use crate::api::{ClaudeClient, ContentBlock, ContentDelta, Message, MessageContent, StreamEvent, ToolResultContent};
 use crate::permissions::PermissionManager;
 use crate::state::StateManager;
 use crate::tools::{ToolOutput, ToolRegistry};
@@ -243,37 +243,204 @@ impl QueryEngine {
     /// Process a query with streaming events
     pub async fn process_query(&self, context: QueryContext) -> QueryStream {
         let query_id = context.query_id;
+        let config = self.config.clone();
+
+        // Create receiver for events
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        // Get necessary state for the spawned task
         let tools = self.tools.clone();
         let permissions = self.permissions.clone();
-        let session_id = context.session_id;
-        let config = self.config.clone();
-        let event_tx = self.event_tx.clone();
+        let client_api_key = self.client.api_key().to_string();
+        let client_model = self.client.model().to_string();
+        let client_base_url = self.client.base_url().to_string();
+        let client_max_tokens = self.client.max_tokens();
+        let user_message = context.user_message.clone();
 
-        // Emit start event
-        let _ = event_tx.send(QueryEvent::Started { query_id });
+        // Spawn background task to handle query processing
+        tokio::spawn(async move {
+            // Create a new client for this task
+            let client_config = crate::api::ClaudeClientConfig {
+                api_key: client_api_key,
+                base_url: client_base_url,
+                model: client_model,
+                max_tokens: client_max_tokens,
+                ..Default::default()
+            };
+            let client = ClaudeClient::new(client_config);
 
-        // Create the processing stream
-        let stream = stream::unfold(
-            (query_id, tools, permissions, session_id, config, 0, false),
-            move |(qid, tools, perms, sid, cfg, turn, complete)| async move {
-                if complete {
-                    return None;
+            let mut conversation = ConversationState::default();
+            conversation.messages.push(Message {
+                role: "user".to_string(),
+                content: MessageContent::Text(user_message),
+            });
+
+            let mut turn = 0;
+            let mut tool_results: Vec<(String, String)> = Vec::new();
+
+            loop {
+                if turn >= config.max_turns {
+                    let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
+                    break;
                 }
 
-                // Simulate processing - in real implementation, this would:
-                // 1. Build request with conversation history
-                // 2. Call Claude API
-                // 3. Stream events back
-                // 4. Handle tool use requests
-                // 5. Continue until completion or max turns
+                // Build messages for API call
+                let mut messages = conversation.messages.clone();
 
-                // For now, emit a completion event
-                Some((
-                    Ok(QueryEvent::Completed { query_id: qid }),
-                    (qid, tools, perms, sid, cfg, turn, true),
-                ))
-            },
-        );
+                // Add pending tool results from previous turn
+                for (tool_use_id, result_content) in tool_results.drain(..) {
+                    messages.push(Message {
+                        role: "user".to_string(),
+                        content: MessageContent::Blocks(vec![
+                            ContentBlock::ToolResult {
+                                tool_use_id,
+                                content: Some(ToolResultContent::Single(result_content)),
+                                is_error: Some(false),
+                            }
+                        ]),
+                    });
+                }
+
+                // Get tools schema
+                let tools_schema = Some(tools.to_tool_definitions());
+
+                // Call the API
+                match client.send_message_stream(messages, tools_schema).await {
+                    Ok(mut stream) => {
+                        let mut current_tool_use: Option<(String, String)> = None;
+                        let mut accumulated_tool_input = String::new();
+                        let mut tool_inputs: Vec<(String, String, serde_json::Value)> = Vec::new();
+                        let mut has_content = false;
+
+                        // Process streaming events
+                        while let Some(event_result) = stream.next().await {
+                            match event_result {
+                                Ok(stream_event) => {
+                                    match stream_event {
+                                        StreamEvent::MessageStart { .. } => {}
+                                        StreamEvent::ContentBlockStart { content_block, .. } => {
+                                            match &content_block {
+                                                ContentBlock::ToolUse { id, name, input } => {
+                                                    current_tool_use = Some((id.clone(), name.clone()));
+                                                    let _ = tx.send(Ok(QueryEvent::ToolUseRequest {
+                                                        query_id,
+                                                        tool_use_id: id.clone(),
+                                                        tool_name: name.clone(),
+                                                        tool_input: input.clone(),
+                                                    }));
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                        StreamEvent::ContentBlockDelta { delta, .. } => {
+                                            match delta {
+                                                ContentDelta::TextDelta { text } => {
+                                                    has_content = true;
+                                                    let _ = tx.send(Ok(QueryEvent::Text {
+                                                        query_id,
+                                                        content: text,
+                                                    }));
+                                                }
+                                                ContentDelta::InputJsonDelta { partial_json } => {
+                                                    accumulated_tool_input.push_str(&partial_json);
+                                                }
+                                            }
+                                        }
+                                        StreamEvent::ContentBlockStop { .. } => {
+                                            if let Some((id, name)) = current_tool_use.take() {
+                                                if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&accumulated_tool_input) {
+                                                    tool_inputs.push((id, name, json_val));
+                                                }
+                                                accumulated_tool_input.clear();
+                                            }
+                                        }
+                                        StreamEvent::MessageDelta { usage, .. } => {
+                                            let _ = tx.send(Ok(QueryEvent::Usage {
+                                                query_id,
+                                                input_tokens: usage.input_tokens as u64,
+                                                output_tokens: usage.output_tokens as u64,
+                                                cost_usd: 0.0,
+                                            }));
+
+                                            if !tool_inputs.is_empty() {
+                                                // Execute tools
+                                                for (tool_id, tool_name, tool_input) in tool_inputs.drain(..) {
+                                                    let _ = tx.send(Ok(QueryEvent::Progress {
+                                                        query_id,
+                                                        message: format!("Executing tool: {}", tool_name),
+                                                    }));
+
+                                                    match tools.execute(&tool_name, tool_input.clone()).await {
+                                                        Ok(output) => {
+                                                            let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                query_id,
+                                                                tool_use_id: tool_id.clone(),
+                                                                tool_name,
+                                                                result: output.content.clone(),
+                                                                is_error: false,
+                                                            }));
+                                                            tool_results.push((tool_id, output.content.clone()));
+                                                        }
+                                                        Err(e) => {
+                                                            let error_msg = format!("Tool error: {}", e);
+                                                            let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                query_id,
+                                                                tool_use_id: tool_id.clone(),
+                                                                tool_name,
+                                                                result: error_msg.clone(),
+                                                                is_error: true,
+                                                            }));
+                                                            tool_results.push((tool_id, error_msg));
+                                                        }
+                                                    }
+                                                }
+
+                                                turn += 1;
+                                                let _ = tx.send(Ok(QueryEvent::TurnCompleted {
+                                                    query_id,
+                                                    turn_number: turn,
+                                                    tokens_used: (usage.input_tokens + usage.output_tokens) as u64,
+                                                }));
+                                            } else {
+                                                let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
+                                                return;
+                                            }
+                                        }
+                                        StreamEvent::MessageStop => {}
+                                        StreamEvent::Ping => {}
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(Ok(QueryEvent::Failed {
+                                        query_id,
+                                        error: e.to_string(),
+                                    }));
+                                    return;
+                                }
+                            }
+                        }
+
+                        if !has_content && tool_inputs.is_empty() {
+                            let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Ok(QueryEvent::Failed {
+                            query_id,
+                            error: e.to_string(),
+                        }));
+                    }
+                }
+            }
+        });
+
+        // Convert channel receiver to stream
+        let stream = stream::unfold(rx, move |mut receiver| async move {
+            match receiver.recv().await {
+                Some(event) => Some((event, receiver)),
+                None => None,
+            }
+        });
 
         Box::pin(stream)
     }

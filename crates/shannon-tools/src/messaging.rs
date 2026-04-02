@@ -6,9 +6,10 @@
 //! Supports both plain text messages and structured protocol messages
 //! for team coordination.
 
-use crate::{Tool, ToolError, ToolResult};
+use crate::{Tool, ToolError, ToolResult, ToolOutput};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
@@ -180,7 +181,7 @@ impl SendMessageTool {
         // Store in inbox
         {
             let mut inbox = self.inbox.write().map_err(|e| {
-                ToolError::AgentError(format!("Failed to acquire inbox lock: {}", e))
+                ToolError::ExecutionFailed(format!("Failed to acquire inbox lock: {}", e))
             })?;
             inbox.entry(recipient.to_string()).or_insert_with(Vec::new).push(inbox_message);
         }
@@ -264,7 +265,7 @@ impl SendMessageTool {
 
         {
             let mut inbox = self.inbox.write().map_err(|e| {
-                ToolError::AgentError(format!("Failed to acquire inbox lock: {}", e))
+                ToolError::ExecutionFailed(format!("Failed to acquire inbox lock: {}", e))
             })?;
             inbox.entry(target.to_string()).or_insert_with(Vec::new).push(message);
         }
@@ -345,7 +346,7 @@ impl SendMessageTool {
 
                     {
                         let mut inbox = self.inbox.write().map_err(|e| {
-                            ToolError::AgentError(format!("Failed to acquire inbox lock: {}", e))
+                            ToolError::ExecutionFailed(format!("Failed to acquire inbox lock: {}", e))
                         })?;
                         inbox.entry(input.to.clone()).or_insert_with(Vec::new).push(message);
                     }
@@ -380,7 +381,7 @@ impl SendMessageTool {
 
                     {
                         let mut inbox = self.inbox.write().map_err(|e| {
-                            ToolError::AgentError(format!("Failed to acquire inbox lock: {}", e))
+                            ToolError::ExecutionFailed(format!("Failed to acquire inbox lock: {}", e))
                         })?;
                         inbox.entry(input.to.clone()).or_insert_with(Vec::new).push(message);
                     }
@@ -404,10 +405,23 @@ impl SendMessageTool {
 
 #[async_trait]
 impl Tool for SendMessageTool {
-    async fn execute(&self, input: serde_json::Value) -> ToolResult<serde_json::Value> {
-        let send_input: SendMessageInput = serde_json::from_value(input)?;
+    async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
+        let send_input: SendMessageInput = serde_json::from_value(input)
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid send message input: {}", e)))?;
         let output = self.execute_send(send_input).await?;
-        serde_json::to_value(output).map_err(ToolError::from)
+        Ok(ToolOutput {
+            content: output.message,
+            is_error: !output.success,
+            metadata: {
+                let mut map = HashMap::new();
+                map.insert("success".to_string(), json!(output.success));
+                map.insert("target".to_string(), json!(output.target));
+                if let Some(request_id) = output.request_id {
+                    map.insert("request_id".to_string(), json!(request_id));
+                }
+                map
+            },
+        })
     }
 
     fn name(&self) -> &str {
@@ -418,19 +432,24 @@ impl Tool for SendMessageTool {
         &self.description
     }
 
-    fn validate_input(&self, input: &serde_json::Value) -> Result<(), ToolError> {
-        if !input.is_object() {
-            return Err(ToolError::AgentError("Input must be an object".to_string()));
-        }
-
-        if input.get("to").is_none() {
-            return Err(ToolError::AgentError("Missing required field: to".to_string()));
-        }
-
-        if input.get("message").is_none() {
-            return Err(ToolError::AgentError("Missing required field: message".to_string()));
-        }
-
-        Ok(())
+    fn input_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "to": {
+                    "type": "string",
+                    "description": "Recipient: teammate name, or '*' for broadcast to all teammates"
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "Optional summary shown as a preview in the UI"
+                },
+                "message": {
+                    "type": "string",
+                    "description": "Message content"
+                }
+            },
+            "required": ["to", "message"]
+        })
     }
 }

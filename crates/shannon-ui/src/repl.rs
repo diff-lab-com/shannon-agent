@@ -11,11 +11,28 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use futures::StreamExt;
 use ratatui::{
     backend::CrosstermBackend,
     Terminal,
 };
 use std::io;
+use tokio::runtime::Runtime;
+use uuid::Uuid;
+
+// Import core functionality
+use shannon_core::{
+    api::ClaudeClientConfig,
+    permissions::PermissionManager,
+    query_engine::{QueryContext, QueryEngine, QueryEngineConfig, QueryEvent},
+    state::StateManager,
+    tools::ToolRegistry,
+};
+use shannon_tools::{
+    BashTool,
+    ReadTool,
+    WriteTool,
+};
 
 /// Application state for the REPL
 #[derive(Debug, Clone)]
@@ -55,11 +72,41 @@ pub struct Repl {
     state: ReplState,
     /// Running state
     running: bool,
+    /// Query engine for AI processing
+    query_engine: Option<QueryEngine>,
+    /// Tokio runtime for async operations
+    runtime: Runtime,
 }
 
 impl Repl {
     /// Create a new REPL instance
     pub fn new() -> Result<Self> {
+        let runtime = Runtime::new()?;
+
+        // Create tool registry
+        let mut tool_registry = ToolRegistry::new();
+
+        // Register tools that implement shannon_core::Tool
+        tool_registry.register(Box::new(shannon_tools::BashTool::new()))?;
+
+        // Create Claude client
+        let client_config = ClaudeClientConfig::default();
+        let client = shannon_core::api::ClaudeClient::new(client_config);
+
+        // Create permission manager
+        let permission_manager = PermissionManager::new();
+
+        // Create state manager
+        let state_manager = StateManager::new();
+
+        // Create query engine
+        let query_engine = QueryEngine::with_defaults(
+            client,
+            tool_registry,
+            permission_manager,
+            state_manager,
+        );
+
         Ok(Self {
             events: EventHandler::new(250)?,
             renderer: Renderer::new(),
@@ -67,6 +114,8 @@ impl Repl {
             prompt: PromptWidget::new(),
             state: ReplState::default(),
             running: false,
+            query_engine: Some(query_engine),
+            runtime,
         })
     }
 
@@ -262,15 +311,95 @@ impl Repl {
         // Add system message indicating processing
         self.chat.add_message(
             ChatRole::System,
-            "Processing your query...".to_string(),
+            "Thinking...".to_string(),
         );
 
-        // TODO: Implement actual AI query processing here
-        // For now, just echo back
-        self.chat.add_message(
-            ChatRole::Assistant,
-            format!("I received: {}", input),
-        );
+        // Clone necessary data for the async block
+        let input_clone = input.to_string();
+        let query_engine = self.query_engine.as_ref().expect("QueryEngine not initialized");
+
+        // Create query context
+        let query_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+
+        let context = QueryContext {
+            query_id,
+            session_id,
+            user_message: input_clone.clone(),
+            metadata: shannon_core::query_engine::QueryMetadata {
+                timestamp: chrono::Utc::now(),
+                tools_allowed: true,
+                max_tokens: Some(4096),
+                model: self.state.model.clone().unwrap_or_else(||
+                    "claude-3-5-sonnet".to_string()
+                ),
+                temperature: None,
+                top_p: None,
+            },
+        };
+
+        // Process query synchronously (in real implementation, use async properly)
+        // For now, we'll use a blocking approach within the runtime
+        let query_result = self.runtime.block_on(async {
+            let mut stream = query_engine.process_query(context).await;
+
+            let mut response_text = String::new();
+            let mut completed = false;
+
+            // Process stream events
+            while let Some(event_result) = stream.next().await {
+                match event_result {
+                    Ok(QueryEvent::Started { .. }) => {
+                        // Query started
+                    }
+                    Ok(QueryEvent::Text { content, .. }) => {
+                        // Append text and update UI
+                        response_text.push_str(&content);
+                    }
+                    Ok(QueryEvent::ToolUseRequest { tool_name, tool_input, .. }) => {
+                        // Tool use requested - in production, execute tool here
+                    }
+                    Ok(QueryEvent::ToolUseResult { tool_name, result, is_error, .. }) => {
+                        // Tool execution result
+                    }
+                    Ok(QueryEvent::TurnCompleted { tokens_used, .. }) => {
+                        // Update token count
+                    }
+                    Ok(QueryEvent::Completed { .. }) => {
+                        completed = true;
+                    }
+                    Ok(QueryEvent::Failed { error, .. }) => {
+                        return Err(format!("Query failed: {}", error));
+                    }
+                    Ok(QueryEvent::Progress { message, .. }) => {
+                        // Progress update
+                    }
+                    Ok(QueryEvent::Usage { .. }) => {
+                        // Usage statistics
+                    }
+                    Err(e) => {
+                        return Err(format!("Stream error: {}", e));
+                    }
+                }
+            }
+
+            Ok::<String, String>(response_text)
+        });
+
+        match query_result {
+            Ok(response) => {
+                self.chat.add_message(
+                    ChatRole::Assistant,
+                    response,
+                );
+            }
+            Err(e) => {
+                self.chat.add_message(
+                    ChatRole::System,
+                    format!("Error: {}", e),
+                );
+            }
+        }
 
         self.state.status = "Ready".to_string();
         self.state.tokens_used += input.len() as u64; // Rough estimate
@@ -308,6 +437,7 @@ mod tests {
         assert!(repl.is_ok());
         if let Ok(r) = repl {
             assert!(r.state().welcome_active);
+            assert!(r.query_engine.is_some());
         }
     }
 }

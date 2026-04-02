@@ -1,7 +1,9 @@
 //! Glob tool implementation
 
-use super::super::ToolError;
+use crate::{ToolOutput, ToolError};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -64,7 +66,7 @@ mod glob {
     pub struct GlobError;
 }
 
-pub async fn execute(input: GlobInput) -> Result<serde_json::Value, ToolError> {
+pub async fn execute(input: GlobInput) -> Result<ToolOutput, ToolError> {
     let base_path = input.path.unwrap_or_else(|| ".".to_string());
     let full_pattern = if base_path == "." {
         input.pattern.clone()
@@ -75,7 +77,7 @@ pub async fn execute(input: GlobInput) -> Result<serde_json::Value, ToolError> {
     let mut files = Vec::new();
 
     for entry in glob(&full_pattern)
-        .map_err(|e| ToolError::FileError(format!("Invalid glob pattern: {:?}", e)))?
+        .map_err(|e| ToolError::ExecutionFailed(format!("Invalid glob pattern: {:?}", e)))?
     {
         match entry {
             Ok(path) => {
@@ -93,12 +95,16 @@ pub async fn execute(input: GlobInput) -> Result<serde_json::Value, ToolError> {
     // Sort files by modification time (if possible) or name
     files.sort();
 
-    let output = GlobOutput {
-        count: files.len(),
-        files,
-        pattern: input.pattern,
-    };
-
-    serde_json::to_value(output).map_err(ToolError::from)
+    Ok(ToolOutput {
+        content: format!("Found {} files matching pattern: {}", files.len(), input.pattern),
+        is_error: false,
+        metadata: {
+            let mut map = HashMap::new();
+            map.insert("files".to_string(), json!(files));
+            map.insert("count".to_string(), json!(files.len()));
+            map.insert("pattern".to_string(), json!(input.pattern));
+            map
+        },
+    })
 }
 

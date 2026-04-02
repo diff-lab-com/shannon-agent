@@ -4,9 +4,11 @@
 //! - Bash: Execute shell commands on Unix-like systems
 //! - PowerShell: Execute commands on Windows systems
 
-use crate::{Tool, ToolError, ToolResult};
+use crate::{Tool, ToolError, ToolResult, ToolOutput};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::collections::HashMap;
 use std::process::Stdio;
 use tokio::process::Command;
 
@@ -83,7 +85,7 @@ impl BashTool {
         cwd: Option<&str>,
         env: Option<&std::collections::HashMap<String, String>>,
         timeout_ms: Option<u64>,
-    ) -> Result<CommandOutput, ToolError> {
+    ) -> Result<CommandOutput, std::io::Error> {
         let mut cmd = Command::new("bash");
         cmd.arg("-c")
             .arg(command)
@@ -105,12 +107,12 @@ impl BashTool {
             let duration = std::time::Duration::from_millis(timeout);
             tokio::time::timeout(duration, cmd.output())
                 .await
-                .map_err(|_| ToolError::SystemError(format!("Command timed out after {}ms", timeout)))?
-                .map_err(|e| ToolError::SystemError(format!("Failed to execute command: {}", e)))?
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, format!("Command timed out after {}ms", timeout)))?
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to execute command: {}", e)))?
         } else {
             cmd.output()
                 .await
-                .map_err(|e| ToolError::SystemError(format!("Failed to execute command: {}", e)))?
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to execute command: {}", e)))?
         };
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -129,20 +131,6 @@ impl BashTool {
 
 #[async_trait]
 impl Tool for BashTool {
-    async fn execute(&self, input: serde_json::Value) -> ToolResult<serde_json::Value> {
-        let bash_input: BashInput = serde_json::from_value(input)?;
-
-        let output = Self::execute_command(
-            &bash_input.command,
-            bash_input.cwd.as_deref(),
-            bash_input.env.as_ref(),
-            bash_input.timeout,
-        )
-        .await?;
-
-        serde_json::to_value(output).map_err(ToolError::from)
-    }
-
     fn name(&self) -> &str {
         "Bash"
     }
@@ -151,16 +139,62 @@ impl Tool for BashTool {
         &self.description
     }
 
-    fn validate_input(&self, input: &serde_json::Value) -> Result<(), ToolError> {
-        if !input.is_object() {
-            return Err(ToolError::SystemError("Input must be an object".to_string()));
-        }
+    fn input_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "The bash command to execute"
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Optional working directory"
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Optional timeout in milliseconds"
+                },
+                "env": {
+                    "type": "object",
+                    "description": "Optional environment variables"
+                }
+            },
+            "required": ["command"]
+        })
+    }
 
-        if input.get("command").is_none() {
-            return Err(ToolError::SystemError("Missing required field: command".to_string()));
-        }
+    async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
+        let bash_input: BashInput = serde_json::from_value(input)
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid bash input: {}", e)))?;
 
-        Ok(())
+        let output = Self::execute_command(
+            &bash_input.command,
+            bash_input.cwd.as_deref(),
+            bash_input.env.as_ref(),
+            bash_input.timeout,
+        )
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(format!("Command failed: {}", e)))?;
+
+        let content = if output.success {
+            output.stdout
+        } else {
+            format!("Command failed with exit code {}: {}", output.exit_code, output.stderr)
+        };
+
+        Ok(ToolOutput {
+            content,
+            is_error: !output.success,
+            metadata: {
+                let mut map = HashMap::new();
+                map.insert("exit_code".to_string(), json!(output.exit_code));
+                if !output.stderr.is_empty() {
+                    map.insert("stderr".to_string(), json!(output.stderr));
+                }
+                map
+            },
+        })
     }
 }
 
@@ -181,7 +215,7 @@ impl PowerShellTool {
         cwd: Option<&str>,
         env: Option<&std::collections::HashMap<String, String>>,
         timeout_ms: Option<u64>,
-    ) -> Result<CommandOutput, ToolError> {
+    ) -> Result<CommandOutput, std::io::Error> {
         let mut cmd = Command::new("powershell");
         cmd.arg("-Command")
             .arg(command)
@@ -203,12 +237,12 @@ impl PowerShellTool {
             let duration = std::time::Duration::from_millis(timeout);
             tokio::time::timeout(duration, cmd.output())
                 .await
-                .map_err(|_| ToolError::SystemError(format!("Command timed out after {}ms", timeout)))?
-                .map_err(|e| ToolError::SystemError(format!("Failed to execute command: {}", e)))?
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, format!("Command timed out after {}ms", timeout)))?
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to execute command: {}", e)))?
         } else {
             cmd.output()
                 .await
-                .map_err(|e| ToolError::SystemError(format!("Failed to execute command: {}", e)))?
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to execute command: {}", e)))?
         };
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -227,20 +261,6 @@ impl PowerShellTool {
 
 #[async_trait]
 impl Tool for PowerShellTool {
-    async fn execute(&self, input: serde_json::Value) -> ToolResult<serde_json::Value> {
-        let ps_input: PowerShellInput = serde_json::from_value(input)?;
-
-        let output = Self::execute_command(
-            &ps_input.command,
-            ps_input.cwd.as_deref(),
-            ps_input.env.as_ref(),
-            ps_input.timeout,
-        )
-        .await?;
-
-        serde_json::to_value(output).map_err(ToolError::from)
-    }
-
     fn name(&self) -> &str {
         "PowerShell"
     }
@@ -249,16 +269,62 @@ impl Tool for PowerShellTool {
         &self.description
     }
 
-    fn validate_input(&self, input: &serde_json::Value) -> Result<(), ToolError> {
-        if !input.is_object() {
-            return Err(ToolError::SystemError("Input must be an object".to_string()));
-        }
+    fn input_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "The PowerShell command to execute"
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Optional working directory"
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Optional timeout in milliseconds"
+                },
+                "env": {
+                    "type": "object",
+                    "description": "Optional environment variables"
+                }
+            },
+            "required": ["command"]
+        })
+    }
 
-        if input.get("command").is_none() {
-            return Err(ToolError::SystemError("Missing required field: command".to_string()));
-        }
+    async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
+        let ps_input: PowerShellInput = serde_json::from_value(input)
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid PowerShell input: {}", e)))?;
 
-        Ok(())
+        let output = Self::execute_command(
+            &ps_input.command,
+            ps_input.cwd.as_deref(),
+            ps_input.env.as_ref(),
+            ps_input.timeout,
+        )
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(format!("Command failed: {}", e)))?;
+
+        let content = if output.success {
+            output.stdout
+        } else {
+            format!("Command failed with exit code {}: {}", output.exit_code, output.stderr)
+        };
+
+        Ok(ToolOutput {
+            content,
+            is_error: !output.success,
+            metadata: {
+                let mut map = std::collections::HashMap::new();
+                map.insert("exit_code".to_string(), json!(output.exit_code));
+                if !output.stderr.is_empty() {
+                    map.insert("stderr".to_string(), json!(output.stderr));
+                }
+                map
+            },
+        })
     }
 }
 
@@ -303,7 +369,7 @@ impl SleepTool {
         }
     }
 
-    pub async fn execute_sleep(&self, duration_ms: u64) -> Result<CommandOutput, ToolError> {
+    pub async fn execute_sleep(&self, duration_ms: u64) -> Result<CommandOutput, std::io::Error> {
         tokio::time::sleep(tokio::time::Duration::from_millis(duration_ms)).await;
 
         Ok(CommandOutput {
@@ -317,14 +383,6 @@ impl SleepTool {
 
 #[async_trait]
 impl Tool for SleepTool {
-    async fn execute(&self, input: serde_json::Value) -> ToolResult<serde_json::Value> {
-        let sleep_input: SleepInput = serde_json::from_value(input)?;
-
-        let output = self.execute_sleep(sleep_input.duration_ms).await?;
-
-        serde_json::to_value(output).map_err(ToolError::from)
-    }
-
     fn name(&self) -> &str {
         "Sleep"
     }
@@ -333,24 +391,41 @@ impl Tool for SleepTool {
         &self.description
     }
 
-    fn validate_input(&self, input: &serde_json::Value) -> Result<(), ToolError> {
-        if !input.is_object() {
-            return Err(ToolError::SystemError("Input must be an object".to_string()));
-        }
+    fn input_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "duration_ms": {
+                    "type": "integer",
+                    "description": "Duration to sleep in milliseconds (max 3600000 = 1 hour)"
+                }
+            },
+            "required": ["duration_ms"]
+        })
+    }
 
-        if input.get("duration_ms").is_none() {
-            return Err(ToolError::SystemError("Missing required field: duration_ms".to_string()));
-        }
+    async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
+        let sleep_input: SleepInput = serde_json::from_value(input)
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid sleep input: {}", e)))?;
 
         // Validate duration is reasonable
-        if let Some(duration) = input.get("duration_ms").and_then(|v| v.as_u64()) {
-            if duration > 3600000 {
-                return Err(ToolError::SystemError(
-                    "Duration too long (max 1 hour / 3600000ms)".to_string(),
-                ));
-            }
+        if sleep_input.duration_ms > 3600000 {
+            return Err(ToolError::InvalidInput(
+                "Duration too long (max 1 hour / 3600000ms)".to_string(),
+            ));
         }
 
-        Ok(())
+        let output = self.execute_sleep(sleep_input.duration_ms).await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Sleep failed: {}", e)))?;
+
+        Ok(ToolOutput {
+            content: output.stdout,
+            is_error: false,
+            metadata: {
+                let mut map = std::collections::HashMap::new();
+                map.insert("duration_ms".to_string(), json!(sleep_input.duration_ms));
+                map
+            },
+        })
     }
 }

@@ -1900,6 +1900,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "shannon-core",
  "thiserror",
  "tokio",
  "tokio-test",
@@ -1923,9 +1924,17 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "crossterm",
+ "futures",
  "ratatui",
+ "serde",
+ "serde_json",
+ "shannon-core",
+ "shannon-mcp",
+ "shannon-tools",
+ "shannon-types",
  "tokio",
  "unicode-width 0.2.0",
+ "uuid",
 ]
 
 [[package]]

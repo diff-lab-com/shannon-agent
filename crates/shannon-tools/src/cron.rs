@@ -7,9 +7,10 @@
 //!
 //! Enables time-based task scheduling with persistence options.
 
-use crate::{Tool, ToolError, ToolResult};
+use crate::{Tool, ToolError, ToolResult, ToolOutput};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
@@ -153,7 +154,7 @@ fn cron_to_human(cron: &str) -> String {
 fn validate_cron(cron: &str) -> Result<(), ToolError> {
     let parts: Vec<&str> = cron.split_whitespace().collect();
     if parts.len() != 5 {
-        return Err(ToolError::SystemError(
+        return Err(ToolError::InvalidInput(
             "Invalid cron expression. Expected 5 fields: M H DoM Mon DoW".to_string(),
         ));
     }
@@ -176,7 +177,7 @@ fn validate_cron(cron: &str) -> Result<(), ToolError> {
         if let Some(rest) = part.strip_prefix("*/") {
             if let Ok(n) = rest.parse::<u32>() {
                 if n == 0 || n > (ranges[i].1 - ranges[i].0) {
-                    return Err(ToolError::SystemError(format!(
+                    return Err(ToolError::InvalidInput(format!(
                         "Invalid {} value in cron expression",
                         ["minute", "hour", "day", "month", "weekday"][i]
                     )));
@@ -189,7 +190,7 @@ fn validate_cron(cron: &str) -> Result<(), ToolError> {
         for value in part.split(',') {
             if let Ok(n) = value.parse::<u32>() {
                 if n < ranges[i].0 || n > ranges[i].1 {
-                    return Err(ToolError::SystemError(format!(
+                    return Err(ToolError::InvalidInput(format!(
                         "Invalid {} value in cron expression",
                         ["minute", "hour", "day", "month", "weekday"][i]
                     )));
@@ -225,13 +226,13 @@ impl CronTool {
         // Check max jobs limit
         let job_count = {
             let store = self.store.read().map_err(|e| {
-                ToolError::SystemError(format!("Failed to acquire store lock: {}", e))
+                ToolError::ExecutionFailed(format!("Failed to acquire store lock: {}", e))
             })?;
             store.len()
         };
 
         if job_count >= self.max_jobs {
-            return Err(ToolError::SystemError(format!(
+            return Err(ToolError::ExecutionFailed(format!(
                 "Too many scheduled jobs (max {})",
                 self.max_jobs
             )));
@@ -254,7 +255,7 @@ impl CronTool {
 
         {
             let mut store = self.store.write().map_err(|e| {
-                ToolError::SystemError(format!("Failed to acquire store lock: {}", e))
+                ToolError::ExecutionFailed(format!("Failed to acquire store lock: {}", e))
             })?;
             store.insert(id.clone(), job);
         }
@@ -273,13 +274,13 @@ impl CronTool {
     async fn delete_cron(&self, input: CronDeleteInput) -> Result<CronDeleteOutput, ToolError> {
         let exists = {
             let store = self.store.read().map_err(|e| {
-                ToolError::SystemError(format!("Failed to acquire store lock: {}", e))
+                ToolError::ExecutionFailed(format!("Failed to acquire store lock: {}", e))
             })?;
             store.contains_key(&input.id)
         };
 
         if !exists {
-            return Err(ToolError::SystemError(format!(
+            return Err(ToolError::InvalidInput(format!(
                 "No scheduled job with id '{}'",
                 input.id
             )));
@@ -287,7 +288,7 @@ impl CronTool {
 
         {
             let mut store = self.store.write().map_err(|e| {
-                ToolError::SystemError(format!("Failed to acquire store lock: {}", e))
+                ToolError::ExecutionFailed(format!("Failed to acquire store lock: {}", e))
             })?;
             store.remove(&input.id);
         }
@@ -298,7 +299,7 @@ impl CronTool {
     /// List all cron jobs
     async fn list_cron(&self, _input: CronListInput) -> Result<CronListOutput, ToolError> {
         let store = self.store.read().map_err(|e| {
-            ToolError::SystemError(format!("Failed to acquire store lock: {}", e))
+            ToolError::ExecutionFailed(format!("Failed to acquire store lock: {}", e))
         })?;
 
         let jobs: Vec<CronJobInfo> = store
@@ -319,30 +320,62 @@ impl CronTool {
 
 #[async_trait]
 impl Tool for CronTool {
-    async fn execute(&self, input: serde_json::Value) -> ToolResult<serde_json::Value> {
+    async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         // Parse operation type from input
         let operation = input
             .get("operation")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::SystemError("Missing operation field".to_string()))?;
+            .ok_or_else(|| ToolError::InvalidInput("Missing operation field".to_string()))?;
 
         match operation {
             "Create" => {
-                let create_input: CronCreateInput = serde_json::from_value(input)?;
+                let create_input: CronCreateInput = serde_json::from_value(input)
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid create cron input: {}", e)))?;
                 let output = self.create_cron(create_input).await?;
-                serde_json::to_value(output).map_err(ToolError::from)
+                Ok(ToolOutput {
+                    content: format!("Created cron job with ID: {}", output.id),
+                    is_error: false,
+                    metadata: {
+                        let mut map = HashMap::new();
+                        map.insert("id".to_string(), json!(output.id));
+                        map.insert("human_schedule".to_string(), json!(output.human_schedule));
+                        map.insert("recurring".to_string(), json!(output.recurring));
+                        if let Some(durable) = output.durable {
+                            map.insert("durable".to_string(), json!(durable));
+                        }
+                        map
+                    },
+                })
             }
             "Delete" => {
-                let delete_input: CronDeleteInput = serde_json::from_value(input)?;
+                let delete_input: CronDeleteInput = serde_json::from_value(input)
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid delete cron input: {}", e)))?;
                 let output = self.delete_cron(delete_input).await?;
-                serde_json::to_value(output).map_err(ToolError::from)
+                Ok(ToolOutput {
+                    content: format!("Deleted cron job: {}", output.id),
+                    is_error: false,
+                    metadata: {
+                        let mut map = HashMap::new();
+                        map.insert("id".to_string(), json!(output.id));
+                        map
+                    },
+                })
             }
             "List" => {
-                let list_input: CronListInput = serde_json::from_value(input)?;
+                let list_input: CronListInput = serde_json::from_value(input)
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid list cron input: {}", e)))?;
                 let output = self.list_cron(list_input).await?;
-                serde_json::to_value(output).map_err(ToolError::from)
+                Ok(ToolOutput {
+                    content: format!("Found {} cron jobs", output.jobs.len()),
+                    is_error: false,
+                    metadata: {
+                        let mut map = HashMap::new();
+                        map.insert("jobs".to_string(), json!(output.jobs));
+                        map
+                    },
+                })
             }
-            _ => Err(ToolError::SystemError(format!(
+            _ => Err(ToolError::InvalidInput(format!(
                 "Unknown operation: {}",
                 operation
             ))),
@@ -357,15 +390,37 @@ impl Tool for CronTool {
         &self.description
     }
 
-    fn validate_input(&self, input: &serde_json::Value) -> Result<(), ToolError> {
-        if !input.is_object() {
-            return Err(ToolError::SystemError("Input must be an object".to_string()));
-        }
-
-        if input.get("operation").is_none() {
-            return Err(ToolError::SystemError("Missing required field: operation".to_string()));
-        }
-
-        Ok(())
+    fn input_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "operation": {
+                    "type": "string",
+                    "description": "Operation type",
+                    "enum": ["Create", "Delete", "List"]
+                },
+                "cron": {
+                    "type": "string",
+                    "description": "Cron expression (5 fields: M H DoM Mon DoW)"
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "Prompt to enqueue"
+                },
+                "recurring": {
+                    "type": "boolean",
+                    "description": "Recurring job"
+                },
+                "durable": {
+                    "type": "boolean",
+                    "description": "Persist to disk"
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Job ID"
+                }
+            },
+            "required": ["operation"]
+        })
     }
 }

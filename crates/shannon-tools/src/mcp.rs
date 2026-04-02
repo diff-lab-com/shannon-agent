@@ -6,9 +6,10 @@
 //!
 //! These tools enable interaction with MCP servers for extended capabilities.
 
-use crate::{Tool, ToolError, ToolResult};
+use crate::{Tool, ToolError, ToolResult, ToolOutput};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashMap;
 
 /// MCP resource content
@@ -157,21 +158,21 @@ impl McpResourceTool {
 
         let client = registry
             .get(&input.server)
-            .ok_or_else(|| ToolError::AgentError(format!(
+            .ok_or_else(|| ToolError::InvalidInput(format!(
                 "Server '{}' not found. Available servers: {}",
                 input.server,
                 registry.keys().cloned().collect::<Vec<_>>().join(", ")
             )))?;
 
         if !client.connected {
-            return Err(ToolError::AgentError(format!(
+            return Err(ToolError::InvalidInput(format!(
                 "Server '{}' is not connected",
                 input.server
             )));
         }
 
         if !client.supports_resources {
-            return Err(ToolError::AgentError(format!(
+            return Err(ToolError::InvalidInput(format!(
                 "Server '{}' does not support resources",
                 input.server
             )));
@@ -203,14 +204,14 @@ impl McpResourceTool {
         if let Some(target_server) = input.server {
             let client = registry
                 .get(&target_server)
-                .ok_or_else(|| ToolError::AgentError(format!(
+                .ok_or_else(|| ToolError::InvalidInput(format!(
                     "Server '{}' not found. Available servers: {}",
                     target_server,
                     registry.keys().cloned().collect::<Vec<_>>().join(", ")
                 )))?;
 
             if !client.connected {
-                return Err(ToolError::AgentError(format!(
+                return Err(ToolError::InvalidInput(format!(
                     "Server '{}' is not connected",
                     target_server
                 )));
@@ -249,25 +250,49 @@ impl McpResourceTool {
 
 #[async_trait]
 impl Tool for McpResourceTool {
-    async fn execute(&self, input: serde_json::Value) -> ToolResult<serde_json::Value> {
+    async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         // Parse operation type from input
         let operation = input
             .get("operation")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::AgentError("Missing operation field".to_string()))?;
+            .ok_or_else(|| ToolError::InvalidInput("Missing operation field".to_string()))?;
 
         match operation {
             "Read" => {
-                let read_input: ReadMcpResourceInput = serde_json::from_value(input)?;
+                let read_input: ReadMcpResourceInput = serde_json::from_value(input)
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid read input: {}", e)))?;
+                let server = read_input.server.clone();
                 let output = self.read_resource(read_input).await?;
-                serde_json::to_value(output).map_err(ToolError::from)
+                let resource_count = output.contents.len();
+                Ok(ToolOutput {
+                    content: format!("Read {} MCP resource(s) from server {}", resource_count, server),
+                    is_error: false,
+                    metadata: {
+                        let mut map = HashMap::new();
+                        map.insert("server".to_string(), json!(server));
+                        map.insert("contents".to_string(), json!(output.contents));
+                        map
+                    },
+                })
             }
             "List" => {
-                let list_input: ListMcpResourcesInput = serde_json::from_value(input)?;
+                let list_input: ListMcpResourcesInput = serde_json::from_value(input)
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid list input: {}", e)))?;
                 let output = self.list_resources(list_input).await?;
-                serde_json::to_value(output).map_err(ToolError::from)
+                let resource_count = output.resources.as_ref().map(|r| r.len()).unwrap_or(0);
+                Ok(ToolOutput {
+                    content: format!("Found {} resources on MCP servers", resource_count),
+                    is_error: false,
+                    metadata: {
+                        let mut map = HashMap::new();
+                        if let Some(ref resources) = output.resources {
+                            map.insert("resources".to_string(), json!(resources));
+                        }
+                        map
+                    },
+                })
             }
-            _ => Err(ToolError::AgentError(format!(
+            _ => Err(ToolError::InvalidInput(format!(
                 "Unknown operation: {}",
                 operation
             ))),
@@ -282,15 +307,25 @@ impl Tool for McpResourceTool {
         &self.description
     }
 
-    fn validate_input(&self, input: &serde_json::Value) -> Result<(), ToolError> {
-        if !input.is_object() {
-            return Err(ToolError::AgentError("Input must be an object".to_string()));
-        }
-
-        if input.get("operation").is_none() {
-            return Err(ToolError::AgentError("Missing required field: operation".to_string()));
-        }
-
-        Ok(())
+    fn input_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "operation": {
+                    "type": "string",
+                    "description": "Operation type",
+                    "enum": ["Read", "List"]
+                },
+                "server": {
+                    "type": "string",
+                    "description": "MCP server name"
+                },
+                "uri": {
+                    "type": "string",
+                    "description": "Resource URI"
+                }
+            },
+            "required": ["operation"]
+        })
     }
 }

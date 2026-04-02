@@ -27,7 +27,7 @@ pub mod skill;
 pub mod cron;
 
 // Re-exports for convenience
-pub use file::{FileTool, FileOperation};
+pub use file::{ReadTool, WriteTool, EditTool, GlobTool, FileOperation};
 pub use system::{SystemTool, ShellCommand, SleepTool, BashTool, PowerShellTool};
 pub use web::{WebFetchTool, WebSearchTool, WebOperation};
 pub use agent::{AgentTool, AgentOperation};
@@ -40,52 +40,7 @@ pub use todo::{TodoWriteTool, TodoWriteInput, TodoWriteOutput};
 pub use skill::{SkillTool, SkillInvokeInput, SkillInvokeOutput};
 pub use cron::{CronTool, CronCreateInput, CronCreateOutput, CronDeleteInput, CronDeleteOutput, CronListInput, CronListOutput};
 
-/// Tool execution result
-pub type ToolResult<T> = Result<T, ToolError>;
-
-/// Common error type for all tools
-#[derive(Debug, thiserror::Error)]
-pub enum ToolError {
-    #[error("File operation failed: {0}")]
-    FileError(String),
-
-    #[error("System command failed: {0}")]
-    SystemError(String),
-
-    #[error("Web request failed: {0}")]
-    WebError(String),
-
-    #[error("Agent operation failed: {0}")]
-    AgentError(String),
-
-    #[error("Task operation failed: {0}")]
-    TaskError(String),
-
-    #[error("Serialization error: {0}")]
-    SerializationError(#[from] serde_json::Error),
-
-    #[error("IO error: {0}")]
-    IoError(#[from] std::io::Error),
-
-    #[error("Unknown error: {0}")]
-    Unknown(String),
-}
-
-/// Base trait for all tools
-#[async_trait::async_trait]
-pub trait Tool: Send + Sync {
-    /// Execute the tool operation
-    async fn execute(&self, input: serde_json::Value) -> ToolResult<serde_json::Value>;
-
-    /// Get the tool name
-    fn name(&self) -> &str;
-
-    /// Get the tool description
-    fn description(&self) -> &str;
-
-    /// Validate input parameters
-    fn validate_input(&self, input: &serde_json::Value) -> Result<(), ToolError> {
-        // Default implementation - override for custom validation
-        Ok(())
-    }
-}
+// Re-export from shannon_core
+pub use shannon_core::{
+    tools::{Tool, ToolError, ToolResult, ToolOutput},
+};

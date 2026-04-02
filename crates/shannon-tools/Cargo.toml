@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+# Core types and traits
+shannon-core = { path = "../shannon-core" }
+
 # Async runtime
 tokio = { workspace = true }
 

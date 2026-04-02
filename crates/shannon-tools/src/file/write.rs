@@ -1,7 +1,9 @@
 //! Write tool implementation
 
-use super::super::ToolError;
+use crate::{ToolOutput, ToolError};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WriteInput {
@@ -24,20 +26,23 @@ pub struct WriteOutput {
     pub message: String,
 }
 
-pub async fn execute(input: WriteInput) -> Result<serde_json::Value, ToolError> {
+pub async fn execute(input: WriteInput) -> Result<ToolOutput, ToolError> {
     use tokio::fs;
 
     fs::write(&input.file_path, &input.content)
         .await
-        .map_err(|e| ToolError::FileError(format!("Failed to write file: {}", e)))?;
+        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write file: {}", e)))?;
 
     let bytes = input.content.len();
 
-    let output = WriteOutput {
-        file_path: input.file_path,
-        bytes,
-        message: format!("Successfully wrote {} bytes to file", bytes),
-    };
-
-    serde_json::to_value(output).map_err(ToolError::from)
+    Ok(ToolOutput {
+        content: format!("Successfully wrote {} bytes to file", bytes),
+        is_error: false,
+        metadata: {
+            let mut map = HashMap::new();
+            map.insert("file_path".to_string(), json!(input.file_path));
+            map.insert("bytes".to_string(), json!(bytes));
+            map
+        },
+    })
 }

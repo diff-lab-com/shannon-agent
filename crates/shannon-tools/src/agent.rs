@@ -4,9 +4,11 @@
 //! - Agent: Spawn and manage subagent operations
 //! - Team: Create and manage multi-agent teams
 
-use crate::{Tool, ToolError, ToolResult};
+use crate::{Tool, ToolError, ToolResult, ToolOutput};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::collections::HashMap;
 
 /// Agent operation types
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,35 +201,81 @@ impl AgentTool {
 
 #[async_trait]
 impl Tool for AgentTool {
-    async fn execute(&self, input: serde_json::Value) -> ToolResult<serde_json::Value> {
+    async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         // Parse operation type from input
         let operation = input
             .get("operation")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::AgentError("Missing operation field".to_string()))?;
+            .ok_or_else(|| ToolError::InvalidInput("Missing operation field".to_string()))?;
 
         match operation {
             "Spawn" => {
-                let spawn_input: AgentSpawnInput = serde_json::from_value(input)?;
+                let spawn_input: AgentSpawnInput = serde_json::from_value(input)
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid spawn input: {}", e)))?;
                 let output = self.spawn_agent(spawn_input).await?;
-                serde_json::to_value(output).map_err(ToolError::from)
+                Ok(ToolOutput {
+                    content: output.message,
+                    is_error: false,
+                    metadata: {
+                        let mut map = HashMap::new();
+                        map.insert("agent_id".to_string(), json!(output.agent_id));
+                        map.insert("agent_type".to_string(), json!(output.agent_type));
+                        map.insert("status".to_string(), json!(output.status));
+                        map
+                    },
+                })
             }
             "SendMessage" => {
-                let msg_input: SendMessageInput = serde_json::from_value(input)?;
+                let msg_input: SendMessageInput = serde_json::from_value(input)
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid message input: {}", e)))?;
                 let output = self.send_message(msg_input).await?;
-                serde_json::to_value(output).map_err(ToolError::from)
+                Ok(ToolOutput {
+                    content: format!("Message {} delivered successfully", output.message_id),
+                    is_error: false,
+                    metadata: {
+                        let mut map = HashMap::new();
+                        map.insert("message_id".to_string(), json!(output.message_id));
+                        map.insert("delivered".to_string(), json!(output.delivered));
+                        if let Some(response) = output.response {
+                            map.insert("response".to_string(), json!(response));
+                        }
+                        map
+                    },
+                })
             }
             "CreateTeam" => {
-                let team_input: CreateTeamInput = serde_json::from_value(input)?;
+                let team_input: CreateTeamInput = serde_json::from_value(input)
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid team input: {}", e)))?;
                 let output = self.create_team(team_input).await?;
-                serde_json::to_value(output).map_err(ToolError::from)
+                Ok(ToolOutput {
+                    content: format!("Team {} created successfully", output.team_name),
+                    is_error: false,
+                    metadata: {
+                        let mut map = HashMap::new();
+                        map.insert("team_id".to_string(), json!(output.team_id));
+                        map.insert("team_name".to_string(), json!(output.team_name));
+                        map.insert("agent_ids".to_string(), json!(output.agent_ids));
+                        map.insert("status".to_string(), json!(output.status));
+                        map
+                    },
+                })
             }
             "Shutdown" => {
-                let shutdown_input: ShutdownInput = serde_json::from_value(input)?;
+                let shutdown_input: ShutdownInput = serde_json::from_value(input)
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid shutdown input: {}", e)))?;
                 let output = self.shutdown_agent(shutdown_input).await?;
-                serde_json::to_value(output).map_err(ToolError::from)
+                Ok(ToolOutput {
+                    content: output.message,
+                    is_error: false,
+                    metadata: {
+                        let mut map = HashMap::new();
+                        map.insert("agent_id".to_string(), json!(output.agent_id));
+                        map.insert("success".to_string(), json!(output.success));
+                        map
+                    },
+                })
             }
-            _ => Err(ToolError::AgentError(format!(
+            _ => Err(ToolError::InvalidInput(format!(
                 "Unknown operation: {}",
                 operation
             ))),
@@ -242,15 +290,45 @@ impl Tool for AgentTool {
         &self.description
     }
 
-    fn validate_input(&self, input: &serde_json::Value) -> Result<(), ToolError> {
-        if !input.is_object() {
-            return Err(ToolError::AgentError("Input must be an object".to_string()));
-        }
-
-        if input.get("operation").is_none() {
-            return Err(ToolError::AgentError("Missing required field: operation".to_string()));
-        }
-
-        Ok(())
+    fn input_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "operation": {
+                    "type": "string",
+                    "description": "Operation type",
+                    "enum": ["Spawn", "SendMessage", "CreateTeam", "Shutdown"]
+                },
+                "agent_type": {
+                    "type": "string",
+                    "description": "Agent type to spawn"
+                },
+                "task": {
+                    "type": "string",
+                    "description": "Task description"
+                },
+                "context": {
+                    "type": "object",
+                    "description": "Optional context"
+                },
+                "agent_id": {
+                    "type": "string",
+                    "description": "Agent ID for operations"
+                },
+                "message": {
+                    "type": "string",
+                    "description": "Message content"
+                },
+                "team_name": {
+                    "type": "string",
+                    "description": "Team name"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Team description"
+                }
+            },
+            "required": ["operation"]
+        })
     }
 }

@@ -4,10 +4,12 @@
 //! - WebFetch: Fetch and extract content from URLs
 //! - WebSearch: Search the web for information
 
-use crate::{Tool, ToolError, ToolResult};
+use crate::{Tool, ToolError, ToolResult, ToolOutput};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::collections::HashMap;
 
 /// Web operation types
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,25 +146,14 @@ impl WebFetchTool {
         max_length: usize,
         start_index: usize,
         _raw: bool,
-    ) -> Result<WebFetchOutput, ToolError> {
-        let response = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| ToolError::WebError(format!("Failed to fetch URL: {}", e)))?;
+    ) -> Result<WebFetchOutput, Box<dyn std::error::Error + Send + Sync>> {
+        let response = self.client.get(url).send().await?;
 
         if !response.status().is_success() {
-            return Err(ToolError::WebError(format!(
-                "HTTP error: {}",
-                response.status()
-            )));
+            return Err(format!("HTTP error: {}", response.status()).into());
         }
 
-        let full_content = response
-            .text()
-            .await
-            .map_err(|e| ToolError::WebError(format!("Failed to read response: {}", e)))?;
+        let full_content = response.text().await?;
 
         let content_length = full_content.len();
 
@@ -188,8 +179,9 @@ impl WebFetchTool {
 
 #[async_trait]
 impl Tool for WebFetchTool {
-    async fn execute(&self, input: serde_json::Value) -> ToolResult<serde_json::Value> {
-        let fetch_input: WebFetchInput = serde_json::from_value(input)?;
+    async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
+        let fetch_input: WebFetchInput = serde_json::from_value(input)
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid WebFetch input: {}", e)))?;
 
         let output = self
             .fetch_url(
@@ -198,9 +190,24 @@ impl Tool for WebFetchTool {
                 fetch_input.start_index,
                 fetch_input.raw,
             )
-            .await?;
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to fetch URL: {}", e)))?;
 
-        serde_json::to_value(output).map_err(ToolError::from)
+        Ok(ToolOutput {
+            content: format!("Successfully fetched {} bytes from {}", output.content_length, output.url),
+            is_error: false,
+            metadata: {
+                let mut map = HashMap::new();
+                map.insert("url".to_string(), json!(output.url));
+                map.insert("content_length".to_string(), json!(output.content_length));
+                map.insert("has_more".to_string(), json!(output.has_more));
+                if let Some(next) = output.next_start_index {
+                    map.insert("next_start_index".to_string(), json!(next));
+                }
+                map.insert("content".to_string(), json!(output.content));
+                map
+            },
+        })
     }
 
     fn name(&self) -> &str {
@@ -211,23 +218,30 @@ impl Tool for WebFetchTool {
         &self.description
     }
 
-    fn validate_input(&self, input: &serde_json::Value) -> Result<(), ToolError> {
-        if !input.is_object() {
-            return Err(ToolError::WebError("Input must be an object".to_string()));
-        }
-
-        if input.get("url").is_none() {
-            return Err(ToolError::WebError("Missing required field: url".to_string()));
-        }
-
-        // Validate URL format
-        if let Some(url) = input.get("url").and_then(|v| v.as_str()) {
-            if !url.starts_with("http://") && !url.starts_with("https://") {
-                return Err(ToolError::WebError("URL must start with http:// or https://".to_string()));
-            }
-        }
-
-        Ok(())
+    fn input_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "URL to fetch"
+                },
+                "max_length": {
+                    "type": "integer",
+                    "description": "Maximum number of characters to return",
+                    "default": 5000
+                },
+                "start_index": {
+                    "type": "integer",
+                    "description": "Start index for pagination"
+                },
+                "raw": {
+                    "type": "boolean",
+                    "description": "Return raw HTML instead of simplified content"
+                }
+            },
+            "required": ["url"]
+        })
     }
 }
 
@@ -250,7 +264,7 @@ impl WebSearchTool {
         }
     }
 
-    async fn search(&self, query: &str, max_results: usize) -> Result<WebSearchOutput, ToolError> {
+    async fn search(&self, query: &str, max_results: usize) -> Result<WebSearchOutput, Box<dyn std::error::Error + Send + Sync>> {
         // For now, return mock results
         // TODO: Integrate with Tavily or another search API
 
@@ -273,14 +287,37 @@ impl WebSearchTool {
 
 #[async_trait]
 impl Tool for WebSearchTool {
-    async fn execute(&self, input: serde_json::Value) -> ToolResult<serde_json::Value> {
-        let search_input: WebSearchInput = serde_json::from_value(input)?;
+    async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
+        let search_input: WebSearchInput = serde_json::from_value(input)
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid WebSearch input: {}", e)))?;
 
         let output = self
             .search(&search_input.query, search_input.max_results)
-            .await?;
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Search failed: {}", e)))?;
 
-        serde_json::to_value(output).map_err(ToolError::from)
+        let results_json: Vec<serde_json::Value> = output.results.iter().map(|r| {
+            json!({
+                "title": r.title,
+                "url": r.url,
+                "snippet": r.snippet,
+                "score": r.score,
+                "published_date": r.published_date
+            })
+        }).collect();
+
+        Ok(ToolOutput {
+            content: format!("Found {} search results for: {}", output.count, output.query),
+            is_error: false,
+            metadata: {
+                let mut map = HashMap::new();
+                map.insert("query".to_string(), json!(output.query));
+                map.insert("count".to_string(), json!(output.count));
+                map.insert("has_more".to_string(), json!(output.has_more));
+                map.insert("results".to_string(), json!(results_json));
+                map
+            },
+        })
     }
 
     fn name(&self) -> &str {
@@ -291,15 +328,33 @@ impl Tool for WebSearchTool {
         &self.description
     }
 
-    fn validate_input(&self, input: &serde_json::Value) -> Result<(), ToolError> {
-        if !input.is_object() {
-            return Err(ToolError::WebError("Input must be an object".to_string()));
-        }
-
-        if input.get("query").is_none() {
-            return Err(ToolError::WebError("Missing required field: query".to_string()));
-        }
-
-        Ok(())
+    fn input_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query"
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of results",
+                    "default": 10
+                },
+                "search_depth": {
+                    "type": "string",
+                    "description": "Search depth (basic or advanced)"
+                },
+                "include_images": {
+                    "type": "boolean",
+                    "description": "Include images in results"
+                },
+                "include_raw_content": {
+                    "type": "boolean",
+                    "description": "Include raw content"
+                }
+            },
+            "required": ["query"]
+        })
     }
 }

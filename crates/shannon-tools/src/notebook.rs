@@ -9,9 +9,11 @@
 //! - Deleting cells
 //! - Changing cell types (code/markdown)
 
-use crate::{Tool, ToolError, ToolResult};
+use crate::{Tool, ToolError, ToolResult, ToolOutput};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -189,10 +191,10 @@ impl NotebookEditTool {
     /// Load notebook from file
     fn load_notebook(path: &str) -> Result<NotebookContent, ToolError> {
         let content = fs::read_to_string(path)
-            .map_err(|e| ToolError::FileError(format!("Failed to read notebook: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read notebook: {}", e)))?;
 
         let notebook: NotebookContent = serde_json::from_str(&content)
-            .map_err(|e| ToolError::FileError(format!("Failed to parse notebook JSON: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to parse notebook JSON: {}", e)))?;
 
         Ok(notebook)
     }
@@ -200,10 +202,10 @@ impl NotebookEditTool {
     /// Save notebook to file
     fn save_notebook(path: &str, notebook: &NotebookContent) -> Result<(), ToolError> {
         let json = serde_json::to_string_pretty(notebook)
-            .map_err(|e| ToolError::FileError(format!("Failed to serialize notebook: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to serialize notebook: {}", e)))?;
 
         fs::write(path, json)
-            .map_err(|e| ToolError::FileError(format!("Failed to write notebook: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write notebook: {}", e)))?;
 
         Ok(())
     }
@@ -245,7 +247,7 @@ impl NotebookEditTool {
             }
         }
 
-        Err(ToolError::FileError(format!(
+        Err(ToolError::ExecutionFailed(format!(
             "Cell with ID '{}' not found in notebook",
             cell_id
         )))
@@ -357,7 +359,7 @@ impl NotebookEditTool {
             EditMode::Insert => {
                 let cell_type = input.cell_type
                     .as_ref()
-                    .ok_or_else(|| ToolError::FileError("Cell type is required when using edit_mode=insert".to_string()))?
+                    .ok_or_else(|| ToolError::ExecutionFailed("Cell type is required when using edit_mode=insert".to_string()))?
                     .clone();
 
                 let insert_index = if let Some(ref cell_id) = input.cell_id {
@@ -449,10 +451,34 @@ impl NotebookEditTool {
 
 #[async_trait]
 impl Tool for NotebookEditTool {
-    async fn execute(&self, input: serde_json::Value) -> ToolResult<serde_json::Value> {
-        let edit_input: NotebookEditInput = serde_json::from_value(input)?;
+    async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
+        let edit_input: NotebookEditInput = serde_json::from_value(input)
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid notebook edit input: {}", e)))?;
         let output = self.execute_edit(edit_input).await?;
-        serde_json::to_value(output).map_err(ToolError::from)
+
+        let notebook_path = output.notebook_path.clone();
+        let is_error = output.error.is_some();
+        let content = if let Some(err) = &output.error {
+            format!("Failed to edit notebook: {}", err)
+        } else {
+            format!("Successfully edited notebook cell in {}", notebook_path)
+        };
+
+        Ok(ToolOutput {
+            content,
+            is_error,
+            metadata: {
+                let mut map = HashMap::new();
+                map.insert("notebook_path".to_string(), json!(notebook_path));
+                map.insert("cell_id".to_string(), json!(output.cell_id));
+                map.insert("cell_type".to_string(), json!(output.cell_type));
+                map.insert("edit_mode".to_string(), json!(output.edit_mode));
+                if let Some(err) = &output.error {
+                    map.insert("error".to_string(), json!(err));
+                }
+                map
+            },
+        })
     }
 
     fn name(&self) -> &str {
@@ -463,20 +489,29 @@ impl Tool for NotebookEditTool {
         &self.description
     }
 
-    fn validate_input(&self, input: &serde_json::Value) -> Result<(), ToolError> {
-        if !input.is_object() {
-            return Err(ToolError::FileError("Input must be an object".to_string()));
-        }
-
-        if input.get("notebook_path").is_none() {
-            return Err(ToolError::FileError("Missing required field: notebook_path".to_string()));
-        }
-
-        if input.get("new_source").is_none() {
-            return Err(ToolError::FileError("Missing required field: new_source".to_string()));
-        }
-
-        Ok(())
+    fn input_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "notebook_path": {
+                    "type": "string",
+                    "description": "Path to .ipynb file"
+                },
+                "cell_id": {
+                    "type": "string",
+                    "description": "Cell ID to edit"
+                },
+                "new_source": {
+                    "type": "string",
+                    "description": "New cell content"
+                },
+                "cell_type": {
+                    "type": "string",
+                    "description": "Cell type (code or markdown)"
+                }
+            },
+            "required": ["notebook_path"]
+        })
     }
 }
 

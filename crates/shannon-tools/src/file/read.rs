@@ -1,7 +1,9 @@
 //! Read tool implementation
 
-use super::super::ToolError;
+use crate::{ToolOutput, ToolError};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ReadInput {
@@ -27,12 +29,12 @@ pub struct ReadOutput {
     pub file_path: String,
 }
 
-pub async fn execute(input: ReadInput) -> Result<serde_json::Value, ToolError> {
+pub async fn execute(input: ReadInput) -> Result<ToolOutput, ToolError> {
     use tokio::fs;
 
     let content = fs::read_to_string(&input.file_path)
         .await
-        .map_err(|e| ToolError::FileError(format!("Failed to read file: {}", e)))?;
+        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {}", e)))?;
 
     let lines: Vec<&str> = content.lines().collect();
 
@@ -49,11 +51,14 @@ pub async fn execute(input: ReadInput) -> Result<serde_json::Value, ToolError> {
 
     let selected_lines = lines[start..end].join("\n");
 
-    let output = ReadOutput {
-        content: selected_lines,
-        lines: end - start,
-        file_path: input.file_path,
-    };
-
-    serde_json::to_value(output).map_err(ToolError::from)
+    Ok(ToolOutput {
+        content: selected_lines.clone(),
+        is_error: false,
+        metadata: {
+            let mut map = HashMap::new();
+            map.insert("lines".to_string(), json!(end - start));
+            map.insert("file_path".to_string(), json!(input.file_path));
+            map
+        },
+    })
 }

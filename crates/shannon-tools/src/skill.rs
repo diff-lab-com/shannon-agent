@@ -5,9 +5,10 @@
 //!
 //! Supports both inline and forked skill execution contexts.
 
-use crate::{Tool, ToolError, ToolResult};
+use crate::{Tool, ToolError, ToolResult, ToolOutput};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -190,7 +191,7 @@ impl SkillTool {
         let normalized_name = input.skill.trim().strip_prefix('/').unwrap_or(&input.skill);
 
         let command = self.find_skill(normalized_name).ok_or_else(|| {
-            ToolError::AgentError(format!("Unknown skill: {}", normalized_name))
+            ToolError::InvalidInput(format!("Unknown skill: {}", normalized_name))
         })?;
 
         // Check if command is a prompt-based skill
@@ -218,10 +219,42 @@ impl SkillTool {
 
 #[async_trait]
 impl Tool for SkillTool {
-    async fn execute(&self, input: serde_json::Value) -> ToolResult<serde_json::Value> {
-        let invoke_input: SkillInvokeInput = serde_json::from_value(input)?;
+    async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
+        let invoke_input: SkillInvokeInput = serde_json::from_value(input)
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid skill invoke input: {}", e)))?;
         let output = self.execute_invoke(invoke_input).await?;
-        serde_json::to_value(output).map_err(ToolError::from)
+
+        let content = if output.success {
+            format!("Skill '{}' executed successfully", output.command_name)
+        } else {
+            output.result.clone().unwrap_or_else(|| format!("Skill '{}' execution failed", output.command_name))
+        };
+
+        Ok(ToolOutput {
+            content,
+            is_error: !output.success,
+            metadata: {
+                let mut map = HashMap::new();
+                map.insert("command_name".to_string(), json!(output.command_name));
+                map.insert("success".to_string(), json!(output.success));
+                if let Some(allowed_tools) = output.allowed_tools {
+                    map.insert("allowed_tools".to_string(), json!(allowed_tools));
+                }
+                if let Some(model) = output.model {
+                    map.insert("model".to_string(), json!(model));
+                }
+                if let Some(status) = output.status {
+                    map.insert("status".to_string(), json!(status));
+                }
+                if let Some(result) = output.result {
+                    map.insert("result".to_string(), json!(result));
+                }
+                if let Some(agent_id) = output.agent_id {
+                    map.insert("agent_id".to_string(), json!(agent_id));
+                }
+                map
+            },
+        })
     }
 
     fn name(&self) -> &str {
@@ -232,20 +265,20 @@ impl Tool for SkillTool {
         &self.description
     }
 
-    fn validate_input(&self, input: &serde_json::Value) -> Result<(), ToolError> {
-        if !input.is_object() {
-            return Err(ToolError::AgentError("Input must be an object".to_string()));
-        }
-
-        if input.get("skill").is_none() {
-            return Err(ToolError::AgentError("Missing required field: skill".to_string()));
-        }
-
-        let skill_value = input.get("skill").and_then(|v| v.as_str()).unwrap_or("");
-        if skill_value.trim().is_empty() {
-            return Err(ToolError::AgentError("Skill name cannot be empty".to_string()));
-        }
-
-        Ok(())
+    fn input_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "skill": {
+                    "type": "string",
+                    "description": "Skill name (e.g., 'commit', 'review-pr')"
+                },
+                "args": {
+                    "type": "string",
+                    "description": "Optional arguments for the skill"
+                }
+            },
+            "required": ["skill"]
+        })
     }
 }

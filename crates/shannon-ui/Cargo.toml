@@ -4,8 +4,16 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+shannon-core = { path = "../shannon-core" }
+shannon-tools = { path = "../shannon-tools" }
+shannon-mcp = { path = "../shannon-mcp" }
+shannon-types = { path = "../shannon-types" }
 ratatui = "0.29"
 crossterm = "0.28"
 tokio = { version = "1.42", features = ["full"] }
 unicode-width = "0.2"
 chrono = "0.4"
+uuid = { version = "1.11", features = ["v4", "serde"] }
+futures = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

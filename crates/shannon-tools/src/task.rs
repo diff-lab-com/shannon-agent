@@ -6,9 +6,10 @@
 //! - TaskGet: Fetch task details
 //! - TaskList: List all tasks
 
-use crate::{Tool, ToolError, ToolResult};
+use crate::{Tool, ToolError, ToolResult, ToolOutput};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -218,7 +219,7 @@ impl TaskTool {
 
         let task = store
             .get_mut(&input.task_id)
-            .ok_or_else(|| ToolError::TaskError(format!("Task {} not found", input.task_id)))?;
+            .ok_or_else(|| ToolError::InvalidInput(format!("Task {} not found", input.task_id)))?;
 
         // Update fields if provided
         if let Some(status) = input.status {
@@ -306,35 +307,80 @@ impl TaskTool {
 
 #[async_trait]
 impl Tool for TaskTool {
-    async fn execute(&self, input: serde_json::Value) -> ToolResult<serde_json::Value> {
+    async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         // Parse operation type from input
         let operation = input
             .get("operation")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::TaskError("Missing operation field".to_string()))?;
+            .ok_or_else(|| ToolError::InvalidInput("Missing operation field".to_string()))?;
 
         match operation {
             "Create" => {
-                let create_input: TaskCreateInput = serde_json::from_value(input)?;
+                let create_input: TaskCreateInput = serde_json::from_value(input)
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid create input: {}", e)))?;
                 let output = self.create_task(create_input).await?;
-                serde_json::to_value(output).map_err(ToolError::from)
+                Ok(ToolOutput {
+                    content: output.message,
+                    is_error: false,
+                    metadata: {
+                        let mut map = HashMap::new();
+                        map.insert("task".to_string(), json!(output.task));
+                        map
+                    },
+                })
             }
             "Update" => {
-                let update_input: TaskUpdateInput = serde_json::from_value(input)?;
+                let update_input: TaskUpdateInput = serde_json::from_value(input)
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid update input: {}", e)))?;
                 let output = self.update_task(update_input).await?;
-                serde_json::to_value(output).map_err(ToolError::from)
+                Ok(ToolOutput {
+                    content: output.message,
+                    is_error: false,
+                    metadata: {
+                        let mut map = HashMap::new();
+                        map.insert("task".to_string(), json!(output.task));
+                        map
+                    },
+                })
             }
             "Get" => {
-                let get_input: TaskGetInput = serde_json::from_value(input)?;
+                let get_input: TaskGetInput = serde_json::from_value(input)
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid get input: {}", e)))?;
+                let task_id = get_input.task_id.clone();
                 let output = self.get_task(get_input).await?;
-                serde_json::to_value(output).map_err(ToolError::from)
+                Ok(ToolOutput {
+                    content: if output.found {
+                        format!("Task found: {}", task_id)
+                    } else {
+                        format!("Task not found: {}", task_id)
+                    },
+                    is_error: !output.found,
+                    metadata: {
+                        let mut map = HashMap::new();
+                        map.insert("found".to_string(), json!(output.found));
+                        if let Some(task) = output.task {
+                            map.insert("task".to_string(), json!(task));
+                        }
+                        map
+                    },
+                })
             }
             "List" => {
-                let list_input: TaskListInput = serde_json::from_value(input)?;
+                let list_input: TaskListInput = serde_json::from_value(input)
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid list input: {}", e)))?;
                 let output = self.list_tasks(list_input).await?;
-                serde_json::to_value(output).map_err(ToolError::from)
+                Ok(ToolOutput {
+                    content: format!("Found {} tasks", output.count),
+                    is_error: false,
+                    metadata: {
+                        let mut map = HashMap::new();
+                        map.insert("count".to_string(), json!(output.count));
+                        map.insert("tasks".to_string(), json!(output.tasks));
+                        map
+                    },
+                })
             }
-            _ => Err(ToolError::TaskError(format!(
+            _ => Err(ToolError::InvalidInput(format!(
                 "Unknown operation: {}",
                 operation
             ))),
@@ -349,15 +395,38 @@ impl Tool for TaskTool {
         &self.description
     }
 
-    fn validate_input(&self, input: &serde_json::Value) -> Result<(), ToolError> {
-        if !input.is_object() {
-            return Err(ToolError::TaskError("Input must be an object".to_string()));
-        }
-
-        if input.get("operation").is_none() {
-            return Err(ToolError::TaskError("Missing required field: operation".to_string()));
-        }
-
-        Ok(())
+    fn input_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "operation": {
+                    "type": "string",
+                    "description": "Operation type",
+                    "enum": ["Create", "Update", "Get", "List"]
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Task ID"
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "Task subject"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Task description"
+                },
+                "status": {
+                    "type": "string",
+                    "description": "Task status",
+                    "enum": ["pending", "in_progress", "completed"]
+                },
+                "filter": {
+                    "type": "string",
+                    "description": "Filter tasks by status"
+                }
+            },
+            "required": ["operation"]
+        })
     }
 }
