@@ -7,9 +7,10 @@ mod widgets;
 mod events;
 mod render;
 
-pub use repl::Repl;
+pub use repl::{Repl, ReplState};
 pub use events::{Event, EventHandler};
 pub use render::Renderer;
+pub use widgets::{ChatWidget, ChatRole, PromptWidget, MainLayoutWidget};
 
 /// Terminal UI application result type
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
