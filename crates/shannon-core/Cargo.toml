@@ -1,0 +1,33 @@
+[package]
+name = "shannon-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Workspace dependencies
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+# HTTP client for Claude API
+reqwest = { workspace = true }
+
+# Streaming support
+futures = "0.3"
+tokio-stream = "0.1"
+
+# State management
+dashmap = "6.1"
+
+[dev-dependencies]
+tokio-test = "0.4"
+criterion = "0.5"

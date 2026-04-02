@@ -1,0 +1,110 @@
+# Rust 编译产物
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo 锁定文件（可选，根据团队习惯决定是否提交）
+# Cargo.lock
+
+# IDE 和编辑器
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+.directory
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# 测试覆盖率
+*.profraw
+*.profdata
+llvm-profdata/
+llvm-cov/
+
+# 调试和日志
+*.log
+logs/
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+
+# 配置文件（包含敏感信息）
+config/local.toml
+config/production.toml
+.env
+.env.local
+.env.*.local
+
+# 构建脚本输出
+Cargo.toml.deps
+Cargo.toml.orig
+
+# 文档生成
+doc/
+
+# 备份文件
+*.bak
+*.backup
+*.old
+
+# 性能分析
+perf.data*
+flamegraph.svg
+
+# 依赖缓存
+.cargo/
+.cached/
+
+# 构建输出
+dist/
+build/
+out/
+
+# 测试
+tests/integration/tmp/
+
+# Claude/Anthropic 相关
+.claude/
+.shannon/
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# 二进制文件（意外提交）
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+
+# 覆盖率报告
+tarpaulin-report.html
+cobertura.xml
+lcov.info
+
+# 其他
+.cache/
+vendor/

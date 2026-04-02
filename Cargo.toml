@@ -1,0 +1,64 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/shannon-core",
+    "crates/shannon-cli",
+    "crates/shannon-ui",
+    "crates/shannon-mcp",
+    "crates/shannon-tools",
+    "crates/shannon-agents",
+    "crates/shannon-types",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["Shannon Code Contributors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/your-org/shannon-code"
+homepage = "https://github.com/your-org/shannon-code"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.43", features = ["full"] }
+tokio-util = "0.7"
+async-trait = "0.1"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# Terminal UI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# HTTP
+reqwest = { version = "0.12", features = ["json"] }
+
+# Utilities
+uuid = { version = "1.12", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+futures-util = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.dev]
+opt-level = 0
+debug = true
