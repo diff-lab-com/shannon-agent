@@ -36,7 +36,14 @@ pub use notebook::{NotebookEditTool, NotebookEditInput, NotebookEditOutput};
 pub use worktree::{WorktreeTool, EnterWorktreeInput, EnterWorktreeOutput, ExitWorktreeInput, ExitWorktreeOutput};
 pub use mcp::{McpResourceTool, ReadMcpResourceInput, ReadMcpResourceOutput, ListMcpResourcesInput, ListMcpResourcesOutput};
 pub use messaging::{SendMessageTool, SendMessageInput, SendMessageOutput};
-pub use todo::{TodoWriteTool, TodoWriteInput, TodoWriteOutput};
+pub use todo::{
+    TodoWriteTool, TodoWriteInput, TodoWriteOutput,
+    TaskCreateTool, TaskCreateInput, TaskCreateOutput,
+    TaskListTool, TaskListInput, TaskListOutput,
+    TaskUpdateTool, TaskUpdateInput, TaskUpdateOutput,
+    TaskGetTool, TaskGetInput, TaskGetOutput,
+    TaskStore, TodoItem, TodoStatus,
+};
 pub use skill::{SkillTool, SkillInvokeInput, SkillInvokeOutput};
 pub use cron::{CronTool, CronCreateInput, CronCreateOutput, CronDeleteInput, CronDeleteOutput, CronListInput, CronListOutput};
 

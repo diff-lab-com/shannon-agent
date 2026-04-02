@@ -467,6 +467,9 @@ impl Repl {
                             input_tokens, output_tokens, cost_usd);
                         response_text.push_str(&usage);
                     }
+                    Ok(QueryEvent::Cost { total_cost_usd, input_tokens, output_tokens, .. }) => {
+                        // Display cost tracking info
+                    }
                     Ok(QueryEvent::Completed { .. }) => {
                         // Query completed successfully
                     }

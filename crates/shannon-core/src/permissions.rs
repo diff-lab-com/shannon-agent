@@ -4,7 +4,6 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
 use thiserror::Error;
 
 /// Errors that can occur during permission validation

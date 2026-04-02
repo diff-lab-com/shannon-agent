@@ -29,6 +29,12 @@ tokio-stream = "0.1"
 dashmap = "6.1"
 serde_yaml = "0.9.34"
 
+# Home directory support
+dirs = { workspace = true }
+
+# Testing utilities
+tempfile = "3.16"
+
 [dev-dependencies]
 tokio-test = "0.4"
 criterion = "0.5"

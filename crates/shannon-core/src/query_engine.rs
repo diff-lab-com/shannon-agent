@@ -15,6 +15,74 @@ use tokio::sync::mpsc;
 use std::sync::RwLock;
 use uuid::Uuid;
 
+/// Cost tracker for API usage
+#[derive(Debug, Clone)]
+pub struct CostTracker {
+    pub total_input_tokens: u64,
+    pub total_output_tokens: u64,
+    pub total_cost_usd: f64,
+    pub model_name: String,
+}
+
+impl CostTracker {
+    /// Create a new cost tracker for a specific model
+    pub fn new(model: String) -> Self {
+        Self {
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cost_usd: 0.0,
+            model_name: model,
+        }
+    }
+
+    /// Calculate cost based on model pricing (in USD)
+    /// Prices per million tokens as of 2025
+    pub fn calculate_cost(model: &str, input_tokens: u64, output_tokens: u64) -> f64 {
+        let (input_price_per_mtok, output_price_per_mtok) = match model {
+            // Claude 3.5 Sonnet
+            m if m.contains("claude-3-5-sonnet") || m.contains("claude-sonnet-4-") => (3.0, 15.0),
+            // Claude 3.5 Haiku
+            m if m.contains("claude-3-5-haiku") => (0.80, 4.0),
+            // Claude 3 Opus
+            m if m.contains("claude-3-opus") => (15.0, 75.0),
+            // Claude 4.x Sonnet (same pricing as 3.5 Sonnet)
+            m if m.contains("claude-sonnet-4") => (3.0, 15.0),
+            // Default fallback (similar to 3.5 Sonnet)
+            _ => (3.0, 15.0),
+        };
+
+        let input_cost = (input_tokens as f64 / 1_000_000.0) * input_price_per_mtok;
+        let output_cost = (output_tokens as f64 / 1_000_000.0) * output_price_per_mtok;
+        input_cost + output_cost
+    }
+
+    /// Record usage and update totals
+    pub fn record_usage(&mut self, model: &str, input_tokens: u64, output_tokens: u64) {
+        self.total_input_tokens += input_tokens;
+        self.total_output_tokens += output_tokens;
+        self.total_cost_usd += Self::calculate_cost(model, input_tokens, output_tokens);
+    }
+
+    /// Get the total cost in USD
+    pub fn total_cost(&self) -> f64 {
+        self.total_cost_usd
+    }
+
+    /// Get a formatted summary of costs
+    pub fn summary(&self) -> String {
+        format!(
+            "Model: {} | Input tokens: {} | Output tokens: {} | Total cost: ${:.6}",
+            self.model_name, self.total_input_tokens, self.total_output_tokens, self.total_cost_usd
+        )
+    }
+}
+
+impl Default for CostTracker {
+    fn default() -> Self {
+        Self::new("claude-3-5-sonnet-20241022".to_string())
+    }
+}
+
 /// Permission request for user approval
 #[derive(Debug, Clone)]
 pub struct PermissionRequest {
@@ -149,6 +217,14 @@ pub enum QueryEvent {
         input_tokens: u64,
         output_tokens: u64,
         cost_usd: f64,
+    },
+
+    /// Cost summary event
+    Cost {
+        query_id: Uuid,
+        total_cost_usd: f64,
+        input_tokens: u64,
+        output_tokens: u64,
     },
 }
 
@@ -312,6 +388,7 @@ pub struct QueryEngine {
     config: QueryEngineConfig,
     event_tx: mpsc::UnboundedSender<QueryEvent>,
     conversation: ConversationState,
+    cost_tracker: Arc<RwLock<CostTracker>>,
 }
 
 impl QueryEngine {
@@ -324,6 +401,7 @@ impl QueryEngine {
         config: QueryEngineConfig,
     ) -> Self {
         let (event_tx, _) = mpsc::unbounded_channel();
+        let model = client.model().to_string();
         Self {
             client,
             tools: Arc::new(tools),
@@ -332,6 +410,7 @@ impl QueryEngine {
             config,
             event_tx,
             conversation: ConversationState::default(),
+            cost_tracker: Arc::new(RwLock::new(CostTracker::new(model))),
         }
     }
 
@@ -342,7 +421,18 @@ impl QueryEngine {
         permissions: PermissionManager,
         state: StateManager,
     ) -> Self {
-        Self::new(client, tools, permissions, state, QueryEngineConfig::default())
+        let (event_tx, _) = mpsc::unbounded_channel();
+        let model = client.model().to_string();
+        Self {
+            client,
+            tools: Arc::new(tools),
+            permissions: Arc::new(RwLock::new(permissions)),
+            state: Arc::new(state),
+            config: QueryEngineConfig::default(),
+            event_tx,
+            conversation: ConversationState::default(),
+            cost_tracker: Arc::new(RwLock::new(CostTracker::new(model))),
+        }
     }
 
     /// Subscribe to query events
@@ -409,7 +499,7 @@ impl QueryEngine {
             let client_config = crate::api::ClaudeClientConfig {
                 api_key: client_api_key,
                 base_url: client_base_url,
-                model: client_model,
+                model: client_model.clone(),
                 max_tokens: client_max_tokens,
                 ..Default::default()
             };
@@ -424,9 +514,18 @@ impl QueryEngine {
             let mut turn = 0;
             let mut tool_results: Vec<(String, String)> = Vec::new();
             let mut permission_requests: Vec<(mpsc::UnboundedReceiver<PermissionChoice>, String, serde_json::Value)> = Vec::new();
+            let mut total_input_tokens: u64 = 0;
+            let mut total_output_tokens: u64 = 0;
 
             loop {
                 if turn >= config.max_turns {
+                    let total_cost = CostTracker::calculate_cost(&client_model, total_input_tokens, total_output_tokens);
+                    let _ = tx.send(Ok(QueryEvent::Cost {
+                        query_id,
+                        total_cost_usd: total_cost,
+                        input_tokens: total_input_tokens,
+                        output_tokens: total_output_tokens,
+                    }));
                     let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
                     break;
                 }
@@ -502,11 +601,18 @@ impl QueryEngine {
                                             }
                                         }
                                         StreamEvent::MessageDelta { usage, .. } => {
+                                            let input_tokens = usage.input_tokens as u64;
+                                            let output_tokens = usage.output_tokens as u64;
+                                            let cost_usd = CostTracker::calculate_cost(&client_model, input_tokens, output_tokens);
+                                            
+                                            total_input_tokens += input_tokens;
+                                            total_output_tokens += output_tokens;
+                                            
                                             let _ = tx.send(Ok(QueryEvent::Usage {
                                                 query_id,
-                                                input_tokens: usage.input_tokens as u64,
-                                                output_tokens: usage.output_tokens as u64,
-                                                cost_usd: 0.0,
+                                                input_tokens,
+                                                output_tokens,
+                                                cost_usd,
                                             }));
 
                                             if !tool_inputs.is_empty() {
@@ -618,6 +724,13 @@ impl QueryEngine {
                                                     tokens_used: (usage.input_tokens + usage.output_tokens) as u64,
                                                 }));
                                             } else {
+                                                let total_cost = CostTracker::calculate_cost(&client_model, total_input_tokens, total_output_tokens);
+                                                let _ = tx.send(Ok(QueryEvent::Cost {
+                                                    query_id,
+                                                    total_cost_usd: total_cost,
+                                                    input_tokens: total_input_tokens,
+                                                    output_tokens: total_output_tokens,
+                                                }));
                                                 let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
                                                 return;
                                             }
@@ -637,6 +750,13 @@ impl QueryEngine {
                         }
 
                         if !has_content && tool_inputs.is_empty() {
+                            let total_cost = CostTracker::calculate_cost(&client_model, total_input_tokens, total_output_tokens);
+                            let _ = tx.send(Ok(QueryEvent::Cost {
+                                query_id,
+                                total_cost_usd: total_cost,
+                                input_tokens: total_input_tokens,
+                                output_tokens: total_output_tokens,
+                            }));
                             let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
                         }
                     }
@@ -954,5 +1074,134 @@ mod tests {
             }
             _ => panic!("First message should be a text summary"),
         }
+    }
+
+    // CostTracker tests
+
+    #[test]
+    fn test_cost_tracker_calculate_cost_sonnet() {
+        // Claude 3.5 Sonnet: $3/MTok input, $15/MTok output
+        let model = "claude-3-5-sonnet-20241022";
+        
+        // 1M input tokens = $3.00
+        let cost = CostTracker::calculate_cost(model, 1_000_000, 0);
+        assert!((cost - 3.0).abs() < 0.001);
+        
+        // 1M output tokens = $15.00
+        let cost = CostTracker::calculate_cost(model, 0, 1_000_000);
+        assert!((cost - 15.0).abs() < 0.001);
+        
+        // 1M input + 1M output = $18.00
+        let cost = CostTracker::calculate_cost(model, 1_000_000, 1_000_000);
+        assert!((cost - 18.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_cost_tracker_calculate_cost_haiku() {
+        // Claude 3.5 Haiku: $0.80/MTok input, $4/MTok output
+        let model = "claude-3-5-haiku-20241022";
+        
+        // 1M input tokens = $0.80
+        let cost = CostTracker::calculate_cost(model, 1_000_000, 0);
+        assert!((cost - 0.80).abs() < 0.001);
+        
+        // 1M output tokens = $4.00
+        let cost = CostTracker::calculate_cost(model, 0, 1_000_000);
+        assert!((cost - 4.0).abs() < 0.001);
+        
+        // 1M input + 1M output = $4.80
+        let cost = CostTracker::calculate_cost(model, 1_000_000, 1_000_000);
+        assert!((cost - 4.80).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_cost_tracker_calculate_cost_opus() {
+        // Claude 3 Opus: $15/MTok input, $75/MTok output
+        let model = "claude-3-opus-20240229";
+        
+        // 1M input tokens = $15.00
+        let cost = CostTracker::calculate_cost(model, 1_000_000, 0);
+        assert!((cost - 15.0).abs() < 0.001);
+        
+        // 1M output tokens = $75.00
+        let cost = CostTracker::calculate_cost(model, 0, 1_000_000);
+        assert!((cost - 75.0).abs() < 0.001);
+        
+        // 1M input + 1M output = $90.00
+        let cost = CostTracker::calculate_cost(model, 1_000_000, 1_000_000);
+        assert!((cost - 90.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_cost_tracker_calculate_cost_sonnet4() {
+        // Claude Sonnet 4: same pricing as 3.5 Sonnet
+        let model = "claude-sonnet-4-20250514";
+        
+        // 1M input + 1M output = $18.00
+        let cost = CostTracker::calculate_cost(model, 1_000_000, 1_000_000);
+        assert!((cost - 18.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_cost_tracker_calculate_cost_default() {
+        // Unknown model should fallback to 3.5 Sonnet pricing
+        let model = "unknown-model";
+        
+        // 1M input + 1M output = $18.00 (default pricing)
+        let cost = CostTracker::calculate_cost(model, 1_000_000, 1_000_000);
+        assert!((cost - 18.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_cost_tracker_calculate_cost_small_tokens() {
+        // Test with small token counts (less than 1M)
+        let model = "claude-3-5-sonnet-20241022";
+        
+        // 1000 input + 500 output
+        // Input: 1000/1M * $3 = $0.000003
+        // Output: 500/1M * $15 = $0.0000075
+        // Total: $0.0000105
+        let cost = CostTracker::calculate_cost(model, 1000, 500);
+        let expected = (1000.0 / 1_000_000.0) * 3.0 + (500.0 / 1_000_000.0) * 15.0;
+        assert!((cost - expected).abs() < 0.000001);
+    }
+
+    #[test]
+    fn test_cost_tracker_record_usage() {
+        let mut tracker = CostTracker::new("claude-3-5-sonnet-20241022".to_string());
+        
+        // Record first usage
+        tracker.record_usage("claude-3-5-sonnet-20241022", 100_000, 50_000);
+        assert_eq!(tracker.total_input_tokens, 100_000);
+        assert_eq!(tracker.total_output_tokens, 50_000);
+        assert!(tracker.total_cost_usd > 0.0);
+        
+        // Record second usage - should accumulate
+        tracker.record_usage("claude-3-5-sonnet-20241022", 200_000, 100_000);
+        assert_eq!(tracker.total_input_tokens, 300_000);
+        assert_eq!(tracker.total_output_tokens, 150_000);
+        assert!(tracker.total_cost_usd > 0.001);
+    }
+
+    #[test]
+    fn test_cost_tracker_summary() {
+        let tracker = CostTracker::new("claude-3-5-haiku".to_string());
+        let summary = tracker.summary();
+        
+        assert!(summary.contains("claude-3-5-haiku"));
+        assert!(summary.contains("Input tokens:"));
+        assert!(summary.contains("Output tokens:"));
+        assert!(summary.contains("Total cost:"));
+    }
+
+    #[test]
+    fn test_cost_tracker_total_cost() {
+        let mut tracker = CostTracker::new("claude-3-opus".to_string());
+        
+        assert!((tracker.total_cost() - 0.0).abs() < 0.001);
+        
+        tracker.record_usage("claude-3-opus", 1_000_000, 1_000_000);
+        // Opus: $15 input + $75 output = $90 total
+        assert!((tracker.total_cost() - 90.0).abs() < 0.001);
     }
 }

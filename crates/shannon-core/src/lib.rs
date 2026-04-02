@@ -9,6 +9,7 @@
 //! - [`PermissionManager`]: Security and permission validation
 //! - [`StateManager`]: Persistent state and session management
 //! - [`ClaudeClient`]: Async Claude API client with streaming support
+//! - [`SettingsManager`]: Configuration management for user and project settings
 
 pub mod query_engine;
 pub mod tools;
@@ -16,6 +17,7 @@ pub mod permissions;
 pub mod state;
 pub mod api;
 pub mod claude_md;
+pub mod settings;
 
 // Re-export key types for convenience
 pub use query_engine::{QueryEngine, QueryContext, QueryEvent};
@@ -30,6 +32,7 @@ pub use api::{
     MessageRequest, MessageResponse, StreamEvent, ToolDefinition, Usage,
     ApiError,
 };
+pub use settings::{Settings, SettingsManager, SettingsError};
 
 /// Core error types for Shannon
 pub mod error {
@@ -37,6 +40,7 @@ pub mod error {
     pub use crate::tools::ToolError;
     pub use crate::permissions::PermissionError;
     pub use crate::state::StateError;
+    pub use crate::settings::SettingsError;
 }
 
 /// Version information
