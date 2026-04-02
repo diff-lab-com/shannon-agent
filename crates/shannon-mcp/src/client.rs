@@ -6,7 +6,6 @@
 use crate::protocol::*;
 use crate::transport::Transport;
 use crate::{McpError, McpResult};
-use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -174,6 +173,83 @@ impl<T: Transport> McpClient<T> {
             .map_err(|e| McpError::Protocol(format!("Invalid prompt get result: {}", e)))?;
 
         Ok(content)
+    }
+
+    /// Complete a prompt argument or resource name
+    pub async fn complete(&self, reference: CompletionRef, argument: PromptArgument) -> McpResult<CompletionResult> {
+        debug!(ref_type = %reference.ref_type, "Requesting completion");
+
+        let params = serde_json::json!({
+            "ref": reference,
+            "argument": argument
+        });
+
+        let response = self.send_request("completion/complete", Some(params)).await?;
+        let result: CompletionResult = serde_json::from_value(response)
+            .map_err(|e| McpError::Protocol(format!("Invalid completion result: {}", e)))?;
+
+        Ok(result)
+    }
+
+    /// Set the logging level
+    pub async fn set_logging_level(&self, level: LoggingLevel) -> McpResult<()> {
+        debug!(level = ?level, "Setting logging level");
+
+        let params = serde_json::json!({ "level": level });
+        let _response = self.send_request("logging/setLevel", Some(params)).await?;
+
+        Ok(())
+    }
+
+    /// Subscribe to resource updates
+    pub async fn subscribe_resource(&self, uri: &str) -> McpResult<bool> {
+        debug!(uri = %uri, "Subscribing to resource");
+
+        let params = serde_json::json!({ "uri": uri });
+        let response = self.send_request("resources/subscribe", Some(params)).await?;
+        let result: SubscribeResult = serde_json::from_value(response)
+            .map_err(|e| McpError::Protocol(format!("Invalid subscribe result: {}", e)))?;
+
+        Ok(result.subscribed)
+    }
+
+    /// Unsubscribe from resource updates
+    pub async fn unsubscribe_resource(&self, uri: &str) -> McpResult<bool> {
+        debug!(uri = %uri, "Unsubscribing from resource");
+
+        let params = serde_json::json!({ "uri": uri });
+        let response = self.send_request("resources/unsubscribe", Some(params)).await?;
+        let result: SubscribeResult = serde_json::from_value(response)
+            .map_err(|e| McpError::Protocol(format!("Invalid unsubscribe result: {}", e)))?;
+
+        Ok(result.subscribed)
+    }
+
+    /// Get server capabilities
+    pub async fn capabilities(&self) -> Option<ServerCapabilities> {
+        self.server_capabilities.lock().await.clone()
+    }
+
+    /// Check if server supports a specific capability
+    pub async fn supports_tools(&self) -> bool {
+        self.server_capabilities.lock().await
+            .as_ref()
+            .and_then(|caps| caps.tools.as_ref())
+            .is_some()
+    }
+
+    pub async fn supports_resources(&self) -> bool {
+        self.server_capabilities.lock().await
+            .as_ref()
+            .and_then(|caps| caps.resources.as_ref())
+            .is_some()
+    }
+
+    pub async fn supports_prompts(&self) -> bool {
+        self.server_capabilities.lock().await
+            .as_ref()
+            .and_then(|caps| caps.prompts.as_ref())
+            .is_some()
     }
 
     /// Send a raw JSON-RPC request

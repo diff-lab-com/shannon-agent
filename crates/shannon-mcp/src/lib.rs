@@ -44,9 +44,14 @@ pub use protocol::{
     JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, JsonRpcNotification,
     McpRequest, McpResponse, McpNotification,
     RequestMethod, ResponseMethod, NotificationMethod,
-    Tool, Resource, Prompt,
+    Tool, Resource, ResourceTemplate, Prompt, PromptArgument,
     McpCapabilities, ServerCapabilities, ClientCapabilities,
-    ToolContent, ResourceContent,
+    ToolContent, ResourceContent, ContentBlock,
+    CompletionRequest, CompletionRef, CompletionResult, Completion, CompletionValue,
+    LoggingLevel,
+    InitializeParams, InitializeResult, ClientInfo, ServerInfo,
+    ListToolsResult, ListResourcesResult, ListPromptsResult, ListResourceTemplatesResult,
+    SubscribeRequest, UnsubscribeRequest, SubscribeResult,
 };
 pub use transport::{Transport, TransportError, StdioTransport, SseTransport, HttpTransport, WebSocketTransport};
 pub use client::{McpClient, McpClientError};

@@ -414,3 +414,89 @@ pub struct ResourceTemplate {
 
 /// List resource templates result
 pub type ListResourceTemplatesResult = Vec<ResourceTemplate>;
+
+/// Completion request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionRequest {
+    #[serde(rename = "ref")]
+    pub reference: CompletionRef,
+    pub argument: PromptArgument,
+}
+
+/// Reference to a completion
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionRef {
+    #[serde(rename = "type")]
+    pub ref_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// Completion result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionResult {
+    pub completion: Completion,
+}
+
+/// Completion values
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Completion {
+    pub values: Vec<CompletionValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_more: Option<bool>,
+}
+
+/// A completion value suggestion
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionValue {
+    pub value: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// Set level for logging
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LoggingLevel {
+    Debug,
+    Info,
+    Notice,
+    Warning,
+    Error,
+    Critical,
+    Alert,
+    Emergency,
+}
+
+/// Set logging level request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetLevelRequest {
+    pub level: LoggingLevel,
+}
+
+/// Subscribe to resource request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubscribeRequest {
+    pub uri: String,
+}
+
+/// Unsubscribe from resource request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnsubscribeRequest {
+    pub uri: String,
+}
+
+/// Subscription result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubscribeResult {
+    pub subscribed: bool,
+}
