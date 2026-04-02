@@ -1,11 +1,19 @@
 //! Git worktree isolation for parallel agent development
+//!
+//! Provides:
+//! - `WorktreeManager`: Session-based worktree management for multi-agent coordination
+//! - `EnterWorktreeTool` / `ExitWorktreeTool`: Tool trait implementations for the query engine
 
 use crate::error::AgentError;
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use shannon_core::tools::{Tool, ToolError, ToolOutput, ToolResult};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tokio::sync::RwLock;
+use std::sync::RwLock;
+use tokio::sync::RwLock as AsyncRwLock;
 
 /// Configuration for worktree manager
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,7 +90,7 @@ pub struct WorktreeSession {
 /// Manager for git worktree isolation
 pub struct WorktreeManager {
     config: WorktreeConfig,
-    active_sessions: RwLock<HashMap<String, WorktreeSession>>,
+    active_sessions: AsyncRwLock<HashMap<String, WorktreeSession>>,
 }
 
 impl WorktreeManager {
@@ -107,7 +115,7 @@ impl WorktreeManager {
 
         Ok(Self {
             config,
-            active_sessions: RwLock::new(HashMap::new()),
+            active_sessions: AsyncRwLock::new(HashMap::new()),
         })
     }
 
@@ -375,5 +383,513 @@ impl WorktreeManager {
     /// Get count of active sessions
     pub async fn session_count(&self) -> usize {
         self.active_sessions.read().await.len()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tool trait implementations for the query engine
+// ---------------------------------------------------------------------------
+
+/// Input for the enter_worktree tool.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EnterWorktreeToolInput {
+    /// Optional worktree name. Auto-generated if omitted.
+    pub name: Option<String>,
+}
+
+/// Input for the exit_worktree tool.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ExitWorktreeToolInput {
+    /// "keep" to leave the worktree on disk, "remove" to delete it.
+    pub action: String,
+    /// Required when action is "remove" and there are uncommitted changes.
+    pub discard_changes: Option<bool>,
+}
+
+/// Global state tracking the currently active worktree session (process-wide).
+static ACTIVE_WORKTREE: RwLock<Option<WorktreeSession>> = RwLock::new(None);
+
+/// Validate that a worktree name contains only safe characters.
+fn validate_name(name: &str) -> Result<(), ToolError> {
+    if name.is_empty() {
+        return Err(ToolError::ExecutionFailed(
+            "Worktree name must not be empty".into(),
+        ));
+    }
+    if name.len() > 64 {
+        return Err(ToolError::ExecutionFailed(
+            "Worktree name must be at most 64 characters".into(),
+        ));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '.' || c == '_' || c == '-')
+    {
+        return Err(ToolError::ExecutionFailed(format!(
+            "Worktree name '{}' contains invalid characters. Use only letters, digits, dots, underscores, and dashes.",
+            name
+        )));
+    }
+    Ok(())
+}
+
+/// Walk upward from `start` to find a directory containing `.git/`.
+fn find_git_root(start: &Path) -> Option<PathBuf> {
+    let mut current = Some(start.to_path_buf());
+    while let Some(path) = current {
+        if path.join(".git").exists() {
+            return Some(path);
+        }
+        current = path.parent().map(|p| p.to_path_buf());
+    }
+    None
+}
+
+/// Generate a random worktree name.
+fn generate_random_name() -> String {
+    format!(
+        "wt-{}",
+        uuid::Uuid::new_v4().to_string().split('-').next().unwrap()
+    )
+}
+
+// ---- EnterWorktreeTool ---------------------------------------------------
+
+/// Tool that creates a git worktree and switches the session into it.
+pub struct EnterWorktreeTool;
+
+impl EnterWorktreeTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl Tool for EnterWorktreeTool {
+    fn name(&self) -> &str {
+        "enter_worktree"
+    }
+
+    fn description(&self) -> &str {
+        "Create an isolated git worktree for safe experimentation"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Worktree name (auto-generated if omitted)"
+                }
+            }
+        })
+    }
+
+    async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
+        let parsed: EnterWorktreeToolInput = serde_json::from_value(input)
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid enter_worktree input: {}", e)))?;
+
+        // Prevent double-entry.
+        {
+            let guard = ACTIVE_WORKTREE
+                .read()
+                .map_err(|e| ToolError::ExecutionFailed(format!("Lock error: {}", e)))?;
+            if guard.is_some() {
+                return Err(ToolError::ExecutionFailed(
+                    "Already inside a worktree session".into(),
+                ));
+            }
+        }
+
+        let cwd = std::env::current_dir()
+            .map_err(|e| ToolError::ExecutionFailed(format!("Cannot determine cwd: {}", e)))?;
+        let git_root = find_git_root(&cwd).ok_or_else(|| {
+            ToolError::ExecutionFailed("Not in a git repository".into())
+        })?;
+
+        // Resolve / validate name.
+        let name = match &parsed.name {
+            Some(n) => {
+                validate_name(n)?;
+                n.clone()
+            }
+            None => generate_random_name(),
+        };
+
+        let worktree_path = git_root.join(".claude").join("worktrees").join(&name);
+        let branch = format!("worktree/{}", name);
+
+        // Create the worktree.
+        let output = Command::new("git")
+            .args(["worktree", "add", "-b", &branch])
+            .arg(worktree_path.to_str().unwrap())
+            .current_dir(&git_root)
+            .output()
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to run git: {}", e)))?;
+
+        if !output.status.success() {
+            return Err(ToolError::ExecutionFailed(format!(
+                "Failed to create worktree: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        let session = WorktreeSession {
+            id: name.clone(),
+            path: worktree_path.clone(),
+            branch_name: branch.clone(),
+            original_branch: String::new(),
+            status: WorktreeStatus::Active,
+            created_at: chrono::Utc::now(),
+            agent: None,
+            metadata: HashMap::new(),
+        };
+
+        {
+            let mut guard = ACTIVE_WORKTREE
+                .write()
+                .map_err(|e| ToolError::ExecutionFailed(format!("Lock error: {}", e)))?;
+            *guard = Some(session);
+        }
+
+        tracing::info!(
+            name = %name,
+            path = %worktree_path.display(),
+            "Entered worktree"
+        );
+
+        Ok(ToolOutput {
+            content: format!(
+                "Created worktree '{}' at {}.",
+                name,
+                worktree_path.display()
+            ),
+            is_error: false,
+            metadata: {
+                let mut m = HashMap::new();
+                m.insert("worktree_path".into(), json!(worktree_path.to_string_lossy()));
+                m.insert("branch".into(), json!(branch));
+                m
+            },
+        })
+    }
+}
+
+// ---- ExitWorktreeTool ----------------------------------------------------
+
+/// Tool that exits the current worktree session, optionally removing it.
+pub struct ExitWorktreeTool;
+
+impl ExitWorktreeTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl Tool for ExitWorktreeTool {
+    fn name(&self) -> &str {
+        "exit_worktree"
+    }
+
+    fn description(&self) -> &str {
+        "Exit and optionally remove a git worktree"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["keep", "remove"],
+                    "description": "Whether to keep or remove the worktree"
+                }
+            },
+            "required": ["action"]
+        })
+    }
+
+    async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
+        let parsed: ExitWorktreeToolInput = serde_json::from_value(input)
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid exit_worktree input: {}", e)))?;
+
+        let session = {
+            let guard = ACTIVE_WORKTREE
+                .read()
+                .map_err(|e| ToolError::ExecutionFailed(format!("Lock error: {}", e)))?;
+            guard
+                .as_ref()
+                .cloned()
+                .ok_or_else(|| ToolError::ExecutionFailed("No active worktree session".into()))?
+        };
+
+        let action = parsed.action.as_str();
+        let action_lower = action.to_lowercase();
+
+        match action_lower.as_str() {
+            "keep" => {
+                // Clear session state.
+                {
+                    let mut guard = ACTIVE_WORKTREE
+                        .write()
+                        .map_err(|e| ToolError::ExecutionFailed(format!("Lock error: {}", e)))?;
+                    *guard = None;
+                }
+
+                tracing::info!(
+                    name = %session.id,
+                    "Exited worktree (kept)"
+                );
+
+                Ok(ToolOutput {
+                    content: format!(
+                        "Exited worktree. Worktree preserved at {} on branch {}.",
+                        session.path.display(),
+                        session.branch_name
+                    ),
+                    is_error: false,
+                    metadata: {
+                        let mut m = HashMap::new();
+                        m.insert("action".into(), json!("keep"));
+                        m.insert("worktree_path".into(), json!(session.path.to_string_lossy()));
+                        m
+                    },
+                })
+            }
+
+            "remove" => {
+                // Check for uncommitted changes unless discard_changes is set.
+                if !parsed.discard_changes.unwrap_or(false) {
+                    let has_changes = has_uncommitted_changes(&session.path)?;
+                    if has_changes {
+                        return Err(ToolError::ExecutionFailed(
+                            "Worktree has uncommitted changes. Set discard_changes: true to force removal.".into(),
+                        ));
+                    }
+                }
+
+                // Remove the worktree via git.
+                let output = Command::new("git")
+                    .args(["worktree", "remove", "--force"])
+                    .arg(session.path.to_str().unwrap())
+                    .output()
+                    .map_err(|e| {
+                        ToolError::ExecutionFailed(format!("Failed to run git: {}", e))
+                    })?;
+
+                if !output.status.success() {
+                    return Err(ToolError::ExecutionFailed(format!(
+                        "Failed to remove worktree: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    )));
+                }
+
+                // Clear session state.
+                {
+                    let mut guard = ACTIVE_WORKTREE
+                        .write()
+                        .map_err(|e| ToolError::ExecutionFailed(format!("Lock error: {}", e)))?;
+                    *guard = None;
+                }
+
+                tracing::info!(
+                    name = %session.id,
+                    "Exited and removed worktree"
+                );
+
+                Ok(ToolOutput {
+                    content: format!(
+                        "Exited and removed worktree at {}.",
+                        session.path.display()
+                    ),
+                    is_error: false,
+                    metadata: {
+                        let mut m = HashMap::new();
+                        m.insert("action".into(), json!("remove"));
+                        m.insert("worktree_path".into(), json!(session.path.to_string_lossy()));
+                        m
+                    },
+                })
+            }
+
+            other => Err(ToolError::InvalidInput(format!(
+                "Invalid action '{}'. Expected 'keep' or 'remove'.",
+                other
+            ))),
+        }
+    }
+}
+
+/// Check whether a worktree path has uncommitted changes.
+fn has_uncommitted_changes(path: &Path) -> Result<bool, ToolError> {
+    let output = Command::new("git")
+        .args(["-C", path.to_str().unwrap(), "status", "--porcelain"])
+        .output()
+        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to run git: {}", e)))?;
+
+    Ok(!output.stdout.is_empty())
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_name_accepts_valid() {
+        assert!(validate_name("my-worktree").is_ok());
+        assert!(validate_name("worktree_123").is_ok());
+        assert!(validate_name("a.b").is_ok());
+        assert!(validate_name("ABC").is_ok());
+    }
+
+    #[test]
+    fn test_validate_name_rejects_invalid() {
+        assert!(validate_name("has spaces").is_err());
+        assert!(validate_name("has/slash").is_err());
+        assert!(validate_name("").is_err());
+    }
+
+    #[test]
+    fn test_validate_name_rejects_too_long() {
+        let long_name = "a".repeat(65);
+        assert!(validate_name(&long_name).is_err());
+        assert!(validate_name(&"a".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn test_generate_random_name_format() {
+        let name = generate_random_name();
+        assert!(name.starts_with("wt-"));
+        // UUID segment is 8 hex chars
+        assert_eq!(name.len(), "wt-".len() + 8);
+    }
+
+    #[test]
+    fn test_enter_worktree_input_optional_name() {
+        let input = EnterWorktreeToolInput { name: None };
+        assert!(input.name.is_none());
+
+        let input = EnterWorktreeToolInput {
+            name: Some("test-wt".into()),
+        };
+        assert_eq!(input.name.as_deref(), Some("test-wt"));
+    }
+
+    #[test]
+    fn test_exit_worktree_input_parsing() {
+        let input = ExitWorktreeToolInput {
+            action: "keep".into(),
+            discard_changes: None,
+        };
+        assert_eq!(input.action, "keep");
+
+        let input = ExitWorktreeToolInput {
+            action: "remove".into(),
+            discard_changes: Some(true),
+        };
+        assert_eq!(input.action, "remove");
+        assert_eq!(input.discard_changes, Some(true));
+    }
+
+    #[test]
+    fn test_enter_worktree_tool_schema() {
+        let tool = EnterWorktreeTool::new();
+        assert_eq!(tool.name(), "enter_worktree");
+        assert!(!tool.description().is_empty());
+
+        let schema = tool.input_schema();
+        assert_eq!(schema["type"], "object");
+        let props = schema["properties"].as_object().unwrap();
+        assert!(props.contains_key("name"));
+    }
+
+    #[test]
+    fn test_exit_worktree_tool_schema() {
+        let tool = ExitWorktreeTool::new();
+        assert_eq!(tool.name(), "exit_worktree");
+        assert!(!tool.description().is_empty());
+
+        let schema = tool.input_schema();
+        assert_eq!(schema["type"], "object");
+        let required = schema["required"].as_array().unwrap();
+        assert!(required.contains(&json!("action")));
+
+        let props = schema["properties"].as_object().unwrap();
+        let action = &props["action"];
+        let enum_vals = action["enum"].as_array().unwrap();
+        assert!(enum_vals.contains(&json!("keep")));
+        assert!(enum_vals.contains(&json!("remove")));
+    }
+
+    #[test]
+    fn test_enter_worktree_tool_execute_invalid_json() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let tool = EnterWorktreeTool::new();
+        let result = rt.block_on(tool.execute(json!({"name": 123})));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_exit_worktree_tool_execute_no_session() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let tool = ExitWorktreeTool::new();
+
+        // Ensure no active session.
+        *ACTIVE_WORKTREE.write().unwrap() = None;
+
+        let result = rt.block_on(tool.execute(json!({"action": "keep"})));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("No active worktree session"));
+    }
+
+    #[test]
+    fn test_exit_worktree_tool_execute_invalid_action() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let tool = ExitWorktreeTool::new();
+
+        // Set up a fake session so we get past the "no session" check.
+        *ACTIVE_WORKTREE.write().unwrap() = Some(WorktreeSession {
+            id: "test".into(),
+            path: PathBuf::from("/tmp/nonexistent-worktree"),
+            branch_name: "worktree/test".into(),
+            original_branch: String::new(),
+            status: WorktreeStatus::Active,
+            created_at: chrono::Utc::now(),
+            agent: None,
+            metadata: HashMap::new(),
+        });
+
+        let result = rt.block_on(tool.execute(json!({"action": "invalid"})));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Invalid action"));
+
+        // Clean up.
+        *ACTIVE_WORKTREE.write().unwrap() = None;
+    }
+
+    #[test]
+    fn test_find_git_root_finds_repo() {
+        // This test runs inside the actual git repo.
+        let cwd = std::env::current_dir().unwrap();
+        let root = find_git_root(&cwd);
+        assert!(root.is_some());
+        // The root should contain a .git directory.
+        assert!(root.unwrap().join(".git").exists());
+    }
+
+    #[test]
+    fn test_find_git_root_no_repo() {
+        // /tmp is very unlikely to be inside a git repo.
+        let result = find_git_root(Path::new("/tmp"));
+        // May or may not find one depending on system, so just ensure no panic.
+        let _ = result;
     }
 }

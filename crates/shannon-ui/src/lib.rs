@@ -10,6 +10,7 @@ mod render;
 pub use repl::{Repl, ReplState};
 pub use events::{Event, EventHandler};
 pub use render::Renderer;
+pub use render::render_diff;
 pub use widgets::{ChatWidget, ChatRole, PromptWidget, MainLayoutWidget};
 
 /// Terminal UI application result type

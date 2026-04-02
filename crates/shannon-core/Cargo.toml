@@ -32,6 +32,9 @@ serde_yaml = "0.9.34"
 # Home directory support
 dirs = { workspace = true }
 
+# Regex for hook matching
+regex = "1.11"
+
 # Testing utilities
 tempfile = "3.16"
 

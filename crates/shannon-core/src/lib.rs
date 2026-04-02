@@ -18,6 +18,7 @@ pub mod state;
 pub mod api;
 pub mod claude_md;
 pub mod settings;
+pub mod hooks;
 
 // Re-export key types for convenience
 pub use query_engine::{QueryEngine, QueryContext, QueryEvent};
@@ -33,6 +34,7 @@ pub use api::{
     ApiError,
 };
 pub use settings::{Settings, SettingsManager, SettingsError};
+pub use hooks::{HookManager, HookEvent, HookResult, HookDecision, HookEventType, HookError};
 
 /// Core error types for Shannon
 pub mod error {
@@ -41,6 +43,7 @@ pub mod error {
     pub use crate::permissions::PermissionError;
     pub use crate::state::StateError;
     pub use crate::settings::SettingsError;
+    pub use crate::hooks::HookError;
 }
 
 /// Version information

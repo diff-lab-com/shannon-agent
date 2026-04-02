@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 # Core types and traits
 shannon-core = { path = "../shannon-core" }
+shannon-mcp = { path = "../shannon-mcp" }
 
 # Async runtime
 tokio = { workspace = true }
@@ -17,6 +18,9 @@ serde_json = { workspace = true }
 # Error handling
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
 
 # HTTP client for web operations
 reqwest = { version = "0.12", features = ["json"] }
