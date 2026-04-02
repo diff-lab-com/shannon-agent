@@ -1,0 +1,517 @@
+//! Git worktree management tools
+//!
+//! Provides implementations for:
+//! - EnterWorktree: Create isolated git worktree and switch into it
+//! - ExitWorktree: Exit worktree session and return to original directory
+//!
+//! These tools enable safe, isolated experimentation in parallel git branches.
+
+use crate::{Tool, ToolError, ToolResult};
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::{Arc, RwLock};
+use uuid::Uuid;
+
+/// Worktree session state
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorktreeSession {
+    /// Path to the worktree directory
+    pub worktree_path: String,
+
+    /// Branch name for the worktree
+    pub worktree_branch: Option<String>,
+
+    /// Original working directory before entering worktree
+    pub original_cwd: String,
+
+    /// Original HEAD commit (for detecting changes)
+    pub original_head_commit: Option<String>,
+
+    /// Optional tmux session name
+    pub tmux_session_name: Option<String>,
+
+    /// Session ID
+    pub session_id: String,
+}
+
+/// Input for entering a worktree
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EnterWorktreeInput {
+    /// Optional name for the worktree
+    /// Each "/"-separated segment may contain only letters, digits, dots, underscores, and dashes
+    /// Max 64 chars total. Random name generated if not provided.
+    pub name: Option<String>,
+}
+
+/// Output from entering a worktree
+#[derive(Debug, Serialize)]
+pub struct EnterWorktreeOutput {
+    /// Path to the created worktree
+    pub worktree_path: String,
+
+    /// Branch name for the worktree
+    pub worktree_branch: Option<String>,
+
+    /// Success message
+    pub message: String,
+}
+
+/// Action for exiting a worktree
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ExitAction {
+    /// Leave the worktree and branch on disk
+    Keep,
+    /// Delete both the worktree and branch
+    Remove,
+}
+
+/// Input for exiting a worktree
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ExitWorktreeInput {
+    /// Action to take (keep or remove)
+    pub action: ExitAction,
+
+    /// Required when action is "remove" and worktree has uncommitted changes
+    pub discard_changes: Option<bool>,
+}
+
+/// Output from exiting a worktree
+#[derive(Debug, Serialize)]
+pub struct ExitWorktreeOutput {
+    /// Action that was taken
+    pub action: ExitAction,
+
+    /// Original working directory
+    pub original_cwd: String,
+
+    /// Worktree path
+    pub worktree_path: String,
+
+    /// Worktree branch (if any)
+    pub worktree_branch: Option<String>,
+
+    /// Tmux session name (if any)
+    pub tmux_session_name: Option<String>,
+
+    /// Number of discarded files (when removing)
+    pub discarded_files: Option<usize>,
+
+    /// Number of discarded commits (when removing)
+    pub discarded_commits: Option<usize>,
+
+    /// Status message
+    pub message: String,
+}
+
+/// Global worktree session state
+static CURRENT_WORKTREE_SESSION: RwLock<Option<WorktreeSession>> = RwLock::new(None);
+
+/// Validate worktree name format
+fn validate_worktree_name(name: &str) -> Result<(), ToolError> {
+    if name.len() > 64 {
+        return Err(ToolError::SystemError(
+            "Worktree name must be 64 characters or less".to_string(),
+        ));
+    }
+
+    for segment in name.split('/') {
+        if !segment
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '.' || c == '_' || c == '-')
+        {
+            return Err(ToolError::SystemError(format!(
+                "Worktree name segment '{}' contains invalid characters. Only letters, digits, dots, underscores, and dashes are allowed",
+                segment
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// Get the current git HEAD commit
+fn get_current_head_commit(repo_path: &Path) -> Result<Option<String>, ToolError> {
+    let output = Command::new("git")
+        .args(["-C", repo_path.to_str().unwrap(), "rev-parse", "HEAD"])
+        .output()
+        .map_err(|e| ToolError::SystemError(format!("Failed to get HEAD commit: {}", e)))?;
+
+    if output.status.success() {
+        let commit = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        Ok(Some(commit))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Find the canonical git root directory
+fn find_git_root(start_path: &Path) -> Option<PathBuf> {
+    let mut current = Some(start_path.to_path_buf());
+
+    while let Some(path) = current {
+        let git_dir = path.join(".git");
+        if git_dir.exists() {
+            return Some(path);
+        }
+
+        current = path.parent().map(|p| p.to_path_buf());
+    }
+
+    None
+}
+
+/// Generate a random worktree name
+fn generate_worktree_name() -> String {
+    format!("worktree-{}", Uuid::new_v4().to_string().split('-').next().unwrap())
+}
+
+/// Get current working directory
+fn get_current_dir() -> Result<String, ToolError> {
+    std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .map_err(|e| ToolError::SystemError(format!("Failed to get current directory: {}", e)))
+}
+
+/// Change working directory
+fn change_directory(path: &str) -> Result<(), ToolError> {
+    std::env::set_current_dir(path)
+        .map_err(|e| ToolError::SystemError(format!("Failed to change directory: {}", e)))
+}
+
+/// Worktree management tool
+pub struct WorktreeTool {
+    description: String,
+}
+
+impl WorktreeTool {
+    pub fn new() -> Self {
+        Self {
+            description: "Manage git worktree sessions for isolated branch work".to_string(),
+        }
+    }
+
+    /// Enter a new worktree session
+    async fn enter_worktree(&self, input: EnterWorktreeInput) -> Result<EnterWorktreeOutput, ToolError> {
+        // Check if already in a worktree session
+        {
+            let session = CURRENT_WORKTREE_SESSION
+                .read()
+                .map_err(|e| ToolError::SystemError(format!("Failed to acquire lock: {}", e)))?;
+            if session.is_some() {
+                return Err(ToolError::SystemError(
+                    "Already in a worktree session".to_string(),
+                ));
+            }
+        }
+
+        let current_dir = get_current_dir()?;
+
+        // Find git root
+        let git_root = find_git_root(Path::new(&current_dir))
+            .ok_or_else(|| ToolError::SystemError("Not in a git repository".to_string()))?;
+
+        // Change to git root for worktree creation
+        change_directory(git_root.to_str().unwrap())?;
+
+        // Get original HEAD commit
+        let original_head_commit = get_current_head_commit(&git_root).ok();
+
+        // Generate or validate worktree name
+        let worktree_name = if let Some(name) = input.name {
+            validate_worktree_name(&name)?;
+            name
+        } else {
+            generate_worktree_name()
+        };
+
+        // Create worktree directory path
+        let worktree_path = git_root.join(".claude").join("worktrees").join(&worktree_name);
+
+        // Create worktree using git
+        let branch_name = format!("worktree/{}", worktree_name);
+
+        let output = Command::new("git")
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                &branch_name,
+                worktree_path.to_str().unwrap(),
+            ])
+            .output()
+            .map_err(|e| ToolError::SystemError(format!("Failed to create worktree: {}", e)))?;
+
+        if !output.status.success() {
+            return Err(ToolError::SystemError(format!(
+                "Git worktree creation failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        // Create session state
+        let session = WorktreeSession {
+            worktree_path: worktree_path.to_string_lossy().to_string(),
+            worktree_branch: Some(branch_name.clone()),
+            original_cwd: current_dir.clone(),
+            original_head_commit: original_head_commit.flatten(),
+            tmux_session_name: None,
+            session_id: Uuid::new_v4().to_string(),
+        };
+
+        // Store session
+        {
+            let mut guard = CURRENT_WORKTREE_SESSION
+                .write()
+                .map_err(|e| ToolError::SystemError(format!("Failed to acquire lock: {}", e)))?;
+            *guard = Some(session);
+        }
+
+        // Change to worktree directory
+        change_directory(worktree_path.to_str().unwrap())?;
+
+        Ok(EnterWorktreeOutput {
+            worktree_path: worktree_path.to_string_lossy().to_string(),
+            worktree_branch: Some(branch_name),
+            message: format!(
+                "Created worktree at {}. The session is now working in the worktree.",
+                worktree_path.display()
+            ),
+        })
+    }
+
+    /// Count changes in worktree
+    fn count_worktree_changes(worktree_path: &Path, original_head: Option<&String>) -> Result<(usize, usize), ToolError> {
+        // Count changed files
+        let status_output = Command::new("git")
+            .args(["-C", worktree_path.to_str().unwrap(), "status", "--porcelain"])
+            .output()
+            .map_err(|e| ToolError::SystemError(format!("Failed to get git status: {}", e)))?;
+
+        let changed_files = if status_output.status.success() {
+            String::from_utf8_lossy(&status_output.stdout)
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .count()
+        } else {
+            0
+        };
+
+        // Count new commits
+        let commits = if let Some(original_commit) = original_head {
+            let revlist_output = Command::new("git")
+                .args([
+                    "-C",
+                    worktree_path.to_str().unwrap(),
+                    "rev-list",
+                    "--count",
+                    &format!("{}..HEAD", original_commit),
+                ])
+                .output()
+                .map_err(|e| ToolError::SystemError(format!("Failed to count commits: {}", e)))?;
+
+            if revlist_output.status.success() {
+                String::from_utf8_lossy(&revlist_output.stdout)
+                    .trim()
+                    .parse()
+                    .unwrap_or(0)
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
+        Ok((changed_files, commits))
+    }
+
+    /// Exit current worktree session
+    async fn exit_worktree(&self, input: ExitWorktreeInput) -> Result<ExitWorktreeOutput, ToolError> {
+        // Get current session
+        let session = {
+            let guard = CURRENT_WORKTREE_SESSION
+                .read()
+                .map_err(|e| ToolError::SystemError(format!("Failed to acquire lock: {}", e)))?;
+            guard.as_ref().cloned().ok_or_else(|| {
+                ToolError::SystemError(
+                    "No active worktree session to exit".to_string(),
+                )
+            })?
+        };
+
+        let (changed_files, commits) = Self::count_worktree_changes(
+            Path::new(&session.worktree_path),
+            session.original_head_commit.as_ref(),
+        )?;
+
+        // Check for uncommitted changes when removing
+        if input.action == ExitAction::Remove && !input.discard_changes.unwrap_or(false) {
+            if changed_files > 0 || commits > 0 {
+                let mut parts = Vec::new();
+                if changed_files > 0 {
+                    parts.push(format!(
+                        "{} uncommitted {}",
+                        changed_files,
+                        if changed_files == 1 { "file" } else { "files" }
+                    ));
+                }
+                if commits > 0 {
+                    parts.push(format!(
+                        "{} {}",
+                        commits,
+                        if commits == 1 { "commit" } else { "commits" }
+                    ));
+                }
+                return Err(ToolError::SystemError(format!(
+                    "Worktree has {}. Set discard_changes: true to proceed, or use action: keep to preserve the worktree.",
+                    parts.join(" and ")
+                )));
+            }
+        }
+
+        match input.action {
+            ExitAction::Keep => {
+                // Just return to original directory
+                change_directory(&session.original_cwd)?;
+            }
+            ExitAction::Remove => {
+                // Remove worktree
+                let output = Command::new("git")
+                    .args([
+                        "worktree",
+                        "remove",
+                        &session.worktree_path,
+                    ])
+                    .output()
+                    .map_err(|e| ToolError::SystemError(format!("Failed to remove worktree: {}", e)))?;
+
+                if !output.status.success() {
+                    return Err(ToolError::SystemError(format!(
+                        "Failed to remove worktree: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    )));
+                }
+
+                // Return to original directory
+                change_directory(&session.original_cwd)?;
+            }
+        }
+
+        // Clear session state
+        {
+            let mut guard = CURRENT_WORKTREE_SESSION
+                .write()
+                .map_err(|e| ToolError::SystemError(format!("Failed to acquire lock: {}", e)))?;
+            *guard = None;
+        }
+
+        let tmux_note = if let Some(ref tmux_name) = session.tmux_session_name {
+            format!(" Tmux session {} is still running; reattach with: tmux attach -t {}", tmux_name, tmux_name)
+        } else {
+            String::new()
+        };
+
+        let message = match input.action {
+            ExitAction::Keep => format!(
+                "Exited worktree. Your work is preserved at {}{}.",
+                session.worktree_path,
+                if let Some(ref branch) = session.worktree_branch {
+                    format!(" on branch {}", branch)
+                } else {
+                    String::new()
+                }
+            ),
+            ExitAction::Remove => {
+                let mut discard_parts = Vec::new();
+                if commits > 0 {
+                    discard_parts.push(format!("{} {}", commits, if commits == 1 { "commit" } else { "commits" }));
+                }
+                if changed_files > 0 {
+                    discard_parts.push(format!(
+                        "{} uncommitted {}",
+                        changed_files,
+                        if changed_files == 1 { "file" } else { "files" }
+                    ));
+                }
+                let discard_note = if !discard_parts.is_empty() {
+                    format!(" Discarded {}.", discard_parts.join(" and "))
+                } else {
+                    String::new()
+                };
+                format!(
+                    "Exited and removed worktree at {}.{} Session is now back in {}.",
+                    session.worktree_path, discard_note, session.original_cwd
+                )
+            }
+        };
+
+        Ok(ExitWorktreeOutput {
+            action: input.action.clone(),
+            original_cwd: session.original_cwd,
+            worktree_path: session.worktree_path,
+            worktree_branch: session.worktree_branch,
+            tmux_session_name: session.tmux_session_name,
+            discarded_files: if input.action == ExitAction::Remove && changed_files > 0 {
+                Some(changed_files)
+            } else {
+                None
+            },
+            discarded_commits: if input.action == ExitAction::Remove && commits > 0 {
+                Some(commits)
+            } else {
+                None
+            },
+            message: message + &tmux_note,
+        })
+    }
+}
+
+#[async_trait]
+impl Tool for WorktreeTool {
+    async fn execute(&self, input: serde_json::Value) -> ToolResult<serde_json::Value> {
+        // Parse operation type from input
+        let operation = input
+            .get("operation")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::SystemError("Missing operation field".to_string()))?;
+
+        match operation {
+            "Enter" => {
+                let enter_input: EnterWorktreeInput = serde_json::from_value(input)?;
+                let output = self.enter_worktree(enter_input).await?;
+                serde_json::to_value(output).map_err(ToolError::from)
+            }
+            "Exit" => {
+                let exit_input: ExitWorktreeInput = serde_json::from_value(input)?;
+                let output = self.exit_worktree(exit_input).await?;
+                serde_json::to_value(output).map_err(ToolError::from)
+            }
+            _ => Err(ToolError::SystemError(format!(
+                "Unknown operation: {}",
+                operation
+            ))),
+        }
+    }
+
+    fn name(&self) -> &str {
+        "Worktree"
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn validate_input(&self, input: &serde_json::Value) -> Result<(), ToolError> {
+        if !input.is_object() {
+            return Err(ToolError::SystemError("Input must be an object".to_string()));
+        }
+
+        if input.get("operation").is_none() {
+            return Err(ToolError::SystemError("Missing required field: operation".to_string()));
+        }
+
+        Ok(())
+    }
+}

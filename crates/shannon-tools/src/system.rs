@@ -266,6 +266,7 @@ impl Tool for PowerShellTool {
 pub enum SystemTool {
     Bash(BashTool),
     PowerShell(PowerShellTool),
+    Sleep(SleepTool),
 }
 
 impl SystemTool {
@@ -275,5 +276,81 @@ impl SystemTool {
 
         #[cfg(not(target_os = "windows"))]
         return SystemTool::Bash(BashTool::new());
+    }
+
+    pub fn sleep() -> Self {
+        SystemTool::Sleep(SleepTool::new())
+    }
+}
+
+/// Input for sleep operation
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SleepInput {
+    /// Duration to sleep in milliseconds
+    pub duration_ms: u64,
+}
+
+/// Sleep tool for waiting a specified duration
+#[derive(Debug)]
+pub struct SleepTool {
+    description: String,
+}
+
+impl SleepTool {
+    pub fn new() -> Self {
+        Self {
+            description: "Wait for a specified duration without holding a shell process".to_string(),
+        }
+    }
+
+    pub async fn execute_sleep(&self, duration_ms: u64) -> Result<CommandOutput, ToolError> {
+        tokio::time::sleep(tokio::time::Duration::from_millis(duration_ms)).await;
+
+        Ok(CommandOutput {
+            stdout: format!("Slept for {}ms", duration_ms),
+            stderr: String::new(),
+            exit_code: 0,
+            success: true,
+        })
+    }
+}
+
+#[async_trait]
+impl Tool for SleepTool {
+    async fn execute(&self, input: serde_json::Value) -> ToolResult<serde_json::Value> {
+        let sleep_input: SleepInput = serde_json::from_value(input)?;
+
+        let output = self.execute_sleep(sleep_input.duration_ms).await?;
+
+        serde_json::to_value(output).map_err(ToolError::from)
+    }
+
+    fn name(&self) -> &str {
+        "Sleep"
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn validate_input(&self, input: &serde_json::Value) -> Result<(), ToolError> {
+        if !input.is_object() {
+            return Err(ToolError::SystemError("Input must be an object".to_string()));
+        }
+
+        if input.get("duration_ms").is_none() {
+            return Err(ToolError::SystemError("Missing required field: duration_ms".to_string()));
+        }
+
+        // Validate duration is reasonable
+        if let Some(duration) = input.get("duration_ms").and_then(|v| v.as_u64()) {
+            if duration > 3600000 {
+                return Err(ToolError::SystemError(
+                    "Duration too long (max 1 hour / 3600000ms)".to_string(),
+                ));
+            }
+        }
+
+        Ok(())
     }
 }

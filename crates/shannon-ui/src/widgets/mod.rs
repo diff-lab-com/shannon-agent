@@ -1,10 +1,14 @@
 //! Ratatui widgets for Shannon UI
 
+pub mod select;
+pub mod progress;
+pub mod dialog;
+
 use ratatui::{
     layout::{Alignment, Direction, Rect, Constraint},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap, ListState, Scrollbar, ScrollbarOrientation},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 use std::collections::VecDeque;
@@ -176,7 +180,7 @@ impl ChatWidget {
     pub fn render(&self, frame: &mut Frame, area: Rect) {
         let mut list_items = Vec::new();
 
-        for (i, msg) in self.messages.iter().enumerate() {
+        for (_i, msg) in self.messages.iter().enumerate() {
             let (role_name, role_color) = match msg.role {
                 ChatRole::User => ("User", Color::Green),
                 ChatRole::Assistant => ("Assistant", Color::Cyan),

@@ -2,7 +2,7 @@
 //!
 //! Main orchestrator for streaming query processing with tool orchestration.
 
-use crate::api::{ClaudeClient, Message, MessageContent, StreamEvent};
+use crate::api::{ClaudeClient, ContentBlock, ContentDelta, Message, MessageContent, StreamEvent};
 use crate::permissions::PermissionManager;
 use crate::state::StateManager;
 use crate::tools::{ToolOutput, ToolRegistry};
@@ -213,17 +213,20 @@ impl QueryEngine {
 
     /// Add a user message to the conversation
     pub fn add_user_message(&mut self, content: String) {
-        self.conversation.messages.push(Message {
+        use crate::api::MessageContent;
+        self.conversation.messages.push(crate::api::Message {
             role: "user".to_string(),
-            content: vec![MessageContent::Text { text: content }],
+            content: MessageContent::Text(content),
         });
     }
 
     /// Add an assistant message to the conversation
-    pub fn add_assistant_message(&mut self, content: Vec<MessageContent>) {
+    pub fn add_assistant_message(&mut self, content: Vec<crate::api::ContentBlock>) {
+        use crate::api::{ContentBlock, Message, MessageContent};
+        let blocks: Vec<ContentBlock> = content;
         self.conversation.messages.push(Message {
             role: "assistant".to_string(),
-            content,
+            content: MessageContent::Blocks(blocks),
         });
     }
 
@@ -311,7 +314,7 @@ impl QueryEngine {
 
         // Get tools schema if enabled
         let tools_schema = if self.conversation.messages.len() > 0 {
-            Some(self.tools.to_json_schema())
+            Some(self.tools.to_tool_definitions())
         } else {
             None
         };
@@ -324,12 +327,21 @@ impl QueryEngine {
                     match event_result {
                         Ok(stream_event) => {
                             match stream_event {
-                                StreamEvent::ContentBlockDelta { index, delta } => {
-                                    if let Some(text) = delta.get("text").and_then(|v| v.as_str()) {
-                                        events.push(QueryEvent::Text {
-                                            query_id,
-                                            content: text.to_string(),
-                                        });
+                                StreamEvent::ContentBlockDelta { delta, .. } => {
+                                    match delta {
+                                        ContentDelta::TextDelta { text } => {
+                                            events.push(QueryEvent::Text {
+                                                query_id,
+                                                content: text,
+                                            });
+                                        }
+                                        ContentDelta::InputJsonDelta { partial_json } => {
+                                            // Handle tool input streaming - emit as text for now
+                                            events.push(QueryEvent::Text {
+                                                query_id,
+                                                content: format!("[Tool Input: {}]", partial_json),
+                                            });
+                                        }
                                     }
                                 }
                                 StreamEvent::MessageStop => {
@@ -401,8 +413,7 @@ pub struct ConversationStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::permissions::{Permission, PermissionLevel};
-    use crate::tools::ToolOutput;
+    use crate::tools::{Tool, ToolOutput};
     use async_trait::async_trait;
     use std::collections::HashMap;
 

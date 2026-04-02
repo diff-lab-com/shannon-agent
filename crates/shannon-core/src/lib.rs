@@ -21,7 +21,12 @@ pub use query_engine::{QueryEngine, QueryContext, QueryEvent};
 pub use tools::{Tool, ToolRegistry, ToolOutput, ToolResult};
 pub use permissions::{PermissionManager, Permission, PermissionLevel};
 pub use state::{StateManager, SessionState};
-pub use api::{ClaudeClient, ClaudeClientConfig, MessageStream};
+pub use api::{
+    ClaudeClient, ClaudeClientConfig, MessageStream,
+    ContentBlock, ContentDelta, ImageSource, Message, MessageContent,
+    MessageRequest, MessageResponse, StreamEvent, ToolDefinition, Usage,
+    ApiError,
+};
 
 /// Core error types for Shannon
 pub mod error {

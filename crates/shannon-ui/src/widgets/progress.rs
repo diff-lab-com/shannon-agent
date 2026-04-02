@@ -1,0 +1,412 @@
+//! Progress display widgets for Shannon UI
+//!
+//! Provides progress bars with various styles and animations
+
+use ratatui::{
+    layout::{Alignment, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph, Wrap},
+    Frame,
+};
+
+/// Unicode block characters for smooth progress display
+const BLOCKS: [&str; 9] = [" ", "▏", "▎", "█", "▌", "▋", "▊", "▉", "█"];
+
+/// Progress bar widget
+pub struct ProgressBarWidget {
+    title: Option<String>,
+    progress: f64,
+    width: Option<u16>,
+    fill_style: Style,
+    empty_style: Style,
+    show_percentage: bool,
+    animated: bool,
+    animation_frame: usize,
+}
+
+impl ProgressBarWidget {
+    /// Create a new progress bar
+    pub fn new() -> Self {
+        Self {
+            title: None,
+            progress: 0.0,
+            width: None,
+            fill_style: Style::default().fg(Color::Green),
+            empty_style: Style::default().fg(Color::DarkGray),
+            show_percentage: true,
+            animated: false,
+            animation_frame: 0,
+        }
+    }
+
+    /// Set the title
+    pub fn with_title(mut self, title: String) -> Self {
+        self.title = Some(title);
+        self
+    }
+
+    /// Set the progress (0.0 to 1.0)
+    pub fn with_progress(mut self, progress: f64) -> Self {
+        self.progress = progress.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Set the width in characters
+    pub fn with_width(mut self, width: u16) -> Self {
+        self.width = Some(width);
+        self
+    }
+
+    /// Set the fill style
+    pub fn with_fill_style(mut self, style: Style) -> Self {
+        self.fill_style = style;
+        self
+    }
+
+    /// Set the empty style
+    pub fn with_empty_style(mut self, style: Style) -> Self {
+        self.empty_style = style;
+        self
+    }
+
+    /// Show or hide percentage
+    pub fn with_percentage(mut self, show: bool) -> Self {
+        self.show_percentage = show;
+        self
+    }
+
+    /// Enable animation
+    pub fn with_animation(mut self, animated: bool) -> Self {
+        self.animated = animated;
+        self
+    }
+
+    /// Advance animation frame
+    pub fn tick(&mut self) {
+        if self.animated {
+            self.animation_frame = (self.animation_frame + 1) % 4;
+        }
+    }
+
+    /// Get progress as percentage
+    pub fn percentage(&self) -> f64 {
+        self.progress * 100.0
+    }
+
+    /// Render the progress bar
+    pub fn render(&self, frame: &mut Frame, area: Rect) {
+        let width = self.width.unwrap_or(area.width.saturating_sub(4)) as usize;
+        let filled = (self.progress * width as f64) as usize;
+        let _empty = width.saturating_sub(filled);
+
+        let mut content = Vec::new();
+
+        // Title line
+        if let Some(ref title) = self.title {
+            content.push(Line::from(vec![
+                Span::styled(title, Style::default().fg(Color::White)),
+                Span::raw(" "),
+                Span::styled(
+                    format!("{:.1}%", self.percentage()),
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+            content.push(Line::from(""));
+        }
+
+        // Progress bar line
+        let mut bar_spans = Vec::new();
+
+        // Animated shimmer effect
+        let shimmer_offset = if self.animated {
+            (self.animation_frame as f64 * width as f64 * 0.1) as usize
+        } else {
+            0
+        };
+
+        for i in 0..width {
+            let is_filled = i < filled;
+            let relative_pos = if i >= shimmer_offset {
+                i - shimmer_offset
+            } else {
+                width - (shimmer_offset - i)
+            };
+
+            let block_char = if self.animated && is_filled {
+                // Shimmer effect with different block characters
+                BLOCKS[(relative_pos % 4 + 4) % 9]
+            } else if is_filled {
+                "█"
+            } else {
+                "░"
+            };
+
+            let style = if is_filled {
+                self.fill_style
+            } else {
+                self.empty_style
+            };
+
+            bar_spans.push(Span::styled(block_char, style));
+        }
+
+        content.push(Line::from(bar_spans));
+
+        // Percentage line (if no title)
+        if self.show_percentage && self.title.is_none() {
+            content.push(Line::from(vec![
+                Span::styled(
+                    format!("{:.1}%", self.percentage()),
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        }
+
+        let paragraph = Paragraph::new(content)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan))
+            )
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: true });
+
+        frame.render_widget(paragraph, area);
+    }
+}
+
+impl Default for ProgressBarWidget {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Spinner widget for indeterminate progress
+pub struct SpinnerWidget {
+    frames: Vec<&'static str>,
+    current_frame: usize,
+    message: Option<String>,
+}
+
+impl SpinnerWidget {
+    /// Create a new spinner
+    pub fn new() -> Self {
+        Self {
+            frames: vec!["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
+            current_frame: 0,
+            message: None,
+        }
+    }
+
+    /// Set a custom message
+    pub fn with_message(mut self, message: String) -> Self {
+        self.message = Some(message);
+        self
+    }
+
+    /// Set custom frames
+    pub fn with_frames(mut self, frames: Vec<&'static str>) -> Self {
+        self.frames = frames;
+        self
+    }
+
+    /// Advance to next frame
+    pub fn tick(&mut self) {
+        self.current_frame = (self.current_frame + 1) % self.frames.len();
+    }
+
+    /// Render the spinner
+    pub fn render(&self, frame: &mut Frame, area: Rect) {
+        let spinner = self.frames[self.current_frame];
+
+        let content = if let Some(ref msg) = self.message {
+            Line::from(vec![
+                Span::styled(spinner, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::raw(" "),
+                Span::styled(msg, Style::default().fg(Color::White)),
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled(spinner, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            ])
+        };
+
+        let paragraph = Paragraph::new(content)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan))
+            )
+            .alignment(Alignment::Center);
+
+        frame.render_widget(paragraph, area);
+    }
+}
+
+impl Default for SpinnerWidget {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Multi-progress widget for showing multiple progress bars
+pub struct MultiProgressWidget {
+    bars: Vec<(String, f64, Color)>,
+    show_labels: bool,
+}
+
+impl MultiProgressWidget {
+    /// Create a new multi-progress widget
+    pub fn new() -> Self {
+        Self {
+            bars: Vec::new(),
+            show_labels: true,
+        }
+    }
+
+    /// Add a progress bar
+    pub fn add_bar(mut self, label: String, progress: f64, color: Color) -> Self {
+        self.bars.push((label, progress, color));
+        self
+    }
+
+    /// Show or hide labels
+    pub fn with_labels(mut self, show: bool) -> Self {
+        self.show_labels = show;
+        self
+    }
+
+    /// Clear all bars
+    pub fn clear(&mut self) {
+        self.bars.clear();
+    }
+
+    /// Update a bar's progress
+    pub fn update(&mut self, label: &str, progress: f64) {
+        if let Some(bar) = self.bars.iter_mut().find(|(l, _, _)| l == label) {
+            bar.1 = progress.clamp(0.0, 1.0);
+        }
+    }
+
+    /// Render the multi-progress widget
+    pub fn render(&self, frame: &mut Frame, area: Rect) {
+        let mut content = Vec::new();
+
+        let bar_width = 30_usize; // Fixed width for individual bars
+
+        for (label, progress, color) in &self.bars {
+            let filled = (*progress * bar_width as f64) as usize;
+            let _empty = bar_width.saturating_sub(filled);
+
+            let mut line = Vec::new();
+
+            if self.show_labels {
+                line.push(Span::styled(
+                    format!("{:20} ", label),
+                    Style::default().fg(Color::White),
+                ));
+            }
+
+            // Progress bar
+            for i in 0..bar_width {
+                let char = if i < filled { "█" } else { "░" };
+                line.push(Span::styled(
+                    char,
+                    Style::default().fg(if i < filled { *color } else { Color::DarkGray }),
+                ));
+            }
+
+            line.push(Span::styled(
+                format!(" {:5.1}%", progress * 100.0),
+                Style::default().fg(Color::Cyan),
+            ));
+
+            content.push(Line::from(line));
+        }
+
+        let paragraph = Paragraph::new(content)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .title(" Progress ")
+            )
+            .wrap(Wrap { trim: false });
+
+        frame.render_widget(paragraph, area);
+    }
+}
+
+impl Default for MultiProgressWidget {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_progress_bar_creation() {
+        let bar = ProgressBarWidget::new();
+        assert_eq!(bar.progress, 0.0);
+        assert_eq!(bar.percentage(), 0.0);
+    }
+
+    #[test]
+    fn test_progress_bar_with_values() {
+        let bar = ProgressBarWidget::new()
+            .with_progress(0.5)
+            .with_title("Loading".to_string());
+
+        assert_eq!(bar.progress, 0.5);
+        assert_eq!(bar.percentage(), 50.0);
+        assert!(bar.title.is_some());
+    }
+
+    #[test]
+    fn test_progress_bar_clamping() {
+        let bar = ProgressBarWidget::new().with_progress(1.5);
+        assert_eq!(bar.progress, 1.0);
+
+        let bar = ProgressBarWidget::new().with_progress(-0.5);
+        assert_eq!(bar.progress, 0.0);
+    }
+
+    #[test]
+    fn test_spinner_creation() {
+        let spinner = SpinnerWidget::new();
+        assert_eq!(spinner.current_frame, 0);
+        assert_eq!(spinner.frames.len(), 10);
+    }
+
+    #[test]
+    fn test_spinner_tick() {
+        let mut spinner = SpinnerWidget::new();
+        spinner.tick();
+        assert_eq!(spinner.current_frame, 1);
+
+        spinner.tick();
+        assert_eq!(spinner.current_frame, 2);
+    }
+
+    #[test]
+    fn test_multi_progress_add_bar() {
+        let widget = MultiProgressWidget::new()
+            .add_bar("Task 1".to_string(), 0.3, Color::Green)
+            .add_bar("Task 2".to_string(), 0.7, Color::Blue);
+
+        assert_eq!(widget.bars.len(), 2);
+    }
+
+    #[test]
+    fn test_multi_progress_update() {
+        let mut widget = MultiProgressWidget::new()
+            .add_bar("Task 1".to_string(), 0.3, Color::Green);
+
+        widget.update("Task 1", 0.8);
+        assert_eq!(widget.bars[0].1, 0.8);
+    }
+}

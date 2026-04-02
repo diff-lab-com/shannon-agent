@@ -246,13 +246,13 @@ impl TokenStorage for MemoryTokenStorage {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_api_key_provider() {
+    #[tokio::test]
+    async fn test_api_key_provider() {
         let provider = ApiKeyProvider::new("test_key")
             .with_header_name("X-Custom-Key")
             .with_prefix("Bearer");
 
-        assert!(provider.is_valid());
+        assert!(provider.is_valid().await);
     }
 
     #[test]

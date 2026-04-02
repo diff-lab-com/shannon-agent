@@ -1,0 +1,39 @@
+[package]
+name = "shannon-skills"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+description = "Skill system for Shannon Code - extensible prompt/command framework"
+
+[dependencies]
+# Workspace dependencies
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+# Local dependencies
+shannon-types = { path = "../shannon-types" }
+
+# Serialization
+serde_yaml = "0.9"
+
+# File system operations
+ignore = "0.4"
+walkdir = "2.5"
+
+# Path handling
+path-absolutize = "3.1"
+
+# Text processing
+regex = "1.11"
+shell-words = "1.1"

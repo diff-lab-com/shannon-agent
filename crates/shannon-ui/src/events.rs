@@ -28,7 +28,6 @@ impl EventHandler {
 
     /// Get the next event with timeout
     pub fn next(&mut self) -> io::Result<Option<Event>> {
-        use std::io::ErrorKind;
         // Poll for event with timeout
         if event::poll(self.tick_rate)? {
             if let CrosstermEvent::Key(key) = event::read()? {

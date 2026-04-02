@@ -90,7 +90,7 @@ impl Repl {
 
             terminal.draw(|f| {
                 if state.welcome_active {
-                    crate::widgets::WelcomeWidget::render(f, f.size());
+                    crate::widgets::WelcomeWidget::render(f, f.area());
                 } else {
                     MainLayoutWidget::render_complete(
                         f,

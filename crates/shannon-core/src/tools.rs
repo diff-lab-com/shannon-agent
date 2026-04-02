@@ -128,6 +128,19 @@ impl ToolRegistry {
             .collect();
         serde_json::json!(tools)
     }
+
+    /// Get all tools as ToolDefinition for Claude API
+    pub fn to_tool_definitions(&self) -> Vec<crate::api::ToolDefinition> {
+        self.tools
+            .values()
+            .map(|tool| crate::api::ToolDefinition {
+                name: tool.name().to_string(),
+                description: tool.description().to_string(),
+                input_schema: tool.input_schema(),
+                strict: Some(false), // Default to non-strict for compatibility
+            })
+            .collect()
+    }
 }
 
 impl Default for ToolRegistry {
