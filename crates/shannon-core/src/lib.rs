@@ -21,7 +21,9 @@ pub mod claude_md;
 pub use query_engine::{QueryEngine, QueryContext, QueryEvent};
 pub use tools::{Tool, ToolRegistry, ToolOutput, ToolResult};
 pub use permissions::{PermissionManager, Permission, PermissionLevel};
-pub use state::{StateManager, SessionState};
+pub use state::{
+    StateManager, SessionState, SessionData, SessionInfo, SessionPersistMetadata,
+};
 pub use api::{
     ClaudeClient, ClaudeClientConfig, MessageStream,
     ContentBlock, ContentDelta, ImageSource, Message, MessageContent,
