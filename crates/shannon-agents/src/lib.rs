@@ -12,6 +12,7 @@ mod message;
 mod task;
 mod error;
 mod sub_agent;
+mod summary;
 
 pub use coordinator::{AgentCoordinator, CoordinatorConfig, AssignmentStrategy, CoordinatorEvent};
 pub use teammate::{Teammate, TeammateConfig, TeammateStatus, TeammateState};
@@ -27,6 +28,9 @@ pub use sub_agent::{
     AgentSpawnTool, AgentSpawnInput,
     SendMessageTool, SendMessageInput,
     TeamCreateTool, TeamCreateInput,
+};
+pub use summary::{
+    AgentExecutionSummary, SummaryStatus, SummaryGenerator, SuccessMetrics,
 };
 
 /// Version information for the agents crate

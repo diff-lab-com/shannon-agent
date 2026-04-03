@@ -12,6 +12,8 @@
 //! - [`SettingsManager`]: Configuration management for user and project settings
 //! - [`AutoUpdater`]: Automatic update checking via GitHub Releases
 //! - [`PluginManager`]: Plugin discovery, loading, and lifecycle management
+//! - [`MemoryStore`]: Persistent memory storage with search and cleanup
+//! - [`AutoDreamService`]: Automatic memory extraction from conversations
 
 pub mod query_engine;
 pub mod tools;
@@ -23,6 +25,8 @@ pub mod settings;
 pub mod hooks;
 pub mod plugins;
 pub mod updater;
+pub mod suggestions;
+pub mod memory;
 
 // Re-export key types for convenience
 pub use query_engine::{QueryEngine, QueryContext, QueryEvent};
@@ -41,6 +45,10 @@ pub use settings::{Settings, SettingsManager, SettingsError};
 pub use hooks::{HookManager, HookEvent, HookResult, HookDecision, HookEventType, HookError};
 pub use plugins::{PluginManager, PluginManifest, PluginState, PluginError, Plugin, PluginStateFile};
 pub use updater::{AutoUpdater, UpdateStatus, UpdaterConfig, ReleaseInfo, UpdateError};
+pub use memory::{MemoryStore, MemoryEntry, MemoryCategory, AutoDreamService, MemoryError};
+pub use suggestions::{
+    Suggestion, SuggestionCategory, SuggestionContext, SuggestionEngine, SuggestionRule,
+};
 
 /// Core error types for Shannon
 pub mod error {
@@ -52,6 +60,7 @@ pub mod error {
     pub use crate::hooks::HookError;
     pub use crate::plugins::PluginError;
     pub use crate::updater::UpdateError;
+    pub use crate::memory::MemoryError;
 }
 
 /// Version information

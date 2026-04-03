@@ -38,6 +38,8 @@ pub mod lsp;
 pub mod grep;
 pub mod ask_user;
 pub mod tool_search;
+pub mod brief;
+pub mod config;
 
 // Re-exports for convenience
 pub use file::{ReadTool, WriteTool, EditTool, GlobTool, FileOperation};
@@ -75,6 +77,8 @@ pub use ask_user::{
     MockQuestionHandler, ErrorQuestionHandler,
 };
 pub use tool_search::{ToolSearchTool, ToolSearchInput, ToolSearchOutput};
+pub use brief::{BriefTool, BriefInput, BriefMessage, BriefFormat};
+pub use config::{ConfigTool, ConfigInput, ConfigAction, ConfigManager, SharedConfigManager};
 
 // Re-export from shannon_core
 pub use shannon_core::{
