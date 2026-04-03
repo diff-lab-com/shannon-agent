@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn test_token_bucket_try_consume() {
-        let mut bucket = TokenBucket::new(3.0, 1.0);
+        let mut bucket = TokenBucket::new(3.0, 0.0); // zero refill rate for deterministic test
         assert!(bucket.try_consume());
         assert!((bucket.tokens - 2.0).abs() < 1e-6);
         assert!(bucket.try_consume());

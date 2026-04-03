@@ -61,6 +61,10 @@ pub mod streaming_tool_executor;
 pub mod tool_execution;
 pub mod tool_hooks;
 pub mod doctor;
+pub mod permission_classifier;
+pub mod team_memory_sync;
+pub mod auto_dream_consolidation;
+pub mod mcp_server_approval;
 
 // Re-export key types for convenience
 pub use query_engine::{QueryEngine, QueryContext, QueryEvent};
@@ -154,6 +158,23 @@ pub use tool_hooks::{
     ToolHookChain, ToolHook, ToolHookResult, ToolHookDecision, ToolHookContext,
     ToolHookError, PermissionToolHook, LoggingToolHook, StopOnDenyHook,
 };
+pub use permission_classifier::{
+    PermissionClassifier, PermissionClassifierError, PermissionRule, PermissionRuleParser,
+    ClassificationResult, ClassificationResultBuilder, DangerousPattern,
+    RuleDecision, RuleSource, RiskLevel,
+};
+pub use team_memory_sync::{
+    TeamMemorySync, TeamMemoryConfig, TeamMemorySyncError, SyncResult,
+    SecretScanner, SecretRule, SecretMatch, TeamMemoryGuard,
+};
+pub use auto_dream_consolidation::{
+    ConsolidationLock, ConsolidationGuard, ConsolidationPrompt, ConsolidationConfig,
+    EnhancedConsolidationResult, ConsolidationError, should_consolidate,
+};
+pub use mcp_server_approval::{
+    McpApprovalManager, McpApprovalPolicy, McpServerApprovalRequest,
+    McpTransportType, ApprovalDecision, RiskAssessment, McpApprovalError,
+};
 
 /// Core error types for Shannon
 pub mod error {
@@ -186,6 +207,10 @@ pub mod error {
     pub use crate::compact::CompactError;
     pub use crate::doctor::DoctorError;
     pub use crate::tool_hooks::ToolHookError;
+    pub use crate::team_memory_sync::TeamMemorySyncError;
+    pub use crate::permission_classifier::PermissionClassifierError;
+    pub use crate::auto_dream_consolidation::ConsolidationError;
+    pub use crate::mcp_server_approval::McpApprovalError;
 }
 
 /// Version information
