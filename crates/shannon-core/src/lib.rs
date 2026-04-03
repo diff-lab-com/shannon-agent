@@ -17,6 +17,7 @@
 //! - [`DiagnosticTracker`]: Error tracking, pattern analysis, and diagnostic event management
 //! - [`VoiceModeService`]: Voice input/output management and keyword spotting
 //! - [`MagicDocsService`]: Automatic documentation generation from source paths
+//! - [`SessionHistoryManager`]: Session history listing, searching, archiving, and resumption
 
 pub mod query_engine;
 pub mod tools;
@@ -53,6 +54,10 @@ pub mod remote_settings;
 pub mod mcp_advanced;
 pub mod api_services;
 pub mod bridge_service;
+pub mod session_history;
+pub mod compact;
+pub mod streaming_tool_executor;
+pub mod tool_execution;
 
 // Re-export key types for convenience
 pub use query_engine::{QueryEngine, QueryContext, QueryEvent};
@@ -128,6 +133,13 @@ pub use bridge_service::{
     BridgeService, BridgeSession, BridgeConfig, BridgeStatus,
     SessionMessage, MessageDirection, BridgeError,
 };
+pub use session_history::{
+    SessionHistoryManager, SessionHistoryEntry, SessionFilter, ResumeInfo,
+    SessionMetadata, SessionSortField, SortOrder, SessionHistoryError,
+};
+pub use streaming_tool_executor::{StreamingToolExecutor, TrackedTool, ToolStatus};
+pub use tool_execution::{ToolExecutionService, ToolExecutionResult, ToolProgress, ToolProgressStatus};
+pub use compact::{CompactEngine, CompactConfig, CompactResult, CompactStrategy, MessageGroup, CompactError};
 
 /// Core error types for Shannon
 pub mod error {
@@ -153,6 +165,10 @@ pub mod error {
     pub use crate::mcp_advanced::McpAdvancedError;
     pub use crate::api_services::ApiServiceError;
     pub use crate::bridge_service::BridgeError;
+    pub use crate::session_history::SessionHistoryError;
+    pub use crate::streaming_tool_executor::ExecutorError;
+    pub use crate::tool_execution::ToolExecutionError;
+    pub use crate::compact::CompactError;
 }
 
 /// Version information
