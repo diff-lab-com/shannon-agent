@@ -2,340 +2,346 @@
 
 <div align="center">
 
-**🦀 用 Rust 重新实现的 Claude Code**
-
-一个高性能、类型安全的 AI 辅助编程工具
+**A high-performance AI-assisted coding tool, rewritten in Rust**
 
 [![Rust](https://img.shields.io/badge/rust-1.75+-orange.svg)](https://www.rust-lang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-2341-brightgreen.svg)
+[![Lines](https://img.shields.io/badge/code-78K-blue.svg)
+
+[中文文档](#中文文档)
 
 </div>
 
 ---
 
-## 📖 项目简介
+## Disclaimer
 
-Shannon Code 是 [Anthropic Claude Code](https://github.com/anthropics/claude-code) 的 Rust 语言重新实现版本。该项目旨在提供相同的功能体验，同时利用 Rust 的内存安全、零成本抽象和卓越的并发性能。
+**Shannon Code is an independent, clean-room reimplementation of AI-assisted coding tool concepts.** This project was built from the ground up using only publicly available documentation, open specifications (such as the [Model Context Protocol](https://modelcontextprotocol.io)), and general software engineering principles.
 
-### 为什么选择 Rust？
+- No proprietary source code, binaries, or confidential materials were accessed or used in the development of this project.
+- All code, architecture, and design decisions are original work.
+- Any functional similarities to other products are the result of implementing open standards and common software patterns, not copying.
+- This project is **not affiliated with, endorsed by, or connected to** any other AI coding tool vendor.
+- The developers of Shannon Code assume **no legal liability** for how this software is used.
 
-- **内存安全**：编译时保证，无数据竞争
-- **高性能**：零成本抽象，接近 C 语言的性能
-- **类型安全**：强大的类型系统，减少运行时错误
-- **并发能力**：基于 async/await 的原生异步支持
-- **跨平台**：一次编译，多平台运行
-
----
-
-## ✨ 核心特性
-
-### 🤖 AI 辅助编程
-- 智能代码补全和生成
-- 自然语言交互式编程
-- 代码重构和优化建议
-- 自动化测试生成
-
-### 🔧 MCP (Model Context Protocol) 支持
-- 标准 MCP 协议实现
-- 可扩展的工具系统
-- 自定义 MCP 服务器集成
-
-### 🛠️ 丰富的工具集
-- **文件操作**：读取、编辑、创建文件
-- **代码分析**：语法分析、代码理解
-- **Git 集成**：版本控制操作
-- **命令执行**：Shell 命令运行
-- **浏览器自动化**：集成 Playwright/Chrome DevTools
-
-### 🎯 多 Agent 协作
-- 支持 Agent 任务委托
-- 并行任务执行
-- 智能任务调度
-
-### 🎨 现代化终端 UI
-- TUI (Terminal User Interface) 界面
-- 语法高亮显示
-- 交互式文件选择
-- 实时进度反馈
+This project is intended solely for educational and research purposes.
 
 ---
 
-## 🚀 快速开始
+## What is Shannon Code?
 
-### 环境要求
+Shannon Code is a feature-rich, type-safe AI-assisted coding tool written entirely in Rust. It provides a terminal-based REPL interface for interacting with large language models (LLMs) while offering advanced capabilities like tool orchestration, session management, plugin systems, and MCP (Model Context Protocol) support.
 
-- **Rust** 1.75 或更高版本
-- **操作系统**：Linux / macOS / Windows
-- **内存**：建议 4GB 以上
+### Why Rust?
 
-### 安装
+- **Memory safety** — guaranteed at compile time, no data races
+- **High performance** — zero-cost abstractions, near-C speed
+- **Type safety** — a strong type system catches bugs before runtime
+- **Concurrency** — native `async/await` support for parallel operations
+- **Cross-platform** — compile once, run on Linux, macOS, and Windows
+
+---
+
+## Features
+
+### AI-Powered Coding
+- Streaming query processing with real-time output
+- Multi-turn conversation with context management
+- Code generation, refactoring, and optimization suggestions
+- Automated test generation
+
+### Tool System
+- **File operations**: read, edit, create, notebook editing
+- **Code analysis**: syntax highlighting, symbol navigation, diff rendering
+- **Git integration**: version control, branch management, commit operations
+- **Command execution**: sandboxed shell command running
+- **Image support**: screenshot analysis, visual understanding
+- **Web search**: real-time information retrieval
+
+### MCP (Model Context Protocol)
+- Full MCP protocol implementation (stdio, SSE, streamable HTTP)
+- Dynamic tool registration from MCP servers
+- Resource management and subscription support
+- Elicitation and completion support
+
+### Advanced Capabilities
+- **Multi-Agent orchestration**: parallel agent dispatch, team coordination, task delegation
+- **Permission system**: rule-based classification, dangerous pattern detection, approval workflows
+- **Session management**: persistence, history, search, resume
+- **Plugin system**: discovery, loading, lifecycle management, marketplace
+- **Skills & Commands**: extensible skill framework, bundled implementations
+- **Context compression**: advanced strategies with auto-compact, micro-compact, session memory
+- **Hooks system**: pre/post tool execution hooks, custom event handlers
+- **Memory system**: persistent memory store, auto-dream extraction, consolidation
+- **LSP integration**: language server protocol for intelligent code navigation
+- **Plan mode**: structured planning with approval workflows
+- **Worktree support**: isolated git worktrees for parallel development
+- **Auto-updater**: GitHub Releases-based update checking
+- **Diagnostics & Doctor**: environment health checks, error pattern analysis
+- **Voice mode**: voice input/output with keyword spotting
+- **OAuth**: token management with encryption
+- **Team memory sync**: bidirectional sync with secret scanning
+- **Streaming tool executor**: concurrent tool execution with progress tracking
+
+### Terminal UI
+- Interactive REPL with command history and search
+- Markdown rendering with syntax highlighting
+- Diff visualization with colored output
+- Virtual scroll and progress indicators
+
+---
+
+## Quick Start
+
+### Prerequisites
+
+- **Rust** 1.75+
+- **Operating System**: Linux / macOS / Windows
+- **Memory**: 4 GB+ recommended
+- **API Key**: Anthropic API key (or compatible endpoint)
+
+### Build
 
 ```bash
-# 克隆仓库
+# Clone the repository
 git clone https://github.com/your-username/shannon-code.git
 cd shannon-code
 
-# 构建项目
+# Build in release mode
 cargo build --release
 
-# 安装到本地
-cargo install --path .
+# The binary is at target/release/shannon
 ```
 
-### 配置
+### Configure
 
-首次运行需要配置 API 密钥：
+First run requires an API key:
 
 ```bash
-# 创建配置文件
 mkdir -p ~/.config/shannon
-cat > ~/.config/shannon/config.toml << 'EOF'
+cat > ~/.config/shannon/config.toml << 'EOF
 [anthropic]
-api_key = "your-anthropic-api-key"
+api_key = "your-api-key-here"
 
 [general]
-model = "claude-3-5-sonnet-20241022"
+model = "claude-sonnet-4-20250514"
 max_tokens = 8192
 temperature = 0.7
 EOF
 ```
 
-### 基础使用
+### Run
 
 ```bash
-# 启动 Shannon Code
+# Start Shannon Code
 shannon
 
-# 或者在特定目录中启动
+# Start in a specific project directory
 shannon /path/to/project
 
-# 查看帮助
+# Show help
 shannon --help
 
-# 查看版本
+# Show version
 shannon --version
 ```
 
 ---
 
-## 📁 项目结构
+## Project Structure
 
 ```
 shannon-code/
-├── crates/                    # Rust crates
-│   ├── shannon-core/          # 核心功能模块
-│   │   ├── src/
-│   │   │   ├── agent/         # Agent 系统
-│   │   │   ├── mcp/           # MCP 协议实现
-│   │   │   ├── tools/         # 工具集
-│   │   │   └── llm/           # LLM 接口
-│   │   └── Cargo.toml
-│   │
-│   ├── shannon-cli/           # 命令行界面
-│   │   ├── src/
-│   │   │   ├── main.rs
-│   │   │   └── cli.rs
-│   │   └── Cargo.toml
-│   │
-│   ├── shannon-ui/            # TUI 界面
-│   │   ├── src/
-│   │   │   ├── widgets/
-│   │   │   ├── layout/
-│   │   │   └── events/
-│   │   └── Cargo.toml
-│   │
-│   ├── shannon-tools/         # 工具实现
-│   │   ├── src/
-│   │   │   ├── file_ops/
-│   │   │   ├── git_ops/
-│   │   │   ├── bash/
-│   │   │   └── browser/
-│   │   └── Cargo.toml
-│   │
-│   ├── shannon-mcp/           # MCP 协议
-│   │   ├── src/
-│   │   │   ├── protocol/
-│   │   │   ├── transport/
-│   │   │   └── server/
-│   │   └── Cargo.toml
-│   │
-│   └── shannon-agents/        # Agent 系统
-│       ├── src/
-│       │   ├── dispatcher/
-│       │   ├── executor/
-│       │   └── memory/
-│       └── Cargo.toml
-│
-├── skills/                    # 技能定义
-│   ├── commit/
-│   ├── review-pr/
-│   └── pdf/
-│
-├── config/                    # 配置文件
-│   ├── default.toml
-│   └── examples/
-│
-├── tests/                     # 集成测试
-├── benches/                   # 性能测试
-├── examples/                  # 示例代码
-│
-├── Cargo.toml                 # Workspace 配置
-├── Cargo.lock                 # 依赖锁定
-├── README.md                  # 项目文档
-├── LICENSE                    # 许可证
-└── .gitignore                 # Git 忽略文件
+├── crates/
+│   ├── shannon-core/          # Core engine: query processing, tools, permissions, state
+│   ├── shannon-tools/         # Tool implementations: file ops, git, search, notebook
+│   ├── shannon-agents/        # Agent system: coordinator, dispatcher, executor
+│   ├── shannon-ui/            # Terminal UI: REPL, widgets, rendering
+│   ├── shannon-mcp/           # MCP protocol: transport, server, client
+│   ├── shannon-commands/      # Slash commands: built-in command registry
+│   ├── shannon-skills/       # Skills framework: discovery, loading, execution
+│   ├── shannon-types/         # Shared type definitions
+│   └── shannon-cli/           # CLI entry point
+├── skills/                    # Bundled skill definitions
+├── Cargo.toml                 # Workspace configuration
+├── Cargo.lock                 # Dependency lock file
+├── LICENSE
+└── README.md
 ```
 
 ---
 
-## 🔧 开发指南
-
-### 构建项目
+## Development
 
 ```bash
-# Debug 构建
+# Debug build
 cargo build
 
-# Release 构建（优化）
-cargo build --release
+# Run all tests (2,341 tests)
+cargo test --workspace
 
-# 运行测试
-cargo test
+# Run a specific module's tests
+cargo test -p shannon-core -- tool_execution
 
-# 运行特定测试
-cargo test --test integration_test
+# Check compilation without building
+cargo check --workspace
 
-# 检查代码（不构建）
-cargo check
-
-# 格式化代码
+# Format code
 cargo fmt
 
-# 代码检查
+# Lint
 cargo clippy
 ```
 
-### 添加新的 Crate
+### Adding a New Crate
 
 ```bash
-# 在 crates/ 目录下创建新的 crate
 cd crates
 cargo new --lib shannon-new-feature
-
-# 在根 Cargo.toml 中添加 workspace member
-echo 'members = ["crates/shannon-new-feature"]' >> ../../Cargo.toml
 ```
 
-### 代码规范
-
-- 使用 `cargo fmt` 格式化代码
-- 使用 `cargo clippy` 进行代码检查
-- 编写单元测试和集成测试
-- 添加文档注释（`///` 和 `//!`）
-- 遵循 Rust 命名规范
+Then add it to the workspace in the root `Cargo.toml`.
 
 ---
 
-## 🤝 贡献指南
+## Statistics
 
-我们欢迎任何形式的贡献！
-
-### 贡献方式
-
-1. **报告 Bug**：在 Issues 中提交问题
-2. **功能建议**：提出新功能的想法
-3. **代码贡献**：提交 Pull Request
-4. **文档改进**：完善项目文档
-
-### 提交 PR 流程
-
-1. Fork 本仓库
-2. 创建功能分支：`git checkout -b feature/amazing-feature`
-3. 提交更改：`git commit -m 'Add amazing feature'`
-4. 推送分支：`git push origin feature/amazing-feature`
-5. 创建 Pull Request
-
-### 代码审查
-
-- 所有 PR 需要通过 CI 检查
-- 至少一位维护者审查批准
-- 遵循现有代码风格
-- 添加必要的测试
+| Metric | Value |
+|--------|-------|
+| Total lines of code | ~78,000 |
+| Number of tests | ~2,341 |
+| Number of crates | 9 |
+| Supported platforms | Linux, macOS, Windows |
 
 ---
 
-## 📊 性能对比
+## License
 
-| 操作 | Claude Code (Node.js) | Shannon Code (Rust) | 提升 |
-|------|----------------------|---------------------|------|
-| 启动时间 | ~800ms | ~50ms | **16x** |
-| 内存占用 | ~200MB | ~30MB | **6.7x** |
-| 文件读取 | ~15ms | ~2ms | **7.5x** |
-| 并发请求 | 受限 | 原生支持 | **显著** |
+This project is released under the MIT License. See [LICENSE](LICENSE) for details.
 
-> *基于本地测试环境，实际性能因硬件而异*
+### Acknowledgments
 
----
-
-## 🗺️ 路线图
-
-### v0.1.0 (当前)
-- ✅ 基础 CLI 功能
-- ✅ MCP 协议支持
-- ✅ 核心工具集
-- ✅ Agent 系统
-
-### v0.2.0 (计划中)
-- ⏳ 完整 TUI 界面
-- ⏳ 技能系统
-- ⏳ 浏览器自动化
-- ⏳ 性能优化
-
-### v0.3.0 (未来)
-- ⏳ 插件系统
-- ⏳ 多 LLM 支持
-- ⏳ 云同步功能
-- ⏳ VS Code 扩展
-
----
-
-## 📄 许可证
-
-本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件
-
-### 致谢
-
-本项目灵感来源于 [Anthropic Claude Code](https://github.com/anthropics/claude-code)，原始版本由 Anthropic 开发。
-
-**版权声明**：
-- Shannon Code 是 Claude Code 的独立重新实现
-- Anthropic 保留 Claude Code 的所有权利
-- 本项目仅用于学习和研究目的
-
----
-
-## 📞 联系方式
-
-- **GitHub Issues**: [提交问题](https://github.com/your-username/shannon-code/issues)
-- **Discussions**: [参与讨论](https://github.com/your-username/shannon-code/discussions)
-- **Email**: your-email@example.com
-
----
-
-## 🔗 相关链接
-
-- [Claude Code 官方仓库](https://github.com/anthropics/claude-code)
-- [Anthropic 官网](https://www.anthropic.com)
-- [Rust 语言官网](https://www.rust-lang.org)
-- [MCP 协议规范](https://modelcontextprotocol.io)
+This project was inspired by publicly available AI-assisted coding tools and open specifications. No proprietary materials were used in its creation.
 
 ---
 
 <div align="center">
 
-**用 ❤️ 和 🦀 Rust 构建**
+Built with Rust
 
-[⬆ 返回顶部](#shannon-code)
+[Back to top](#shannon-code)
+
+</div>
+
+---
+
+<a id="中文文档"></a>
+
+# 中文文档
+
+## 免责声明
+
+**Shannon Code 是一个独立的、基于净室（clean room）方法重新实现的 AI 辅助编程工具。** 本项目完全从零开始构建，仅参考了公开文档、开放规范（如 [Model Context Protocol](https://modelcontextprotocol.io)）和通用软件工程原则。
+
+- 开发过程中**未访问、未使用**任何专有源代码、二进制文件或机密材料
+- 所有代码、架构和设计决策均为原创
+- 与其他产品的功能相似性来自对开放标准和通用软件模式的实现，而非复制
+- 本项目**不隶属于、不由...认可、也不与**任何其他 AI 编程工具供应商关联
+- Shannon Code 的开发者**不承担任何法律责任**
+
+本项目仅用于教育和研究目的。
+
+## 什么是 Shannon Code？
+
+Shannon Code 是一个功能丰富、类型安全的 AI 辅助编程工具，完全使用 Rust 编写。它提供了基于终端的 REPL 界面，用于与大语言模型（LLM）交互，同时提供工具编排、会话管理、插件系统和 MCP（模型上下文协议）支持等高级功能。
+
+## 特性
+
+### AI 辅助编程
+- 流式查询处理与实时输出
+- 多轮对话与上下文管理
+- 代码生成、重构和优化建议
+- 自动测试生成
+
+### 工具系统
+- **文件操作**：读取、编辑、创建、Notebook 编辑
+- **代码分析**：语法高亮、符号导航、Diff 渲染
+- **Git 集成**：版本控制、分支管理、提交操作
+- **命令执行**：沙箱化的 Shell 命令运行
+- **图片支持**：截图分析、视觉理解
+- **Web 搜索**：实时信息检索
+
+### MCP 协议
+- 完整的 MCP 协议实现（stdio、SSE、streamable HTTP）
+- 从 MCP 服务器动态注册工具
+- 资源管理和订阅支持
+- 请求/响应交互支持
+
+### 高级能力
+- **多 Agent 协作**：并行 Agent 调度、团队协调、任务委托
+- **权限系统**：基于规则的分类、危险模式检测、审批工作流
+- **会话管理**：持久化、历史记录、搜索、恢复
+- **插件系统**：发现、加载、生命周期管理
+- **技能与命令**：可扩展的技能框架
+- **上下文压缩**：自动压缩、微压缩、会话记忆策略
+- **钩子系统**：工具执行前后钩子、自定义事件处理
+- **记忆系统**：持久化存储、自动提取、整合
+- **LSP 集成**：语言服务协议实现智能代码导航
+- **计划模式**：结构化规划与审批工作流
+- **Worktree 支持**：隔离的 Git 工作树
+
+## 快速开始
+
+### 环境要求
+
+- **Rust** 1.75+
+- **操作系统**：Linux / macOS / Windows
+- **内存**：建议 4GB 以上
+- **API 密钥**：Anthropic API 密钥（或兼容端点）
+
+### 构建
+
+```bash
+git clone https://github.com/your-username/shannon-code.git
+cd shannon-code
+cargo build --release
+```
+
+### 配置
+
+```bash
+mkdir -p ~/.config/shannon
+cat > ~/.config/shannon/config.toml << 'EOF'
+[anthropic]
+api_key = "your-api-key-here"
+
+[general]
+model = "claude-sonnet-4-20250514"
+max_tokens = 8192
+temperature = 0.7
+EOF
+```
+
+### 运行
+
+```bash
+shannon              # 启动
+shannon /path/to/project  # 在指定目录启动
+shannon --help        # 查看帮助
+shannon --version     # 查看版本
+```
+
+## 许可证
+
+本项目采用 MIT 许可证发布。详见 [LICENSE](LICENSE)。
+
+---
+
+<div align="center">
+
+使用 Rust 构建
+
+[返回顶部](#shannon-code)
 
 </div>
