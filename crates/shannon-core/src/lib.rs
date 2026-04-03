@@ -26,7 +26,7 @@ pub mod updater;
 
 // Re-export key types for convenience
 pub use query_engine::{QueryEngine, QueryContext, QueryEvent};
-pub use tools::{Tool, ToolRegistry, ToolOutput, ToolResult};
+pub use tools::{Tool, ToolInfo, ToolRegistry, ToolOutput, ToolResult};
 pub use permissions::{PermissionManager, Permission, PermissionLevel};
 pub use state::{
     StateManager, SessionState, SessionData, SessionInfo, SessionPersistMetadata,

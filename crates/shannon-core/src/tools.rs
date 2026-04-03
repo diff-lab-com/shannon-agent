@@ -61,6 +61,21 @@ pub trait Tool: Send + Sync {
     }
 }
 
+/// Metadata about a registered tool, used for tool discovery.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolInfo {
+    /// Tool name
+    pub name: String,
+    /// Tool description
+    pub description: String,
+    /// Tool category
+    pub category: String,
+    /// Whether the tool requires authentication
+    pub requires_auth: bool,
+    /// JSON Schema describing the tool's input parameters
+    pub input_schema: Value,
+}
+
 /// Registry for managing available tools
 pub struct ToolRegistry {
     tools: HashMap<String, Box<dyn Tool>>,
@@ -103,6 +118,20 @@ impl ToolRegistry {
     /// List all registered tool names
     pub fn list(&self) -> Vec<String> {
         self.tools.keys().cloned().collect()
+    }
+
+    /// List all registered tools with their metadata (name, description, category, auth, schema).
+    pub fn list_tools_info(&self) -> Vec<ToolInfo> {
+        self.tools
+            .values()
+            .map(|t| ToolInfo {
+                name: t.name().to_string(),
+                description: t.description().to_string(),
+                category: t.category().to_string(),
+                requires_auth: t.requires_auth(),
+                input_schema: t.input_schema(),
+            })
+            .collect()
     }
 
     /// Execute a tool by name

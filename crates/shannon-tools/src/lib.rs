@@ -15,6 +15,9 @@
 //! - Plan mode operations (EnterPlanMode, ExitPlanMode for read-only planning)
 //! - Git operations (GitBranch, GitDiff, GitLog, GitStash, GitSafety)
 //! - LSP operations (GoToDefinition, FindReferences, Hover, DocumentSymbol)
+//! - Grep operations (Grep for content search across files)
+//! - Tool search operations (ToolSearch for tool discovery)
+//! - Ask user operations (AskUserQuestion for interactive confirmation and option selection)
 
 pub mod file;
 pub mod system;
@@ -32,6 +35,9 @@ pub mod skill;
 pub mod cron;
 pub mod plan_mode;
 pub mod lsp;
+pub mod grep;
+pub mod ask_user;
+pub mod tool_search;
 
 // Re-exports for convenience
 pub use file::{ReadTool, WriteTool, EditTool, GlobTool, FileOperation};
@@ -63,6 +69,12 @@ pub use lsp::{
     GoToDefinitionOutput, FindReferencesOutput, HoverOutput, DocumentSymbolOutput,
     detect_language_id,
 };
+pub use ask_user::{
+    AskUserQuestionTool, AskUserInput, Question, QuestionOption, QuestionAnswer,
+    QuestionHandler, SharedQuestionHandler, TerminalQuestionHandler,
+    MockQuestionHandler, ErrorQuestionHandler,
+};
+pub use tool_search::{ToolSearchTool, ToolSearchInput, ToolSearchOutput};
 
 // Re-export from shannon_core
 pub use shannon_core::{
