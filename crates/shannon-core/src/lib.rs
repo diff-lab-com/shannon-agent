@@ -37,6 +37,12 @@ pub mod away_summary;
 pub mod tool_use_summary;
 pub mod token_estimation;
 pub mod prevent_sleep;
+pub mod policy_limits;
+pub mod rate_limit_messages;
+pub mod ai_limits;
+pub mod vcr;
+pub mod internal_logging;
+pub mod git_operation_tracking;
 
 // Re-export key types for convenience
 pub use query_engine::{QueryEngine, QueryContext, QueryEvent};
@@ -77,6 +83,12 @@ pub use tips::{
 pub use rate_limit::{
     RateLimiter, RateLimitConfig, RateLimitResult, TokenBucket, ExponentialBackoff,
 };
+pub use policy_limits::{PolicyLimits, PolicyLimitsManager, PolicyCheckResult, PolicyError};
+pub use rate_limit_messages::RateLimitMessageBuilder;
+pub use ai_limits::{AiLimitType, AiUsageRecord, AiLimitsTracker, LimitStatus};
+pub use vcr::{Vcr, VcrConfig, VcrRecording, VcrError};
+pub use internal_logging::{InternalLogEntry, InternalLogLevel, InternalLogger};
+pub use git_operation_tracking::{GitOperation, GitOperationTracker};
 
 /// Core error types for Shannon
 pub mod error {
@@ -92,6 +104,8 @@ pub mod error {
     pub use crate::notifier::NotifierError;
     pub use crate::tips::TipError;
     pub use crate::analytics::AnalyticsError;
+    pub use crate::policy_limits::PolicyError;
+    pub use crate::vcr::VcrError;
 }
 
 /// Version information
