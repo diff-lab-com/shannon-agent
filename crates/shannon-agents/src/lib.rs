@@ -11,6 +11,7 @@ mod worktree;
 mod message;
 mod task;
 mod error;
+mod sub_agent;
 
 pub use coordinator::{AgentCoordinator, CoordinatorConfig, AssignmentStrategy, CoordinatorEvent};
 pub use teammate::{Teammate, TeammateConfig, TeammateStatus, TeammateState};
@@ -21,6 +22,12 @@ pub use worktree::{WorktreeManager, WorktreeConfig, WorktreeSession, WorktreeSta
 pub use message::{AgentMessage, MessagePriority, MessageType, MessageContent, ProtocolMessage};
 pub use task::{AgentTask, TaskStatus, TaskDependency, TaskPriority, DependencyType};
 pub use error::{AgentError, CoordinationError, TaskError};
+pub use sub_agent::{
+    AgentConfig, AgentStatus, SubAgent, SubAgentRegistry,
+    AgentSpawnTool, AgentSpawnInput,
+    SendMessageTool, SendMessageInput,
+    TeamCreateTool, TeamCreateInput,
+};
 
 /// Version information for the agents crate
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

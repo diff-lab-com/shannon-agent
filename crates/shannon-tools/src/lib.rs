@@ -14,6 +14,7 @@
 //! - Messaging operations (SendMessage for team communication)
 //! - Plan mode operations (EnterPlanMode, ExitPlanMode for read-only planning)
 //! - Git operations (GitBranch, GitDiff, GitLog, GitStash, GitSafety)
+//! - LSP operations (GoToDefinition, FindReferences, Hover, DocumentSymbol)
 
 pub mod file;
 pub mod system;
@@ -30,6 +31,7 @@ pub mod todo;
 pub mod skill;
 pub mod cron;
 pub mod plan_mode;
+pub mod lsp;
 
 // Re-exports for convenience
 pub use file::{ReadTool, WriteTool, EditTool, GlobTool, FileOperation};
@@ -54,6 +56,13 @@ pub use todo::{
 pub use skill::{SkillTool, SkillInvokeInput, SkillInvokeOutput};
 pub use cron::{CronTool, CronCreateInput, CronCreateOutput, CronDeleteInput, CronDeleteOutput, CronListInput, CronListOutput};
 pub use plan_mode::{PlanModeState, EnterPlanModeTool, ExitPlanModeTool, new_plan_mode_state, is_plan_mode_active};
+pub use lsp::{
+    GoToDefinitionTool, FindReferencesTool, HoverTool, DocumentSymbolTool,
+    LspPosition, LspRange, LspLocation, HoverResult, DocumentSymbolItem,
+    GoToDefinitionInput, FindReferencesInput, HoverInput, DocumentSymbolInput,
+    GoToDefinitionOutput, FindReferencesOutput, HoverOutput, DocumentSymbolOutput,
+    detect_language_id,
+};
 
 // Re-export from shannon_core
 pub use shannon_core::{

@@ -10,6 +10,8 @@
 //! - [`StateManager`]: Persistent state and session management
 //! - [`ClaudeClient`]: Async Claude API client with streaming support
 //! - [`SettingsManager`]: Configuration management for user and project settings
+//! - [`AutoUpdater`]: Automatic update checking via GitHub Releases
+//! - [`PluginManager`]: Plugin discovery, loading, and lifecycle management
 
 pub mod query_engine;
 pub mod tools;
@@ -19,6 +21,8 @@ pub mod api;
 pub mod claude_md;
 pub mod settings;
 pub mod hooks;
+pub mod plugins;
+pub mod updater;
 
 // Re-export key types for convenience
 pub use query_engine::{QueryEngine, QueryContext, QueryEvent};
@@ -35,6 +39,8 @@ pub use api::{
 };
 pub use settings::{Settings, SettingsManager, SettingsError};
 pub use hooks::{HookManager, HookEvent, HookResult, HookDecision, HookEventType, HookError};
+pub use plugins::{PluginManager, PluginManifest, PluginState, PluginError, Plugin, PluginStateFile};
+pub use updater::{AutoUpdater, UpdateStatus, UpdaterConfig, ReleaseInfo, UpdateError};
 
 /// Core error types for Shannon
 pub mod error {
@@ -44,6 +50,8 @@ pub mod error {
     pub use crate::state::StateError;
     pub use crate::settings::SettingsError;
     pub use crate::hooks::HookError;
+    pub use crate::plugins::PluginError;
+    pub use crate::updater::UpdateError;
 }
 
 /// Version information
