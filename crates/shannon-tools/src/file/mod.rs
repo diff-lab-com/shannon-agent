@@ -22,6 +22,8 @@ pub mod edit;
 pub mod glob;
 pub mod sandbox;
 pub mod history;
+pub mod diff_renderer;
+pub mod sandbox_adapter;
 
 // Re-export sandbox types for external use
 pub use sandbox::{PathSandbox, SandboxConfig, SandboxError};

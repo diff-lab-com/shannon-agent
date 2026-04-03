@@ -110,6 +110,13 @@ pub use file::history::{
     FileSnapshot, FileHistory, FileDiff, FileOperation as FileHistoryOperation,
     DiffHunk,
 };
+pub use file::diff_renderer::{
+    DiffRenderer, DiffHunk as DiffRenderHunk, DiffLine, DiffLineType, DiffStats, ColorScheme,
+};
+pub use file::sandbox_adapter::{
+    SandboxAdapter, PathSandboxAdapter, SandboxViolation, SandboxResult,
+    SandboxConfig as SandboxAdapterConfig,
+};
 
 // Re-export from shannon_core
 pub use shannon_core::{

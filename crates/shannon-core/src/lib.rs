@@ -18,6 +18,9 @@
 //! - [`VoiceModeService`]: Voice input/output management and keyword spotting
 //! - [`MagicDocsService`]: Automatic documentation generation from source paths
 //! - [`SessionHistoryManager`]: Session history listing, searching, archiving, and resumption
+//! - [`TranscriptStore`]: Persistent conversation transcript storage and search
+//! - [`ActivityManager`]: Long-running task activity tracking with progress
+//! - [`Housekeeper`]: Periodic background cleanup tasks
 
 pub mod query_engine;
 pub mod tools;
@@ -65,6 +68,12 @@ pub mod permission_classifier;
 pub mod team_memory_sync;
 pub mod auto_dream_consolidation;
 pub mod mcp_server_approval;
+pub mod session_transcript;
+pub mod activity_manager;
+pub mod housekeeping;
+pub mod credential_manager;
+pub mod billing;
+pub mod enhanced_suggestions;
 
 // Re-export key types for convenience
 pub use query_engine::{QueryEngine, QueryContext, QueryEvent};
@@ -175,7 +184,33 @@ pub use mcp_server_approval::{
     McpApprovalManager, McpApprovalPolicy, McpServerApprovalRequest,
     McpTransportType, ApprovalDecision, RiskAssessment, McpApprovalError,
 };
+pub use session_transcript::{
+    TranscriptStore, TranscriptEntry, TranscriptRole, TranscriptQuery,
+    TranscriptError, ToolCallRecord,
+    SessionTranscriptStats, GlobalTranscriptStats,
+};
+pub use activity_manager::{
+    ActivityManager, Activity, ActivityStatus, ActivityError,
+};
+pub use housekeeping::{
+    Housekeeper, HousekeepingTask, HousekeepingConfig, HousekeepingError,
+    TaskResult, TempFileCleanupTask, CacheRefreshTask,
+    OldSessionPruneTask, LogRotationTask,
+};
+pub use credential_manager::{
+    CredentialManager, Credential, CredentialError, CredentialSummary,
+    CredentialFileDescriptor, CredentialFileFormat, PortableCredential,
+    PortableCredentialBundle, ImportResult,
+};
+pub use billing::{
+    BillingManager, BillingPeriod, UsageRecord, BillingConfig,
+    BillingError, ModelUsageSummary, BudgetAlert, BudgetAlertType, DailyUsage,
+};
 
+pub use enhanced_suggestions::{
+    ContextSuggestionEngine, ContextualSuggestion, SuggestionTrigger,
+    SuggestionContext as EnhancedSuggestionContext, SuggestionError,
+};
 /// Core error types for Shannon
 pub mod error {
     pub use crate::api::ApiError;
@@ -211,6 +246,12 @@ pub mod error {
     pub use crate::permission_classifier::PermissionClassifierError;
     pub use crate::auto_dream_consolidation::ConsolidationError;
     pub use crate::mcp_server_approval::McpApprovalError;
+    pub use crate::session_transcript::TranscriptError;
+    pub use crate::activity_manager::ActivityError;
+    pub use crate::housekeeping::HousekeepingError;
+    pub use crate::enhanced_suggestions::SuggestionError;
+    pub use crate::credential_manager::CredentialError;
+    pub use crate::billing::BillingError;
 }
 
 /// Version information

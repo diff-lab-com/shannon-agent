@@ -7,6 +7,7 @@ mod widgets;
 mod events;
 mod render;
 pub mod vim;
+pub mod repl_enhancement;
 
 pub use repl::{Repl, ReplState};
 pub use events::{Event, EventHandler};
