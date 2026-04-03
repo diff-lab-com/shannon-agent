@@ -35,6 +35,9 @@ dirs = { workspace = true }
 # Regex for hook matching
 regex = "1.11"
 
+# Platform-specific disk space info
+libc = "0.2"
+
 # Testing utilities
 tempfile = "3.16"
 

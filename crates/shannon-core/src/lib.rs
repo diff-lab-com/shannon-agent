@@ -31,6 +31,7 @@ pub mod plugins;
 pub mod updater;
 pub mod suggestions;
 pub mod memory;
+pub mod extract_memories;
 pub mod diagnostics;
 pub mod analytics;
 pub mod notifier;
@@ -58,6 +59,8 @@ pub mod session_history;
 pub mod compact;
 pub mod streaming_tool_executor;
 pub mod tool_execution;
+pub mod tool_hooks;
+pub mod doctor;
 
 // Re-export key types for convenience
 pub use query_engine::{QueryEngine, QueryContext, QueryEvent};
@@ -76,7 +79,14 @@ pub use settings::{Settings, SettingsManager, SettingsError};
 pub use hooks::{HookManager, HookEvent, HookResult, HookDecision, HookEventType, HookError};
 pub use plugins::{PluginManager, PluginManifest, PluginState, PluginError, Plugin, PluginStateFile};
 pub use updater::{AutoUpdater, UpdateStatus, UpdaterConfig, ReleaseInfo, UpdateError};
-pub use memory::{MemoryStore, MemoryEntry, MemoryCategory, AutoDreamService, MemoryError};
+pub use memory::{
+    MemoryStore, MemoryEntry, MemoryCategory, AutoDreamService, MemoryError,
+    MemoryType, SessionMemoryConfig, MemoryConsolidator, ConsolidationResult,
+};
+pub use extract_memories::{
+    MemoryExtractor, ExtractionConfig, ExtractionResult, ExtractionCategory,
+    ExtractionError, MessageSummary, ExtractedMemory,
+};
 pub use suggestions::{
     Suggestion, SuggestionCategory, SuggestionContext, SuggestionEngine, SuggestionRule,
 };
@@ -140,6 +150,10 @@ pub use session_history::{
 pub use streaming_tool_executor::{StreamingToolExecutor, TrackedTool, ToolStatus};
 pub use tool_execution::{ToolExecutionService, ToolExecutionResult, ToolProgress, ToolProgressStatus};
 pub use compact::{CompactEngine, CompactConfig, CompactResult, CompactStrategy, MessageGroup, CompactError};
+pub use tool_hooks::{
+    ToolHookChain, ToolHook, ToolHookResult, ToolHookDecision, ToolHookContext,
+    ToolHookError, PermissionToolHook, LoggingToolHook, StopOnDenyHook,
+};
 
 /// Core error types for Shannon
 pub mod error {
@@ -152,6 +166,7 @@ pub mod error {
     pub use crate::plugins::PluginError;
     pub use crate::updater::UpdateError;
     pub use crate::memory::MemoryError;
+    pub use crate::extract_memories::ExtractionError;
     pub use crate::notifier::NotifierError;
     pub use crate::tips::TipError;
     pub use crate::analytics::AnalyticsError;
@@ -169,6 +184,8 @@ pub mod error {
     pub use crate::streaming_tool_executor::ExecutorError;
     pub use crate::tool_execution::ToolExecutionError;
     pub use crate::compact::CompactError;
+    pub use crate::doctor::DoctorError;
+    pub use crate::tool_hooks::ToolHookError;
 }
 
 /// Version information

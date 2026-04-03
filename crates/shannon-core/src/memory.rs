@@ -81,6 +81,196 @@ impl std::fmt::Display for MemoryCategory {
     }
 }
 
+/// A more granular memory type for session memory management.
+///
+/// This extends [`MemoryCategory`] with scope information (user vs project vs
+/// shared) and is used by the session memory consolidation system.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum MemoryType {
+    /// User preferences, workflow choices.
+    UserPreference,
+    /// Project-specific patterns, coding standards.
+    ProjectConvention,
+    /// Architectural decisions and rationale.
+    TechnicalDecision,
+    /// Solutions to problems encountered.
+    DebuggingInsight,
+}
+
+impl MemoryType {
+    /// Return all memory type variants.
+    pub fn all() -> Vec<MemoryType> {
+        vec![
+            MemoryType::UserPreference,
+            MemoryType::ProjectConvention,
+            MemoryType::TechnicalDecision,
+            MemoryType::DebuggingInsight,
+        ]
+    }
+
+    /// Parse a string into a `MemoryType`.
+    pub fn from_string(s: &str) -> Option<MemoryType> {
+        match s {
+            "UserPreference" => Some(MemoryType::UserPreference),
+            "ProjectConvention" => Some(MemoryType::ProjectConvention),
+            "TechnicalDecision" => Some(MemoryType::TechnicalDecision),
+            "DebuggingInsight" => Some(MemoryType::DebuggingInsight),
+            _ => None,
+        }
+    }
+
+    /// String representation of this memory type.
+    pub fn as_str(&self) -> &str {
+        match self {
+            MemoryType::UserPreference => "UserPreference",
+            MemoryType::ProjectConvention => "ProjectConvention",
+            MemoryType::TechnicalDecision => "TechnicalDecision",
+            MemoryType::DebuggingInsight => "DebuggingInsight",
+        }
+    }
+
+    /// Human-readable description of this memory type.
+    pub fn description(&self) -> &str {
+        match self {
+            MemoryType::UserPreference => "User preferences and workflow choices",
+            MemoryType::ProjectConvention => "Project-specific patterns and coding standards",
+            MemoryType::TechnicalDecision => "Architectural decisions and rationale",
+            MemoryType::DebuggingInsight => "Solutions to problems encountered during debugging",
+        }
+    }
+
+    /// The scope directory name for storing this type of memory.
+    ///
+    /// - `"user"` -- stored per-user, shared across projects
+    /// - `"project"` -- stored per-project
+    /// - `"shared"` -- stored per-project but intended for team sharing
+    pub fn scope_directory(&self) -> &str {
+        match self {
+            MemoryType::UserPreference => "user",
+            MemoryType::ProjectConvention => "project",
+            MemoryType::TechnicalDecision => "project",
+            MemoryType::DebuggingInsight => "shared",
+        }
+    }
+}
+
+impl std::fmt::Display for MemoryType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl From<MemoryType> for MemoryCategory {
+    fn from(mt: MemoryType) -> Self {
+        match mt {
+            MemoryType::UserPreference => MemoryCategory::Preference,
+            MemoryType::ProjectConvention => MemoryCategory::Pattern,
+            MemoryType::TechnicalDecision => MemoryCategory::Decision,
+            MemoryType::DebuggingInsight => MemoryCategory::Error,
+        }
+    }
+}
+
+// ============================================================================
+// Session Memory Configuration
+// ============================================================================
+
+/// Configuration for session memory management.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionMemoryConfig {
+    /// Whether automatic extraction from conversations is enabled.
+    pub auto_extract_enabled: bool,
+    /// Maximum number of memories to retain per category.
+    pub max_memories_per_category: usize,
+    /// Time-to-live for auto-extracted memories. Memories older than this
+    /// are eligible for cleanup.
+    pub memory_ttl: Duration,
+    /// Whether memory consolidation (dedup + merge) is enabled.
+    pub consolidation_enabled: bool,
+}
+
+impl Default for SessionMemoryConfig {
+    fn default() -> Self {
+        Self {
+            auto_extract_enabled: true,
+            max_memories_per_category: 100,
+            memory_ttl: Duration::days(90),
+            consolidation_enabled: true,
+        }
+    }
+}
+
+// ============================================================================
+// Consolidation
+// ============================================================================
+
+/// Result of a memory consolidation pass.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsolidationResult {
+    /// Number of duplicate memories merged.
+    pub duplicates_merged: usize,
+    /// Number of stale memories removed.
+    pub stale_removed: usize,
+    /// Total memories before consolidation.
+    pub before_count: usize,
+    /// Total memories after consolidation.
+    pub after_count: usize,
+}
+
+/// Deduplicates and merges memories in a [`MemoryStore`].
+pub struct MemoryConsolidator {
+    /// Jaccard similarity threshold above which two memories are considered duplicates.
+    similarity_threshold: f64,
+}
+
+impl MemoryConsolidator {
+    /// Create a new consolidator with the given similarity threshold.
+    ///
+    /// Two memories with Jaccard similarity above `similarity_threshold`
+    /// are considered duplicates and will be merged.
+    pub fn new(similarity_threshold: f64) -> Self {
+        Self {
+            similarity_threshold: similarity_threshold.clamp(0.0, 1.0),
+        }
+    }
+
+    /// Create a consolidator with the default threshold of 0.8.
+    pub fn default() -> Self {
+        Self::new(0.8)
+    }
+
+    /// Run consolidation on the given memory store.
+    ///
+    /// 1. Merges duplicates (keeps the entry with higher confidence).
+    /// 2. Removes entries older than the configured TTL.
+    /// 3. Enforces per-category caps.
+    pub fn consolidate(
+        &self,
+        store: &mut MemoryStore,
+        config: &SessionMemoryConfig,
+    ) -> Result<ConsolidationResult, MemoryError> {
+        let before_count = store.len();
+
+        // Phase 1: Merge duplicates
+        let duplicates_merged = store.merge_duplicates(self.similarity_threshold)?;
+
+        // Phase 2: Remove stale entries
+        let stale_removed = store.remove_stale(config.memory_ttl)?;
+
+        // Phase 3: Enforce per-category caps
+        store.enforce_category_caps(config.max_memories_per_category);
+
+        let after_count = store.len();
+
+        Ok(ConsolidationResult {
+            duplicates_merged,
+            stale_removed,
+            before_count,
+            after_count,
+        })
+    }
+}
+
 /// A single memory entry extracted from a conversation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryEntry {
@@ -361,6 +551,197 @@ impl MemoryStore {
     /// Return true if the store contains no entries.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Get memories filtered by [`MemoryType`].
+    ///
+    /// Maps the `MemoryType` to the corresponding [`MemoryCategory`] and
+    /// returns all entries matching that category.
+    pub fn get_memories_by_type(&self, memory_type: &MemoryType) -> Vec<MemoryEntry> {
+        let category: MemoryCategory = memory_type.clone().into();
+        self.entries
+            .values()
+            .filter(|e| e.category == category)
+            .cloned()
+            .collect()
+    }
+
+    /// Consolidate memories: merge duplicates, remove stale entries, enforce caps.
+    ///
+    /// This is a convenience method that creates a default [`MemoryConsolidator`]
+    /// and runs consolidation with the given config.
+    pub fn consolidate_memories(
+        &mut self,
+        config: &SessionMemoryConfig,
+    ) -> Result<ConsolidationResult, MemoryError> {
+        let consolidator = MemoryConsolidator::default();
+        consolidator.consolidate(self, config)
+    }
+
+    /// Auto-extract memories from a list of message summaries.
+    ///
+    /// Uses pattern matching to detect preferences, decisions, errors, and
+    /// conventions in the provided messages, returning newly extracted
+    /// [`MemoryEntry`] instances.
+    pub fn auto_extract_from_messages(
+        &self,
+        messages: &[crate::extract_memories::MessageSummary],
+        config: &SessionMemoryConfig,
+    ) -> Vec<MemoryEntry> {
+        if !config.auto_extract_enabled {
+            return Vec::new();
+        }
+
+        let mut memories = Vec::new();
+
+        for msg in messages {
+            let lower = msg.content.to_lowercase();
+
+            // --- UserPreference detection ---
+            for kw in &["i always", "i never", "i prefer", "please always", "please never", "don't use", "do not use"] {
+                if lower.contains(kw) {
+                    memories.push(MemoryEntry::with_confidence(
+                        "auto",
+                        MemoryCategory::Preference,
+                        &msg.content,
+                        0.7,
+                        vec!["auto-extracted".to_string(), "preference".to_string()],
+                    ).unwrap_or_else(|_| MemoryEntry::new("auto", MemoryCategory::Preference, &msg.content)));
+                    break;
+                }
+            }
+
+            // --- ProjectConvention detection ---
+            for kw in &["in this project we", "our convention", "naming convention", "the standard approach"] {
+                if lower.contains(kw) {
+                    memories.push(MemoryEntry::with_confidence(
+                        "auto",
+                        MemoryCategory::Pattern,
+                        &msg.content,
+                        0.7,
+                        vec!["auto-extracted".to_string(), "convention".to_string()],
+                    ).unwrap_or_else(|_| MemoryEntry::new("auto", MemoryCategory::Pattern, &msg.content)));
+                    break;
+                }
+            }
+
+            // --- TechnicalDecision detection ---
+            for kw in &["we decided", "let's use", "going with", "the decision", "decided to"] {
+                if lower.contains(kw) {
+                    memories.push(MemoryEntry::with_confidence(
+                        "auto",
+                        MemoryCategory::Decision,
+                        &msg.content,
+                        0.7,
+                        vec!["auto-extracted".to_string(), "decision".to_string()],
+                    ).unwrap_or_else(|_| MemoryEntry::new("auto", MemoryCategory::Decision, &msg.content)));
+                    break;
+                }
+            }
+
+            // --- DebuggingInsight detection ---
+            for kw in &["the issue was", "the error was", "the fix was", "root cause", "the workaround"] {
+                if lower.contains(kw) {
+                    memories.push(MemoryEntry::with_confidence(
+                        "auto",
+                        MemoryCategory::Error,
+                        &msg.content,
+                        0.7,
+                        vec!["auto-extracted".to_string(), "debugging".to_string()],
+                    ).unwrap_or_else(|_| MemoryEntry::new("auto", MemoryCategory::Error, &msg.content)));
+                    break;
+                }
+            }
+        }
+
+        // Deduplicate by content similarity
+        deduplicate_memories(memories)
+    }
+
+    /// Merge duplicate memories based on Jaccard similarity.
+    ///
+    /// When two entries have similarity above the threshold, the one with
+    /// the higher confidence is kept and the other is removed.
+    /// Returns the number of duplicates removed.
+    pub fn merge_duplicates(&mut self, similarity_threshold: f64) -> Result<usize, MemoryError> {
+        let mut to_remove: Vec<String> = Vec::new();
+        let ids: Vec<String> = self.entries.keys().cloned().collect();
+
+        for i in 0..ids.len() {
+            if to_remove.contains(&ids[i]) {
+                continue;
+            }
+            for j in (i + 1)..ids.len() {
+                if to_remove.contains(&ids[j]) {
+                    continue;
+                }
+                let entry_i = &self.entries[&ids[i]];
+                let entry_j = &self.entries[&ids[j]];
+
+                if entry_i.category == entry_j.category
+                    && content_similarity(&entry_i.content, &entry_j.content) > similarity_threshold
+                {
+                    // Remove the one with lower confidence
+                    let remove_id = if entry_i.confidence >= entry_j.confidence {
+                        &ids[j]
+                    } else {
+                        &ids[i]
+                    };
+                    to_remove.push(remove_id.clone());
+                }
+            }
+        }
+
+        for id in &to_remove {
+            self.entries.remove(id);
+        }
+
+        Ok(to_remove.len())
+    }
+
+    /// Remove entries that are older than the given TTL.
+    ///
+    /// Returns the number of entries removed.
+    pub fn remove_stale(&mut self, ttl: Duration) -> Result<usize, MemoryError> {
+        let cutoff = Utc::now() - ttl;
+        let initial_count = self.entries.len();
+
+        self.entries.retain(|_, entry| entry.created_at > cutoff);
+
+        Ok(initial_count - self.entries.len())
+    }
+
+    /// Enforce per-category caps by removing the least-accessed entries.
+    pub fn enforce_category_caps(&mut self, max_per_category: usize) {
+        let mut by_category: HashMap<MemoryCategory, Vec<String>> = HashMap::new();
+
+        for (id, entry) in &self.entries {
+            by_category
+                .entry(entry.category.clone())
+                .or_default()
+                .push(id.clone());
+        }
+
+        for (_category, mut ids) in by_category {
+            if ids.len() <= max_per_category {
+                continue;
+            }
+
+            // Sort by access count ascending, then by accessed_at ascending
+            ids.sort_by(|a, b| {
+                let entry_a = &self.entries[a];
+                let entry_b = &self.entries[b];
+                entry_a
+                    .access_count
+                    .cmp(&entry_b.access_count)
+                    .then_with(|| entry_a.accessed_at.cmp(&entry_b.accessed_at))
+            });
+
+            let to_remove = ids.len() - max_per_category;
+            for id in ids.into_iter().take(to_remove) {
+                self.entries.remove(&id);
+            }
+        }
     }
 }
 
@@ -1725,5 +2106,337 @@ mod tests {
 
         let results = service.project_memories("my-proj");
         assert_eq!(results.len(), 1);
+    }
+
+    // ==========================================================================
+    // MemoryType tests
+    // ==========================================================================
+
+    #[test]
+    fn test_memory_type_all() {
+        let all = MemoryType::all();
+        assert_eq!(all.len(), 4);
+    }
+
+    #[test]
+    fn test_memory_type_from_string() {
+        assert_eq!(MemoryType::from_string("UserPreference"), Some(MemoryType::UserPreference));
+        assert_eq!(MemoryType::from_string("ProjectConvention"), Some(MemoryType::ProjectConvention));
+        assert_eq!(MemoryType::from_string("TechnicalDecision"), Some(MemoryType::TechnicalDecision));
+        assert_eq!(MemoryType::from_string("DebuggingInsight"), Some(MemoryType::DebuggingInsight));
+        assert_eq!(MemoryType::from_string("NonExistent"), None);
+    }
+
+    #[test]
+    fn test_memory_type_as_str() {
+        assert_eq!(MemoryType::UserPreference.as_str(), "UserPreference");
+        assert_eq!(MemoryType::ProjectConvention.as_str(), "ProjectConvention");
+    }
+
+    #[test]
+    fn test_memory_type_description() {
+        assert!(!MemoryType::UserPreference.description().is_empty());
+        assert!(!MemoryType::DebuggingInsight.description().is_empty());
+    }
+
+    #[test]
+    fn test_memory_type_scope_directory() {
+        assert_eq!(MemoryType::UserPreference.scope_directory(), "user");
+        assert_eq!(MemoryType::ProjectConvention.scope_directory(), "project");
+        assert_eq!(MemoryType::TechnicalDecision.scope_directory(), "project");
+        assert_eq!(MemoryType::DebuggingInsight.scope_directory(), "shared");
+    }
+
+    #[test]
+    fn test_memory_type_display() {
+        assert_eq!(MemoryType::UserPreference.to_string(), "UserPreference");
+    }
+
+    #[test]
+    fn test_memory_type_into_category() {
+        assert_eq!(MemoryCategory::from(MemoryType::UserPreference), MemoryCategory::Preference);
+        assert_eq!(MemoryCategory::from(MemoryType::ProjectConvention), MemoryCategory::Pattern);
+        assert_eq!(MemoryCategory::from(MemoryType::TechnicalDecision), MemoryCategory::Decision);
+        assert_eq!(MemoryCategory::from(MemoryType::DebuggingInsight), MemoryCategory::Error);
+    }
+
+    // ==========================================================================
+    // SessionMemoryConfig tests
+    // ==========================================================================
+
+    #[test]
+    fn test_session_memory_config_default() {
+        let config = SessionMemoryConfig::default();
+        assert!(config.auto_extract_enabled);
+        assert_eq!(config.max_memories_per_category, 100);
+        assert!(config.consolidation_enabled);
+    }
+
+    #[test]
+    fn test_session_memory_config_serialization() {
+        let config = SessionMemoryConfig::default();
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: SessionMemoryConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.max_memories_per_category, config.max_memories_per_category);
+    }
+
+    // ==========================================================================
+    // MemoryConsolidator tests
+    // ==========================================================================
+
+    #[test]
+    fn test_consolidator_new() {
+        let consolidator = MemoryConsolidator::new(0.8);
+        assert!(consolidator.similarity_threshold > 0.0);
+    }
+
+    #[test]
+    fn test_consolidator_default() {
+        let consolidator = MemoryConsolidator::default();
+        assert!((consolidator.similarity_threshold - 0.8).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_consolidator_clamps_threshold() {
+        let consolidator = MemoryConsolidator::new(1.5);
+        assert_eq!(consolidator.similarity_threshold, 1.0);
+
+        let consolidator = MemoryConsolidator::new(-0.5);
+        assert_eq!(consolidator.similarity_threshold, 0.0);
+    }
+
+    #[test]
+    fn test_consolidate_merges_duplicates() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(temp_dir.path().to_path_buf());
+        store.load().unwrap();
+
+        // These two are near-identical and should be merged
+        store.add(MemoryEntry::new("proj", MemoryCategory::Preference, "Always use tabs for indentation in Rust code")).unwrap();
+        store.add(MemoryEntry::new("proj", MemoryCategory::Preference, "Always use tabs for indentation in Rust code")).unwrap();
+        store.add(MemoryEntry::new("proj", MemoryCategory::Decision, "Use Rust")).unwrap();
+
+        assert_eq!(store.len(), 3);
+
+        let config = SessionMemoryConfig::default();
+        let consolidator = MemoryConsolidator::new(0.8);
+        let result = consolidator.consolidate(&mut store, &config).unwrap();
+
+        assert_eq!(result.duplicates_merged, 1);
+        assert_eq!(result.before_count, 3);
+        assert_eq!(store.len(), 2);
+    }
+
+    #[test]
+    fn test_consolidate_removes_stale() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(temp_dir.path().to_path_buf());
+        store.load().unwrap();
+
+        let mut old = MemoryEntry::new("proj", MemoryCategory::Context, "old");
+        old.created_at = Utc::now() - Duration::days(200);
+        store.add(old).unwrap();
+        store.add(MemoryEntry::new("proj", MemoryCategory::Context, "new")).unwrap();
+
+        let config = SessionMemoryConfig {
+            memory_ttl: Duration::days(90),
+            ..SessionMemoryConfig::default()
+        };
+        let consolidator = MemoryConsolidator::default();
+        let result = consolidator.consolidate(&mut store, &config).unwrap();
+
+        assert_eq!(result.stale_removed, 1);
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn test_consolidate_enforces_caps() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(temp_dir.path().to_path_buf());
+        store.load().unwrap();
+
+        for i in 0..5 {
+            store.add(MemoryEntry::new("proj", MemoryCategory::Preference, &format!("pref-{}", i))).unwrap();
+        }
+
+        let config = SessionMemoryConfig {
+            max_memories_per_category: 2,
+            ..SessionMemoryConfig::default()
+        };
+        let consolidator = MemoryConsolidator::default();
+        let result = consolidator.consolidate(&mut store, &config).unwrap();
+
+        assert_eq!(store.len(), 2);
+    }
+
+    // ==========================================================================
+    // MemoryStore enhancement tests
+    // ==========================================================================
+
+    #[test]
+    fn test_get_memories_by_type() {
+        let (mut store, _tmp) = temp_store();
+        store.add(MemoryEntry::new("proj", MemoryCategory::Preference, "Use tabs")).unwrap();
+        store.add(MemoryEntry::new("proj", MemoryCategory::Preference, "No unwrap")).unwrap();
+        store.add(MemoryEntry::new("proj", MemoryCategory::Decision, "Use Rust")).unwrap();
+
+        let prefs = store.get_memories_by_type(&MemoryType::UserPreference);
+        assert_eq!(prefs.len(), 2);
+
+        let decisions = store.get_memories_by_type(&MemoryType::TechnicalDecision);
+        assert_eq!(decisions.len(), 1);
+    }
+
+    #[test]
+    fn test_consolidate_memories_convenience() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(temp_dir.path().to_path_buf());
+        store.load().unwrap();
+
+        store.add(MemoryEntry::new("proj", MemoryCategory::Preference, "Use tabs for indentation")).unwrap();
+        store.add(MemoryEntry::new("proj", MemoryCategory::Preference, "Use tabs for indentation")).unwrap();
+
+        let config = SessionMemoryConfig::default();
+        let result = store.consolidate_memories(&config).unwrap();
+
+        assert_eq!(result.duplicates_merged, 1);
+        assert!(store.len() < 2);
+    }
+
+    #[test]
+    fn test_auto_extract_from_messages_disabled() {
+        let (store, _tmp) = temp_store();
+
+        let messages = vec![
+            crate::extract_memories::MessageSummary::new("user", "I always use tabs"),
+        ];
+
+        let config = SessionMemoryConfig {
+            auto_extract_enabled: false,
+            ..SessionMemoryConfig::default()
+        };
+
+        let extracted = store.auto_extract_from_messages(&messages, &config);
+        assert!(extracted.is_empty());
+    }
+
+    #[test]
+    fn test_auto_extract_from_messages_enabled() {
+        let (store, _tmp) = temp_store();
+
+        let messages = vec![
+            crate::extract_memories::MessageSummary::new("user", "I always use tabs for indentation"),
+            crate::extract_memories::MessageSummary::new("user", "We decided to use Rust"),
+            crate::extract_memories::MessageSummary::new("user", "The issue was a race condition"),
+        ];
+
+        let config = SessionMemoryConfig::default();
+        let extracted = store.auto_extract_from_messages(&messages, &config);
+
+        assert!(!extracted.is_empty());
+        assert!(extracted.len() >= 3);
+    }
+
+    #[test]
+    fn test_auto_extract_deduplicates() {
+        let (store, _tmp) = temp_store();
+
+        let messages = vec![
+            crate::extract_memories::MessageSummary::new("user", "I always use tabs"),
+            crate::extract_memories::MessageSummary::new("user", "I always use tabs for code"),
+        ];
+
+        let config = SessionMemoryConfig::default();
+        let extracted = store.auto_extract_from_messages(&messages, &config);
+
+        // Similar preferences should be deduplicated
+        let pref_count = extracted.iter().filter(|m| m.category == MemoryCategory::Preference).count();
+        assert!(pref_count <= 2);
+    }
+
+    #[test]
+    fn test_merge_duplicates_keeps_higher_confidence() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(temp_dir.path().to_path_buf());
+        store.load().unwrap();
+
+        let mut low = MemoryEntry::new("proj", MemoryCategory::Preference, "Always use tabs for indentation in Rust code");
+        low.confidence = 0.3;
+        let low_id = low.id.clone();
+
+        let mut high = MemoryEntry::new("proj", MemoryCategory::Preference, "Always use tabs for indentation in Rust code");
+        high.confidence = 0.9;
+        let high_id = high.id.clone();
+
+        store.add(low).unwrap();
+        store.add(high).unwrap();
+
+        let removed = store.merge_duplicates(0.8).unwrap();
+        assert_eq!(removed, 1);
+
+        // The higher-confidence one should remain
+        let remaining = store.get(&high_id);
+        assert!(remaining.is_some());
+        assert_eq!(remaining.unwrap().confidence, 0.9);
+
+        let removed_entry = store.get(&low_id);
+        assert!(removed_entry.is_none());
+    }
+
+    #[test]
+    fn test_remove_stale() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(temp_dir.path().to_path_buf());
+        store.load().unwrap();
+
+        let mut old = MemoryEntry::new("proj", MemoryCategory::Context, "old memory");
+        old.created_at = Utc::now() - Duration::days(100);
+        store.add(old).unwrap();
+
+        store.add(MemoryEntry::new("proj", MemoryCategory::Context, "recent memory")).unwrap();
+
+        let removed = store.remove_stale(Duration::days(30)).unwrap();
+        assert_eq!(removed, 1);
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn test_enforce_category_caps() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::new(temp_dir.path().to_path_buf());
+        store.load().unwrap();
+
+        for i in 0..5 {
+            store.add(MemoryEntry::new("proj", MemoryCategory::Preference, &format!("pref-{}", i))).unwrap();
+        }
+        for i in 0..3 {
+            store.add(MemoryEntry::new("proj", MemoryCategory::Decision, &format!("dec-{}", i))).unwrap();
+        }
+
+        store.enforce_category_caps(2);
+
+        let prefs = store.get_memories_by_type(&MemoryType::UserPreference);
+        assert_eq!(prefs.len(), 2);
+
+        let decs = store.get_memories_by_type(&MemoryType::TechnicalDecision);
+        assert_eq!(decs.len(), 2);
+    }
+
+    // ==========================================================================
+    // ConsolidationResult tests
+    // ==========================================================================
+
+    #[test]
+    fn test_consolidation_result_serialization() {
+        let result = ConsolidationResult {
+            duplicates_merged: 3,
+            stale_removed: 2,
+            before_count: 20,
+            after_count: 15,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: ConsolidationResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.duplicates_merged, 3);
+        assert_eq!(deserialized.stale_removed, 2);
     }
 }

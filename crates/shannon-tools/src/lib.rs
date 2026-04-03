@@ -105,6 +105,11 @@ pub use repl_tool::{ReplTool, ReplInput, ReplOutput, REPL_TOOL_NAME};
 pub use mcp_auth::{
     McpAuthTool, McpAuthAction, McpOAuthConfig, OAuthToken, OAuthTokenStore,
 };
+pub use file::history::{
+    FileHistoryManager, FileHistoryConfig, FileHistoryError,
+    FileSnapshot, FileHistory, FileDiff, FileOperation as FileHistoryOperation,
+    DiffHunk,
+};
 
 // Re-export from shannon_core
 pub use shannon_core::{
