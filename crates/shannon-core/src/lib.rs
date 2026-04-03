@@ -14,6 +14,7 @@
 //! - [`PluginManager`]: Plugin discovery, loading, and lifecycle management
 //! - [`MemoryStore`]: Persistent memory storage with search and cleanup
 //! - [`AutoDreamService`]: Automatic memory extraction from conversations
+//! - [`DiagnosticTracker`]: Error tracking, pattern analysis, and diagnostic event management
 
 pub mod query_engine;
 pub mod tools;
@@ -27,6 +28,9 @@ pub mod plugins;
 pub mod updater;
 pub mod suggestions;
 pub mod memory;
+pub mod diagnostics;
+pub mod notifier;
+pub mod tips;
 
 // Re-export key types for convenience
 pub use query_engine::{QueryEngine, QueryContext, QueryEvent};
@@ -49,6 +53,17 @@ pub use memory::{MemoryStore, MemoryEntry, MemoryCategory, AutoDreamService, Mem
 pub use suggestions::{
     Suggestion, SuggestionCategory, SuggestionContext, SuggestionEngine, SuggestionRule,
 };
+pub use diagnostics::{
+    DiagnosticTracker, DiagnosticEvent, DiagnosticLevel, DiagnosticCategory,
+    ErrorPattern, DiagnosticSummary,
+};
+pub use notifier::{
+    Notification, NotificationLevel, Notifier, NotificationHandler,
+    LogNotifier, FileNotifier, CallbackNotifier, NotifierError,
+};
+pub use tips::{
+    Tip, TipCategory, TipCondition, TipManager, TipContext, TipError,
+};
 
 /// Core error types for Shannon
 pub mod error {
@@ -61,6 +76,8 @@ pub mod error {
     pub use crate::plugins::PluginError;
     pub use crate::updater::UpdateError;
     pub use crate::memory::MemoryError;
+    pub use crate::notifier::NotifierError;
+    pub use crate::tips::TipError;
 }
 
 /// Version information

@@ -40,6 +40,10 @@ pub mod ask_user;
 pub mod tool_search;
 pub mod brief;
 pub mod config;
+pub mod remote_trigger;
+pub mod task_output;
+pub mod task_stop;
+pub mod team_delete;
 
 // Re-exports for convenience
 pub use file::{ReadTool, WriteTool, EditTool, GlobTool, FileOperation};
@@ -79,6 +83,12 @@ pub use ask_user::{
 pub use tool_search::{ToolSearchTool, ToolSearchInput, ToolSearchOutput};
 pub use brief::{BriefTool, BriefInput, BriefMessage, BriefFormat};
 pub use config::{ConfigTool, ConfigInput, ConfigAction, ConfigManager, SharedConfigManager};
+pub use remote_trigger::{
+    RemoteTriggerTool, RemoteTriggerServer, RemoteTriggerInput, TriggerAction,
+};
+pub use task_output::{TaskOutputTool, TaskOutputInput, TaskOutputOutput};
+pub use task_stop::{TaskStopTool, TaskStopInput, TaskStopOutput};
+pub use team_delete::{TeamDeleteTool, TeamDeleteInput, TeamDeleteOutput, TeamEntry, TeamRegistry};
 
 // Re-export from shannon_core
 pub use shannon_core::{
