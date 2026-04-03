@@ -18,6 +18,9 @@
 //! - Grep operations (Grep for content search across files)
 //! - Tool search operations (ToolSearch for tool discovery)
 //! - Ask user operations (AskUserQuestion for interactive confirmation and option selection)
+//! - Structured output operations (StructuredOutput for AI-returned JSON data)
+//! - REPL operations (REPL for batch command execution)
+//! - MCP auth operations (McpAuth for OAuth authentication with MCP servers)
 
 pub mod file;
 pub mod system;
@@ -45,6 +48,9 @@ pub mod remote_trigger;
 pub mod task_output;
 pub mod task_stop;
 pub mod team_delete;
+pub mod synthetic_output;
+pub mod repl_tool;
+pub mod mcp_auth;
 
 // Re-exports for convenience
 pub use file::{ReadTool, WriteTool, EditTool, GlobTool, FileOperation};
@@ -94,6 +100,11 @@ pub use remote_trigger::{
 pub use task_output::{TaskOutputTool, TaskOutputInput, TaskOutputOutput};
 pub use task_stop::{TaskStopTool, TaskStopInput, TaskStopOutput};
 pub use team_delete::{TeamDeleteTool, TeamDeleteInput, TeamDeleteOutput, TeamEntry, TeamRegistry};
+pub use synthetic_output::{StructuredOutputTool, StructuredOutputInput, StructuredOutputOutput, STRUCTURED_OUTPUT_TOOL_NAME};
+pub use repl_tool::{ReplTool, ReplInput, ReplOutput, REPL_TOOL_NAME};
+pub use mcp_auth::{
+    McpAuthTool, McpAuthAction, McpOAuthConfig, OAuthToken, OAuthTokenStore,
+};
 
 // Re-export from shannon_core
 pub use shannon_core::{

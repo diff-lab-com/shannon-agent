@@ -33,6 +33,10 @@ pub mod analytics;
 pub mod notifier;
 pub mod tips;
 pub mod rate_limit;
+pub mod away_summary;
+pub mod tool_use_summary;
+pub mod token_estimation;
+pub mod prevent_sleep;
 
 // Re-export key types for convenience
 pub use query_engine::{QueryEngine, QueryContext, QueryEvent};
