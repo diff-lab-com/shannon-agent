@@ -35,6 +35,7 @@ pub mod skill;
 pub mod cron;
 pub mod plan_mode;
 pub mod lsp;
+pub mod lsp_diagnostics;
 pub mod grep;
 pub mod ask_user;
 pub mod tool_search;
@@ -74,6 +75,10 @@ pub use lsp::{
     GoToDefinitionInput, FindReferencesInput, HoverInput, DocumentSymbolInput,
     GoToDefinitionOutput, FindReferencesOutput, HoverOutput, DocumentSymbolOutput,
     detect_language_id,
+};
+pub use lsp_diagnostics::{
+    LspDiagnostic, DiagnosticSeverity, RelatedInfo,
+    DiagnosticRegistry, DiagnosticSummary,
 };
 pub use ask_user::{
     AskUserQuestionTool, AskUserInput, Question, QuestionOption, QuestionAnswer,

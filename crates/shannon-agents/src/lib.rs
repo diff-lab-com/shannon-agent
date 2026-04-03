@@ -12,6 +12,7 @@ mod message;
 mod task;
 mod error;
 mod sub_agent;
+mod multi_agent;
 mod summary;
 
 pub use coordinator::{AgentCoordinator, CoordinatorConfig, AssignmentStrategy, CoordinatorEvent};
@@ -28,6 +29,12 @@ pub use sub_agent::{
     AgentSpawnTool, AgentSpawnInput,
     SendMessageTool, SendMessageInput,
     TeamCreateTool, TeamCreateInput,
+};
+pub use multi_agent::{
+    MultiAgentConfig, MultiAgentSpawner, MultiAgentResult,
+    AgentResult as MultiAgentTaskResult, AgentResultStatus,
+    AgentConfig as SpawnAgentConfig,
+    DependencyError,
 };
 pub use summary::{
     AgentExecutionSummary, SummaryStatus, SummaryGenerator, SuccessMetrics,

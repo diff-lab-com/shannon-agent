@@ -29,8 +29,10 @@ pub mod updater;
 pub mod suggestions;
 pub mod memory;
 pub mod diagnostics;
+pub mod analytics;
 pub mod notifier;
 pub mod tips;
+pub mod rate_limit;
 
 // Re-export key types for convenience
 pub use query_engine::{QueryEngine, QueryContext, QueryEvent};
@@ -57,12 +59,19 @@ pub use diagnostics::{
     DiagnosticTracker, DiagnosticEvent, DiagnosticLevel, DiagnosticCategory,
     ErrorPattern, DiagnosticSummary,
 };
+pub use analytics::{
+    AnalyticsStore, AnalyticsEvent, AnalyticsEventType, AnalyticsError, AnalyticsSummary,
+    ToolStats, SessionStats, DailyStats,
+};
 pub use notifier::{
     Notification, NotificationLevel, Notifier, NotificationHandler,
     LogNotifier, FileNotifier, CallbackNotifier, NotifierError,
 };
 pub use tips::{
     Tip, TipCategory, TipCondition, TipManager, TipContext, TipError,
+};
+pub use rate_limit::{
+    RateLimiter, RateLimitConfig, RateLimitResult, TokenBucket, ExponentialBackoff,
 };
 
 /// Core error types for Shannon
@@ -78,6 +87,7 @@ pub mod error {
     pub use crate::memory::MemoryError;
     pub use crate::notifier::NotifierError;
     pub use crate::tips::TipError;
+    pub use crate::analytics::AnalyticsError;
 }
 
 /// Version information
