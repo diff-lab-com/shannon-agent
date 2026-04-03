@@ -15,6 +15,8 @@
 //! - [`MemoryStore`]: Persistent memory storage with search and cleanup
 //! - [`AutoDreamService`]: Automatic memory extraction from conversations
 //! - [`DiagnosticTracker`]: Error tracking, pattern analysis, and diagnostic event management
+//! - [`VoiceModeService`]: Voice input/output management and keyword spotting
+//! - [`MagicDocsService`]: Automatic documentation generation from source paths
 
 pub mod query_engine;
 pub mod tools;
@@ -43,6 +45,14 @@ pub mod ai_limits;
 pub mod vcr;
 pub mod internal_logging;
 pub mod git_operation_tracking;
+pub mod voice_mode;
+pub mod magic_docs;
+pub mod oauth;
+pub mod settings_sync;
+pub mod remote_settings;
+pub mod mcp_advanced;
+pub mod api_services;
+pub mod bridge_service;
 
 // Re-export key types for convenience
 pub use query_engine::{QueryEngine, QueryContext, QueryEvent};
@@ -89,6 +99,35 @@ pub use ai_limits::{AiLimitType, AiUsageRecord, AiLimitsTracker, LimitStatus};
 pub use vcr::{Vcr, VcrConfig, VcrRecording, VcrError};
 pub use internal_logging::{InternalLogEntry, InternalLogLevel, InternalLogger};
 pub use git_operation_tracking::{GitOperation, GitOperationTracker};
+pub use voice_mode::{
+    VoiceModeService, VoiceConfig, VoiceCommand, VoiceCommandResult, VoiceStatus,
+    VoiceSession, TranscriptionResult, KeywordSpotter, VoiceError,
+};
+pub use magic_docs::{
+    MagicDocsService, DocSection, DocGenerationRequest, DocOutput, DocOutputFormat,
+    DocLevel, DocMetadata, MagicDocsError,
+};
+pub use oauth::{OAuthService, OAuthClient, OAuthToken, OAuthError, TokenEncryption};
+pub use settings_sync::{
+    SettingsSyncService, SyncRecord, SyncStatus, DeviceRegistry, DeviceInfo, SyncError,
+};
+pub use remote_settings::{
+    RemoteSettingsProvider, RemoteManagedSettings, SettingOverride, SettingSource, RemoteSettingsError,
+};
+pub use mcp_advanced::{
+    McpChannelManager, McpServerRegistry, ElicitationHandler,
+    McpServerConfig, McpChannel, ElicitationRequest,
+    TransportType, ChannelStatus, ChannelCapabilities,
+    ElicitationStatus, McpAdvancedError,
+};
+pub use api_services::{
+    ApiManager, UsageTracker, ApiRequest, ApiResponse,
+    UsageStats, ModelUsage, RateLimitInfo, ApiServiceError,
+};
+pub use bridge_service::{
+    BridgeService, BridgeSession, BridgeConfig, BridgeStatus,
+    SessionMessage, MessageDirection, BridgeError,
+};
 
 /// Core error types for Shannon
 pub mod error {
@@ -106,6 +145,14 @@ pub mod error {
     pub use crate::analytics::AnalyticsError;
     pub use crate::policy_limits::PolicyError;
     pub use crate::vcr::VcrError;
+    pub use crate::voice_mode::VoiceError;
+    pub use crate::magic_docs::MagicDocsError;
+    pub use crate::oauth::OAuthError;
+    pub use crate::settings_sync::SyncError;
+    pub use crate::remote_settings::RemoteSettingsError;
+    pub use crate::mcp_advanced::McpAdvancedError;
+    pub use crate::api_services::ApiServiceError;
+    pub use crate::bridge_service::BridgeError;
 }
 
 /// Version information
