@@ -136,6 +136,11 @@ impl Repl {
 
     /// Run the main REPL loop
     pub fn run(&mut self) -> Result<()> {
+        // Check for interactive terminal
+        if !atty::is(atty::Stream::Stdout) || !atty::is(atty::Stream::Stdin) {
+            return Err("shannon repl requires an interactive terminal (TTY). Redirecting input/output is not supported.".into());
+        }
+
         // Setup terminal
         enable_raw_mode()?;
         let mut stdout = io::stdout();

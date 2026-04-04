@@ -24,6 +24,32 @@ impl CommandRegistry {
         }
     }
 
+    /// Register a command (blocking — uses block_in_place, safe inside tokio)
+    ///
+    /// Use this from sync contexts or from within a tokio runtime.
+    /// Uses `tokio::task::block_in_place` to avoid deadlocking.
+    pub fn register_sync(&self, command: Command) {
+        let name = command.name().to_string();
+        let cmd_aliases = command.aliases().to_vec();
+
+        let commands = Arc::clone(&self.commands);
+        let aliases = Arc::clone(&self.aliases);
+
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async move {
+                commands
+                    .write()
+                    .await
+                    .insert(name.clone(), Arc::new(command.clone()));
+
+                let mut aliases_map = aliases.write().await;
+                for alias in cmd_aliases {
+                    aliases_map.insert(alias, name.clone());
+                }
+            });
+        });
+    }
+
     /// Register a command
     pub async fn register(&self, command: Command) -> CommandResult<()> {
         let name = command.name().to_string();

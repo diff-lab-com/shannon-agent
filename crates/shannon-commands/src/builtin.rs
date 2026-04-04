@@ -19,13 +19,10 @@ mod status;
 mod diff;
 
 /// Register all built-in commands
-pub fn register_all(registry: &mut CommandRegistry) {
-    // Use a simple registration approach since CommandRegistry uses async
-    // In a real implementation, this would be called from an async context
-    let commands = all_commands();
-
-    // Note: This is a synchronous function that would need to be called from async
-    // The actual registration happens in create_registry()
+pub fn register_all(registry: &CommandRegistry) {
+    for command in all_commands() {
+        registry.register_sync(command);
+    }
 }
 
 /// Get all built-in commands

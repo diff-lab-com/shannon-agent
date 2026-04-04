@@ -310,25 +310,27 @@ async fn test_parse_unknown_command_not_in_registry() {
 
 // ── Full Registry via create_registry() ──────────────────────────
 
-#[tokio::test]
-async fn test_create_registry_starts_empty() {
-    // Note: create_registry() calls builtin::register_all() which is a stub
-    // that doesn't actually populate the registry (all_commands() is called
-    // but the results are not registered). This test documents that behavior.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_create_registry_includes_builtins() {
     let registry = shannon_commands::create_registry();
     let names = registry.list_names().await;
-    assert!(names.is_empty(), "Registry should be empty — builtin registration is not wired up");
+
+    // Should have built-in commands
+    assert!(!names.is_empty(), "Built-in registry should not be empty");
+
+    // Should contain common commands
+    assert!(names.contains(&"commit".to_string()), "Should have /commit command");
+    assert!(names.contains(&"help".to_string()), "Should have /help command");
 }
 
-#[tokio::test]
-async fn test_builtin_commit_command_structure() {
-    // Verify that all_commands() returns properly structured commands
-    // even though they aren't registered in the default registry
-    let cmds = shannon_commands::builtin_commands::all_commands();
-    assert!(!cmds.is_empty(), "all_commands() should return built-in commands");
+#[tokio::test(flavor = "multi_thread")]
+async fn test_create_registry_commands_are_accessible() {
+    let registry = shannon_commands::create_registry();
 
-    let commit = cmds.iter().find(|c| c.name() == "commit");
-    assert!(commit.is_some(), "Should have a commit command");
-    let commit = commit.unwrap();
-    assert!(!commit.description().is_empty());
+    let commit = registry.get("commit").await;
+    assert!(commit.is_ok(), "Should be able to get /commit");
+
+    let cmd = commit.unwrap();
+    assert_eq!(cmd.name(), "commit");
+    assert!(!cmd.description().is_empty());
 }

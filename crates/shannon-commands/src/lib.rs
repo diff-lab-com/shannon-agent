@@ -42,7 +42,7 @@ pub mod builtin_commands {
 
 /// Create a new command registry with all built-in commands registered
 pub fn create_registry() -> CommandRegistry {
-    let mut registry = CommandRegistry::new();
-    builtin::register_all(&mut registry);
+    let registry = CommandRegistry::new();
+    builtin::register_all(&registry);
     registry
 }
