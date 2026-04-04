@@ -675,4 +675,110 @@ mod tests {
         // Read permission should not grant write access
         assert!(!read_perm.grants(PermissionLevel::Write));
     }
+
+    #[test]
+    fn test_permission_serialization_roundtrip() {
+        let perm = Permission::new("file", "write", PermissionLevel::Write);
+        let json = serde_json::to_string(&perm).unwrap();
+        let parsed: Permission = serde_json::from_str(&json).unwrap();
+        assert_eq!(perm, parsed);
+    }
+
+    #[test]
+    fn test_risk_level_serialization() {
+        for level in [RiskLevel::Safe, RiskLevel::Low, RiskLevel::Medium, RiskLevel::High, RiskLevel::Critical] {
+            let json = serde_json::to_string(&level).unwrap();
+            let parsed: RiskLevel = serde_json::from_str(&json).unwrap();
+            assert_eq!(level, parsed);
+        }
+    }
+
+    #[test]
+    fn test_permission_choice_serialization() {
+        for choice in [PermissionChoice::Deny, PermissionChoice::AllowOnce, PermissionChoice::AlwaysAllow] {
+            let json = serde_json::to_string(&choice).unwrap();
+            let parsed: PermissionChoice = serde_json::from_str(&json).unwrap();
+            assert_eq!(choice, parsed);
+        }
+    }
+
+    #[test]
+    fn test_permission_prompt_serialization() {
+        let prompt = PermissionPrompt::new(
+            "file_write".to_string(),
+            serde_json::json!({"path": "/tmp/test"}),
+            RiskLevel::Medium,
+            "Write to /tmp/test".to_string(),
+        );
+        let json = serde_json::to_string(&prompt).unwrap();
+        let parsed: PermissionPrompt = serde_json::from_str(&json).unwrap();
+        assert_eq!(prompt.id, parsed.id);
+        assert_eq!(prompt.tool_name, parsed.tool_name);
+        assert_eq!(prompt.risk_level, parsed.risk_level);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_permission_check() {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let manager = Arc::new(Mutex::new(PermissionManager::new()));
+        let session_id = Uuid::new_v4();
+        let perm = Permission::new("file", "read", PermissionLevel::Read);
+
+        // Grant permission
+        manager.lock().await.grant_permission(session_id, perm.clone());
+
+        // Concurrent reads
+        let mut handles = vec![];
+        for _ in 0..10 {
+            let mgr = Arc::clone(&manager);
+            let sid = session_id;
+            let p = perm.clone();
+            handles.push(tokio::spawn(async move {
+                let result = mgr.lock().await.check_permission(sid, &p);
+                assert!(result.is_ok());
+            }));
+        }
+        for handle in handles {
+            handle.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_grant_and_check() {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let manager = Arc::new(Mutex::new(PermissionManager::new()));
+        let mut handles = vec![];
+
+        // Spawn tasks that grant different permissions concurrently
+        for i in 0..5 {
+            let mgr = Arc::clone(&manager);
+            let session_id = Uuid::new_v4();
+            handles.push(tokio::spawn(async move {
+                let perm = Permission::new("file", &format!("action_{}", i), PermissionLevel::Write);
+                mgr.lock().await.grant_permission(session_id, perm.clone());
+
+                let result = mgr.lock().await.check_permission(session_id, &perm);
+                assert!(result.is_ok(), "Permission for action_{} should be granted", i);
+            }));
+        }
+        for handle in handles {
+            handle.await.unwrap();
+        }
+    }
+
+    #[test]
+    fn test_permission_manager_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<PermissionManager>();
+    }
+
+    #[test]
+    fn test_permission_memory_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<PermissionMemory>();
+    }
 }
