@@ -845,4 +845,218 @@ mod tests {
         assert!(dir.to_string_lossy().contains(".shannon"));
         assert!(dir.to_string_lossy().contains("sessions"));
     }
+
+    // ── Concurrent DashMap Access Tests ───────────────────────────────
+
+    #[tokio::test]
+    async fn test_concurrent_session_insert_and_read() {
+        let manager = Arc::new(StateManager::new());
+        let num_threads = 10;
+        let inserts_per_thread = 100;
+
+        let mut handles = Vec::new();
+
+        // Spawn multiple threads that each create sessions
+        for _ in 0..num_threads {
+            let manager_clone = manager.clone();
+            let handle = tokio::spawn(async move {
+                for i in 0..inserts_per_thread {
+                    let _ = manager_clone.create_session(
+                        Some(format!("user_{}", i)),
+                        "test-model".to_string(),
+                    );
+                }
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all threads to complete
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        // Verify all sessions were inserted
+        assert_eq!(manager.session_count(), num_threads * inserts_per_thread);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_global_state_access() {
+        let manager = Arc::new(StateManager::new());
+        let num_threads = 20;
+        let operations_per_thread = 50;
+
+        let mut handles = Vec::new();
+
+        // Each thread performs a mix of set and get operations
+        for i in 0..num_threads {
+            let manager_ref = manager.clone();
+            let handle = tokio::spawn(async move {
+                for j in 0..operations_per_thread {
+                    let key = format!("key_{}_{}", i, j);
+                    let value = serde_json::json!(j);
+
+                    // Set
+                    manager_ref.set_global(key.clone(), value);
+
+                    // Get (should return what was just set)
+                    let retrieved = manager_ref.get_global(&key);
+                    assert!(retrieved.is_some());
+                    assert_eq!(retrieved.unwrap().as_i64(), Some(j));
+                }
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all threads to complete
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        // Verify final state - manager is an Arc, so we need to get the inner DashMap length
+        let final_len = manager.global.len();
+        assert_eq!(final_len, num_threads as usize * operations_per_thread as usize);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_session_update_and_delete() {
+        let manager = Arc::new(StateManager::new());
+        let num_sessions = 10;
+
+        // Create initial sessions
+        let mut session_ids = Vec::new();
+        for _ in 0..num_sessions {
+            let session = manager
+                .create_session(None, "test-model".to_string())
+                .unwrap();
+            session_ids.push(session.session_id);
+        }
+
+        let session_ids_for_update = session_ids.clone();
+        let session_ids_for_delete = session_ids.clone();
+        let manager_for_update = manager.clone();
+        let manager_for_delete = manager.clone();
+
+        // Concurrently update and delete sessions
+        let update_handle = tokio::spawn(async move {
+            for session_id in session_ids_for_update.iter() {
+                for _ in 0..10 {
+                    let _ = manager_for_update.increment_query_count(*session_id);
+                    let _ = manager_for_update.add_tokens_used(*session_id, 100);
+                }
+            }
+        });
+
+        let delete_handle = tokio::spawn(async move {
+            for (i, session_id) in session_ids_for_delete.iter().enumerate() {
+                if i % 2 == 0 {
+                    // Delete every other session
+                    let _ = manager_for_delete.delete_session(*session_id);
+                }
+            }
+        });
+
+        update_handle.await.unwrap();
+        delete_handle.await.unwrap();
+
+        // Verify remaining sessions
+        let remaining_count = manager.session_count();
+        assert_eq!(remaining_count, num_sessions / 2);
+
+        // Verify that remaining sessions have the correct counts
+        for session_id in &session_ids {
+            if let Ok(session) = manager.get_session(*session_id) {
+                assert_eq!(session.metadata.query_count, 10);
+                assert_eq!(session.metadata.total_tokens_used, 1000);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_tool_registry_style_operations() {
+        // Simulate tool registry style operations with DashMap
+        use dashmap::DashMap;
+
+        let tool_registry: Arc<DashMap<String, serde_json::Value>> = Arc::new(DashMap::new());
+        let num_threads = 15;
+        let tools_per_thread = 20;
+
+        let mut handles = Vec::new();
+
+        // Each thread registers tools
+        for i in 0..num_threads {
+            let registry_ref = tool_registry.clone();
+            let handle = tokio::spawn(async move {
+                for j in 0..tools_per_thread {
+                    let tool_name = format!("tool_{}_{}", i, j);
+                    let tool_def = serde_json::json!({
+                        "name": tool_name,
+                        "description": "Test tool"
+                    });
+
+                    // Insert
+                    registry_ref.insert(tool_name.clone(), tool_def.clone());
+
+                    // Read back
+                    if let Some(retrieved) = registry_ref.get(&tool_name) {
+                        assert_eq!(retrieved["name"], tool_name);
+                    }
+
+                    // Remove every other tool
+                    if j % 2 == 0 {
+                        registry_ref.remove(&tool_name);
+                    }
+                }
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all threads to complete
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        // Verify final count (should be half because we removed every other)
+        let final_count = tool_registry.len();
+        assert_eq!(final_count, num_threads * tools_per_thread / 2);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_session_state_serialization() {
+        let manager = Arc::new(StateManager::new());
+        let num_threads = 5;
+
+        // Create sessions
+        let mut session_ids = Vec::new();
+        for _ in 0..num_threads {
+            let session = manager
+                .create_session(
+                    Some(format!("user_{}", session_ids.len())),
+                    "test-model".to_string(),
+                )
+                .unwrap();
+            session_ids.push(session.session_id);
+        }
+
+        // Concurrently serialize sessions - clone session_ids to move into closures
+        let handles: Vec<_> = session_ids
+            .iter()
+            .map(|session_id| {
+                let manager_clone = manager.clone();
+                let id = *session_id;
+                tokio::spawn(async move {
+                    // Simultaneous reads during serialization
+                    let session1 = manager_clone.get_session(id).unwrap();
+                    let serialized = manager_clone.serialize_sessions().unwrap();
+                    let session2 = manager_clone.get_session(id).unwrap();
+
+                    assert_eq!(session1.session_id, session2.session_id);
+                    assert!(serialized.contains(&id.to_string()));
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.await.unwrap();
+        }
+    }
 }

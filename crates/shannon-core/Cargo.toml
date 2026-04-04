@@ -47,6 +47,7 @@ tempfile = "3.16"
 [dev-dependencies]
 tokio-test = "0.4"
 criterion = "0.5"
+mockito = "1.6"
 
 [[bench]]
 name = "query_engine"

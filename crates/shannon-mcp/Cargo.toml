@@ -16,3 +16,18 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 reqwest = { workspace = true }
 uuid = { workspace = true }
+
+# MCP transport dependencies
+tokio-tungstenite = { workspace = true }
+sha2 = { workspace = true }
+rand = { workspace = true }
+base64 = { workspace = true }
+urlencoding = { workspace = true }
+futures-util = { workspace = true }
+chrono = { workspace = true }
+bytes = { workspace = true }
+
+[dev-dependencies]
+# Testing dependencies
+tempfile = "3.15"
+futures-util = { workspace = true }
