@@ -1,7 +1,8 @@
 //! Benchmark for query engine operations
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
-use shannon_core::{QueryEngine, QueryContext, QueryMetadata};
+use shannon_core::{QueryContext};
+use shannon_core::query_engine::QueryMetadata;
 use uuid::Uuid;
 
 fn bench_query_context_creation(c: &mut Criterion) {
@@ -17,7 +18,9 @@ fn bench_query_context_creation(c: &mut Criterion) {
                     timestamp: chrono::Utc::now(),
                     tools_allowed: true,
                     max_tokens: Some(4096),
-                    model: "claude-3-5-sonnet-20241022".to_string(),
+                    model: "claude-sonnet-4-20250514".to_string(),
+                    temperature: None,
+                    top_p: None,
                 },
             }
         })

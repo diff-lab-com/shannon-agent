@@ -8,7 +8,7 @@
 //! - [`ToolRegistry`]: Dynamic tool registration and execution
 //! - [`PermissionManager`]: Security and permission validation
 //! - [`StateManager`]: Persistent state and session management
-//! - [`ClaudeClient`]: Async Claude API client with streaming support
+//! - [`LlmClient`]: Async LLM API client with multi-provider and streaming support
 //! - [`SettingsManager`]: Configuration management for user and project settings
 //! - [`AutoUpdater`]: Automatic update checking via GitHub Releases
 //! - [`PluginManager`]: Plugin discovery, loading, and lifecycle management
@@ -27,7 +27,7 @@ pub mod tools;
 pub mod permissions;
 pub mod state;
 pub mod api;
-pub mod claude_md;
+pub mod project_memory;
 pub mod settings;
 pub mod hooks;
 pub mod plugins;
@@ -83,10 +83,12 @@ pub use state::{
     StateManager, SessionState, SessionData, SessionInfo, SessionPersistMetadata,
 };
 pub use api::{
-    ClaudeClient, ClaudeClientConfig, MessageStream,
+    LlmClient, LlmClientConfig, LlmProvider, MessageStream,
     ContentBlock, ContentDelta, ImageSource, Message, MessageContent,
     MessageRequest, MessageResponse, StreamEvent, ToolDefinition, Usage,
     ApiError,
+    // Backward-compatible aliases
+    ClaudeClient, ClaudeClientConfig,
 };
 pub use settings::{Settings, SettingsManager, SettingsError};
 pub use hooks::{HookManager, HookEvent, HookResult, HookDecision, HookEventType, HookError};
@@ -211,6 +213,16 @@ pub use enhanced_suggestions::{
     ContextSuggestionEngine, ContextualSuggestion, SuggestionTrigger,
     SuggestionContext as EnhancedSuggestionContext, SuggestionError,
 };
+// Backward-compatible re-exports for the claude_md -> project_memory rename
+pub use project_memory::{
+    ProjectMemoryConfig as ClaudeMdConfig,
+    ProjectMemoryMetadata as ClaudeMdMetadata,
+    ProjectMemoryManager as ClaudeMdManager,
+    ProjectMemorySearchResult as ClaudeMdSearchResult,
+    ProjectMemoryError as ClaudeMdError,
+    MemorySource,
+    MergedMemory,
+};
 /// Core error types for Shannon
 pub mod error {
     pub use crate::api::ApiError;
@@ -252,6 +264,7 @@ pub mod error {
     pub use crate::enhanced_suggestions::SuggestionError;
     pub use crate::credential_manager::CredentialError;
     pub use crate::billing::BillingError;
+    pub use crate::project_memory::ProjectMemoryError;
 }
 
 /// Version information

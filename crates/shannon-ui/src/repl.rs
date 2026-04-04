@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 // Import core functionality
 use shannon_core::{
-    api::ClaudeClientConfig,
+    api::LlmClientConfig,
     permissions::{PermissionManager, PermissionPrompt, PermissionChoice, RiskLevel},
     query_engine::{QueryContext, QueryEngine, QueryEngineConfig, QueryEvent, PermissionRequest},
     state::StateManager,
@@ -99,9 +99,9 @@ impl Repl {
         // Register tools that implement shannon_core::Tool
         tool_registry.register(Box::new(shannon_tools::BashTool::new()))?;
 
-        // Create Claude client
-        let client_config = ClaudeClientConfig::default();
-        let client = shannon_core::api::ClaudeClient::new(client_config);
+        // Create LLM client
+        let client_config = LlmClientConfig::default();
+        let client = shannon_core::api::LlmClient::new(client_config);
 
         // Create permission manager
         let permission_manager = PermissionManager::new();

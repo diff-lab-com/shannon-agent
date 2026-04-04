@@ -2,7 +2,7 @@
 //!
 //! Main orchestrator for streaming query processing with tool orchestration.
 
-use crate::api::{ClaudeClient, ContentBlock, ContentDelta, Message, MessageContent, StreamEvent, ToolResultContent};
+use crate::api::{LlmClient, ContentBlock, ContentDelta, Message, MessageContent, StreamEvent, ToolResultContent};
 use crate::permissions::{PermissionChoice, PermissionPrompt, PermissionManager};
 use crate::state::StateManager;
 use crate::tools::{ToolOutput, ToolRegistry};
@@ -39,15 +39,17 @@ impl CostTracker {
     /// Prices per million tokens as of 2025
     pub fn calculate_cost(model: &str, input_tokens: u64, output_tokens: u64) -> f64 {
         let (input_price_per_mtok, output_price_per_mtok) = match model {
-            // Claude 3.5 Sonnet
-            m if m.contains("claude-3-5-sonnet") || m.contains("claude-sonnet-4-") => (3.0, 15.0),
-            // Claude 3.5 Haiku
+            // Anthropic Claude series
+            m if m.contains("claude-3-5-sonnet") || m.contains("claude-sonnet-4") => (3.0, 15.0),
             m if m.contains("claude-3-5-haiku") => (0.80, 4.0),
-            // Claude 3 Opus
             m if m.contains("claude-3-opus") => (15.0, 75.0),
-            // Claude 4.x Sonnet (same pricing as 3.5 Sonnet)
-            m if m.contains("claude-sonnet-4") => (3.0, 15.0),
-            // Default fallback (similar to 3.5 Sonnet)
+            // OpenAI GPT series
+            m if m.contains("gpt-4o") => (2.5, 10.0),
+            m if m.contains("gpt-4-turbo") => (10.0, 30.0),
+            m if m.contains("gpt-3.5-turbo") => (0.5, 1.5),
+            // Ollama local models (free)
+            m if m.contains("llama") || m.contains("mistral") || m.contains("qwen") => (0.0, 0.0),
+            // Default fallback
             _ => (3.0, 15.0),
         };
 
@@ -79,7 +81,7 @@ impl CostTracker {
 
 impl Default for CostTracker {
     fn default() -> Self {
-        Self::new("claude-3-5-sonnet-20241022".to_string())
+        Self::new("claude-sonnet-4-20250514".to_string())
     }
 }
 
@@ -381,7 +383,7 @@ impl ConversationState {
 
 /// Main query engine orchestrator
 pub struct QueryEngine {
-    client: ClaudeClient,
+    client: LlmClient,
     tools: Arc<ToolRegistry>,
     permissions: Arc<RwLock<PermissionManager>>,
     state: Arc<StateManager>,
@@ -394,7 +396,7 @@ pub struct QueryEngine {
 impl QueryEngine {
     /// Create a new query engine
     pub fn new(
-        client: ClaudeClient,
+        client: LlmClient,
         tools: ToolRegistry,
         permissions: PermissionManager,
         state: StateManager,
@@ -416,7 +418,7 @@ impl QueryEngine {
 
     /// Create with default configuration
     pub fn with_defaults(
-        client: ClaudeClient,
+        client: LlmClient,
         tools: ToolRegistry,
         permissions: PermissionManager,
         state: StateManager,
@@ -496,14 +498,14 @@ impl QueryEngine {
         // Spawn background task to handle query processing
         tokio::spawn(async move {
             // Create a new client for this task
-            let client_config = crate::api::ClaudeClientConfig {
+            let client_config = crate::api::LlmClientConfig {
                 api_key: client_api_key,
                 base_url: client_base_url,
                 model: client_model.clone(),
                 max_tokens: client_max_tokens,
                 ..Default::default()
             };
-            let client = ClaudeClient::new(client_config);
+            let client = LlmClient::new(client_config);
 
             let mut conversation = ConversationState::default();
             conversation.messages.push(Message {
@@ -1197,11 +1199,112 @@ mod tests {
     #[test]
     fn test_cost_tracker_total_cost() {
         let mut tracker = CostTracker::new("claude-3-opus".to_string());
-        
+
         assert!((tracker.total_cost() - 0.0).abs() < 0.001);
-        
+
         tracker.record_usage("claude-3-opus", 1_000_000, 1_000_000);
         // Opus: $15 input + $75 output = $90 total
         assert!((tracker.total_cost() - 90.0).abs() < 0.001);
+    }
+
+    // OpenAI model cost tests
+
+    #[test]
+    fn test_cost_tracker_calculate_cost_gpt4o() {
+        // GPT-4o: $2.5/MTok input, $10/MTok output
+        let model = "gpt-4o";
+
+        let cost = CostTracker::calculate_cost(model, 1_000_000, 0);
+        assert!((cost - 2.5).abs() < 0.001);
+
+        let cost = CostTracker::calculate_cost(model, 0, 1_000_000);
+        assert!((cost - 10.0).abs() < 0.001);
+
+        let cost = CostTracker::calculate_cost(model, 1_000_000, 1_000_000);
+        assert!((cost - 12.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_cost_tracker_calculate_cost_gpt4turbo() {
+        // GPT-4 Turbo: $10/MTok input, $30/MTok output
+        let model = "gpt-4-turbo";
+
+        let cost = CostTracker::calculate_cost(model, 1_000_000, 1_000_000);
+        assert!((cost - 40.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_cost_tracker_calculate_cost_gpt35turbo() {
+        // GPT-3.5 Turbo: $0.5/MTok input, $1.5/MTok output
+        let model = "gpt-3.5-turbo";
+
+        let cost = CostTracker::calculate_cost(model, 1_000_000, 1_000_000);
+        assert!((cost - 2.0).abs() < 0.001);
+    }
+
+    // Ollama local model cost tests (free)
+
+    #[test]
+    fn test_cost_tracker_calculate_cost_ollama_llama() {
+        // Ollama local models: $0
+        let model = "llama3";
+
+        let cost = CostTracker::calculate_cost(model, 1_000_000, 1_000_000);
+        assert!((cost - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_cost_tracker_calculate_cost_ollama_mistral() {
+        let model = "mistral:7b";
+
+        let cost = CostTracker::calculate_cost(model, 1_000_000, 1_000_000);
+        assert!((cost - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_cost_tracker_calculate_cost_ollama_qwen() {
+        let model = "qwen:72b";
+
+        let cost = CostTracker::calculate_cost(model, 1_000_000, 1_000_000);
+        assert!((cost - 0.0).abs() < 0.001);
+    }
+
+    // Mixed model cost tracking
+
+    #[test]
+    fn test_cost_tracker_mixed_models() {
+        let mut tracker = CostTracker::new("claude-sonnet-4".to_string());
+
+        // Claude Sonnet 4: $3 + $15 = $18
+        tracker.record_usage("claude-sonnet-4-20250514", 1_000_000, 1_000_000);
+
+        // GPT-4o: $2.5 + $10 = $12.50
+        tracker.record_usage("gpt-4o", 1_000_000, 1_000_000);
+
+        // Ollama: $0
+        tracker.record_usage("llama3:70b", 1_000_000, 1_000_000);
+
+        // Total: $18 + $12.50 + $0 = $30.50
+        assert!((tracker.total_cost() - 30.5).abs() < 0.001);
+        assert_eq!(tracker.total_input_tokens, 3_000_000);
+        assert_eq!(tracker.total_output_tokens, 3_000_000);
+    }
+
+    #[test]
+    fn test_cost_tracker_zero_tokens() {
+        let model = "claude-sonnet-4";
+        let cost = CostTracker::calculate_cost(model, 0, 0);
+        assert!((cost - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_cost_tracker_summary_includes_model_name() {
+        let mut tracker = CostTracker::new("gpt-4o".to_string());
+        tracker.record_usage("gpt-4o", 500_000, 250_000);
+
+        let summary = tracker.summary();
+        assert!(summary.contains("gpt-4o"));
+        assert!(summary.contains("500000"));
+        assert!(summary.contains("250000"));
     }
 }

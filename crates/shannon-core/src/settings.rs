@@ -301,6 +301,19 @@ pub struct SettingsManager {
     project_config_path: PathBuf,
 }
 
+/// Try multiple environment variable names in priority order.
+/// Returns the value of the first one found.
+fn env_priority(names: &[&str]) -> Option<String> {
+    for name in names {
+        if let Ok(value) = std::env::var(name) {
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
 impl Default for SettingsManager {
     fn default() -> Self {
         Self::new()
@@ -326,8 +339,10 @@ impl SettingsManager {
         }
     }
 
-    /// Load settings from disk
-    /// Project-level settings override user-level settings
+    /// Load settings from disk with full priority chain:
+    /// 1. settings.json (user + project)
+    /// 2. .env files (.env → .env.local → .env.production)
+    /// 3. Environment variables (highest priority)
     pub fn load(&mut self) -> Result<(), SettingsError> {
         // Start with user settings
         if self.user_config_path.exists() {
@@ -363,6 +378,175 @@ impl SettingsManager {
             self.settings.merge(project_settings);
         }
 
+        // Override from .env files
+        self.load_from_dotenv()?;
+
+        // Override from environment variables (highest priority)
+        self.load_from_env()?;
+
+        Ok(())
+    }
+
+    /// Load settings from .env files in the current directory.
+    /// Searches: .env → .env.local → .env.production
+    /// Later files override earlier ones.
+    fn load_from_dotenv(&mut self) -> Result<(), SettingsError> {
+        for name in &[".env", ".env.local", ".env.production"] {
+            let path = std::path::Path::new(name);
+            if path.exists() {
+                let content = std::fs::read_to_string(path)?;
+                self.parse_env_content(&content)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Parse KEY=VALUE lines from an env file content string.
+    ///
+    /// Handles:
+    /// - Comments (`#`) and blank lines
+    /// - Quoted values (single or double quotes)
+    /// - Multi-line values: a line ending with `\` continues on the next line
+    fn parse_env_content(&mut self, content: &str) -> Result<(), SettingsError> {
+        // Join continuation lines (trailing backslash)
+        let mut joined = String::with_capacity(content.len());
+        for raw_line in content.lines() {
+            let trimmed_end = raw_line.trim_end_matches(|c| c == ' ' || c == '\t');
+            if let Some(continued) = trimmed_end.strip_suffix('\\') {
+                joined.push_str(continued);
+                joined.push(' ');
+            } else {
+                joined.push_str(raw_line);
+                joined.push('\n');
+            }
+        }
+
+        for line in joined.lines() {
+            let line = line.trim();
+            // Skip empty lines and comments
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            // Split on first '=' only
+            if let Some((key, value)) = line.split_once('=') {
+                let key = key.trim();
+                let value = value.trim();
+                // Remove surrounding quotes if present (only if both prefix and suffix match)
+                let value = if let Some(inner) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+                    inner
+                } else if let Some(inner) = value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')) {
+                    inner
+                } else {
+                    value
+                };
+                self.apply_env_var(key, value);
+            }
+        }
+        Ok(())
+    }
+
+    /// Load settings from environment variables with priority chain:
+    /// SHANNON_* → ANTHROPIC_* → OPENAI_* → bare name
+    fn load_from_env(&mut self) -> Result<(), SettingsError> {
+        // SHANNON_MODEL → ANTHROPIC_MODEL → OPENAI_MODEL → MODEL
+        if let Some(v) = env_priority(&["SHANNON_MODEL", "ANTHROPIC_MODEL", "OPENAI_MODEL", "MODEL"]) {
+            self.settings.model = Some(v);
+        }
+        // SHANNON_API_KEY → ANTHROPIC_API_KEY → OPENAI_API_KEY (handled by LlmClient, but store model hint)
+        // SHANNON_MAX_TOKENS → MAX_TOKENS
+        if let Some(v) = env_priority(&["SHANNON_MAX_TOKENS", "MAX_TOKENS"]) {
+            if let Ok(tokens) = v.parse::<u32>() {
+                self.settings.max_tokens = Some(tokens);
+            }
+        }
+        // SHANNON_TEMPERATURE → TEMPERATURE
+        if let Some(v) = env_priority(&["SHANNON_TEMPERATURE", "TEMPERATURE"]) {
+            if let Ok(temp) = v.parse::<f32>() {
+                self.settings.temperature = Some(temp);
+            }
+        }
+        // SHANNON_PERMISSIONS_MODE → PERMISSIONS_MODE
+        if let Some(v) = env_priority(&["SHANNON_PERMISSIONS_MODE", "PERMISSIONS_MODE"]) {
+            if ["ask", "auto", "readonly"].contains(&v.as_str()) {
+                self.settings.permissions_mode = v;
+            }
+        }
+        // SHANNON_THEME → THEME
+        if let Some(v) = env_priority(&["SHANNON_THEME", "THEME"]) {
+            if ["dark", "light", "auto"].contains(&v.as_str()) {
+                self.settings.theme = v;
+            }
+        }
+        // SHANNON_AUTO_MEMORY → AUTO_MEMORY
+        if let Some(v) = env_priority(&["SHANNON_AUTO_MEMORY", "AUTO_MEMORY"]) {
+            if let Ok(b) = v.parse::<bool>() {
+                self.settings.auto_memory = b;
+            }
+        }
+        // SHANNON_TOOLS_ENABLED → TOOLS_ENABLED
+        if let Some(v) = env_priority(&["SHANNON_TOOLS_ENABLED", "TOOLS_ENABLED"]) {
+            if let Ok(b) = v.parse::<bool>() {
+                self.settings.tools_enabled = b;
+            }
+        }
+        Ok(())
+    }
+
+    /// Apply a single env variable key-value pair to settings.
+    fn apply_env_var(&mut self, key: &str, value: &str) {
+        match key {
+            "SHANNON_MODEL" | "ANTHROPIC_MODEL" | "OPENAI_MODEL" | "MODEL" => {
+                self.settings.model = Some(value.to_string());
+            }
+            "SHANNON_MAX_TOKENS" | "MAX_TOKENS" => {
+                if let Ok(tokens) = value.parse::<u32>() {
+                    self.settings.max_tokens = Some(tokens);
+                }
+            }
+            "SHANNON_TEMPERATURE" | "TEMPERATURE" => {
+                if let Ok(temp) = value.parse::<f32>() {
+                    self.settings.temperature = Some(temp);
+                }
+            }
+            "SHANNON_PERMISSIONS_MODE" | "PERMISSIONS_MODE" => {
+                if ["ask", "auto", "readonly"].contains(&value) {
+                    self.settings.permissions_mode = value.to_string();
+                }
+            }
+            "SHANNON_THEME" | "THEME" => {
+                if ["dark", "light", "auto"].contains(&value) {
+                    self.settings.theme = value.to_string();
+                }
+            }
+            "SHANNON_AUTO_MEMORY" | "AUTO_MEMORY" => {
+                if let Ok(b) = value.parse::<bool>() {
+                    self.settings.auto_memory = b;
+                }
+            }
+            "SHANNON_TOOLS_ENABLED" | "TOOLS_ENABLED" => {
+                if let Ok(b) = value.parse::<bool>() {
+                    self.settings.tools_enabled = b;
+                }
+            }
+            _ => {
+                // Ignore unknown env vars
+            }
+        }
+    }
+
+    /// Apply a list of KEY=VALUE pairs (from CLI -e flags).
+    /// Each pair overrides settings, with later entries winning.
+    pub fn apply_env_overrides(&mut self, overrides: &[String]) -> Result<(), SettingsError> {
+        for pair in overrides {
+            if let Some((key, value)) = pair.split_once('=') {
+                let value = value
+                    .strip_prefix('"').and_then(|v| v.strip_suffix('"'))
+                    .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+                    .unwrap_or(value);
+                self.apply_env_var(key.trim(), value.trim());
+            }
+        }
+        self.settings.validate()?;
         Ok(())
     }
 
@@ -820,5 +1004,173 @@ mod tests {
 
         // Non-optional fields remain unchanged
         assert_eq!(settings.tools_enabled, true);
+    }
+
+    #[test]
+    fn test_parse_env_content() {
+        let (mut manager, _temp_dir) = create_temp_manager();
+
+        let env_content = r#"
+# Comment line
+SHANNON_MODEL=gpt-4o
+SHANNON_MAX_TOKENS=8192
+SHANNON_TEMPERATURE=0.9
+SHANNON_PERMISSIONS_MODE=auto
+SHANNON_THEME=light
+"#;
+
+        manager.parse_env_content(env_content).unwrap();
+
+        assert_eq!(manager.settings.model, Some("gpt-4o".to_string()));
+        assert_eq!(manager.settings.max_tokens, Some(8192));
+        assert_eq!(manager.settings.temperature, Some(0.9));
+        assert_eq!(manager.settings.permissions_mode, "auto");
+        assert_eq!(manager.settings.theme, "light");
+    }
+
+    #[test]
+    fn test_parse_env_content_with_quotes() {
+        let (mut manager, _temp_dir) = create_temp_manager();
+
+        let env_content = r#"SHANNON_MODEL="gpt-4o"
+SHANNON_THEME='dark'"#;
+
+        manager.parse_env_content(env_content).unwrap();
+
+        assert_eq!(manager.settings.model, Some("gpt-4o".to_string()));
+        assert_eq!(manager.settings.theme, "dark");
+    }
+
+    #[test]
+    fn test_parse_env_content_ignores_unknown() {
+        let (mut manager, _temp_dir) = create_temp_manager();
+
+        let env_content = "UNKNOWN_KEY=value\nSHANNON_MODEL=my-model\n";
+
+        manager.parse_env_content(env_content).unwrap();
+
+        assert_eq!(manager.settings.model, Some("my-model".to_string()));
+    }
+
+    #[test]
+    fn test_apply_env_overrides() {
+        let (mut manager, _temp_dir) = create_temp_manager();
+
+        let overrides = vec![
+            "SHANNON_MODEL=claude-opus-4-6".to_string(),
+            "SHANNON_MAX_TOKENS=16000".to_string(),
+            "SHANNON_TEMPERATURE=0.3".to_string(),
+        ];
+
+        manager.apply_env_overrides(&overrides).unwrap();
+
+        assert_eq!(manager.settings.model, Some("claude-opus-4-6".to_string()));
+        assert_eq!(manager.settings.max_tokens, Some(16000));
+        assert_eq!(manager.settings.temperature, Some(0.3));
+    }
+
+    #[test]
+    fn test_apply_env_overrides_rejects_invalid() {
+        let (mut manager, _temp_dir) = create_temp_manager();
+
+        let overrides = vec![
+            "SHANNON_MODEL=valid-model".to_string(),
+            "SHANNON_TEMPERATURE=2.0".to_string(), // invalid
+        ];
+
+        let result = manager.apply_env_overrides(&overrides);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_apply_env_var_individual() {
+        let (mut manager, _temp_dir) = create_temp_manager();
+
+        manager.apply_env_var("MODEL", "test-model");
+        assert_eq!(manager.settings.model, Some("test-model".to_string()));
+
+        manager.apply_env_var("MAX_TOKENS", "4096");
+        assert_eq!(manager.settings.max_tokens, Some(4096));
+
+        manager.apply_env_var("TEMPERATURE", "0.5");
+        assert_eq!(manager.settings.temperature, Some(0.5));
+
+        manager.apply_env_var("PERMISSIONS_MODE", "auto");
+        assert_eq!(manager.settings.permissions_mode, "auto");
+
+        manager.apply_env_var("THEME", "light");
+        assert_eq!(manager.settings.theme, "light");
+
+        manager.apply_env_var("AUTO_MEMORY", "false");
+        assert!(!manager.settings.auto_memory);
+
+        manager.apply_env_var("TOOLS_ENABLED", "false");
+        assert!(!manager.settings.tools_enabled);
+
+        // Invalid values should be ignored
+        manager.apply_env_var("PERMISSIONS_MODE", "invalid");
+        assert_eq!(manager.settings.permissions_mode, "auto"); // unchanged
+    }
+
+    #[test]
+    fn test_load_from_dotenv_file() {
+        let (mut manager, _temp_dir) = create_temp_manager();
+        let temp_dir = _temp_dir;
+
+        // Create a .env file
+        let env_path = temp_dir.path().join(".env");
+        let env_content = "SHANNON_MODEL=ollama-llama3\nSHANNON_MAX_TOKENS=4096\n";
+        std::fs::write(&env_path, env_content).unwrap();
+
+        // Change to temp dir to find the .env file
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+        let result = manager.load_from_dotenv();
+        std::env::set_current_dir(&original_dir).unwrap();
+
+        assert!(result.is_ok());
+        assert_eq!(manager.settings.model, Some("ollama-llama3".to_string()));
+        assert_eq!(manager.settings.max_tokens, Some(4096));
+    }
+
+    #[test]
+    fn test_env_priority_helper() {
+        // SAFETY: env var operations before any threads spawn in tests
+        unsafe {
+            std::env::remove_var("SHANNON_MODEL_TEST");
+            std::env::remove_var("ANTHROPIC_MODEL_TEST");
+            std::env::remove_var("OPENAI_MODEL_TEST");
+        }
+
+        // No vars set
+        assert!(env_priority(&["SHANNON_MODEL_TEST", "ANTHROPIC_MODEL_TEST", "OPENAI_MODEL_TEST"]).is_none());
+
+        // Set lowest priority
+        unsafe { std::env::set_var("OPENAI_MODEL_TEST", "gpt-4o"); }
+        assert_eq!(
+            env_priority(&["SHANNON_MODEL_TEST", "ANTHROPIC_MODEL_TEST", "OPENAI_MODEL_TEST"]),
+            Some("gpt-4o".to_string())
+        );
+
+        // Set middle priority (should win)
+        unsafe { std::env::set_var("ANTHROPIC_MODEL_TEST", "claude-sonnet-4"); }
+        assert_eq!(
+            env_priority(&["SHANNON_MODEL_TEST", "ANTHROPIC_MODEL_TEST", "OPENAI_MODEL_TEST"]),
+            Some("claude-sonnet-4".to_string())
+        );
+
+        // Set highest priority (should win)
+        unsafe { std::env::set_var("SHANNON_MODEL_TEST", "my-model"); }
+        assert_eq!(
+            env_priority(&["SHANNON_MODEL_TEST", "ANTHROPIC_MODEL_TEST", "OPENAI_MODEL_TEST"]),
+            Some("my-model".to_string())
+        );
+
+        // Clean up
+        unsafe {
+            std::env::remove_var("SHANNON_MODEL_TEST");
+            std::env::remove_var("ANTHROPIC_MODEL_TEST");
+            std::env::remove_var("OPENAI_MODEL_TEST");
+        }
     }
 }
