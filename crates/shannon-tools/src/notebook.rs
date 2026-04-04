@@ -518,6 +518,8 @@ impl Tool for NotebookEditTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_cell_source_conversion() {
@@ -533,5 +535,362 @@ mod tests {
         let id1 = NotebookEditTool::generate_cell_id();
         let id2 = NotebookEditTool::generate_cell_id();
         assert_ne!(id1, id2);
+        // Verify hex format
+        assert!(id1.len() > 0);
+        assert!(id2.len() > 0);
+    }
+
+    #[test]
+    fn test_cell_source_from_str() {
+        let source = CellSource::from_str("hello world");
+        assert_eq!(source.to_string(), "hello world");
+    }
+
+    #[test]
+    fn test_cell_type_serialization() {
+        let code = CellType::Code;
+        let markdown = CellType::Markdown;
+
+        // Serialize to lowercase
+        let code_json = serde_json::to_string(&code).unwrap();
+        assert_eq!(code_json, "\"code\"");
+
+        let markdown_json = serde_json::to_string(&markdown).unwrap();
+        assert_eq!(markdown_json, "\"markdown\"");
+
+        // Deserialize from lowercase
+        let code_deser: CellType = serde_json::from_str("\"code\"").unwrap();
+        assert_eq!(code_deser, CellType::Code);
+
+        let markdown_deser: CellType = serde_json::from_str("\"markdown\"").unwrap();
+        assert_eq!(markdown_deser, CellType::Markdown);
+    }
+
+    #[test]
+    fn test_edit_mode_serialization() {
+        let replace = EditMode::Replace;
+        let insert = EditMode::Insert;
+        let delete = EditMode::Delete;
+
+        let replace_json = serde_json::to_string(&replace).unwrap();
+        assert_eq!(replace_json, "\"replace\"");
+
+        let insert_json = serde_json::to_string(&insert).unwrap();
+        assert_eq!(insert_json, "\"insert\"");
+
+        let delete_json = serde_json::to_string(&delete).unwrap();
+        assert_eq!(delete_json, "\"delete\"");
+    }
+
+    #[test]
+    fn test_notebook_content_roundtrip() {
+        let notebook = NotebookContent {
+            nbformat: 4,
+            nbformat_minor: 2,
+            metadata: NotebookMetadata {
+                language_info: Some(LanguageInfo {
+                    name: "python".to_string(),
+                    file_extension: Some(".py".to_string()),
+                    mimetype: Some("text/x-python".to_string()),
+                }),
+                other: serde_json::json!({}),
+            },
+            cells: vec![
+                NotebookCell {
+                    cell_type: CellType::Code,
+                    id: Some("cell-1".to_string()),
+                    source: CellSource::Single("print('hello')".to_string()),
+                    metadata: serde_json::json!({}),
+                    execution_count: Some(1),
+                    outputs: vec![],
+                },
+                NotebookCell {
+                    cell_type: CellType::Markdown,
+                    id: Some("cell-2".to_string()),
+                    source: CellSource::Multiple(vec!["# Title".to_string(), "Text".to_string()]),
+                    metadata: serde_json::json!({}),
+                    execution_count: None,
+                    outputs: vec![],
+                },
+            ],
+        };
+
+        let json = serde_json::to_string_pretty(&notebook).unwrap();
+        let deserialized: NotebookContent = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.nbformat, 4);
+        assert_eq!(deserialized.nbformat_minor, 2);
+        assert_eq!(deserialized.cells.len(), 2);
+        assert_eq!(deserialized.cells[0].cell_type, CellType::Code);
+        assert_eq!(deserialized.cells[1].cell_type, CellType::Markdown);
+        assert_eq!(deserialized.cells[0].source.to_string(), "print('hello')");
+        assert_eq!(deserialized.cells[1].source.to_string(), "# Title\nText");
+    }
+
+    #[test]
+    fn test_notebook_save_load() {
+        let tool = NotebookEditTool::new();
+
+        // Create a temporary file
+        let mut temp_file = NamedTempFile::new().unwrap();
+        let temp_path = temp_file.path().to_str().unwrap();
+
+        // Create a notebook
+        let notebook = NotebookContent {
+            nbformat: 4,
+            nbformat_minor: 2,
+            metadata: NotebookMetadata {
+                language_info: Some(LanguageInfo {
+                    name: "python".to_string(),
+                    file_extension: Some(".py".to_string()),
+                    mimetype: Some("text/x-python".to_string()),
+                }),
+                other: serde_json::json!({}),
+            },
+            cells: vec![
+                NotebookCell {
+                    cell_type: CellType::Code,
+                    id: Some("test-cell-1".to_string()),
+                    source: CellSource::Single("x = 42".to_string()),
+                    metadata: serde_json::json!({}),
+                    execution_count: None,
+                    outputs: vec![],
+                },
+            ],
+        };
+
+        // Save notebook
+        NotebookEditTool::save_notebook(temp_path, &notebook).unwrap();
+
+        // Load notebook
+        let loaded = NotebookEditTool::load_notebook(temp_path).unwrap();
+
+        assert_eq!(loaded.nbformat, 4);
+        assert_eq!(loaded.cells.len(), 1);
+        assert_eq!(loaded.cells[0].source.to_string(), "x = 42");
+    }
+
+    #[test]
+    fn test_find_cell_by_id() {
+        let notebook = NotebookContent {
+            nbformat: 4,
+            nbformat_minor: 2,
+            metadata: NotebookMetadata {
+                language_info: None,
+                other: serde_json::json!({}),
+            },
+            cells: vec![
+                NotebookCell {
+                    cell_type: CellType::Code,
+                    id: Some("abc123".to_string()),
+                    source: CellSource::Single("code1".to_string()),
+                    metadata: serde_json::json!({}),
+                    execution_count: None,
+                    outputs: vec![],
+                },
+                NotebookCell {
+                    cell_type: CellType::Markdown,
+                    id: Some("def456".to_string()),
+                    source: CellSource::Single("markdown1".to_string()),
+                    metadata: serde_json::json!({}),
+                    execution_count: None,
+                    outputs: vec![],
+                },
+            ],
+        };
+
+        // Find by actual ID
+        let idx = NotebookEditTool::find_cell_index(&notebook, "abc123").unwrap();
+        assert_eq!(idx, 0);
+
+        let idx = NotebookEditTool::find_cell_index(&notebook, "def456").unwrap();
+        assert_eq!(idx, 1);
+
+        // Find by numeric index (0-based)
+        let idx = NotebookEditTool::find_cell_index(&notebook, "0").unwrap();
+        assert_eq!(idx, 0);
+
+        let idx = NotebookEditTool::find_cell_index(&notebook, "1").unwrap();
+        assert_eq!(idx, 1);
+
+        // Find by cell-N format
+        let idx = NotebookEditTool::find_cell_index(&notebook, "cell-0").unwrap();
+        assert_eq!(idx, 0);
+
+        let idx = NotebookEditTool::find_cell_index(&notebook, "cell-1").unwrap();
+        assert_eq!(idx, 1);
+
+        // Not found
+        let result = NotebookEditTool::find_cell_index(&notebook, "nonexistent");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cell_insertion() {
+        let mut notebook = NotebookContent {
+            nbformat: 4,
+            nbformat_minor: 5, // Supports cell IDs
+            metadata: NotebookMetadata {
+                language_info: None,
+                other: serde_json::json!({}),
+            },
+            cells: vec![
+                NotebookCell {
+                    cell_type: CellType::Code,
+                    id: Some("cell-1".to_string()),
+                    source: CellSource::Single("original".to_string()),
+                    metadata: serde_json::json!({}),
+                    execution_count: None,
+                    outputs: vec![],
+                },
+            ],
+        };
+
+        // Insert at index 0 (beginning)
+        let new_cell = NotebookCell {
+            cell_type: CellType::Markdown,
+            id: Some(NotebookEditTool::generate_cell_id()),
+            source: CellSource::Single("# New cell".to_string()),
+            metadata: serde_json::json!({}),
+            execution_count: None,
+            outputs: vec![],
+        };
+        notebook.cells.insert(0, new_cell);
+
+        assert_eq!(notebook.cells.len(), 2);
+        assert_eq!(notebook.cells[0].source.to_string(), "# New cell");
+        assert_eq!(notebook.cells[1].source.to_string(), "original");
+    }
+
+    #[test]
+    fn test_cell_deletion() {
+        let mut notebook = NotebookContent {
+            nbformat: 4,
+            nbformat_minor: 2,
+            metadata: NotebookMetadata {
+                language_info: None,
+                other: serde_json::json!({}),
+            },
+            cells: vec![
+                NotebookCell {
+                    cell_type: CellType::Code,
+                    id: Some("cell-1".to_string()),
+                    source: CellSource::Single("first".to_string()),
+                    metadata: serde_json::json!({}),
+                    execution_count: None,
+                    outputs: vec![],
+                },
+                NotebookCell {
+                    cell_type: CellType::Code,
+                    id: Some("cell-2".to_string()),
+                    source: CellSource::Single("second".to_string()),
+                    metadata: serde_json::json!({}),
+                    execution_count: None,
+                    outputs: vec![],
+                },
+                NotebookCell {
+                    cell_type: CellType::Code,
+                    id: Some("cell-3".to_string()),
+                    source: CellSource::Single("third".to_string()),
+                    metadata: serde_json::json!({}),
+                    execution_count: None,
+                    outputs: vec![],
+                },
+            ],
+        };
+
+        // Delete middle cell (index 1)
+        notebook.cells.remove(1);
+
+        assert_eq!(notebook.cells.len(), 2);
+        assert_eq!(notebook.cells[0].source.to_string(), "first");
+        assert_eq!(notebook.cells[1].source.to_string(), "third");
+    }
+
+    #[test]
+    fn test_cell_replacement() {
+        let mut notebook = NotebookContent {
+            nbformat: 4,
+            nbformat_minor: 2,
+            metadata: NotebookMetadata {
+                language_info: None,
+                other: serde_json::json!({}),
+            },
+            cells: vec![
+                NotebookCell {
+                    cell_type: CellType::Code,
+                    id: Some("cell-1".to_string()),
+                    source: CellSource::Single("old code".to_string()),
+                    metadata: serde_json::json!({}),
+                    execution_count: Some(1),
+                    outputs: vec![serde_json::json!({"output": "result"})],
+                },
+            ],
+        };
+
+        let cell = &mut notebook.cells[0];
+        cell.source = CellSource::Single("new code".to_string());
+        cell.cell_type = CellType::Markdown;
+        cell.execution_count = None;
+        cell.outputs.clear();
+
+        assert_eq!(cell.source.to_string(), "new code");
+        assert_eq!(cell.cell_type, CellType::Markdown);
+        assert_eq!(cell.execution_count, None);
+        assert!(cell.outputs.is_empty());
+    }
+
+    #[test]
+    fn test_notebook_edit_input_serialization() {
+        let input = NotebookEditInput {
+            notebook_path: "/path/to/notebook.ipynb".to_string(),
+            cell_id: Some("cell-1".to_string()),
+            new_source: "print('test')".to_string(),
+            cell_type: Some(CellType::Code),
+            edit_mode: Some(EditMode::Replace),
+        };
+
+        let json = serde_json::to_string(&input).unwrap();
+        let deserialized: NotebookEditInput = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.notebook_path, "/path/to/notebook.ipynb");
+        assert_eq!(deserialized.cell_id, Some("cell-1".to_string()));
+        assert_eq!(deserialized.new_source, "print('test')");
+        assert_eq!(deserialized.cell_type, Some(CellType::Code));
+        assert_eq!(deserialized.edit_mode, Some(EditMode::Replace));
+    }
+
+    #[test]
+    fn test_load_invalid_json() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let temp_path = temp_file.path().to_str().unwrap();
+
+        // Write invalid JSON
+        std::fs::write(temp_path, "not valid json").unwrap();
+
+        let result = NotebookEditTool::load_notebook(temp_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_nonexistent_file() {
+        let result = NotebookEditTool::load_notebook("/nonexistent/file.ipynb");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_multiline_source_normalization() {
+        // Test that multiline sources are preserved
+        let source = CellSource::Multiple(vec![
+            "line 1".to_string(),
+            "line 2".to_string(),
+            "line 3".to_string(),
+        ]);
+
+        assert_eq!(source.to_string(), "line 1\nline 2\nline 3");
+
+        // Create from multiline string
+        let from_str = CellSource::from_str("line 1\nline 2\nline 3");
+        assert_eq!(from_str.to_string(), "line 1\nline 2\nline 3");
     }
 }

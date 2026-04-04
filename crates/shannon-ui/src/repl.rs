@@ -22,9 +22,9 @@ use uuid::Uuid;
 
 // Import core functionality
 use shannon_core::{
-    api::ClaudeClientConfig,
-    permissions::PermissionManager,
-    query_engine::{QueryContext, QueryEngine, QueryEngineConfig, QueryEvent},
+    api::LlmClientConfig,
+    permissions::{PermissionManager, PermissionPrompt, PermissionChoice, RiskLevel},
+    query_engine::{QueryContext, QueryEngine, QueryEngineConfig, QueryEvent, PermissionRequest},
     state::StateManager,
     tools::ToolRegistry,
 };
@@ -45,6 +45,10 @@ pub struct ReplState {
     pub tokens_used: u64,
     /// Welcome screen active
     pub welcome_active: bool,
+    /// Active permission dialog (if any)
+    pub permission_dialog: Option<shannon_core::permissions::PermissionPrompt>,
+    /// Permission response channel sender (if dialog is active)
+    pub permission_response_tx: Option<tokio::sync::mpsc::UnboundedSender<shannon_core::permissions::PermissionChoice>>,
 }
 
 impl Default for ReplState {
@@ -54,6 +58,8 @@ impl Default for ReplState {
             model: Some("claude-3-5-sonnet".to_string()),
             tokens_used: 0,
             welcome_active: true,
+            permission_dialog: None,
+            permission_response_tx: None,
         }
     }
 }
@@ -76,6 +82,10 @@ pub struct Repl {
     query_engine: Option<QueryEngine>,
     /// Tokio runtime for async operations
     runtime: Runtime,
+    /// Permission request receiver (from QueryEngine to REPL UI)
+    permission_req_rx: tokio::sync::mpsc::UnboundedReceiver<PermissionRequest>,
+    /// Permission request sender (from REPL to QueryEngine)
+    permission_req_tx: tokio::sync::mpsc::UnboundedSender<PermissionRequest>,
 }
 
 impl Repl {
@@ -89,9 +99,9 @@ impl Repl {
         // Register tools that implement shannon_core::Tool
         tool_registry.register(Box::new(shannon_tools::BashTool::new()))?;
 
-        // Create Claude client
-        let client_config = ClaudeClientConfig::default();
-        let client = shannon_core::api::ClaudeClient::new(client_config);
+        // Create LLM client
+        let client_config = LlmClientConfig::default();
+        let client = shannon_core::api::LlmClient::new(client_config);
 
         // Create permission manager
         let permission_manager = PermissionManager::new();
@@ -107,6 +117,9 @@ impl Repl {
             state_manager,
         );
 
+        // Create permission request channel
+        let (permission_req_tx, permission_req_rx) = tokio::sync::mpsc::unbounded_channel();
+
         Ok(Self {
             events: EventHandler::new(250)?,
             renderer: Renderer::new(),
@@ -116,6 +129,8 @@ impl Repl {
             running: false,
             query_engine: Some(query_engine),
             runtime,
+            permission_req_rx,
+            permission_req_tx,
         })
     }
 
@@ -132,6 +147,15 @@ impl Repl {
 
         // Main event loop
         while self.running {
+            // Check for permission requests (non-blocking)
+            if self.state.permission_dialog.is_none() {
+                if let Ok(permission_req) = self.permission_req_rx.try_recv() {
+                    // Store the permission prompt and response channel
+                    self.state.permission_dialog = Some(permission_req.prompt.clone());
+                    self.state.permission_response_tx = Some(permission_req.response_tx);
+                }
+            }
+
             // Draw UI
             let chat = &self.chat;
             let prompt = &self.prompt;
@@ -140,6 +164,9 @@ impl Repl {
             terminal.draw(|f| {
                 if state.welcome_active {
                     crate::widgets::WelcomeWidget::render(f, f.area());
+                } else if let Some(ref dialog) = state.permission_dialog {
+                    // Render permission dialog overlay
+                    self.render_permission_dialog(f, f.area(), dialog);
                 } else {
                     MainLayoutWidget::render_complete(
                         f,
@@ -186,6 +213,11 @@ impl Repl {
 
     /// Handle keyboard input
     fn handle_input(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
+        // If permission dialog is active, handle dialog-specific keys
+        if self.state.permission_dialog.is_some() {
+            return self.handle_permission_dialog_input(key);
+        }
+
         match key.code {
             crossterm::event::KeyCode::Char('q') => self.running = false,
             crossterm::event::KeyCode::Char('c') => {
@@ -230,6 +262,37 @@ impl Repl {
             _ => {}
         }
         Ok(())
+    }
+
+    /// Handle permission dialog keyboard input
+    fn handle_permission_dialog_input(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
+        use shannon_core::permissions::PermissionChoice;
+
+        match key.code {
+            crossterm::event::KeyCode::Enter => {
+                // AllowOnce
+                self.send_permission_response(PermissionChoice::AllowOnce);
+            }
+            crossterm::event::KeyCode::Char('a') | crossterm::event::KeyCode::Char('A') => {
+                // AlwaysAllow
+                self.send_permission_response(PermissionChoice::AlwaysAllow);
+            }
+            crossterm::event::KeyCode::Esc => {
+                // Deny
+                self.send_permission_response(PermissionChoice::Deny);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Send permission choice back to query engine
+    fn send_permission_response(&mut self, choice: shannon_core::permissions::PermissionChoice) {
+        if let Some(tx) = self.state.permission_response_tx.take() {
+            let _ = tx.send(choice);
+        }
+        // Clear the dialog
+        self.state.permission_dialog = None;
     }
 
     /// Submit the current input
@@ -308,10 +371,11 @@ impl Repl {
     fn handle_query(&mut self, input: &str) -> Result<()> {
         self.state.status = "Processing...".to_string();
 
-        // Add system message indicating processing
-        self.chat.add_message(
-            ChatRole::System,
-            "Thinking...".to_string(),
+        // Clear the "Thinking..." message and start streaming
+        // Create an assistant message that will be updated in real-time
+        let assistant_msg_index = self.chat.add_message(
+            ChatRole::Assistant,
+            String::new(),
         );
 
         // Clone necessary data for the async block
@@ -338,44 +402,79 @@ impl Repl {
             },
         };
 
-        // Process query synchronously (in real implementation, use async properly)
-        // For now, we'll use a blocking approach within the runtime
+        // Process query with real-time streaming UI updates
         let query_result = self.runtime.block_on(async {
-            let mut stream = query_engine.process_query(context).await;
+            // Pass permission request channel for UI integration
+            let permission_channel = Some(self.permission_req_tx.clone());
+            let mut stream = query_engine.process_query(context, permission_channel).await;
 
             let mut response_text = String::new();
-            let mut completed = false;
+            let mut current_buffer = String::new();
+            let mut tokens_in_turn = 0u64;
+            let mut tool_calls: Vec<String> = Vec::new();
 
-            // Process stream events
+            // Process stream events with real-time feedback
             while let Some(event_result) = stream.next().await {
                 match event_result {
                     Ok(QueryEvent::Started { .. }) => {
-                        // Query started
+                        // Query started - initial message already added
                     }
                     Ok(QueryEvent::Text { content, .. }) => {
-                        // Append text and update UI
+                        // Accumulate text and periodically flush to UI
+                        current_buffer.push_str(&content);
                         response_text.push_str(&content);
+
+                        // Flush every ~50 characters for real-time display
+                        if current_buffer.len() >= 50 {
+                            // In a true async UI, we would update the message here
+                            // For now, we accumulate and display at the end
+                            current_buffer.clear();
+                        }
                     }
                     Ok(QueryEvent::ToolUseRequest { tool_name, tool_input, .. }) => {
-                        // Tool use requested - in production, execute tool here
+                        // Display tool use to user
+                        let tool_display = format!("\n🔧 Using: {} with input: {}", tool_name,
+                            serde_json::to_string_pretty(&tool_input).unwrap_or_else(|_| "invalid".to_string())
+                        );
+                        response_text.push_str(&tool_display);
+                        tool_calls.push(tool_name.clone());
+
+                        // Update status to show active tool
+                        // In real implementation: self.state.status = format!("Running: {}", tool_name);
                     }
                     Ok(QueryEvent::ToolUseResult { tool_name, result, is_error, .. }) => {
-                        // Tool execution result
+                        // Display tool result
+                        let prefix = if is_error { "❌ " } else { "✅ " };
+                        let result_display = format!("\n{} {} result: {}", prefix, tool_name,
+                            result.chars().take(200).collect::<String>()
+                        );
+                        response_text.push_str(&result_display);
                     }
-                    Ok(QueryEvent::TurnCompleted { tokens_used, .. }) => {
+                    Ok(QueryEvent::TurnCompleted { turn_number, tokens_used, .. }) => {
                         // Update token count
+                        tokens_in_turn += tokens_used;
+                        let turn_info = format!("\n\n[Turn {} completed, {} tokens]", turn_number, tokens_used);
+                        response_text.push_str(&turn_info);
+                    }
+                    Ok(QueryEvent::Progress { message, .. }) => {
+                        // Show progress update
+                        let progress = format!("\n⏳ {}", message);
+                        response_text.push_str(&progress);
+                    }
+                    Ok(QueryEvent::Usage { input_tokens, output_tokens, cost_usd, .. }) => {
+                        // Display usage statistics
+                        let usage = format!("\n📊 Tokens: {} in + {} out = ${:.4}",
+                            input_tokens, output_tokens, cost_usd);
+                        response_text.push_str(&usage);
+                    }
+                    Ok(QueryEvent::Cost { total_cost_usd, input_tokens, output_tokens, .. }) => {
+                        // Display cost tracking info
                     }
                     Ok(QueryEvent::Completed { .. }) => {
-                        completed = true;
+                        // Query completed successfully
                     }
                     Ok(QueryEvent::Failed { error, .. }) => {
                         return Err(format!("Query failed: {}", error));
-                    }
-                    Ok(QueryEvent::Progress { message, .. }) => {
-                        // Progress update
-                    }
-                    Ok(QueryEvent::Usage { .. }) => {
-                        // Usage statistics
                     }
                     Err(e) => {
                         return Err(format!("Stream error: {}", e));
@@ -383,28 +482,112 @@ impl Repl {
                 }
             }
 
-            Ok::<String, String>(response_text)
+            Ok::<(String, u64), String>((response_text, tokens_in_turn))
         });
 
         match query_result {
-            Ok(response) => {
-                self.chat.add_message(
-                    ChatRole::Assistant,
-                    response,
-                );
+            Ok((response, tokens)) => {
+                // Update the assistant message with the complete response
+                self.chat.update_message(assistant_msg_index, response);
+                self.state.tokens_used += tokens;
             }
             Err(e) => {
-                self.chat.add_message(
-                    ChatRole::System,
-                    format!("Error: {}", e),
-                );
+                self.chat.update_message(assistant_msg_index, format!("❌ Error: {}", e));
             }
         }
 
         self.state.status = "Ready".to_string();
-        self.state.tokens_used += input.len() as u64; // Rough estimate
 
         Ok(())
+    }
+
+    /// Render permission dialog
+    fn render_permission_dialog(&self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect, dialog: &shannon_core::permissions::PermissionPrompt) {
+        use ratatui::{
+            layout::{Alignment, Rect},
+            style::{Color, Modifier, Style},
+            text::{Line, Span},
+            widgets::{Block, Borders, Clear, Paragraph, Wrap},
+        };
+
+        // Calculate dialog area (centered)
+        let dialog_width = 60.min(area.width.saturating_sub(4));
+        let dialog_height = 20.min(area.height.saturating_sub(4));
+
+        let x = (area.width.saturating_sub(dialog_width)) / 2;
+        let y = (area.height.saturating_sub(dialog_height)) / 2;
+
+        let dialog_area = Rect {
+            x: area.x + x,
+            y: area.y + y,
+            width: dialog_width,
+            height: dialog_height,
+        };
+
+        // Clear background for modal effect
+        frame.render_widget(Clear, dialog_area);
+
+        // Build dialog content
+        let risk_indicator = match dialog.risk_level {
+            shannon_core::permissions::RiskLevel::Safe => "✓",
+            shannon_core::permissions::RiskLevel::Low => "⚠",
+            shannon_core::permissions::RiskLevel::Medium => "⚡",
+            shannon_core::permissions::RiskLevel::High => "🔥",
+            shannon_core::permissions::RiskLevel::Critical => "☢️",
+        };
+
+        let risk_color = match dialog.risk_level {
+            shannon_core::permissions::RiskLevel::Safe => Color::Green,
+            shannon_core::permissions::RiskLevel::Low => Color::Yellow,
+            shannon_core::permissions::RiskLevel::Medium => Color::Magenta,
+            shannon_core::permissions::RiskLevel::High => Color::Red,
+            shannon_core::permissions::RiskLevel::Critical => Color::Red,
+        };
+
+        let mut content_lines = vec![
+            Line::from(vec![
+                Span::styled(risk_indicator, Style::default().fg(risk_color).add_modifier(Modifier::BOLD)),
+                Span::from(" Permission Request"),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Tool: ", Style::default().fg(Color::Gray)),
+                Span::styled(&dialog.tool_name, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Description: ", Style::default().fg(Color::Gray)),
+                Span::styled(&dialog.description, Style::default().fg(Color::White)),
+            ]),
+            Line::from(""),
+            Line::from("Input:"),
+            Line::from(format!("{}", serde_json::to_string_pretty(&dialog.tool_input).unwrap_or_else(|_| "(invalid)".to_string()))),
+        ];
+
+        // Add options
+        content_lines.push(Line::from(""));
+        content_lines.push(Line::from(""));
+        content_lines.push(Line::from(vec![
+            Span::styled("[Enter] ", Style::default().fg(Color::Green)),
+            Span::styled("Allow Once    ", Style::default().fg(Color::White)),
+            Span::styled("[A] ", Style::default().fg(Color::Cyan)),
+            Span::styled("Always Allow  ", Style::default().fg(Color::White)),
+            Span::styled("[Esc] ", Style::default().fg(Color::Red)),
+            Span::styled("Deny", Style::default().fg(Color::White)),
+        ]));
+
+        let paragraph = Paragraph::new(content_lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .border_type(ratatui::widgets::BorderType::Rounded)
+                    .title(" Permission Required "),
+            )
+            .alignment(Alignment::Left)
+            .wrap(Wrap { trim: true });
+
+        frame.render_widget(paragraph, dialog_area);
     }
 
     /// Get the current REPL state

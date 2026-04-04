@@ -39,6 +39,7 @@ pub mod client;
 pub mod protocol;
 pub mod transport;
 pub mod auth;
+pub mod resources;
 
 pub use protocol::{
     JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, JsonRpcNotification,
@@ -56,6 +57,11 @@ pub use protocol::{
 pub use transport::{Transport, TransportError, StdioTransport, SseTransport, HttpTransport, WebSocketTransport};
 pub use client::{McpClient, McpClientError};
 pub use auth::{AuthProvider, OAuth2Provider, ApiKeyProvider};
+pub use resources::{
+    ResourceDescriptor, ListResourcesInput, ListResourcesOutput,
+    ReadResourceInput, ReadResourceOutput, ResourceReadContent,
+    McpResourceManager, McpResourceClient, McpClientAdapter,
+};
 
 /// Current MCP protocol version supported by this implementation
 pub const MCP_PROTOCOL_VERSION: &str = "2024-11-05";

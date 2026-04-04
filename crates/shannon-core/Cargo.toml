@@ -27,7 +27,31 @@ tokio-stream = "0.1"
 
 # State management
 dashmap = "6.1"
+serde_yaml = "0.9.34"
+
+# Home directory support
+dirs = { workspace = true }
+
+# Env file support
+dotenvy = { workspace = true }
+
+# Regex for hook matching
+regex = "1.11"
+
+# Platform-specific disk space info
+libc = "0.2"
+
+# Testing utilities
+tempfile = "3.16"
 
 [dev-dependencies]
 tokio-test = "0.4"
 criterion = "0.5"
+
+[[bench]]
+name = "query_engine"
+harness = false
+
+[[bench]]
+name = "core_benchmarks"
+harness = false
