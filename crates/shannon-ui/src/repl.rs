@@ -28,6 +28,7 @@ use shannon_core::{
     state::StateManager,
     tools::ToolRegistry,
 };
+use shannon_commands::{CommandRegistry, CommandParser, builtin_commands};
 use shannon_tools::{
     BashTool,
     ReadTool,
@@ -80,6 +81,10 @@ pub struct Repl {
     running: bool,
     /// Query engine for AI processing
     query_engine: Option<QueryEngine>,
+    /// Command registry with all built-in commands
+    command_registry: CommandRegistry,
+    /// Command parser for parsing /commands
+    command_parser: CommandParser,
     /// Tokio runtime for async operations
     runtime: Runtime,
     /// Permission request receiver (from QueryEngine to REPL UI)
@@ -120,6 +125,17 @@ impl Repl {
         // Create permission request channel
         let (permission_req_tx, permission_req_rx) = tokio::sync::mpsc::unbounded_channel();
 
+        // Create command registry inside the runtime context so async
+        // register() works (register_sync requires an active tokio runtime).
+        let handle = runtime.handle().clone();
+        let command_registry = handle.block_on(async {
+            let registry = CommandRegistry::new();
+            for cmd in builtin_commands::all_commands() {
+                let _ = registry.register(cmd).await;
+            }
+            registry
+        });
+
         Ok(Self {
             events: EventHandler::new(250)?,
             renderer: Renderer::new(),
@@ -128,6 +144,8 @@ impl Repl {
             state: ReplState::default(),
             running: false,
             query_engine: Some(query_engine),
+            command_registry,
+            command_parser: CommandParser::new(),
             runtime,
             permission_req_rx,
             permission_req_tx,
@@ -326,48 +344,83 @@ impl Repl {
 
     /// Handle a command (starts with /)
     fn handle_command(&mut self, input: &str) -> Result<()> {
+        // Built-in REPL commands (not in the command registry)
+        let repl_commands = ["/help", "/clear", "/quit", "/model"];
+
         let parts: Vec<&str> = input.splitn(2, ' ').collect();
         let cmd = parts.first().copied().unwrap_or("");
         let args = parts.get(1).copied().unwrap_or("");
 
-        match cmd {
-            "/help" => {
-                self.chat.add_message(
-                    ChatRole::System,
-                    "Available commands: /help, /clear, /quit, /model <name>".to_string(),
-                );
-            }
-            "/clear" => {
-                self.chat.clear();
-                self.chat.add_message(
-                    ChatRole::System,
-                    "Chat cleared.".to_string(),
-                );
-            }
-            "/quit" => {
-                self.running = false;
-            }
-            "/model" => {
-                if args.is_empty() {
-                    self.chat.add_message(
-                        ChatRole::System,
-                        format!("Current model: {}", self.state.model.as_deref().unwrap_or("default")),
-                    );
-                } else {
-                    self.state.model = Some(args.to_string());
-                    self.chat.add_message(
-                        ChatRole::System,
-                        format!("Model set to: {}", args),
-                    );
+        if repl_commands.contains(&cmd) {
+            match cmd {
+                "/help" => {
+                    // List all commands from the registry plus REPL commands
+                    let mut cmd_list = String::from("Available commands:\n");
+
+                    // REPL-local commands
+                    cmd_list.push_str("  /help     Show this help message\n");
+                    cmd_list.push_str("  /clear    Clear chat history\n");
+                    cmd_list.push_str("  /quit     Exit Shannon\n");
+                    cmd_list.push_str("  /model    Show or set the AI model\n");
+
+                    // Builtin commands from registry
+                    let names = self.runtime.block_on(self.command_registry.list_names());
+                    if !names.is_empty() {
+                        cmd_list.push_str("\nBuilt-in commands:\n");
+                        let mut sorted = names;
+                        sorted.sort();
+                        for name in &sorted {
+                            if let Ok(command) = self.runtime.block_on(self.command_registry.get(name)) {
+                                let desc = command.description();
+                                cmd_list.push_str(&format!("  /{:<12} {}\n", name, desc));
+                            }
+                        }
+                    }
+
+                    self.chat.add_message(ChatRole::System, cmd_list);
                 }
+                "/clear" => {
+                    self.chat.clear();
+                    self.chat.add_message(ChatRole::System, "Chat cleared.".to_string());
+                }
+                "/quit" => {
+                    self.running = false;
+                }
+                "/model" => {
+                    if args.is_empty() {
+                        self.chat.add_message(
+                            ChatRole::System,
+                            format!("Current model: {}", self.state.model.as_deref().unwrap_or("default")),
+                        );
+                    } else {
+                        self.state.model = Some(args.to_string());
+                        self.chat.add_message(
+                            ChatRole::System,
+                            format!("Model set to: {}", args),
+                        );
+                    }
+                }
+                _ => {}
             }
-            _ => {
+            return Ok(());
+        }
+
+        // Try to parse and look up from the command registry
+        if let Ok(parsed) = self.command_parser.parse(input) {
+            if let Ok(command) = self.runtime.block_on(self.command_registry.get(&parsed.name)) {
+                let desc = command.description();
                 self.chat.add_message(
                     ChatRole::System,
-                    format!("Unknown command: {}", cmd),
+                    format!("/{} — {}", parsed.name, desc),
                 );
+                return Ok(());
             }
         }
+
+        self.chat.add_message(
+            ChatRole::System,
+            format!("Unknown command: {}. Type /help for available commands.", cmd),
+        );
 
         Ok(())
     }
