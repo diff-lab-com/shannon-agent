@@ -388,7 +388,6 @@ pub struct QueryEngine {
     permissions: Arc<RwLock<PermissionManager>>,
     state: Arc<StateManager>,
     config: QueryEngineConfig,
-    event_tx: mpsc::UnboundedSender<QueryEvent>,
     conversation: ConversationState,
     cost_tracker: Arc<RwLock<CostTracker>>,
 }
@@ -402,7 +401,6 @@ impl QueryEngine {
         state: StateManager,
         config: QueryEngineConfig,
     ) -> Self {
-        let (event_tx, _) = mpsc::unbounded_channel();
         let model = client.model().to_string();
         Self {
             client,
@@ -410,7 +408,6 @@ impl QueryEngine {
             permissions: Arc::new(RwLock::new(permissions)),
             state: Arc::new(state),
             config,
-            event_tx,
             conversation: ConversationState::default(),
             cost_tracker: Arc::new(RwLock::new(CostTracker::new(model))),
         }
@@ -423,7 +420,6 @@ impl QueryEngine {
         permissions: PermissionManager,
         state: StateManager,
     ) -> Self {
-        let (event_tx, _) = mpsc::unbounded_channel();
         let model = client.model().to_string();
         Self {
             client,
@@ -431,21 +427,9 @@ impl QueryEngine {
             permissions: Arc::new(RwLock::new(permissions)),
             state: Arc::new(state),
             config: QueryEngineConfig::default(),
-            event_tx,
             conversation: ConversationState::default(),
             cost_tracker: Arc::new(RwLock::new(CostTracker::new(model))),
         }
-    }
-
-    /// Subscribe to query events
-    pub fn subscribe(&self) -> mpsc::UnboundedReceiver<QueryEvent> {
-        let (_, event_rx) = mpsc::unbounded_channel();
-        event_rx
-    }
-
-    /// Emit an event to all subscribers
-    fn emit_event(&self, event: QueryEvent) {
-        let _ = self.event_tx.send(event);
     }
 
     /// Add a user message to the conversation

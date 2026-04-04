@@ -614,12 +614,8 @@ impl PermissionManager {
     }
 }
 
-// SAFETY: PermissionManager is safe to send across threads because:
-// - All fields (HashMap, HashSet) are Send + Sync when their type parameters are Send + Sync
-// - Permission, ToolPermissionPolicy, and PermissionMemory contain only Send + Sync types
-// - No interior mutability is exposed directly (all access is through &self methods)
-unsafe impl Send for PermissionManager {}
-unsafe impl Sync for PermissionManager {}
+// NOTE: PermissionManager is auto-Send + Sync because all fields (HashMap, HashSet)
+// contain only Send + Sync types. No unsafe impl needed.
 
 impl Default for PermissionManager {
     fn default() -> Self {

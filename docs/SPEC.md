@@ -262,7 +262,7 @@ The core engine provides query processing, tool orchestration, security, state m
 **Query Processing Flow**:
 1. `QueryEngine::process()` receives user message
 2. Builds `MessageRequest` with conversation history + tool definitions
-3. `ClaudeClient` sends streaming request to LLM provider
+3. `LlmClient` sends streaming request to LLM provider
 4. Stream events are processed incrementally:
    - `ContentDelta` → accumulated response text
    - `ToolUse` → permission check → tool execution → result fed back
