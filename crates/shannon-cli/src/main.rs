@@ -11,6 +11,8 @@ use shannon_ui::Repl;
 #[command(author = "Shannon Code Contributors")]
 #[command(version = "0.1.0")]
 #[command(about = "AI-powered code assistant in Rust", long_about = None)]
+#[command(propagate_version = true)]
+#[command(arg_required_else_help = true)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -30,6 +32,34 @@ enum Commands {
         /// Example: -e SHANNON_MODEL=gpt-4o -e SHANNON_MAX_TOKENS=8192
         #[arg(short = 'e', long = "env")]
         env: Vec<String>,
+
+        /// LLM model to use (e.g., claude-sonnet-4, gpt-4o, claude-3-5-sonnet-20241022)
+        #[arg(short, long)]
+        model: Option<String>,
+
+        /// LLM provider (anthropic, openai, ollama, custom)
+        #[arg(short, long)]
+        provider: Option<String>,
+
+        /// Maximum tokens for the response (default: 8192)
+        #[arg(long)]
+        max_tokens: Option<usize>,
+
+        /// Sampling temperature, 0.0 - 1.0 (default: 0.7)
+        #[arg(long)]
+        temperature: Option<f32>,
+
+        /// Request timeout in seconds (default: 120)
+        #[arg(long)]
+        timeout: Option<u64>,
+
+        /// Enable debug logging
+        #[arg(short, long)]
+        debug: bool,
+
+        /// Working directory for the session (default: current directory)
+        #[arg(long)]
+        cwd: Option<String>,
     },
 
     /// Display version information
@@ -70,7 +100,23 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Repl { file: _, env } => {
+        Commands::Repl {
+            file: _,
+            env,
+            model,
+            provider,
+            max_tokens,
+            temperature,
+            timeout,
+            debug,
+            cwd,
+        } => {
+            // Handle working directory change first
+            if let Some(dir) = cwd {
+                std::env::set_current_dir(&dir)
+                    .map_err(|e| anyhow::anyhow!("Failed to set working directory: {}", e))?;
+            }
+
             // Parse and validate env overrides before spawning tokio runtime.
             // We store them as a Vec to pass into the runtime, avoiding unsafe
             // std::env::set_var which is unsound after threads exist.
@@ -83,6 +129,27 @@ fn main() -> Result<()> {
                 // SAFETY: we are in the main function before any async runtime
                 // or thread spawning has occurred.
                 unsafe { std::env::set_var(key, value) };
+            }
+
+            // Apply CLI-provided model configuration as environment variables
+            // These have lower priority than -e flags but higher than config files
+            if let Some(m) = model {
+                unsafe { std::env::set_var("SHANNON_MODEL", m) };
+            }
+            if let Some(p) = provider {
+                unsafe { std::env::set_var("SHANNON_PROVIDER", p) };
+            }
+            if let Some(mt) = max_tokens {
+                unsafe { std::env::set_var("SHANNON_MAX_TOKENS", mt.to_string()) };
+            }
+            if let Some(t) = temperature {
+                unsafe { std::env::set_var("SHANNON_TEMPERATURE", t.to_string()) };
+            }
+            if let Some(to) = timeout {
+                unsafe { std::env::set_var("SHANNON_TIMEOUT", to.to_string()) };
+            }
+            if debug {
+                unsafe { std::env::set_var("SHANNON_DEBUG", "1") };
             }
 
             let mut repl = Repl::new().map_err(|e| anyhow::anyhow!("{e:?}"))?;
@@ -216,7 +283,7 @@ mod tests {
     fn test_cli_parse_repl_no_args() {
         let cli = Cli::try_parse_from(["shannon", "repl"]).unwrap();
         match cli.command {
-            Commands::Repl { file, env } => {
+            Commands::Repl { file, env, model: _, provider: _, max_tokens: _, temperature: _, timeout: _, debug: _, cwd: _ } => {
                 assert!(file.is_none());
                 assert!(env.is_empty());
             }
@@ -228,7 +295,7 @@ mod tests {
     fn test_cli_parse_repl_with_file() {
         let cli = Cli::try_parse_from(["shannon", "repl", "--file", "project.json"]).unwrap();
         match cli.command {
-            Commands::Repl { file, .. } => {
+            Commands::Repl { file, env: _, model: _, provider: _, max_tokens: _, temperature: _, timeout: _, debug: _, cwd: _ } => {
                 assert_eq!(file.as_deref(), Some("project.json"));
             }
             _ => panic!("Expected Repl command"),
@@ -247,7 +314,7 @@ mod tests {
         ])
         .unwrap();
         match cli.command {
-            Commands::Repl { env, .. } => {
+            Commands::Repl { env, file: _, model: _, provider: _, max_tokens: _, temperature: _, timeout: _, debug: _, cwd: _ } => {
                 assert_eq!(env.len(), 2);
                 assert_eq!(env[0], "MODEL=gpt-4o");
                 assert_eq!(env[1], "TOKENS=4096");
@@ -347,6 +414,195 @@ mod tests {
         match cli.command {
             Commands::Repl { .. } => {
                 // Success - repl subcommand parsed
+            }
+            _ => panic!("Expected Repl command"),
+        }
+    }
+
+    // ── New REPL options tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_cli_parse_repl_with_model_short() {
+        let cli = Cli::try_parse_from(["shannon", "repl", "-m", "gpt-4o"]).unwrap();
+        match cli.command {
+            Commands::Repl { model, .. } => {
+                assert_eq!(model.as_deref(), Some("gpt-4o"));
+            }
+            _ => panic!("Expected Repl command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_repl_with_model_long() {
+        let cli = Cli::try_parse_from(["shannon", "repl", "--model", "claude-sonnet-4"]).unwrap();
+        match cli.command {
+            Commands::Repl { model, .. } => {
+                assert_eq!(model.as_deref(), Some("claude-sonnet-4"));
+            }
+            _ => panic!("Expected Repl command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_repl_with_provider_short() {
+        let cli = Cli::try_parse_from(["shannon", "repl", "-p", "anthropic"]).unwrap();
+        match cli.command {
+            Commands::Repl { provider, .. } => {
+                assert_eq!(provider.as_deref(), Some("anthropic"));
+            }
+            _ => panic!("Expected Repl command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_repl_with_provider_long() {
+        let cli = Cli::try_parse_from(["shannon", "repl", "--provider", "openai"]).unwrap();
+        match cli.command {
+            Commands::Repl { provider, .. } => {
+                assert_eq!(provider.as_deref(), Some("openai"));
+            }
+            _ => panic!("Expected Repl command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_repl_with_max_tokens() {
+        let cli = Cli::try_parse_from(["shannon", "repl", "--max-tokens", "4096"]).unwrap();
+        match cli.command {
+            Commands::Repl { max_tokens, .. } => {
+                assert_eq!(max_tokens, Some(4096));
+            }
+            _ => panic!("Expected Repl command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_repl_with_temperature() {
+        let cli = Cli::try_parse_from(["shannon", "repl", "--temperature", "0.5"]).unwrap();
+        match cli.command {
+            Commands::Repl { temperature, .. } => {
+                assert_eq!(temperature, Some(0.5));
+            }
+            _ => panic!("Expected Repl command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_repl_with_timeout() {
+        let cli = Cli::try_parse_from(["shannon", "repl", "--timeout", "300"]).unwrap();
+        match cli.command {
+            Commands::Repl { timeout, .. } => {
+                assert_eq!(timeout, Some(300));
+            }
+            _ => panic!("Expected Repl command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_repl_with_debug_short() {
+        let cli = Cli::try_parse_from(["shannon", "repl", "-d"]).unwrap();
+        match cli.command {
+            Commands::Repl { debug, .. } => {
+                assert!(debug);
+            }
+            _ => panic!("Expected Repl command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_repl_with_debug_long() {
+        let cli = Cli::try_parse_from(["shannon", "repl", "--debug"]).unwrap();
+        match cli.command {
+            Commands::Repl { debug, .. } => {
+                assert!(debug);
+            }
+            _ => panic!("Expected Repl command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_repl_with_cwd() {
+        let cli = Cli::try_parse_from(["shannon", "repl", "--cwd", "/tmp/project"]).unwrap();
+        match cli.command {
+            Commands::Repl { cwd, .. } => {
+                assert_eq!(cwd.as_deref(), Some("/tmp/project"));
+            }
+            _ => panic!("Expected Repl command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_repl_with_all_options() {
+        let cli = Cli::try_parse_from([
+            "shannon",
+            "repl",
+            "-m",
+            "claude-3-5-sonnet-20241022",
+            "-p",
+            "anthropic",
+            "--max-tokens",
+            "16384",
+            "--temperature",
+            "0.8",
+            "--timeout",
+            "180",
+            "-d",
+            "--cwd",
+            "/home/user/project",
+            "-e",
+            "CUSTOM_VAR=value",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Repl {
+                model,
+                provider,
+                max_tokens,
+                temperature,
+                timeout,
+                debug,
+                cwd,
+                env,
+                ..
+            } => {
+                assert_eq!(model.as_deref(), Some("claude-3-5-sonnet-20241022"));
+                assert_eq!(provider.as_deref(), Some("anthropic"));
+                assert_eq!(max_tokens, Some(16384));
+                assert_eq!(temperature, Some(0.8));
+                assert_eq!(timeout, Some(180));
+                assert!(debug);
+                assert_eq!(cwd.as_deref(), Some("/home/user/project"));
+                assert_eq!(env.len(), 1);
+                assert_eq!(env[0], "CUSTOM_VAR=value");
+            }
+            _ => panic!("Expected Repl command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_repl_defaults() {
+        let cli = Cli::try_parse_from(["shannon", "repl"]).unwrap();
+        match cli.command {
+            Commands::Repl {
+                model,
+                provider,
+                max_tokens,
+                temperature,
+                timeout,
+                debug,
+                cwd,
+                env,
+                file,
+            } => {
+                assert!(model.is_none());
+                assert!(provider.is_none());
+                assert!(max_tokens.is_none());
+                assert!(temperature.is_none());
+                assert!(timeout.is_none());
+                assert!(!debug);
+                assert!(cwd.is_none());
+                assert!(env.is_empty());
+                assert!(file.is_none());
             }
             _ => panic!("Expected Repl command"),
         }

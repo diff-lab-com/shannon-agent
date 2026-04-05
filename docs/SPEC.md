@@ -771,9 +771,42 @@ CLI entry point using `clap`.
 
 | Command | Description |
 |---------|-------------|
-| `shannon repl [file]` | Start the interactive REPL. Optionally load a project file on startup. |
+| `shannon repl [OPTIONS]` | Start the interactive REPL with optional configuration. |
 | `shannon version [-v]` | Display version information. `-v` for verbose output (Rust version, features). |
 | `shannon config [setting]` | Manage configuration. View all settings or query a specific setting. |
+| `shannon -h/--help` | Display help information. |
+| `shannon -V/--version` | Display version (short form). |
+
+#### 3.9.2 REPL Options
+
+| Option | Short | Description | Default |
+|--------|-------|-------------|---------|
+| `--file` | `-f` | Project file to load on startup | None |
+| `--env` | `-e` | Set environment variable (KEY=VALUE, repeatable) | None |
+| `--model` | `-m` | LLM model to use (e.g., claude-sonnet-4, gpt-4o) | From config |
+| `--provider` | `-p` | LLM provider (anthropic, openai, ollama) | From config |
+| `--max-tokens` | | Maximum tokens for response | 8192 |
+| `--temperature` | | Sampling temperature (0.0-1.0) | 0.7 |
+| `--timeout` | | Request timeout in seconds | 120 |
+| `--debug` | `-d` | Enable debug logging | false |
+| `--cwd` | | Working directory for the session | Current directory |
+
+#### 3.9.3 Environment Variables
+
+All REPL options can be set via environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `SHANNON_MODEL` | Default model to use |
+| `SHANNON_PROVIDER` | Default provider (anthropic/openai/ollama) |
+| `SHANNON_MAX_TOKENS` | Default max tokens |
+| `SHANNON_TEMPERATURE` | Default temperature |
+| `SHANNON_TIMEOUT` | Default timeout (seconds) |
+| `SHANNON_DEBUG` | Enable debug mode (1/true/yes) |
+| `SHANNON_API_KEY` | API key for the provider |
+| `SHANNON_BASE_URL` | Custom base URL for API |
+
+**Priority Order**: CLI flags > `-e` env vars > `.env` files > `settings.json` > built-in defaults
 
 ---
 
