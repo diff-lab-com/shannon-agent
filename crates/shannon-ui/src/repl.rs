@@ -44,6 +44,8 @@ pub struct ReplState {
     pub model: Option<String>,
     /// Total tokens used
     pub tokens_used: u64,
+    /// Working directory for the session
+    pub working_directory: String,
     /// Welcome screen active
     pub welcome_active: bool,
     /// Active permission dialog (if any)
@@ -54,10 +56,16 @@ pub struct ReplState {
 
 impl Default for ReplState {
     fn default() -> Self {
+        // Get current working directory
+        let cwd = std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| ".".to_string());
+
         Self {
             status: "Ready".to_string(),
             model: Some("claude-3-5-sonnet".to_string()),
             tokens_used: 0,
+            working_directory: cwd,
             welcome_active: false,
             permission_dialog: None,
             permission_response_tx: None,
@@ -202,6 +210,7 @@ impl Repl {
                         &state.status,
                         state.model.as_deref(),
                         Some(state.tokens_used),
+                        &state.working_directory,
                     );
                 }
             })?;
@@ -658,6 +667,47 @@ mod tests {
         assert!(state.model.is_some());
         assert_eq!(state.tokens_used, 0);
         assert!(!state.welcome_active);
+        assert!(!state.working_directory.is_empty());
+    }
+
+    #[test]
+    fn test_repl_state_working_directory() {
+        let state = ReplState::default();
+        // Working directory should be set to current directory
+        assert!(!state.working_directory.is_empty());
+        // Should contain "." or an actual path
+        assert!(state.working_directory.contains(".") || state.working_directory.starts_with('/'));
+    }
+
+    #[test]
+    fn test_repl_state_fields() {
+        let mut state = ReplState::default();
+        assert_eq!(state.status, "Ready");
+        assert_eq!(state.model, Some("claude-3-5-sonnet".to_string()));
+        assert_eq!(state.tokens_used, 0);
+        assert!(!state.welcome_active);
+
+        // Modify fields
+        state.status = "Processing".to_string();
+        state.model = Some("gpt-4".to_string());
+        state.tokens_used = 1000;
+        state.working_directory = "/tmp/test".to_string();
+
+        assert_eq!(state.status, "Processing");
+        assert_eq!(state.model, Some("gpt-4".to_string()));
+        assert_eq!(state.tokens_used, 1000);
+        assert_eq!(state.working_directory, "/tmp/test");
+    }
+
+    #[test]
+    fn test_repl_state_clone() {
+        let state = ReplState::default();
+        let cloned = state.clone();
+        assert_eq!(cloned.status, state.status);
+        assert_eq!(cloned.model, state.model);
+        assert_eq!(cloned.tokens_used, state.tokens_used);
+        assert_eq!(cloned.working_directory, state.working_directory);
+        assert_eq!(cloned.welcome_active, state.welcome_active);
     }
 
     #[test]
