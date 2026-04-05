@@ -210,9 +210,10 @@ impl ChatWidget {
 
             let timestamp = msg.timestamp.format("%H:%M:%S").to_string();
 
-            // Format message
-            let formatted_content = if msg.content.len() > 80 {
-                format!("{}...", &msg.content[..77])
+            // Format message (use char-aware truncation for UTF-8 safety)
+            let formatted_content = if msg.content.chars().count() > 80 {
+                let truncated: String = msg.content.chars().take(77).collect();
+                format!("{}...", truncated)
             } else {
                 msg.content.clone()
             };
