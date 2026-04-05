@@ -58,7 +58,7 @@ impl Default for ReplState {
             status: "Ready".to_string(),
             model: Some("claude-3-5-sonnet".to_string()),
             tokens_used: 0,
-            welcome_active: true,
+            welcome_active: false,
             permission_dialog: None,
             permission_response_tx: None,
         }
@@ -137,7 +137,7 @@ impl Repl {
         });
 
         Ok(Self {
-            events: EventHandler::new(250)?,
+            events: EventHandler::new(50)?,
             renderer: Renderer::new(),
             chat: ChatWidget::new(1000),
             prompt: PromptWidget::new(),
@@ -168,6 +168,12 @@ impl Repl {
 
         self.running = true;
 
+        // Show welcome message directly in the main UI
+        self.chat.add_message(
+            ChatRole::System,
+            "Welcome to Shannon! Type your message and press Enter. Type /help for commands.".to_string(),
+        );
+
         // Main event loop
         while self.running {
             // Check for permission requests (non-blocking)
@@ -185,9 +191,7 @@ impl Repl {
             let state = self.state.clone();
 
             terminal.draw(|f| {
-                if state.welcome_active {
-                    crate::widgets::WelcomeWidget::render(f, f.area());
-                } else if let Some(ref dialog) = state.permission_dialog {
+                if let Some(ref dialog) = state.permission_dialog {
                     // Render permission dialog overlay
                     self.render_permission_dialog(f, f.area(), dialog);
                 } else {
@@ -249,35 +253,19 @@ impl Repl {
                 }
             }
             crossterm::event::KeyCode::Enter => {
-                if self.state.welcome_active {
-                    self.state.welcome_active = false;
-                    self.chat.add_message(
-                        ChatRole::System,
-                        "Welcome to Shannon! Type your message and press Enter.".to_string(),
-                    );
-                } else {
-                    self.submit_input()?;
-                }
+                self.submit_input()?;
             }
             crossterm::event::KeyCode::Char(c) => {
-                if !self.state.welcome_active {
-                    self.prompt.add_char(c);
-                }
+                self.prompt.add_char(c);
             }
             crossterm::event::KeyCode::Backspace => {
-                if !self.state.welcome_active {
-                    self.prompt.backspace();
-                }
+                self.prompt.backspace();
             }
             crossterm::event::KeyCode::Up => {
-                if !self.state.welcome_active {
-                    self.chat.scroll_up();
-                }
+                self.chat.scroll_up();
             }
             crossterm::event::KeyCode::Down => {
-                if !self.state.welcome_active {
-                    self.chat.scroll_down();
-                }
+                self.chat.scroll_down();
             }
             crossterm::event::KeyCode::Esc => {
                 self.prompt.clear();
@@ -669,7 +657,7 @@ mod tests {
         assert_eq!(state.status, "Ready");
         assert!(state.model.is_some());
         assert_eq!(state.tokens_used, 0);
-        assert!(state.welcome_active);
+        assert!(!state.welcome_active);
     }
 
     #[test]
@@ -677,7 +665,7 @@ mod tests {
         let repl = Repl::new();
         assert!(repl.is_ok());
         if let Ok(r) = repl {
-            assert!(r.state().welcome_active);
+            assert!(!r.state().welcome_active);
             assert!(r.query_engine.is_some());
         }
     }

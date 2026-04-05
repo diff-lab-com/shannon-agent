@@ -238,6 +238,8 @@ fn take_flag_value(chars: &mut std::iter::Peekable<std::str::Chars>) -> String {
 mod tests {
     use super::*;
 
+    // ── Basic parsing ──────────────────────────────────────────────
+
     #[test]
     fn test_parse_simple_command() {
         let parser = CommandParser::new();
@@ -273,18 +275,241 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_invalid() {
+    fn test_parse_invalid_no_slash() {
         let parser = CommandParser::new();
-        assert!(parser.parse("commit").is_err()); // No slash
-        assert!(parser.parse("/").is_err()); // Just slash
+        assert!(parser.parse("commit").is_err());
     }
 
     #[test]
-    fn test_is_command() {
+    fn test_parse_just_slash() {
         let parser = CommandParser::new();
-        assert!(parser.is_command("/commit"));
-        assert!(parser.is_command("/commit with args"));
-        assert!(!parser.is_command("commit"));
-        assert!(!parser.is_command(""));
+        assert!(parser.parse("/").is_err());
+    }
+
+    #[test]
+    fn test_parse_only_whitespace_after_slash() {
+        let parser = CommandParser::new();
+        assert!(parser.parse("/  ").is_err());
+    }
+
+    // ── Edge cases ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_hyphenated_command() {
+        let parser = CommandParser::new();
+        let result = parser.parse("/review-pr 123").unwrap();
+        assert_eq!(result.name, "review-pr");
+        assert_eq!(result.args_trimmed(), "123");
+    }
+
+    #[test]
+    fn test_parse_command_with_numbers_in_name() {
+        let parser = CommandParser::new();
+        let result = parser.parse("/issue123 fix").unwrap();
+        assert_eq!(result.name, "issue123");
+    }
+
+    #[test]
+    fn test_parse_unicode_args() {
+        let parser = CommandParser::new();
+        let result = parser.parse("/commit 修复中文bug").unwrap();
+        assert_eq!(result.name, "commit");
+        assert!(result.args.contains("修复中文bug"));
+    }
+
+    #[test]
+    fn test_parse_extra_spaces_in_args() {
+        let parser = CommandParser::new();
+        let result = parser.parse("/commit   fix   the   bug").unwrap();
+        assert_eq!(result.name, "commit");
+        // nom space1 consumes exactly one space, rest captures everything after
+        assert!(result.args.contains("fix"));
+    }
+
+    #[test]
+    fn test_parse_long_command_name() {
+        let long_name = "a".repeat(200);
+        let input = format!("/{long_name}");
+        let parser = CommandParser::new();
+        let result = parser.parse(&input).unwrap();
+        assert_eq!(result.name, long_name);
+    }
+
+    // ── Flags ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_flag_with_url_value() {
+        let parser = CommandParser::new();
+        let result = parser.parse("/set --url=https://example.com").unwrap();
+        assert_eq!(result.flag_value("url"), Some(&"https://example.com".to_string()));
+    }
+
+    #[test]
+    fn test_parse_flag_with_dot_value() {
+        let parser = CommandParser::new();
+        let result = parser.parse("/search --query=file.ts").unwrap();
+        assert_eq!(result.flag_value("query"), Some(&"file.ts".to_string()));
+    }
+
+    #[test]
+    fn test_parse_multiple_long_flags() {
+        let parser = CommandParser::new();
+        let result = parser
+            .parse("/run --model=gpt-4 --temp=0.7 --max-tokens=4096")
+            .unwrap();
+        assert_eq!(result.flag_value("model"), Some(&"gpt-4".to_string()));
+        assert_eq!(result.flag_value("temp"), Some(&"0.7".to_string()));
+        assert_eq!(result.flag_value("max-tokens"), Some(&"4096".to_string()));
+    }
+
+    #[test]
+    fn test_parse_flag_without_value() {
+        let parser = CommandParser::new();
+        let result = parser.parse("/commit --amend").unwrap();
+        assert!(result.has_flag("amend"));
+        assert_eq!(result.flag_value("amend"), None);
+    }
+
+    #[test]
+    fn test_parse_flag_dry_run() {
+        let parser = CommandParser::new();
+        let result = parser.parse("/test --dry-run").unwrap();
+        assert!(result.has_flag("dry-run"));
+        assert_eq!(result.flag_value("dry-run"), None);
+    }
+
+    #[test]
+    fn test_parse_no_flags() {
+        let parser = CommandParser::new();
+        let result = parser.parse("/commit fix bug").unwrap();
+        assert!(result.flags.is_empty());
+        assert!(!result.has_flag("anything"));
+    }
+
+    #[test]
+    fn test_parse_multiple_mixed_flags() {
+        let parser = CommandParser::new();
+        let result = parser.parse("/test --amend -v --verbose").unwrap();
+        assert!(result.has_flag("amend"));
+        assert!(result.has_flag("v"));
+        assert!(result.has_flag("verbose"));
+    }
+
+    #[test]
+    fn test_parse_short_flags_duplicate() {
+        let parser = CommandParser::new();
+        let result = parser.parse("/test -vva").unwrap();
+        assert!(result.has_flag("v"));
+        assert!(result.has_flag("a"));
+    }
+
+    // ── Custom prefix ───────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_custom_prefix_exclamation() {
+        let parser = CommandParser::with_prefix("!".to_string());
+        let result = parser.parse("!commit fix").unwrap();
+        assert_eq!(result.name, "commit");
+        // Default prefix should not work
+        assert!(parser.parse("/commit").is_err());
+    }
+
+    #[test]
+    fn test_parse_custom_prefix_double_dash() {
+        let parser = CommandParser::with_prefix("--".to_string());
+        let result = parser.parse("--commit").unwrap();
+        assert_eq!(result.name, "commit");
+    }
+
+    #[test]
+    fn test_parse_custom_prefix_only_fails() {
+        let parser = CommandParser::with_prefix("!".to_string());
+        assert!(parser.parse("!").is_err());
+    }
+
+    #[test]
+    fn test_parse_custom_prefix_wrong_prefix_fails() {
+        let parser = CommandParser::with_prefix("!".to_string());
+        assert!(parser.parse("/commit").is_err());
+    }
+
+    // ── ParsedCommand helpers ──────────────────────────────────────
+
+    #[test]
+    fn test_args_trimmed() {
+        let parser = CommandParser::new();
+        let result = parser.parse("/commit  fix the bug  ").unwrap();
+        assert_eq!(result.args_trimmed(), "fix the bug");
+    }
+
+    #[test]
+    fn test_args_split() {
+        let parser = CommandParser::new();
+        let result = parser.parse("/tool search --type file").unwrap();
+        let split = result.args_split();
+        assert_eq!(split, vec!["search", "--type", "file"]);
+    }
+
+    #[test]
+    fn test_raw_preserved() {
+        let parser = CommandParser::new();
+        let raw = "/commit --amend -v fix bug";
+        let result = parser.parse(raw).unwrap();
+        assert_eq!(result.raw, raw);
+    }
+
+    #[test]
+    fn test_parsed_command_new() {
+        let cmd = ParsedCommand::new(
+            "test".to_string(),
+            "arg1 arg2".to_string(),
+            "/test arg1 arg2".to_string(),
+        );
+        assert_eq!(cmd.name, "test");
+        assert_eq!(cmd.args, "arg1 arg2");
+        assert_eq!(cmd.raw, "/test arg1 arg2");
+        assert!(cmd.flags.is_empty());
+    }
+
+    // ── is_command ────────────────────────────────────────────────
+
+    #[test]
+    fn test_is_command_true() {
+        let parser = CommandParser::new();
+        assert!(parser.is_command("/help"));
+        }
+
+    #[test]
+    fn test_is_command_false() {
+        let parser = CommandParser::new();
+        assert!(!parser.is_command("help"));
+    }
+
+    #[test]
+    fn test_is_command_with_leading_space() {
+        let parser = CommandParser::new();
+        assert!(parser.is_command("  /help"));
+    }
+
+    // ── parse_multiple ────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_multiple_single_command() {
+        let parser = CommandParser::new();
+        let result = parser.parse_multiple("/help").unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "help");
+    }
+
+    #[test]
+    fn test_parse_multiple_empty_input() {
+        let parser = CommandParser::new();
+        assert!(parser.parse_multiple("").is_err());
+    }
+
+    #[test]
+    fn test_parse_multiple_non_command_input() {
+        let parser = CommandParser::new();
+        assert!(parser.parse_multiple("not a command").is_err());
     }
 }

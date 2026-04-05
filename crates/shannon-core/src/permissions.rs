@@ -781,4 +781,351 @@ mod tests {
         fn assert_send<T: Send>() {}
         assert_send::<PermissionMemory>();
     }
+
+    // ── ToolPermissionPolicy tests ────────────────────────────────
+
+    #[test]
+    fn test_policy_deny_pattern_matches() {
+        let policy = ToolPermissionPolicy::new(
+            "Bash".to_string(),
+            RiskLevel::Medium,
+            "Shell".to_string(),
+        )
+        .add_deny_pattern("rm -rf /");
+
+        assert!(policy.is_denied("rm -rf /"));
+        assert!(policy.is_denied("sudo rm -rf / --no-preserve-root"));
+        assert!(!policy.is_denied("ls -la"));
+    }
+
+    #[test]
+    fn test_policy_confirmation_pattern_matches() {
+        let policy = ToolPermissionPolicy::new(
+            "Bash".to_string(),
+            RiskLevel::Medium,
+            "Shell".to_string(),
+        )
+        .add_confirmation_pattern("rm -rf");
+
+        assert!(policy.requires_confirmation("rm -rf /home/user/dir"));
+        assert!(!policy.requires_confirmation("ls -la"));
+    }
+
+    #[test]
+    fn test_policy_risk_level_denied_input() {
+        let policy = ToolPermissionPolicy::new(
+            "Bash".to_string(),
+            RiskLevel::Medium,
+            "Shell".to_string(),
+        )
+        .add_deny_pattern("rm -rf /")
+        .add_confirmation_pattern("sudo");
+
+        // Denied input → Critical
+        assert_eq!(policy.risk_level_for("rm -rf /"), RiskLevel::Critical);
+        // Confirmation pattern → Medium
+        assert_eq!(policy.risk_level_for("sudo apt install"), RiskLevel::Medium);
+        // Normal input → default (Medium)
+        assert_eq!(policy.risk_level_for("ls -la"), RiskLevel::Medium);
+    }
+
+    #[test]
+    fn test_policy_default_risk_level_no_patterns() {
+        let policy = ToolPermissionPolicy::new(
+            "Read".to_string(),
+            RiskLevel::Safe,
+            "Read files".to_string(),
+        );
+        assert_eq!(policy.risk_level_for("anything"), RiskLevel::Safe);
+    }
+
+    #[test]
+    fn test_policy_builder_pattern_chaining() {
+        let policy = ToolPermissionPolicy::new("T".to_string(), RiskLevel::Low, "desc".to_string())
+            .add_confirmation_pattern("p1")
+            .add_confirmation_pattern("p2")
+            .add_deny_pattern("d1");
+
+        assert!(policy.requires_confirmation("p1"));
+        assert!(policy.requires_confirmation("p2"));
+        assert!(policy.is_denied("d1"));
+        assert!(!policy.is_denied("safe input"));
+    }
+
+    // ── PermissionMemory tests ─────────────────────────────────────
+
+    #[test]
+    fn test_memory_always_allow_persists() {
+        let mut mem = PermissionMemory::new();
+        let sid = Uuid::new_v4();
+        mem.remember_choice(sid, "Bash".to_string(), PermissionChoice::AlwaysAllow);
+        assert!(mem.is_always_allowed(sid, "Bash"));
+    }
+
+    #[test]
+    fn test_memory_deny_persists() {
+        let mut mem = PermissionMemory::new();
+        let sid = Uuid::new_v4();
+        mem.remember_choice(sid, "Bash".to_string(), PermissionChoice::Deny);
+        assert!(mem.is_always_denied("Bash"));
+    }
+
+    #[test]
+    fn test_memory_allow_once_not_remembered() {
+        let mut mem = PermissionMemory::new();
+        let sid = Uuid::new_v4();
+        mem.remember_choice(sid, "Bash".to_string(), PermissionChoice::AllowOnce);
+        assert!(!mem.is_always_allowed(sid, "Bash"));
+        assert!(!mem.is_always_denied("Bash"));
+    }
+
+    #[test]
+    fn test_memory_clear_session() {
+        let mut mem = PermissionMemory::new();
+        let sid = Uuid::new_v4();
+        mem.remember_choice(sid, "Bash".to_string(), PermissionChoice::AlwaysAllow);
+        assert!(mem.is_always_allowed(sid, "Bash"));
+        mem.clear_session(sid);
+        // always_allowed is global, not session-scoped, so still true
+        assert!(mem.is_always_allowed(sid, "Bash"));
+    }
+
+    #[test]
+    fn test_memory_default_is_empty() {
+        let mem = PermissionMemory::new();
+        let sid = Uuid::new_v4();
+        assert!(!mem.is_always_allowed(sid, "Bash"));
+        assert!(!mem.is_always_denied("Bash"));
+    }
+
+    // ── PermissionManager: prompt creation & choice processing ──────
+
+    #[test]
+    fn test_create_prompt_for_known_tool() {
+        let mgr = PermissionManager::new();
+        let sid = Uuid::new_v4();
+        let prompt = mgr.create_permission_prompt(
+            "Bash",
+            &serde_json::json!({"command": "ls -la"}),
+            sid,
+        );
+        assert!(prompt.is_some());
+        let p = prompt.unwrap();
+        assert_eq!(p.tool_name, "Bash");
+        assert_eq!(p.risk_level, RiskLevel::Medium);
+        assert!(!p.is_confirmation);
+    }
+
+    #[test]
+    fn test_create_prompt_for_unknown_tool() {
+        let mgr = PermissionManager::new();
+        let sid = Uuid::new_v4();
+        let prompt = mgr.create_permission_prompt(
+            "UnknownTool",
+            &serde_json::json!({"arg": "val"}),
+            sid,
+        );
+        assert!(prompt.is_some());
+        let p = prompt.unwrap();
+        assert_eq!(p.tool_name, "UnknownTool");
+        assert_eq!(p.risk_level, RiskLevel::Medium);
+    }
+
+    #[test]
+    fn test_create_prompt_dangerous_input_elevated_risk() {
+        let mgr = PermissionManager::new();
+        let sid = Uuid::new_v4();
+        let prompt = mgr.create_permission_prompt(
+            "Bash",
+            &serde_json::json!({"command": "rm -rf /"}),
+            sid,
+        );
+        let p = prompt.unwrap();
+        assert_eq!(p.risk_level, RiskLevel::Critical);
+    }
+
+    #[test]
+    fn test_process_choice_deny_returns_error() {
+        let mut mgr = PermissionManager::new();
+        let sid = Uuid::new_v4();
+        let prompt = PermissionPrompt::new(
+            "Bash".to_string(),
+            serde_json::json!({"command": "ls"}),
+            RiskLevel::Medium,
+            "Run ls".to_string(),
+        );
+        let result = mgr.process_permission_choice(sid, &prompt, PermissionChoice::Deny);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_process_choice_allow_once_succeeds() {
+        let mut mgr = PermissionManager::new();
+        let sid = Uuid::new_v4();
+        let prompt = PermissionPrompt::new(
+            "Bash".to_string(),
+            serde_json::json!({"command": "ls"}),
+            RiskLevel::Medium,
+            "Run ls".to_string(),
+        );
+        assert!(mgr.process_permission_choice(sid, &prompt, PermissionChoice::AllowOnce).is_ok());
+        // AllowOnce does NOT make it always allowed
+        let next_prompt = mgr.create_permission_prompt(
+            "Bash",
+            &serde_json::json!({"command": "ls"}),
+            sid,
+        );
+        assert!(next_prompt.is_some());
+    }
+
+    #[test]
+    fn test_process_choice_always_allow_skips_future_prompts() {
+        let mut mgr = PermissionManager::new();
+        let sid = Uuid::new_v4();
+        let prompt = PermissionPrompt::new(
+            "Bash".to_string(),
+            serde_json::json!({"command": "ls"}),
+            RiskLevel::Medium,
+            "Run ls".to_string(),
+        );
+        assert!(mgr.process_permission_choice(sid, &prompt, PermissionChoice::AlwaysAllow).is_ok());
+        let next_prompt = mgr.create_permission_prompt(
+            "Bash",
+            &serde_json::json!({"command": "ls"}),
+            sid,
+        );
+        assert!(next_prompt.is_none());
+    }
+
+    // ── PermissionPrompt helpers ────────────────────────────────────
+
+    #[test]
+    fn test_prompt_confirmation_factory() {
+        let p = PermissionPrompt::confirmation("Bash".to_string(), "Confirm?".to_string());
+        assert!(p.is_confirmation);
+        assert_eq!(p.risk_level, RiskLevel::Safe);
+        assert_eq!(p.tool_input, serde_json::json!({}));
+    }
+
+    #[test]
+    fn test_prompt_display_text_high_risk() {
+        let p = PermissionPrompt::new(
+            "Bash".to_string(),
+            serde_json::json!({"cmd": "ls"}),
+            RiskLevel::High,
+            "Run ls".to_string(),
+        );
+        let text = p.display_text();
+        assert!(text.contains("🔥"));
+        assert!(text.contains("Bash"));
+        assert!(text.contains("Run ls"));
+    }
+
+    #[test]
+    fn test_prompt_display_text_safe() {
+        let p = PermissionPrompt::new(
+            "Read".to_string(),
+            serde_json::json!({"path": "/tmp"}),
+            RiskLevel::Safe,
+            "Read file".to_string(),
+        );
+        let text = p.display_text();
+        assert!(text.contains("✓"));
+    }
+
+    // ── Default policies verification ───────────────────────────────
+
+    #[test]
+    fn test_default_bash_policy_registered() {
+        let mgr = PermissionManager::new();
+        let sid = Uuid::new_v4();
+        let prompt = mgr.create_permission_prompt(
+            "Bash",
+            &serde_json::json!({"command": "ls"}),
+            sid,
+        ).unwrap();
+        assert_eq!(prompt.risk_level, RiskLevel::Medium);
+    }
+
+    #[test]
+    fn test_default_write_policy_denies_etc() {
+        let mgr = PermissionManager::new();
+        let sid = Uuid::new_v4();
+        let prompt = mgr.create_permission_prompt(
+            "FileWrite",
+            &serde_json::json!({"path": "/etc/passwd"}),
+            sid,
+        ).unwrap();
+        assert_eq!(prompt.risk_level, RiskLevel::Critical);
+    }
+
+    #[test]
+    fn test_default_read_policy_is_safe() {
+        let mgr = PermissionManager::new();
+        let sid = Uuid::new_v4();
+        let prompt = mgr.create_permission_prompt(
+            "Read",
+            &serde_json::json!({"path": "/home/user/file.rs"}),
+            sid,
+        ).unwrap();
+        assert_eq!(prompt.risk_level, RiskLevel::Safe);
+    }
+
+    // ── Session lifecycle ───────────────────────────────────────────
+
+    #[test]
+    fn test_clear_session_removes_permissions() {
+        let mut mgr = PermissionManager::new();
+        let sid = Uuid::new_v4();
+        let perm = Permission::new("file", "write", PermissionLevel::Write);
+        mgr.grant_permission(sid, perm.clone());
+        assert!(mgr.check_permission(sid, &perm).is_ok());
+        mgr.clear_session(sid);
+        assert!(mgr.check_permission(sid, &perm).is_err());
+    }
+
+    #[test]
+    fn test_clear_session_keeps_default_permissions() {
+        let mut mgr = PermissionManager::new();
+        let perm = Permission::new("file", "read", PermissionLevel::Read);
+        mgr.add_default_permission(perm.clone());
+        let sid = Uuid::new_v4();
+        mgr.clear_session(sid);
+        assert!(mgr.check_permission(sid, &perm).is_ok());
+    }
+
+    #[test]
+    fn test_session_permissions_merge_with_defaults() {
+        let mut mgr = PermissionManager::new();
+        let default_perm = Permission::new("file", "read", PermissionLevel::Read);
+        mgr.add_default_permission(default_perm.clone());
+
+        let sid = Uuid::new_v4();
+        let session_perm = Permission::new("file", "write", PermissionLevel::Write);
+        mgr.grant_permission(sid, session_perm.clone());
+
+        let all = mgr.get_session_permissions(sid);
+        assert!(all.contains(&default_perm));
+        assert!(all.contains(&session_perm));
+    }
+
+    #[test]
+    fn test_register_custom_tool_policy() {
+        let mut mgr = PermissionManager::new();
+        let policy = ToolPermissionPolicy::new(
+            "CustomTool".to_string(),
+            RiskLevel::High,
+            "Custom dangerous tool".to_string(),
+        )
+        .add_deny_pattern("nuclear");
+        mgr.register_tool_policy(policy);
+
+        let sid = Uuid::new_v4();
+        let prompt = mgr.create_permission_prompt(
+            "CustomTool",
+            &serde_json::json!({"action": "nuclear launch"}),
+            sid,
+        ).unwrap();
+        assert_eq!(prompt.risk_level, RiskLevel::Critical);
+    }
 }

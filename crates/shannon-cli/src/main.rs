@@ -106,3 +106,207 @@ fn main() -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── parse_cli_env tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_parse_single_env() {
+        let input = vec!["KEY=value".to_string()];
+        let result = parse_cli_env(&input).unwrap();
+        assert_eq!(result, vec![("KEY".to_string(), "value".to_string())]);
+    }
+
+    #[test]
+    fn test_parse_multiple_env() {
+        let input = vec![
+            "FOO=bar".to_string(),
+            "BAZ=qux".to_string(),
+            "PATH=/usr/bin".to_string(),
+        ];
+        let result = parse_cli_env(&input).unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], ("FOO".to_string(), "bar".to_string()));
+        assert_eq!(result[1], ("BAZ".to_string(), "qux".to_string()));
+        assert_eq!(result[2], ("PATH".to_string(), "/usr/bin".to_string()));
+    }
+
+    #[test]
+    fn test_parse_env_empty_value() {
+        let input = vec!["EMPTY=".to_string()];
+        let result = parse_cli_env(&input).unwrap();
+        assert_eq!(result, vec![("EMPTY".to_string(), "".to_string())]);
+    }
+
+    #[test]
+    fn test_parse_env_value_with_equals() {
+        // KEY=a=b should parse as key="KEY", value="a=b"
+        let input = vec!["EQUATION=a=b".to_string()];
+        let result = parse_cli_env(&input).unwrap();
+        assert_eq!(result[0], ("EQUATION".to_string(), "a=b".to_string()));
+    }
+
+    #[test]
+    fn test_parse_env_whitespace_trimmed() {
+        let input = vec!["  KEY  =  value  ".to_string()];
+        let result = parse_cli_env(&input).unwrap();
+        assert_eq!(result[0], ("KEY".to_string(), "value".to_string()));
+    }
+
+    #[test]
+    fn test_parse_env_empty_input() {
+        let input: Vec<String> = vec![];
+        let result = parse_cli_env(&input).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_env_missing_equals() {
+        let input = vec!["NOEQUALSSIGN".to_string()];
+        let result = parse_cli_env(&input);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("missing '='"));
+    }
+
+    #[test]
+    fn test_parse_env_empty_key() {
+        let input = vec!["=value".to_string()];
+        let result = parse_cli_env(&input);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("empty key"));
+    }
+
+    #[test]
+    fn test_parse_env_special_chars_in_value() {
+        let input = vec!["URL=https://example.com/path?q=1&b=2".to_string()];
+        let result = parse_cli_env(&input).unwrap();
+        assert_eq!(
+            result[0],
+            ("URL".to_string(), "https://example.com/path?q=1&b=2".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_env_model_override() {
+        let input = vec!["SHANNON_MODEL=gpt-4o".to_string()];
+        let result = parse_cli_env(&input).unwrap();
+        assert_eq!(result[0], ("SHANNON_MODEL".to_string(), "gpt-4o".to_string()));
+    }
+
+    #[test]
+    fn test_parse_env_multiple_first_error() {
+        let input = vec!["VALID=ok".to_string(), "BADOVERRIDE".to_string()];
+        let result = parse_cli_env(&input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_env_underscore_key() {
+        let input = vec!["MY_VAR_123=hello".to_string()];
+        let result = parse_cli_env(&input).unwrap();
+        assert_eq!(result[0], ("MY_VAR_123".to_string(), "hello".to_string()));
+    }
+
+    // ── CLI clap parsing tests ────────────────────────────────────────
+
+    #[test]
+    fn test_cli_parse_repl_no_args() {
+        let cli = Cli::try_parse_from(["shannon", "repl"]).unwrap();
+        match cli.command {
+            Commands::Repl { file, env } => {
+                assert!(file.is_none());
+                assert!(env.is_empty());
+            }
+            _ => panic!("Expected Repl command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_repl_with_file() {
+        let cli = Cli::try_parse_from(["shannon", "repl", "--file", "project.json"]).unwrap();
+        match cli.command {
+            Commands::Repl { file, .. } => {
+                assert_eq!(file.as_deref(), Some("project.json"));
+            }
+            _ => panic!("Expected Repl command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_repl_with_env() {
+        let cli = Cli::try_parse_from([
+            "shannon",
+            "repl",
+            "-e",
+            "MODEL=gpt-4o",
+            "-e",
+            "TOKENS=4096",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Repl { env, .. } => {
+                assert_eq!(env.len(), 2);
+                assert_eq!(env[0], "MODEL=gpt-4o");
+                assert_eq!(env[1], "TOKENS=4096");
+            }
+            _ => panic!("Expected Repl command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_version() {
+        let cli = Cli::try_parse_from(["shannon", "version"]).unwrap();
+        match cli.command {
+            Commands::Version { verbose } => {
+                assert!(!verbose);
+            }
+            _ => panic!("Expected Version command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_version_verbose() {
+        let cli = Cli::try_parse_from(["shannon", "version", "--verbose"]).unwrap();
+        match cli.command {
+            Commands::Version { verbose } => {
+                assert!(verbose);
+            }
+            _ => panic!("Expected Version command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_config_with_setting() {
+        let cli = Cli::try_parse_from(["shannon", "config", "-s", "model"]).unwrap();
+        match cli.command {
+            Commands::Config { setting } => {
+                assert_eq!(setting.as_deref(), Some("model"));
+            }
+            _ => panic!("Expected Config command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_config_no_setting() {
+        let cli = Cli::try_parse_from(["shannon", "config"]).unwrap();
+        match cli.command {
+            Commands::Config { setting } => {
+                assert!(setting.is_none());
+            }
+            _ => panic!("Expected Config command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_no_subcommand_fails() {
+        assert!(Cli::try_parse_from(["shannon"]).is_err());
+    }
+
+    #[test]
+    fn test_cli_parse_unknown_subcommand_fails() {
+        assert!(Cli::try_parse_from(["shannon", "unknown"]).is_err());
+    }
+}
