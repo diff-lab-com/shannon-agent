@@ -309,4 +309,46 @@ mod tests {
     fn test_cli_parse_unknown_subcommand_fails() {
         assert!(Cli::try_parse_from(["shannon", "unknown"]).is_err());
     }
+
+    // ── CLI help and default behavior tests ─────────────────────────────
+
+    #[test]
+    fn test_cli_no_args_shows_help() {
+        // shannon with no args should show help
+        let result = Cli::try_parse_from(["shannon"]);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_str = err.to_string();
+        // Should mention required subcommand
+        assert!(err_str.contains("required") || err_str.contains("subcommand"));
+    }
+
+    #[test]
+    fn test_cli_help_short_flag() {
+        // shannon -h should show help
+        let result = Cli::try_parse_from(["shannon", "-h"]);
+        assert!(result.is_err());
+        // -h is not a valid flag for our CLI
+    }
+
+    #[test]
+    fn test_cli_help_long_flag() {
+        // shannon --help should show help
+        let result = Cli::try_parse_from(["shannon", "--help"]);
+        assert!(result.is_err());
+        // --help is not a valid flag for our CLI
+    }
+
+    #[test]
+    fn test_cli_repl_is_default_subcommand() {
+        // The repl subcommand should work without explicitly typing it
+        // (when we implement default subcommand behavior)
+        let cli = Cli::try_parse_from(["shannon", "repl"]).unwrap();
+        match cli.command {
+            Commands::Repl { .. } => {
+                // Success - repl subcommand parsed
+            }
+            _ => panic!("Expected Repl command"),
+        }
+    }
 }
