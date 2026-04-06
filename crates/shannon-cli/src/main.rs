@@ -22,10 +22,22 @@ use uuid::Uuid;
 #[command(version = "0.1.0")]
 #[command(about = "AI-powered code assistant in Rust", long_about = None)]
 #[command(propagate_version = true)]
-#[command(arg_required_else_help = true)]
 struct Cli {
+    /// Execute a prompt directly (non-interactive mode).
+    /// Example: shannon "你用的什么模型"
+    #[arg(index = 1)]
+    prompt: Option<String>,
+
+    /// LLM model to use (e.g., claude-sonnet-4, gpt-4o)
+    #[arg(short, long)]
+    model: Option<String>,
+
+    /// LLM provider (anthropic, openai, ollama, custom)
+    #[arg(short, long)]
+    provider: Option<String>,
+
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 /// Shannon CLI commands
@@ -218,8 +230,25 @@ fn run_noninteractive_query(query: &str, stream: bool) -> Result<()> {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Case 1: bare prompt → non-interactive query (like Claude Code)
+    if let Some(prompt) = cli.prompt {
+        if let Some(m) = cli.model {
+            unsafe { std::env::set_var("SHANNON_MODEL", m) };
+        }
+        if let Some(p) = cli.provider {
+            unsafe { std::env::set_var("SHANNON_PROVIDER", p) };
+        }
+        return run_noninteractive_query(&prompt, true);
+    }
+
+    // Case 2: subcommand or default
     match cli.command {
-        Commands::Repl {
+        // No subcommand and no prompt → launch REPL
+        None => {
+            let mut repl = Repl::new().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            repl.run().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        }
+        Some(Commands::Repl {
             file: _,
             env,
             model,
@@ -229,7 +258,7 @@ fn main() -> Result<()> {
             timeout,
             debug,
             cwd,
-        } => {
+        }) => {
             // Handle working directory change first
             if let Some(dir) = cwd {
                 std::env::set_current_dir(&dir)
@@ -274,28 +303,28 @@ fn main() -> Result<()> {
             let mut repl = Repl::new().map_err(|e| anyhow::anyhow!("{e:?}"))?;
             repl.run().map_err(|e| anyhow::anyhow!("{e:?}"))?;
         }
-        Commands::Version { verbose } => {
+        Some(Commands::Version { verbose }) => {
             println!("Shannon Code v0.1.0");
             if verbose {
                 println!("Rust {}", env!("CARGO_PKG_RUST_VERSION"));
                 println!("Features: mcp, multi-agent, tools");
             }
         }
-        Commands::Config { setting } => {
+        Some(Commands::Config { setting }) => {
             if let Some(key) = setting {
                 println!("Config: {key}");
             } else {
                 println!("Show all config");
             }
         }
-        Commands::Query {
+        Some(Commands::Query {
             query,
             model,
             provider,
             max_tokens,
             output: _output_format,
             no_stream,
-        } => {
+        }) => {
             // Apply model/provider overrides while still single-threaded
             if let Some(m) = model {
                 unsafe { std::env::set_var("SHANNON_MODEL", m) };
@@ -309,7 +338,7 @@ fn main() -> Result<()> {
 
             run_noninteractive_query(&query, !no_stream)?;
         }
-    }
+    } // end match cli.command
 
     Ok(())
 }
@@ -423,7 +452,7 @@ mod tests {
     fn test_cli_parse_repl_no_args() {
         let cli = Cli::try_parse_from(["shannon", "repl"]).unwrap();
         match cli.command {
-            Commands::Repl { file, env, model: _, provider: _, max_tokens: _, temperature: _, timeout: _, debug: _, cwd: _ } => {
+            Some(Commands::Repl { file, env, model: _, provider: _, max_tokens: _, temperature: _, timeout: _, debug: _, cwd: _ }) => {
                 assert!(file.is_none());
                 assert!(env.is_empty());
             }
@@ -435,7 +464,7 @@ mod tests {
     fn test_cli_parse_repl_with_file() {
         let cli = Cli::try_parse_from(["shannon", "repl", "--file", "project.json"]).unwrap();
         match cli.command {
-            Commands::Repl { file, env: _, model: _, provider: _, max_tokens: _, temperature: _, timeout: _, debug: _, cwd: _ } => {
+            Some(Commands::Repl { file, env: _, model: _, provider: _, max_tokens: _, temperature: _, timeout: _, debug: _, cwd: _ }) => {
                 assert_eq!(file.as_deref(), Some("project.json"));
             }
             _ => panic!("Expected Repl command"),
@@ -454,7 +483,7 @@ mod tests {
         ])
         .unwrap();
         match cli.command {
-            Commands::Repl { env, file: _, model: _, provider: _, max_tokens: _, temperature: _, timeout: _, debug: _, cwd: _ } => {
+            Some(Commands::Repl { env, file: _, model: _, provider: _, max_tokens: _, temperature: _, timeout: _, debug: _, cwd: _ }) => {
                 assert_eq!(env.len(), 2);
                 assert_eq!(env[0], "MODEL=gpt-4o");
                 assert_eq!(env[1], "TOKENS=4096");
@@ -467,7 +496,7 @@ mod tests {
     fn test_cli_parse_version() {
         let cli = Cli::try_parse_from(["shannon", "version"]).unwrap();
         match cli.command {
-            Commands::Version { verbose } => {
+            Some(Commands::Version { verbose }) => {
                 assert!(!verbose);
             }
             _ => panic!("Expected Version command"),
@@ -478,7 +507,7 @@ mod tests {
     fn test_cli_parse_version_verbose() {
         let cli = Cli::try_parse_from(["shannon", "version", "--verbose"]).unwrap();
         match cli.command {
-            Commands::Version { verbose } => {
+            Some(Commands::Version { verbose }) => {
                 assert!(verbose);
             }
             _ => panic!("Expected Version command"),
@@ -489,7 +518,7 @@ mod tests {
     fn test_cli_parse_config_with_setting() {
         let cli = Cli::try_parse_from(["shannon", "config", "-s", "model"]).unwrap();
         match cli.command {
-            Commands::Config { setting } => {
+            Some(Commands::Config { setting }) => {
                 assert_eq!(setting.as_deref(), Some("model"));
             }
             _ => panic!("Expected Config command"),
@@ -500,7 +529,7 @@ mod tests {
     fn test_cli_parse_config_no_setting() {
         let cli = Cli::try_parse_from(["shannon", "config"]).unwrap();
         match cli.command {
-            Commands::Config { setting } => {
+            Some(Commands::Config { setting }) => {
                 assert!(setting.is_none());
             }
             _ => panic!("Expected Config command"),
@@ -508,26 +537,30 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_parse_no_subcommand_fails() {
-        assert!(Cli::try_parse_from(["shannon"]).is_err());
+    fn test_cli_parse_no_subcommand_succeeds() {
+        let cli = Cli::try_parse_from(["shannon"]).unwrap();
+        assert!(cli.prompt.is_none());
+        assert!(cli.command.is_none());
     }
 
     #[test]
-    fn test_cli_parse_unknown_subcommand_fails() {
-        assert!(Cli::try_parse_from(["shannon", "unknown"]).is_err());
+    fn test_cli_unknown_word_parses_as_prompt() {
+        // "unknown" is no longer a subcommand error — it's treated as a bare prompt
+        let cli = Cli::try_parse_from(["shannon", "unknown"]).unwrap();
+        assert_eq!(cli.prompt.as_deref(), Some("unknown"));
+        assert!(cli.command.is_none());
     }
 
     // ── CLI help and default behavior tests ─────────────────────────────
 
     #[test]
-    fn test_cli_no_args_shows_help() {
-        // shannon with no args should show help
-        let result = Cli::try_parse_from(["shannon"]);
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        let err_str = err.to_string();
-        // Should mention required subcommand
-        assert!(err_str.contains("required") || err_str.contains("subcommand"));
+    fn test_cli_no_args_parses_as_default() {
+        // shannon with no args now parses successfully (prompt=None, command=None → launch REPL)
+        let cli = Cli::try_parse_from(["shannon"]).unwrap();
+        assert!(cli.prompt.is_none());
+        assert!(cli.command.is_none());
+        assert!(cli.model.is_none());
+        assert!(cli.provider.is_none());
     }
 
     #[test]
@@ -546,13 +579,63 @@ mod tests {
         // --help is not a valid flag for our CLI
     }
 
+    // ── Bare prompt (non-interactive) tests ──────────────────────────────
+
+    #[test]
+    fn test_cli_bare_prompt_basic() {
+        let cli = Cli::try_parse_from(["shannon", "hello world"]).unwrap();
+        assert_eq!(cli.prompt.as_deref(), Some("hello world"));
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn test_cli_bare_prompt_chinese() {
+        let cli = Cli::try_parse_from(["shannon", "你用的什么模型"]).unwrap();
+        assert_eq!(cli.prompt.as_deref(), Some("你用的什么模型"));
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn test_cli_bare_prompt_with_model() {
+        let cli = Cli::try_parse_from(["shannon", "--model", "gpt-4o", "explain this"]).unwrap();
+        assert_eq!(cli.prompt.as_deref(), Some("explain this"));
+        assert_eq!(cli.model.as_deref(), Some("gpt-4o"));
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn test_cli_bare_prompt_with_provider() {
+        let cli = Cli::try_parse_from(["shannon", "-p", "anthropic", "test query"]).unwrap();
+        assert_eq!(cli.prompt.as_deref(), Some("test query"));
+        assert_eq!(cli.provider.as_deref(), Some("anthropic"));
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn test_cli_bare_prompt_with_model_and_provider() {
+        let cli = Cli::try_parse_from(["shannon", "-m", "gpt-4o", "-p", "openai", "你好"]).unwrap();
+        assert_eq!(cli.prompt.as_deref(), Some("你好"));
+        assert_eq!(cli.model.as_deref(), Some("gpt-4o"));
+        assert_eq!(cli.provider.as_deref(), Some("openai"));
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn test_cli_subcommand_takes_precedence_over_prompt() {
+        // When a subcommand is given, it should be parsed as a subcommand not a prompt
+        let cli = Cli::try_parse_from(["shannon", "repl"]).unwrap();
+        // "repl" matches a subcommand, so command is Some and prompt is None
+        assert!(cli.prompt.is_none());
+        assert!(cli.command.is_some());
+    }
+
     #[test]
     fn test_cli_repl_is_default_subcommand() {
         // The repl subcommand should work without explicitly typing it
         // (when we implement default subcommand behavior)
         let cli = Cli::try_parse_from(["shannon", "repl"]).unwrap();
         match cli.command {
-            Commands::Repl { .. } => {
+            Some(Commands::Repl { .. }) => {
                 // Success - repl subcommand parsed
             }
             _ => panic!("Expected Repl command"),
@@ -565,7 +648,7 @@ mod tests {
     fn test_cli_parse_repl_with_model_short() {
         let cli = Cli::try_parse_from(["shannon", "repl", "-m", "gpt-4o"]).unwrap();
         match cli.command {
-            Commands::Repl { model, .. } => {
+            Some(Commands::Repl { model, .. }) => {
                 assert_eq!(model.as_deref(), Some("gpt-4o"));
             }
             _ => panic!("Expected Repl command"),
@@ -576,7 +659,7 @@ mod tests {
     fn test_cli_parse_repl_with_model_long() {
         let cli = Cli::try_parse_from(["shannon", "repl", "--model", "claude-sonnet-4"]).unwrap();
         match cli.command {
-            Commands::Repl { model, .. } => {
+            Some(Commands::Repl { model, .. }) => {
                 assert_eq!(model.as_deref(), Some("claude-sonnet-4"));
             }
             _ => panic!("Expected Repl command"),
@@ -587,7 +670,7 @@ mod tests {
     fn test_cli_parse_repl_with_provider_short() {
         let cli = Cli::try_parse_from(["shannon", "repl", "-p", "anthropic"]).unwrap();
         match cli.command {
-            Commands::Repl { provider, .. } => {
+            Some(Commands::Repl { provider, .. }) => {
                 assert_eq!(provider.as_deref(), Some("anthropic"));
             }
             _ => panic!("Expected Repl command"),
@@ -598,7 +681,7 @@ mod tests {
     fn test_cli_parse_repl_with_provider_long() {
         let cli = Cli::try_parse_from(["shannon", "repl", "--provider", "openai"]).unwrap();
         match cli.command {
-            Commands::Repl { provider, .. } => {
+            Some(Commands::Repl { provider, .. }) => {
                 assert_eq!(provider.as_deref(), Some("openai"));
             }
             _ => panic!("Expected Repl command"),
@@ -609,7 +692,7 @@ mod tests {
     fn test_cli_parse_repl_with_max_tokens() {
         let cli = Cli::try_parse_from(["shannon", "repl", "--max-tokens", "4096"]).unwrap();
         match cli.command {
-            Commands::Repl { max_tokens, .. } => {
+            Some(Commands::Repl { max_tokens, .. }) => {
                 assert_eq!(max_tokens, Some(4096));
             }
             _ => panic!("Expected Repl command"),
@@ -620,7 +703,7 @@ mod tests {
     fn test_cli_parse_repl_with_temperature() {
         let cli = Cli::try_parse_from(["shannon", "repl", "--temperature", "0.5"]).unwrap();
         match cli.command {
-            Commands::Repl { temperature, .. } => {
+            Some(Commands::Repl { temperature, .. }) => {
                 assert_eq!(temperature, Some(0.5));
             }
             _ => panic!("Expected Repl command"),
@@ -631,7 +714,7 @@ mod tests {
     fn test_cli_parse_repl_with_timeout() {
         let cli = Cli::try_parse_from(["shannon", "repl", "--timeout", "300"]).unwrap();
         match cli.command {
-            Commands::Repl { timeout, .. } => {
+            Some(Commands::Repl { timeout, .. }) => {
                 assert_eq!(timeout, Some(300));
             }
             _ => panic!("Expected Repl command"),
@@ -642,7 +725,7 @@ mod tests {
     fn test_cli_parse_repl_with_debug_short() {
         let cli = Cli::try_parse_from(["shannon", "repl", "-d"]).unwrap();
         match cli.command {
-            Commands::Repl { debug, .. } => {
+            Some(Commands::Repl { debug, .. }) => {
                 assert!(debug);
             }
             _ => panic!("Expected Repl command"),
@@ -653,7 +736,7 @@ mod tests {
     fn test_cli_parse_repl_with_debug_long() {
         let cli = Cli::try_parse_from(["shannon", "repl", "--debug"]).unwrap();
         match cli.command {
-            Commands::Repl { debug, .. } => {
+            Some(Commands::Repl { debug, .. }) => {
                 assert!(debug);
             }
             _ => panic!("Expected Repl command"),
@@ -664,7 +747,7 @@ mod tests {
     fn test_cli_parse_repl_with_cwd() {
         let cli = Cli::try_parse_from(["shannon", "repl", "--cwd", "/tmp/project"]).unwrap();
         match cli.command {
-            Commands::Repl { cwd, .. } => {
+            Some(Commands::Repl { cwd, .. }) => {
                 assert_eq!(cwd.as_deref(), Some("/tmp/project"));
             }
             _ => panic!("Expected Repl command"),
@@ -694,7 +777,7 @@ mod tests {
         ])
         .unwrap();
         match cli.command {
-            Commands::Repl {
+            Some(Commands::Repl {
                 model,
                 provider,
                 max_tokens,
@@ -704,7 +787,7 @@ mod tests {
                 cwd,
                 env,
                 ..
-            } => {
+            }) => {
                 assert_eq!(model.as_deref(), Some("claude-3-5-sonnet-20241022"));
                 assert_eq!(provider.as_deref(), Some("anthropic"));
                 assert_eq!(max_tokens, Some(16384));
@@ -723,7 +806,7 @@ mod tests {
     fn test_cli_parse_repl_defaults() {
         let cli = Cli::try_parse_from(["shannon", "repl"]).unwrap();
         match cli.command {
-            Commands::Repl {
+            Some(Commands::Repl {
                 model,
                 provider,
                 max_tokens,
@@ -733,7 +816,7 @@ mod tests {
                 cwd,
                 env,
                 file,
-            } => {
+            }) => {
                 assert!(model.is_none());
                 assert!(provider.is_none());
                 assert!(max_tokens.is_none());
@@ -754,7 +837,7 @@ mod tests {
     fn test_cli_parse_query_basic() {
         let cli = Cli::try_parse_from(["shannon", "query", "hello world"]).unwrap();
         match cli.command {
-            Commands::Query { query, .. } => {
+            Some(Commands::Query { query, .. }) => {
                 assert_eq!(query, "hello world");
             }
             _ => panic!("Expected Query command"),
@@ -765,7 +848,7 @@ mod tests {
     fn test_cli_parse_query_with_model() {
         let cli = Cli::try_parse_from(["shannon", "query", "-m", "gpt-4o", "test"]).unwrap();
         match cli.command {
-            Commands::Query { query, model, .. } => {
+            Some(Commands::Query { query, model, .. }) => {
                 assert_eq!(query, "test");
                 assert_eq!(model.as_deref(), Some("gpt-4o"));
             }
@@ -777,7 +860,7 @@ mod tests {
     fn test_cli_parse_query_with_provider() {
         let cli = Cli::try_parse_from(["shannon", "query", "-p", "anthropic", "test"]).unwrap();
         match cli.command {
-            Commands::Query { query, provider, .. } => {
+            Some(Commands::Query { query, provider, .. }) => {
                 assert_eq!(query, "test");
                 assert_eq!(provider.as_deref(), Some("anthropic"));
             }
@@ -789,7 +872,7 @@ mod tests {
     fn test_cli_parse_query_with_max_tokens() {
         let cli = Cli::try_parse_from(["shannon", "query", "--max-tokens", "8192", "test"]).unwrap();
         match cli.command {
-            Commands::Query { query, max_tokens, .. } => {
+            Some(Commands::Query { query, max_tokens, .. }) => {
                 assert_eq!(query, "test");
                 assert_eq!(max_tokens, Some(8192));
             }
@@ -801,7 +884,7 @@ mod tests {
     fn test_cli_parse_query_with_no_stream() {
         let cli = Cli::try_parse_from(["shannon", "query", "--no-stream", "test"]).unwrap();
         match cli.command {
-            Commands::Query { query, no_stream, .. } => {
+            Some(Commands::Query { query, no_stream, .. }) => {
                 assert_eq!(query, "test");
                 assert!(no_stream);
             }
@@ -813,7 +896,7 @@ mod tests {
     fn test_cli_parse_query_output_format() {
         let cli = Cli::try_parse_from(["shannon", "query", "--output", "json", "test"]).unwrap();
         match cli.command {
-            Commands::Query { query, output, .. } => {
+            Some(Commands::Query { query, output, .. }) => {
                 assert_eq!(query, "test");
                 assert_eq!(output, "json");
             }
@@ -825,7 +908,7 @@ mod tests {
     fn test_cli_parse_query_default_output() {
         let cli = Cli::try_parse_from(["shannon", "query", "test"]).unwrap();
         match cli.command {
-            Commands::Query { output, .. } => {
+            Some(Commands::Query { output, .. }) => {
                 assert_eq!(output, "text");
             }
             _ => panic!("Expected Query command"),
@@ -836,7 +919,7 @@ mod tests {
     fn test_cli_parse_query_defaults() {
         let cli = Cli::try_parse_from(["shannon", "query", "test"]).unwrap();
         match cli.command {
-            Commands::Query { query, model, provider, max_tokens, output, no_stream } => {
+            Some(Commands::Query { query, model, provider, max_tokens, output, no_stream }) => {
                 assert_eq!(query, "test");
                 assert!(model.is_none());
                 assert!(provider.is_none());
@@ -867,7 +950,7 @@ mod tests {
             "你用的什么模型",
         ]).unwrap();
         match cli.command {
-            Commands::Query { query, model, provider, max_tokens, output, no_stream } => {
+            Some(Commands::Query { query, model, provider, max_tokens, output, no_stream }) => {
                 assert_eq!(query, "你用的什么模型");
                 assert_eq!(model.as_deref(), Some("claude-sonnet-4"));
                 assert_eq!(provider.as_deref(), Some("anthropic"));

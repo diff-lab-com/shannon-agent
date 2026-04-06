@@ -744,6 +744,7 @@ impl QueryEngine {
                                 output_tokens: total_output_tokens,
                             }));
                             let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
+                            return;
                         }
                     }
                     Err(e) => {
@@ -751,6 +752,7 @@ impl QueryEngine {
                             query_id,
                             error: e.to_string(),
                         }));
+                        return;
                     }
                 }
             }
