@@ -1,7 +1,17 @@
 use anyhow::Result;
 use clap::Parser;
+use std::io::Write;
 use clap::Subcommand;
+use futures::StreamExt;
+use shannon_core::{
+    api::LlmClientConfig,
+    query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata},
+    state::StateManager,
+    tools::ToolRegistry,
+};
+use shannon_tools::BashTool;
 use shannon_ui::Repl;
+use uuid::Uuid;
 
 /// Shannon Code - AI-powered code assistant in Rust
 ///
@@ -74,6 +84,32 @@ enum Commands {
         #[arg(short, long)]
         setting: Option<String>,
     },
+
+    /// Execute a query directly (non-interactive mode)
+    Query {
+        /// The query/prompt to execute
+        query: String,
+
+        /// LLM model to use
+        #[arg(short, long)]
+        model: Option<String>,
+
+        /// LLM provider (anthropic, openai, ollama, custom)
+        #[arg(short, long)]
+        provider: Option<String>,
+
+        /// Maximum tokens for response
+        #[arg(long)]
+        max_tokens: Option<usize>,
+
+        /// Output format (text, json, markdown)
+        #[arg(long, default_value_t = String::from("text"))]
+        output: String,
+
+        /// Disable streaming output (wait for complete response)
+        #[arg(long)]
+        no_stream: bool,
+    },
 }
 
 /// Parse CLI env overrides into a Vec of (key, value) pairs.
@@ -94,6 +130,89 @@ fn parse_cli_env(env: &[String]) -> Result<Vec<(String, String)>, String> {
         }
     }
     Ok(pairs)
+}
+
+/// Run a non-interactive query, outputting results to stdout.
+/// `stream` controls whether text is streamed character-by-character.
+fn run_noninteractive_query(query: &str, stream: bool) -> Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+
+    rt.block_on(async {
+        // Build tool registry
+        let mut tools = ToolRegistry::new();
+        tools.register(Box::new(BashTool::new()))
+            .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
+
+        // Build LLM client
+        let client_config = LlmClientConfig::default();
+        let client = shannon_core::api::LlmClient::new(client_config);
+
+        let permissions = shannon_core::permissions::PermissionManager::new();
+        let state = StateManager::new();
+
+        let engine = QueryEngine::with_defaults(client, tools, permissions, state);
+
+        let context = QueryContext {
+            query_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            user_message: query.to_string(),
+            metadata: QueryMetadata {
+                timestamp: chrono::Utc::now(),
+                tools_allowed: true,
+                max_tokens: None,
+                model: std::env::var("SHANNON_MODEL")
+                    .unwrap_or_else(|_| "default".to_string()),
+                temperature: std::env::var("SHANNON_TEMPERATURE").ok().and_then(|s| s.parse().ok()),
+                top_p: None,
+            },
+        };
+
+        let mut event_stream = engine.process_query(context, None).await;
+
+        let mut response_text = String::new();
+
+        while let Some(event_result) = event_stream.next().await {
+            match event_result {
+                Ok(QueryEvent::Text { content, .. }) => {
+                    if stream {
+                        print!("{content}");
+                        std::io::stdout().flush().ok();
+                    }
+                    response_text.push_str(&content);
+                }
+                Ok(QueryEvent::ToolUseRequest { tool_name, tool_input, .. }) => {
+                    eprintln!("[tool: {tool_name} {}]",
+                        serde_json::to_string_pretty(&tool_input).unwrap_or_default());
+                }
+                Ok(QueryEvent::ToolUseResult { tool_name, result, is_error, .. }) => {
+                    if is_error {
+                        eprintln!("[tool-error: {tool_name}] {result}");
+                    } else {
+                        eprintln!("[tool-done: {tool_name}]");
+                    }
+                }
+                Ok(QueryEvent::Usage { input_tokens, output_tokens, cost_usd, .. }) => {
+                    eprintln!(
+                        "[usage: {input_tokens} in + {output_tokens} out = ${cost_usd:.4}]"
+                    );
+                }
+                Ok(QueryEvent::Completed { .. }) => {
+                    if !stream && !response_text.is_empty() {
+                        println!("{response_text}");
+                    }
+                }
+                Ok(QueryEvent::Failed { error, .. }) => {
+                    eprintln!("Error: {error}");
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("Stream error: {e}");
+                }
+            }
+        }
+
+        Ok(())
+    })
 }
 
 fn main() -> Result<()> {
@@ -168,6 +287,27 @@ fn main() -> Result<()> {
             } else {
                 println!("Show all config");
             }
+        }
+        Commands::Query {
+            query,
+            model,
+            provider,
+            max_tokens,
+            output: _output_format,
+            no_stream,
+        } => {
+            // Apply model/provider overrides while still single-threaded
+            if let Some(m) = model {
+                unsafe { std::env::set_var("SHANNON_MODEL", m) };
+            }
+            if let Some(p) = provider {
+                unsafe { std::env::set_var("SHANNON_PROVIDER", p) };
+            }
+            if let Some(mt) = max_tokens {
+                unsafe { std::env::set_var("SHANNON_MAX_TOKENS", mt.to_string()) };
+            }
+
+            run_noninteractive_query(&query, !no_stream)?;
         }
     }
 
@@ -606,5 +746,143 @@ mod tests {
             }
             _ => panic!("Expected Repl command"),
         }
+    }
+
+    // ── Query subcommand tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_cli_parse_query_basic() {
+        let cli = Cli::try_parse_from(["shannon", "query", "hello world"]).unwrap();
+        match cli.command {
+            Commands::Query { query, .. } => {
+                assert_eq!(query, "hello world");
+            }
+            _ => panic!("Expected Query command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_query_with_model() {
+        let cli = Cli::try_parse_from(["shannon", "query", "-m", "gpt-4o", "test"]).unwrap();
+        match cli.command {
+            Commands::Query { query, model, .. } => {
+                assert_eq!(query, "test");
+                assert_eq!(model.as_deref(), Some("gpt-4o"));
+            }
+            _ => panic!("Expected Query command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_query_with_provider() {
+        let cli = Cli::try_parse_from(["shannon", "query", "-p", "anthropic", "test"]).unwrap();
+        match cli.command {
+            Commands::Query { query, provider, .. } => {
+                assert_eq!(query, "test");
+                assert_eq!(provider.as_deref(), Some("anthropic"));
+            }
+            _ => panic!("Expected Query command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_query_with_max_tokens() {
+        let cli = Cli::try_parse_from(["shannon", "query", "--max-tokens", "8192", "test"]).unwrap();
+        match cli.command {
+            Commands::Query { query, max_tokens, .. } => {
+                assert_eq!(query, "test");
+                assert_eq!(max_tokens, Some(8192));
+            }
+            _ => panic!("Expected Query command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_query_with_no_stream() {
+        let cli = Cli::try_parse_from(["shannon", "query", "--no-stream", "test"]).unwrap();
+        match cli.command {
+            Commands::Query { query, no_stream, .. } => {
+                assert_eq!(query, "test");
+                assert!(no_stream);
+            }
+            _ => panic!("Expected Query command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_query_output_format() {
+        let cli = Cli::try_parse_from(["shannon", "query", "--output", "json", "test"]).unwrap();
+        match cli.command {
+            Commands::Query { query, output, .. } => {
+                assert_eq!(query, "test");
+                assert_eq!(output, "json");
+            }
+            _ => panic!("Expected Query command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_query_default_output() {
+        let cli = Cli::try_parse_from(["shannon", "query", "test"]).unwrap();
+        match cli.command {
+            Commands::Query { output, .. } => {
+                assert_eq!(output, "text");
+            }
+            _ => panic!("Expected Query command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_query_defaults() {
+        let cli = Cli::try_parse_from(["shannon", "query", "test"]).unwrap();
+        match cli.command {
+            Commands::Query { query, model, provider, max_tokens, output, no_stream } => {
+                assert_eq!(query, "test");
+                assert!(model.is_none());
+                assert!(provider.is_none());
+                assert!(max_tokens.is_none());
+                assert_eq!(output, "text");
+                assert!(!no_stream);
+            }
+            _ => panic!("Expected Query command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_query_missing_query_arg() {
+        let result = Cli::try_parse_from(["shannon", "query"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_parse_query_with_all_options() {
+        let cli = Cli::try_parse_from([
+            "shannon",
+            "query",
+            "-m", "claude-sonnet-4",
+            "-p", "anthropic",
+            "--max-tokens", "4096",
+            "--output", "json",
+            "--no-stream",
+            "你用的什么模型",
+        ]).unwrap();
+        match cli.command {
+            Commands::Query { query, model, provider, max_tokens, output, no_stream } => {
+                assert_eq!(query, "你用的什么模型");
+                assert_eq!(model.as_deref(), Some("claude-sonnet-4"));
+                assert_eq!(provider.as_deref(), Some("anthropic"));
+                assert_eq!(max_tokens, Some(4096));
+                assert_eq!(output, "json");
+                assert!(no_stream);
+            }
+            _ => panic!("Expected Query command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_env_chinese_value() {
+        let input = vec!["SHANNON_MODEL=你用的什么模型".to_string()];
+        let result = parse_cli_env(&input).unwrap();
+        assert_eq!(result[0], ("SHANNON_MODEL".to_string(), "你用的什么模型".to_string()));
     }
 }

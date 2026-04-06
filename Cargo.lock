@@ -2208,10 +2208,17 @@ name = "shannon-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
+ "futures",
+ "serde_json",
+ "shannon-commands",
+ "shannon-core",
+ "shannon-tools",
  "shannon-ui",
  "tokio",
  "tokio-test",
+ "uuid",
 ]
 
 [[package]]

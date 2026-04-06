@@ -348,6 +348,16 @@ impl ChatWidget {
     pub fn is_empty(&self) -> bool {
         self.messages.is_empty()
     }
+
+    /// Get a message by index
+    pub fn get_message(&self, index: usize) -> Option<&ChatMessage> {
+        self.messages.get(index)
+    }
+
+    /// Get the last message
+    pub fn last_message(&self) -> Option<&ChatMessage> {
+        self.messages.back()
+    }
 }
 
 /// Input prompt widget

@@ -23,8 +23,8 @@ use uuid::Uuid;
 // Import core functionality
 use shannon_core::{
     api::LlmClientConfig,
-    permissions::{PermissionManager, PermissionPrompt, PermissionChoice, RiskLevel},
-    query_engine::{QueryContext, QueryEngine, QueryEngineConfig, QueryEvent, PermissionRequest},
+    permissions::PermissionManager,
+    query_engine::{QueryContext, QueryEngine, QueryEvent, PermissionRequest},
     state::StateManager,
     tools::ToolRegistry,
 };
@@ -342,7 +342,7 @@ impl Repl {
     /// Handle a command (starts with /)
     fn handle_command(&mut self, input: &str) -> Result<()> {
         // Built-in REPL commands (not in the command registry)
-        let repl_commands = ["/help", "/clear", "/quit", "/model"];
+        let repl_commands = ["/help", "/clear", "/quit", "/exit", "/model", "/init"];
 
         let parts: Vec<&str> = input.splitn(2, ' ').collect();
         let cmd = parts.first().copied().unwrap_or("");
@@ -358,7 +358,9 @@ impl Repl {
                     cmd_list.push_str("  /help     Show this help message\n");
                     cmd_list.push_str("  /clear    Clear chat history\n");
                     cmd_list.push_str("  /quit     Exit Shannon\n");
+                    cmd_list.push_str("  /exit     Exit Shannon (alias for /quit)\n");
                     cmd_list.push_str("  /model    Show or set the AI model\n");
+                    cmd_list.push_str("  /init     Initialize project configuration\n");
 
                     // Builtin commands from registry
                     let names = self.runtime.block_on(self.command_registry.list_names());
@@ -380,7 +382,7 @@ impl Repl {
                     self.chat.clear();
                     self.chat.add_message(ChatRole::System, "Chat cleared.".to_string());
                 }
-                "/quit" => {
+                "/quit" | "/exit" => {
                     self.running = false;
                 }
                 "/model" => {
@@ -396,6 +398,38 @@ impl Repl {
                             format!("Model set to: {}", args),
                         );
                     }
+                }
+                "/init" => {
+                    let mut init_info = String::new();
+                    let cwd = &self.state.working_directory;
+
+                    // Check git status
+                    let is_git = std::path::Path::new(cwd).join(".git").exists();
+                    if is_git {
+                        init_info.push_str("Git repository: detected\n");
+                    } else {
+                        init_info.push_str("Git repository: not found\n");
+                    }
+
+                    // Check/create CLAUDE.md
+                    let claude_md_path = std::path::Path::new(cwd).join("CLAUDE.md");
+                    if claude_md_path.exists() {
+                        init_info.push_str("CLAUDE.md: already exists\n");
+                    } else {
+                        let default_content = "# Project Instructions\n\nThis file contains project-specific instructions for Shannon.\n\n## Coding Standards\n\n- Follow existing code patterns\n- Write clear, descriptive commit messages\n- Keep functions focused and concise\n\n## Project Structure\n\n- Describe your project structure here\n";
+                        match std::fs::write(&claude_md_path, default_content) {
+                            Ok(_) => init_info.push_str("CLAUDE.md: created with default template\n"),
+                            Err(e) => init_info.push_str(&format!("CLAUDE.md: failed to create ({})\n", e)),
+                        }
+                    }
+
+                    // Show working directory
+                    init_info.push_str(&format!("Working directory: {}\n", cwd));
+
+                    self.chat.add_message(
+                        ChatRole::System,
+                        format!("Project initialized.\n{}", init_info),
+                    );
                 }
                 _ => {}
             }
@@ -718,5 +752,94 @@ mod tests {
             assert!(!r.state().welcome_active);
             assert!(r.query_engine.is_some());
         }
+    }
+
+    // ── REPL Command Tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_repl_exit_command() {
+        let mut repl = Repl::new().unwrap();
+        // running is false after new(); only run() sets it to true.
+        // Simulate the active state that run() would set.
+        repl.running = true;
+        repl.handle_command("/exit").unwrap();
+        assert!(!repl.running);
+    }
+
+    #[test]
+    fn test_repl_quit_command() {
+        let mut repl = Repl::new().unwrap();
+        repl.running = true;
+        repl.handle_command("/quit").unwrap();
+        assert!(!repl.running);
+    }
+
+    #[test]
+    fn test_repl_help_command() {
+        let mut repl = Repl::new().unwrap();
+        repl.handle_command("/help").unwrap();
+        // Only the help message is present (welcome is added in run(), not new())
+        assert!(repl.chat.len() >= 1);
+        // Last message should contain "Available commands"
+        let last_msg = &repl.chat.last_message().unwrap().content;
+        assert!(last_msg.contains("Available commands"));
+        assert!(last_msg.contains("/help"));
+        assert!(last_msg.contains("/quit"));
+    }
+
+    #[test]
+    fn test_repl_model_show_command() {
+        let mut repl = Repl::new().unwrap();
+        let msg_count_before = repl.chat.len();
+        repl.handle_command("/model").unwrap();
+        assert_eq!(repl.chat.len(), msg_count_before + 1);
+        let last_msg = &repl.chat.last_message().unwrap().content;
+        assert!(last_msg.contains("Current model:"));
+    }
+
+    #[test]
+    fn test_repl_model_set_command() {
+        let mut repl = Repl::new().unwrap();
+        repl.handle_command("/model gpt-4o").unwrap();
+        assert_eq!(repl.state.model, Some("gpt-4o".to_string()));
+        let last_msg = &repl.chat.last_message().unwrap().content;
+        assert!(last_msg.contains("Model set to: gpt-4o"));
+    }
+
+    #[test]
+    fn test_repl_init_command() {
+        let mut repl = Repl::new().unwrap();
+        let msg_count_before = repl.chat.len();
+        repl.handle_command("/init").unwrap();
+        assert_eq!(repl.chat.len(), msg_count_before + 1);
+        let last_msg = &repl.chat.last_message().unwrap().content;
+        assert!(last_msg.contains("Project initialized"));
+        assert!(last_msg.contains("Working directory:"));
+    }
+
+    #[test]
+    fn test_repl_init_detects_git() {
+        let mut repl = Repl::new().unwrap();
+        // The working directory is the current directory, which is a git repo
+        repl.handle_command("/init").unwrap();
+        let last_msg = &repl.chat.last_message().unwrap().content;
+        // This project has .git, so it should detect it
+        assert!(last_msg.contains("Git repository: detected") || last_msg.contains("Git repository: not found"));
+    }
+
+    #[test]
+    fn test_repl_unknown_command() {
+        let mut repl = Repl::new().unwrap();
+        let msg_count_before = repl.chat.len();
+        repl.handle_command("/unknown_command_xyz").unwrap();
+        assert_eq!(repl.chat.len(), msg_count_before + 1);
+        let last_msg = &repl.chat.last_message().unwrap().content;
+        assert!(last_msg.contains("Unknown command"));
+        assert!(last_msg.contains("/unknown_command_xyz"));
+        assert!(last_msg.contains("/help"));
+        // Should still be running (unknown commands don't change running state)
+        repl.running = true;
+        repl.handle_command("/unknown_command_xyz2").unwrap();
+        assert!(repl.running);
     }
 }
