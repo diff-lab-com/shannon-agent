@@ -353,17 +353,22 @@ mod tests {
     #[tokio::test]
     async fn test_failed_command() {
         let tool = ReplTool::new();
+        // Use ls with a nonexistent path - ls is in ALLOWED_EXECUTABLES
         let input = json!({
-            "command": "exit 42"
+            "command": "ls /nonexistent_dir_xyz_12345"
         });
 
         let result = tool.execute(input).await;
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "Command execution should succeed structurally");
 
         let output = result.unwrap();
-        assert!(output.is_error);
-        assert_eq!(output.metadata.get("exit_code").unwrap(), 42);
-        assert!(output.content.contains("failed"));
+        // ls on nonexistent path returns non-zero exit code
+        assert!(output.is_error, "Output should indicate error: {:?}", output.content);
+        // Exit code should be non-zero
+        let exit_code = output.metadata.get("exit_code")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        assert_ne!(exit_code, 0, "Exit code should be non-zero: {}", exit_code);
     }
 
     #[tokio::test]

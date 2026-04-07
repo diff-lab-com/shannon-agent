@@ -113,6 +113,7 @@ pub struct ToolInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_tool_output_success() {

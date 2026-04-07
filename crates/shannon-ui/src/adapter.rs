@@ -113,7 +113,7 @@ mod tests {
         assert!(adapter.confirm("Continue?").await.unwrap());
     }
 
-    #[tokio::test]
+    #[test]
     fn test_null_adapter_streaming() {
         let adapter = NullUiAdapter;
         assert!(!adapter.supports_streaming());
