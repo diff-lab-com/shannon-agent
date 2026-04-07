@@ -199,15 +199,30 @@ impl ShellExecutor {
         }
     }
 
-    /// Execute a shell command and return its output
+    /// Execute a shell command and return its output.
+    ///
+    /// Commands are parsed into executable + args and executed directly
+    /// (no shell invocation) to prevent command injection.
     pub fn execute(&self, command: &str, cwd: &Path) -> SkillResult<String> {
         debug!("Executing shell command: {}", command);
 
         validate_shell_command(command)?;
 
-        let output = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(command)
+        let parts = shell_words::split(command)
+            .map_err(|e| SkillError::ExecutionFailed {
+                name: "shell".to_string(),
+                message: format!("Failed to parse command: {}", e),
+            })?;
+
+        if parts.is_empty() {
+            return Err(SkillError::ExecutionFailed {
+                name: "shell".to_string(),
+                message: "Empty command".to_string(),
+            });
+        }
+
+        let output = std::process::Command::new(&parts[0])
+            .args(&parts[1..])
             .current_dir(cwd)
             .envs(&self.env)
             .output()
