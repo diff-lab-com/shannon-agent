@@ -3,6 +3,7 @@
 use crate::{
     events::EventHandler,
     render::Renderer,
+    repl_enhancement::{DiffData, ReplHistory, ReplRenderer, SessionSummary, TurnDiff},
     widgets::{ChatWidget, ChatRole, PromptWidget, MainLayoutWidget},
     Result,
 };
@@ -28,11 +29,9 @@ use shannon_core::{
     tools::ToolRegistry,
 };
 use shannon_commands::{CommandRegistry, CommandParser, builtin_commands};
-use shannon_tools::{
-    BashTool,
-    ReadTool,
-    WriteTool,
-};
+// Tool types used by ToolRegistry registration (kept for future tool registration)
+#[allow(unused_imports)]
+use shannon_tools::{BashTool, ReadTool, WriteTool};
 
 /// Application state for the REPL
 #[derive(Debug, Clone)]
@@ -102,6 +101,22 @@ pub struct Repl {
     permission_req_tx: tokio::sync::mpsc::UnboundedSender<PermissionRequest>,
     /// Last session listing cache (for /resume by number)
     last_session_list: Vec<shannon_core::state::SessionInfo>,
+    /// Command history with cursor navigation
+    command_history: ReplHistory,
+    /// Saved input before history navigation (to restore on down-to-bottom)
+    saved_input: String,
+    /// Per-turn diff tracking
+    diff_data: DiffData,
+    /// Current turn index
+    current_turn: usize,
+    /// Session start time
+    session_started_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Markdown renderer for assistant output
+    output_renderer: ReplRenderer,
+    /// Total commands run in this session
+    commands_run: usize,
+    /// Total tools invoked in this session
+    tools_invoked: usize,
 }
 
 impl Repl {
@@ -162,6 +177,14 @@ impl Repl {
             permission_req_rx,
             permission_req_tx,
             last_session_list: Vec::new(),
+            command_history: ReplHistory::new(1000),
+            saved_input: String::new(),
+            diff_data: DiffData::new(),
+            current_turn: 0,
+            session_started_at: Some(chrono::Utc::now()),
+            output_renderer: ReplRenderer::new(),
+            commands_run: 0,
+            tools_invoked: 0,
         })
     }
 
@@ -279,10 +302,31 @@ impl Repl {
                 self.prompt.backspace();
             }
             crossterm::event::KeyCode::Up => {
-                self.chat.scroll_up();
+                // If prompt has content, navigate command history
+                if !self.prompt.input().is_empty() || self.command_history.cursor() >= 0 {
+                    if self.command_history.cursor() < 0 {
+                        // First up press: save current input
+                        self.saved_input = self.prompt.input().to_string();
+                    }
+                    if let Some(cmd) = self.command_history.up() {
+                        self.prompt.set_input(cmd.to_string());
+                    }
+                } else {
+                    self.chat.scroll_up();
+                }
             }
             crossterm::event::KeyCode::Down => {
-                self.chat.scroll_down();
+                if self.command_history.cursor() >= 0 {
+                    if let Some(cmd) = self.command_history.down() {
+                        self.prompt.set_input(cmd.to_string());
+                    } else {
+                        // Back to bottom: restore saved input
+                        self.command_history.reset_cursor();
+                        self.prompt.set_input(self.saved_input.clone());
+                    }
+                } else {
+                    self.chat.scroll_down();
+                }
             }
             crossterm::event::KeyCode::Esc => {
                 self.prompt.clear();
@@ -334,11 +378,14 @@ impl Repl {
         // Add user message to chat
         self.chat.add_message(ChatRole::User, input.clone());
 
-        // Clear input
+        // Push to command history and clear input
+        self.command_history.push(&input);
+        self.saved_input.clear();
         self.prompt.clear();
 
         // Process command or query
         if input.starts_with('/') {
+            self.commands_run += 1;
             self.handle_command(&input)?;
         } else {
             self.handle_query(&input)?;
@@ -397,6 +444,18 @@ impl Repl {
                     self.chat.add_message(ChatRole::System, "Chat cleared.".to_string());
                 }
                 "/quit" | "/exit" => {
+                    // Show session summary if there were changes
+                    if let Some(started) = self.session_started_at {
+                        let summary = SessionSummary::from_diff_data(
+                            &self.diff_data,
+                            self.commands_run,
+                            self.tools_invoked,
+                            started,
+                        );
+                        if summary.had_changes() || summary.total_turns > 0 {
+                            self.chat.add_message(ChatRole::System, summary.render());
+                        }
+                    }
                     self.running = false;
                 }
                 "/model" => {
@@ -723,8 +782,8 @@ impl Repl {
         let tokens = self.state.tokens_used;
         let model = self.state.model.as_deref().unwrap_or("default");
 
-        let stats = format!(
-            "Current session stats:\n  Messages: {} total ({} user, {} assistant)\n  Tokens used: {} ({:.1}k)\n  Model: {}\n  Working dir: {}",
+        let mut stats = format!(
+            "Current session stats:\n  Messages: {} total ({} user, {} assistant)\n  Tokens used: {} ({:.1}k)\n  Model: {}\n  Working dir: {}\n  Commands run: {}\n  Tools invoked: {}",
             msg_count,
             user_count,
             assistant_count,
@@ -732,7 +791,21 @@ impl Repl {
             tokens as f64 / 1000.0,
             model,
             self.state.working_directory,
+            self.commands_run,
+            self.tools_invoked,
         );
+
+        // Add diff summary if there are tracked file changes
+        if self.diff_data.total_files_modified() > 0 || self.diff_data.total_files_created() > 0 || self.diff_data.total_files_deleted() > 0 {
+            stats.push_str(&format!(
+                "\n  Files: +{}/-{}/{} modified, {} created, {} deleted",
+                self.diff_data.total_additions(),
+                self.diff_data.total_deletions(),
+                self.diff_data.total_files_modified(),
+                self.diff_data.total_files_created(),
+                self.diff_data.total_files_deleted(),
+            ));
+        }
 
         self.chat.add_message(ChatRole::System, stats);
         Ok(())
@@ -741,6 +814,9 @@ impl Repl {
     /// Handle a query (send to AI)
     fn handle_query(&mut self, input: &str) -> Result<()> {
         self.state.status = "Processing...".to_string();
+
+        // Start a new turn diff for tracking file changes
+        let mut turn_diff = TurnDiff::new(self.current_turn);
 
         // Clear the "Thinking..." message and start streaming
         // Create an assistant message that will be updated in real-time
@@ -783,6 +859,7 @@ impl Repl {
             let mut current_buffer = String::new();
             let mut tokens_in_turn = 0u64;
             let mut tool_calls: Vec<String> = Vec::new();
+            let mut tools_in_session: usize = 0;
 
             // Process stream events with real-time feedback
             while let Some(event_result) = stream.next().await {
@@ -809,6 +886,15 @@ impl Repl {
                         );
                         response_text.push_str(&tool_display);
                         tool_calls.push(tool_name.clone());
+                        tools_in_session += 1;
+
+                        // Track file modifications from write/edit tools
+                        let tool_name_str = tool_name.as_str();
+                        if tool_name_str == "write" || tool_name_str == "edit" || tool_name_str == "WriteTool" {
+                            if let Some(path) = tool_input.get("file_path").and_then(|v| v.as_str()) {
+                                turn_diff.modify_file(path.to_string(), 1, 0);
+                            }
+                        }
 
                         // Update status to show active tool
                         // In real implementation: self.state.status = format!("Running: {}", tool_name);
@@ -838,7 +924,7 @@ impl Repl {
                             input_tokens, output_tokens, cost_usd);
                         response_text.push_str(&usage);
                     }
-                    Ok(QueryEvent::Cost { total_cost_usd, input_tokens, output_tokens, .. }) => {
+                    Ok(QueryEvent::Cost { total_cost_usd: _, input_tokens: _, output_tokens: _, .. }) => {
                         // Display cost tracking info
                     }
                     Ok(QueryEvent::Completed { .. }) => {
@@ -853,14 +939,21 @@ impl Repl {
                 }
             }
 
-            Ok::<(String, u64), String>((response_text, tokens_in_turn))
+            Ok::<(String, u64, usize, TurnDiff), String>((response_text, tokens_in_turn, tools_in_session, turn_diff))
         });
 
         match query_result {
-            Ok((response, tokens)) => {
+            Ok((response, tokens, tools, turn)) => {
                 // Update the assistant message with the complete response
                 self.chat.update_message(assistant_msg_index, response);
                 self.state.tokens_used += tokens;
+                self.tools_invoked += tools;
+
+                // Record turn diff
+                if turn.total_files_touched() > 0 {
+                    self.diff_data.record_turn_diff(turn);
+                }
+                self.current_turn += 1;
             }
             Err(e) => {
                 self.chat.update_message(assistant_msg_index, format!("❌ Error: {}", e));
@@ -1203,5 +1296,65 @@ mod tests {
         repl.handle_command("/history --export").unwrap();
         let last_msg = &repl.chat.last_message().unwrap().content;
         assert!(last_msg.contains("Usage: /history --export"));
+    }
+
+    // ── History Navigation Tests ──────────────────────────────────────
+
+    #[test]
+    fn test_command_history_push_and_navigate() {
+        let mut repl = Repl::new().unwrap();
+        // Simulate submitting commands
+        repl.command_history.push("hello");
+        repl.command_history.push("world");
+
+        // Navigate up
+        let cmd = repl.command_history.up();
+        assert_eq!(cmd, Some("world"));
+        let cmd = repl.command_history.up();
+        assert_eq!(cmd, Some("hello"));
+
+        // Navigate down
+        let cmd = repl.command_history.down();
+        assert_eq!(cmd, Some("world"));
+        let cmd = repl.command_history.down();
+        assert_eq!(cmd, None); // back to bottom
+    }
+
+    #[test]
+    fn test_command_history_dedup() {
+        let mut repl = Repl::new().unwrap();
+        repl.command_history.push("hello");
+        repl.command_history.push("hello");
+        assert_eq!(repl.command_history.len(), 1);
+    }
+
+    #[test]
+    fn test_diff_data_tracking() {
+        let mut repl = Repl::new().unwrap();
+        assert_eq!(repl.diff_data.total_additions(), 0);
+        assert_eq!(repl.diff_data.total_files_modified(), 0);
+    }
+
+    #[test]
+    fn test_session_summary_on_quit() {
+        let mut repl = Repl::new().unwrap();
+        repl.running = true;
+        // The quit command should show summary if there are turns
+        // With no activity, it should still work
+        let msg_count = repl.chat.len();
+        repl.handle_command("/quit").unwrap();
+        // After quit, running should be false
+        assert!(!repl.running);
+    }
+
+    #[test]
+    fn test_history_shows_commands_and_tools() {
+        let mut repl = Repl::new().unwrap();
+        repl.commands_run = 5;
+        repl.tools_invoked = 3;
+        repl.handle_command("/history").unwrap();
+        let last_msg = &repl.chat.last_message().unwrap().content;
+        assert!(last_msg.contains("Commands run: 5"));
+        assert!(last_msg.contains("Tools invoked: 3"));
     }
 }
