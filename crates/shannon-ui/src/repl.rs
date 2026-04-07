@@ -89,6 +89,8 @@ pub struct Repl {
     running: bool,
     /// Query engine for AI processing
     query_engine: Option<QueryEngine>,
+    /// State manager for session persistence (separate from QueryEngine's internal one)
+    state_manager: StateManager,
     /// Command registry with all built-in commands
     command_registry: CommandRegistry,
     /// Command parser for parsing /commands
@@ -99,6 +101,8 @@ pub struct Repl {
     permission_req_rx: tokio::sync::mpsc::UnboundedReceiver<PermissionRequest>,
     /// Permission request sender (from REPL to QueryEngine)
     permission_req_tx: tokio::sync::mpsc::UnboundedSender<PermissionRequest>,
+    /// Last session listing cache (for /resume by number)
+    last_session_list: Vec<shannon_core::state::SessionInfo>,
 }
 
 impl Repl {
@@ -152,11 +156,13 @@ impl Repl {
             state: ReplState::default(),
             running: false,
             query_engine: Some(query_engine),
+            state_manager: StateManager::new(),
             command_registry,
             command_parser: CommandParser::new(),
             runtime,
             permission_req_rx,
             permission_req_tx,
+            last_session_list: Vec::new(),
         })
     }
 
@@ -342,7 +348,10 @@ impl Repl {
     /// Handle a command (starts with /)
     fn handle_command(&mut self, input: &str) -> Result<()> {
         // Built-in REPL commands (not in the command registry)
-        let repl_commands = ["/help", "/clear", "/quit", "/exit", "/model", "/init"];
+        let repl_commands = [
+            "/help", "/clear", "/quit", "/exit", "/model", "/init",
+            "/sessions", "/resume", "/history",
+        ];
 
         let parts: Vec<&str> = input.splitn(2, ' ').collect();
         let cmd = parts.first().copied().unwrap_or("");
@@ -355,12 +364,15 @@ impl Repl {
                     let mut cmd_list = String::from("Available commands:\n");
 
                     // REPL-local commands
-                    cmd_list.push_str("  /help     Show this help message\n");
-                    cmd_list.push_str("  /clear    Clear chat history\n");
-                    cmd_list.push_str("  /quit     Exit Shannon\n");
-                    cmd_list.push_str("  /exit     Exit Shannon (alias for /quit)\n");
-                    cmd_list.push_str("  /model    Show or set the AI model\n");
-                    cmd_list.push_str("  /init     Initialize project configuration\n");
+                    cmd_list.push_str("  /help      Show this help message\n");
+                    cmd_list.push_str("  /clear     Clear chat history\n");
+                    cmd_list.push_str("  /quit      Exit Shannon\n");
+                    cmd_list.push_str("  /exit      Exit Shannon (alias for /quit)\n");
+                    cmd_list.push_str("  /model     Show or set the AI model\n");
+                    cmd_list.push_str("  /init      Initialize project configuration\n");
+                    cmd_list.push_str("  /sessions  List saved sessions [--all] [--search <query>]\n");
+                    cmd_list.push_str("  /resume    Resume a session by UUID or number\n");
+                    cmd_list.push_str("  /history   Show current session stats [--export <path>]\n");
 
                     // Builtin commands from registry
                     let names = self.runtime.block_on(self.command_registry.list_names());
@@ -431,6 +443,9 @@ impl Repl {
                         format!("Project initialized.\n{}", init_info),
                     );
                 }
+                "/sessions" => self.handle_sessions_command(args)?,
+                "/resume" => self.handle_resume_command(args)?,
+                "/history" => self.handle_history_command(args)?,
                 _ => {}
             }
             return Ok(());
@@ -453,6 +468,271 @@ impl Repl {
             format!("Unknown command: {}. Type /help for available commands.", cmd),
         );
 
+        Ok(())
+    }
+
+    /// Handle /sessions command — list persisted sessions
+    fn handle_sessions_command(&mut self, args: &str) -> Result<()> {
+        let sessions = match self.state_manager.list_persisted_sessions() {
+            Ok(s) => s,
+            Err(e) => {
+                self.chat.add_message(
+                    ChatRole::System,
+                    format!("Error listing sessions: {}", e),
+                );
+                return Ok(());
+            }
+        };
+
+        if sessions.is_empty() {
+            self.chat.add_message(
+                ChatRole::System,
+                "No saved sessions found.".to_string(),
+            );
+            self.last_session_list.clear();
+            return Ok(());
+        }
+
+        // Parse args: --all, --search <query>
+        let show_all = args.contains("--all");
+        let search_query = if let Some(idx) = args.find("--search") {
+            let after = &args[idx + "--search".len()..].trim();
+            if after.is_empty() {
+                None
+            } else {
+                Some(after.to_lowercase())
+            }
+        } else if !args.is_empty() && !args.starts_with("--") {
+            // Treat bare text as search query
+            Some(args.to_lowercase())
+        } else {
+            None
+        };
+
+        // Filter sessions
+        let mut filtered: Vec<_> = sessions.into_iter().filter(|s| {
+            if let Some(ref q) = search_query {
+                let title = s.title.as_deref().unwrap_or("").to_lowercase();
+                let preview = s.preview.as_deref().unwrap_or("").to_lowercase();
+                title.contains(q) || preview.contains(q) || s.model.to_lowercase().contains(q)
+            } else {
+                true
+            }
+        }).collect();
+
+        // Limit to 10 unless --all
+        let limit = if show_all { filtered.len() } else { 10.min(filtered.len()) };
+        filtered.truncate(limit);
+
+        // Cache for /resume by number
+        self.last_session_list = filtered.clone();
+
+        // Format output
+        let mut output = String::from("Saved sessions:\n");
+        for (i, session) in filtered.iter().enumerate() {
+            let title = session.title.as_deref().unwrap_or("Untitled");
+            let date = session.updated_at.format("%Y-%m-%d %H:%M");
+            let tokens = (session.total_input_tokens + session.total_output_tokens) as f64 / 1000.0;
+            output.push_str(&format!(
+                "  #{}  {}  \"{}\"  {} turns  {:.1}k tokens  [{}]\n",
+                i + 1,
+                date,
+                title,
+                session.turn_count,
+                tokens,
+                session.model,
+            ));
+        }
+
+        if !show_all {
+            output.push_str("\nUse /sessions --all to see all, /sessions --search <query> to filter");
+        }
+        output.push_str("\nUse /resume <number-or-uuid> to continue a session");
+
+        self.chat.add_message(ChatRole::System, output);
+        Ok(())
+    }
+
+    /// Handle /resume command — resume a persisted session
+    fn handle_resume_command(&mut self, args: &str) -> Result<()> {
+        let arg = args.trim();
+        if arg.is_empty() {
+            self.chat.add_message(
+                ChatRole::System,
+                "Usage: /resume <number-or-uuid>\nUse /sessions to see available sessions.".to_string(),
+            );
+            return Ok(());
+        }
+
+        // Try to resolve to a UUID: by number (from last listing) or directly
+        let session_id = if let Ok(uuid) = Uuid::parse_str(arg) {
+            uuid
+        } else if let Ok(num) = arg.parse::<usize>() {
+            if num == 0 || num > self.last_session_list.len() {
+                self.chat.add_message(
+                    ChatRole::System,
+                    format!("Invalid session number: {}. Use /sessions to see available sessions.", num),
+                );
+                return Ok(());
+            }
+            self.last_session_list[num - 1].session_id
+        } else {
+            self.chat.add_message(
+                ChatRole::System,
+                format!("Invalid session identifier: {}. Use a number from /sessions or a UUID.", arg),
+            );
+            return Ok(());
+        };
+
+        // Load session data
+        match self.state_manager.load_session(&session_id) {
+            Ok(Some(data)) => {
+                // Clear current chat and load messages from session
+                self.chat.clear();
+
+                let title = data.metadata.title.as_deref().unwrap_or("Untitled");
+                let msg_count = data.messages.len();
+
+                // Add a header message
+                self.chat.add_message(
+                    ChatRole::System,
+                    format!(
+                        "Resumed session: \"{}\" ({} messages, model: {})\nCreated: {} | Updated: {}",
+                        title,
+                        msg_count,
+                        data.metadata.model,
+                        data.metadata.created_at.format("%Y-%m-%d %H:%M"),
+                        data.metadata.updated_at.format("%Y-%m-%d %H:%M"),
+                    ),
+                );
+
+                // Replay messages
+                for msg in &data.messages {
+                    let role = match msg.role.as_str() {
+                        "user" => ChatRole::User,
+                        "assistant" => ChatRole::Assistant,
+                        _ => ChatRole::System,
+                    };
+                    let content = match &msg.content {
+                        shannon_core::api::MessageContent::Text(t) => t.clone(),
+                        shannon_core::api::MessageContent::Blocks(blocks) => {
+                            blocks.iter().filter_map(|b| match b {
+                                shannon_core::api::ContentBlock::Text { text } => Some(text.as_str()),
+                                _ => None,
+                            }).collect::<Vec<_>>().join("\n")
+                        }
+                    };
+                    if !content.is_empty() {
+                        self.chat.add_message(role, content);
+                    }
+                }
+
+                // Restore model if available
+                if !data.metadata.model.is_empty() {
+                    self.state.model = Some(data.metadata.model.clone());
+                }
+
+                // Restore token count
+                self.state.tokens_used =
+                    data.metadata.total_input_tokens + data.metadata.total_output_tokens;
+            }
+            Ok(None) => {
+                self.chat.add_message(
+                    ChatRole::System,
+                    format!("Session not found: {}", session_id),
+                );
+            }
+            Err(e) => {
+                self.chat.add_message(
+                    ChatRole::System,
+                    format!("Error loading session: {}", e),
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Handle /history command — show current session stats or export
+    fn handle_history_command(&mut self, args: &str) -> Result<()> {
+        let arg = args.trim();
+
+        // Parse --export flag
+        if arg.starts_with("--export") {
+            let export_path = if arg.len() > "--export".len() {
+                arg["--export".len()..].trim()
+            } else {
+                ""
+            };
+
+            if export_path.is_empty() {
+                self.chat.add_message(
+                    ChatRole::System,
+                    "Usage: /history --export <file-path>".to_string(),
+                );
+                return Ok(());
+            }
+
+            // Export current chat to markdown
+            let mut md = String::from("# Shannon Session Export\n\n");
+            for i in 0..self.chat.len() {
+                if let Some(msg) = self.chat.get_message(i) {
+                    let role = match msg.role {
+                        ChatRole::User => "## User",
+                        ChatRole::Assistant => "## Assistant",
+                        ChatRole::System => "## System",
+                        ChatRole::Tool => "## Tool",
+                    };
+                    md.push_str(&format!("{}\n\n{}\n\n---\n\n", role, msg.content));
+                }
+            }
+
+            match std::fs::write(export_path, md) {
+                Ok(_) => {
+                    self.chat.add_message(
+                        ChatRole::System,
+                        format!("Session exported to: {}", export_path),
+                    );
+                }
+                Err(e) => {
+                    self.chat.add_message(
+                        ChatRole::System,
+                        format!("Failed to export: {}", e),
+                    );
+                }
+            }
+            return Ok(());
+        }
+
+        // Default: show stats
+        let msg_count = self.chat.len();
+        let mut user_count = 0;
+        let mut assistant_count = 0;
+        for i in 0..self.chat.len() {
+            if let Some(msg) = self.chat.get_message(i) {
+                match msg.role {
+                    ChatRole::User => user_count += 1,
+                    ChatRole::Assistant => assistant_count += 1,
+                    ChatRole::System | ChatRole::Tool => {}
+                }
+            }
+        }
+
+        let tokens = self.state.tokens_used;
+        let model = self.state.model.as_deref().unwrap_or("default");
+
+        let stats = format!(
+            "Current session stats:\n  Messages: {} total ({} user, {} assistant)\n  Tokens used: {} ({:.1}k)\n  Model: {}\n  Working dir: {}",
+            msg_count,
+            user_count,
+            assistant_count,
+            tokens,
+            tokens as f64 / 1000.0,
+            model,
+            self.state.working_directory,
+        );
+
+        self.chat.add_message(ChatRole::System, stats);
         Ok(())
     }
 
@@ -841,5 +1121,85 @@ mod tests {
         repl.running = true;
         repl.handle_command("/unknown_command_xyz2").unwrap();
         assert!(repl.running);
+    }
+
+    // ── Session Command Tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_sessions_command_empty() {
+        let mut repl = Repl::new().unwrap();
+        repl.handle_command("/sessions").unwrap();
+        let last_msg = &repl.chat.last_message().unwrap().content;
+        // With no saved sessions, should report empty
+        assert!(last_msg.contains("No saved sessions") || last_msg.contains("Saved sessions"));
+    }
+
+    #[test]
+    fn test_sessions_command_in_help() {
+        let mut repl = Repl::new().unwrap();
+        repl.handle_command("/help").unwrap();
+        let last_msg = &repl.chat.last_message().unwrap().content;
+        assert!(last_msg.contains("/sessions"));
+        assert!(last_msg.contains("/resume"));
+        assert!(last_msg.contains("/history"));
+    }
+
+    #[test]
+    fn test_resume_command_no_args() {
+        let mut repl = Repl::new().unwrap();
+        repl.handle_command("/resume").unwrap();
+        let last_msg = &repl.chat.last_message().unwrap().content;
+        assert!(last_msg.contains("Usage: /resume"));
+    }
+
+    #[test]
+    fn test_resume_command_invalid_uuid() {
+        let mut repl = Repl::new().unwrap();
+        repl.handle_command("/resume not-a-uuid").unwrap();
+        let last_msg = &repl.chat.last_message().unwrap().content;
+        assert!(last_msg.contains("Invalid session identifier"));
+    }
+
+    #[test]
+    fn test_resume_command_invalid_number() {
+        let mut repl = Repl::new().unwrap();
+        // No sessions listed, so number 1 should be invalid
+        repl.last_session_list.clear();
+        repl.handle_command("/resume 1").unwrap();
+        let last_msg = &repl.chat.last_message().unwrap().content;
+        assert!(last_msg.contains("Invalid session number") || last_msg.contains("Session not found"));
+    }
+
+    #[test]
+    fn test_history_command() {
+        let mut repl = Repl::new().unwrap();
+        repl.handle_command("/history").unwrap();
+        let last_msg = &repl.chat.last_message().unwrap().content;
+        assert!(last_msg.contains("Current session stats"));
+        assert!(last_msg.contains("Messages:"));
+        assert!(last_msg.contains("Tokens used:"));
+    }
+
+    #[test]
+    fn test_history_command_after_messages() {
+        let mut repl = Repl::new().unwrap();
+        // Simulate some conversation
+        repl.chat.add_message(ChatRole::User, "hello".to_string());
+        repl.chat.add_message(ChatRole::Assistant, "hi there".to_string());
+        repl.state.tokens_used = 500;
+
+        repl.handle_command("/history").unwrap();
+        let last_msg = &repl.chat.last_message().unwrap().content;
+        assert!(last_msg.contains("Current session stats"));
+        assert!(last_msg.contains("Messages:"));
+        // Should include the messages we added plus the history command response
+    }
+
+    #[test]
+    fn test_history_export_no_path() {
+        let mut repl = Repl::new().unwrap();
+        repl.handle_command("/history --export").unwrap();
+        let last_msg = &repl.chat.last_message().unwrap().content;
+        assert!(last_msg.contains("Usage: /history --export"));
     }
 }
