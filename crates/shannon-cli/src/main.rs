@@ -278,7 +278,7 @@ fn run_noninteractive_query(query: &str, stream: bool, config: &CliConfig) -> Re
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: true,
-                max_tokens: config.max_tokens(),
+                max_tokens: config.max_tokens().map(|v| v as u32),
                 model: config
                     .model()
                     .unwrap_or_else(|| "default".to_string()),
