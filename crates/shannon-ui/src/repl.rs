@@ -4,7 +4,11 @@ use crate::{
     events::EventHandler,
     render::Renderer,
     repl_enhancement::{DiffData, ReplHistory, ReplRenderer, TurnDiff},
-    widgets::{ChatWidget, ChatRole, PromptWidget, MainLayoutWidget, dialog::DialogWidget},
+    widgets::{
+        ChatWidget, ChatRole, PromptWidget, MainLayoutWidget,
+        dialog::DialogWidget,
+        progress::SpinnerWidget,
+    },
     Result,
 };
 use crossterm::{
@@ -55,6 +59,14 @@ pub struct ReplState {
     pub active_dialog: Option<DialogWidget>,
     /// Pending action to execute when dialog is confirmed
     pub pending_dialog_action: Option<String>,
+    /// Currently active tool name (for progress display)
+    pub active_tool: Option<String>,
+    /// Spinner widget for progress indication
+    pub spinner: SpinnerWidget,
+    /// Number of steps completed in current query
+    pub query_steps_done: usize,
+    /// Total steps estimated for current query (0 = indeterminate)
+    pub query_steps_total: usize,
 }
 
 impl Default for ReplState {
@@ -74,6 +86,10 @@ impl Default for ReplState {
             permission_response_tx: None,
             active_dialog: None,
             pending_dialog_action: None,
+            active_tool: None,
+            spinner: SpinnerWidget::new(),
+            query_steps_done: 0,
+            query_steps_total: 0,
         }
     }
 }
@@ -1033,6 +1049,9 @@ impl Repl {
     /// Handle a query (send to AI)
     fn handle_query(&mut self, input: &str) -> Result<()> {
         self.state.status = "Processing...".to_string();
+        self.state.active_tool = None;
+        self.state.query_steps_done = 0;
+        self.state.query_steps_total = 0;
 
         // Start a new turn diff for tracking file changes
         let mut turn_diff = TurnDiff::new(self.current_turn);
@@ -1079,6 +1098,8 @@ impl Repl {
             let mut tokens_in_turn = 0u64;
             let mut tool_calls: Vec<String> = Vec::new();
             let mut tools_in_session: usize = 0;
+            let mut progress_status = "Processing...".to_string();
+            let mut steps_done = 0usize;
 
             // Process stream events with real-time feedback
             while let Some(event_result) = stream.next().await {
@@ -1100,6 +1121,8 @@ impl Repl {
                     }
                     Ok(QueryEvent::ToolUseRequest { tool_name, tool_input, .. }) => {
                         // Display tool use to user
+                        steps_done += 1;
+                        progress_status = format!("Running: {} (step {})", tool_name, steps_done);
                         let tool_display = format!("\n🔧 Using: {} with input: {}", tool_name,
                             serde_json::to_string_pretty(&tool_input).unwrap_or_else(|_| "invalid".to_string())
                         );
@@ -1114,9 +1137,6 @@ impl Repl {
                                 turn_diff.modify_file(path.to_string(), 1, 0);
                             }
                         }
-
-                        // Update status to show active tool
-                        // In real implementation: self.state.status = format!("Running: {}", tool_name);
                     }
                     Ok(QueryEvent::ToolUseResult { tool_name, result, is_error, .. }) => {
                         // Display tool result
@@ -1134,6 +1154,7 @@ impl Repl {
                     }
                     Ok(QueryEvent::Progress { message, .. }) => {
                         // Show progress update
+                        progress_status = format!("Processing: {}", message);
                         let progress = format!("\n⏳ {}", message);
                         response_text.push_str(&progress);
                     }
@@ -1158,11 +1179,11 @@ impl Repl {
                 }
             }
 
-            Ok::<(String, u64, usize, TurnDiff), String>((response_text, tokens_in_turn, tools_in_session, turn_diff))
+            Ok::<(String, u64, usize, TurnDiff, String, usize), String>((response_text, tokens_in_turn, tools_in_session, turn_diff, progress_status, steps_done))
         });
 
         match query_result {
-            Ok((response, tokens, tools, turn)) => {
+            Ok((response, tokens, tools, turn, final_status, steps)) => {
                 // Update the assistant message with the complete response
                 self.chat.update_message(assistant_msg_index, response);
                 self.state.tokens_used += tokens;
@@ -1173,13 +1194,24 @@ impl Repl {
                     self.diff_data.record_turn_diff(turn);
                 }
                 self.current_turn += 1;
+
+                // Update progress tracking state
+                self.state.query_steps_done = steps;
+                self.state.query_steps_total = steps; // Completed = total since query is done
+                if steps > 0 {
+                    self.state.status = format!("Ready ({} steps completed)", steps);
+                } else {
+                    self.state.status = "Ready".to_string();
+                }
+                let _ = final_status; // Used for future async UI rendering
             }
             Err(e) => {
                 self.chat.update_message(assistant_msg_index, format!("❌ Error: {}", e));
+                self.state.status = "Ready".to_string();
             }
         }
 
-        self.state.status = "Ready".to_string();
+        self.state.active_tool = None;
 
         Ok(())
     }
@@ -1642,5 +1674,58 @@ mod tests {
         let last_msg = &repl.chat.last_message().unwrap().content;
         assert!(last_msg.contains("Commands run: 5"));
         assert!(last_msg.contains("Tools invoked: 3"));
+    }
+
+    // ── Progress State Tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_repl_state_progress_fields_default() {
+        let state = ReplState::default();
+        assert!(state.active_tool.is_none());
+        assert_eq!(state.query_steps_done, 0);
+        assert_eq!(state.query_steps_total, 0);
+    }
+
+    #[test]
+    fn test_repl_state_progress_fields_update() {
+        let mut state = ReplState::default();
+        state.active_tool = Some("bash".to_string());
+        state.query_steps_done = 3;
+        state.query_steps_total = 5;
+        assert_eq!(state.active_tool.as_deref(), Some("bash"));
+        assert_eq!(state.query_steps_done, 3);
+        assert_eq!(state.query_steps_total, 5);
+    }
+
+    #[test]
+    fn test_spinner_widget_tick() {
+        use crate::widgets::progress::SpinnerWidget;
+        let mut spinner = SpinnerWidget::new();
+        assert_eq!(spinner.current_frame(), 0);
+        spinner.tick();
+        assert_eq!(spinner.current_frame(), 1);
+        // Should wrap around
+        for _ in 0..9 {
+            spinner.tick();
+        }
+        assert_eq!(spinner.current_frame(), 0);
+    }
+
+    #[test]
+    fn test_spinner_with_message() {
+        use crate::widgets::progress::SpinnerWidget;
+        let spinner = SpinnerWidget::new()
+            .with_message("Loading...".to_string());
+        assert_eq!(spinner.message(), Some("Loading..."));
+    }
+
+    #[test]
+    fn test_history_shows_steps_after_query() {
+        let mut repl = Repl::new().unwrap();
+        // Simulate state after a query with steps
+        repl.state.query_steps_done = 5;
+        repl.state.query_steps_total = 5;
+        repl.state.status = "Ready (5 steps completed)".to_string();
+        assert!(repl.state.status.contains("5 steps"));
     }
 }

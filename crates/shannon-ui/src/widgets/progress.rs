@@ -183,6 +183,7 @@ impl Default for ProgressBarWidget {
 }
 
 /// Spinner widget for indeterminate progress
+#[derive(Debug, Clone)]
 pub struct SpinnerWidget {
     frames: Vec<&'static str>,
     current_frame: usize,
@@ -214,6 +215,16 @@ impl SpinnerWidget {
     /// Advance to next frame
     pub fn tick(&mut self) {
         self.current_frame = (self.current_frame + 1) % self.frames.len();
+    }
+
+    /// Get current frame index
+    pub fn current_frame(&self) -> usize {
+        self.current_frame
+    }
+
+    /// Get the message text (if any)
+    pub fn message(&self) -> Option<&str> {
+        self.message.as_deref()
     }
 
     /// Render the spinner
