@@ -3,8 +3,8 @@
 use crate::{
     events::EventHandler,
     render::Renderer,
-    repl_enhancement::{DiffData, ReplHistory, ReplRenderer, SessionSummary, TurnDiff},
-    widgets::{ChatWidget, ChatRole, PromptWidget, MainLayoutWidget},
+    repl_enhancement::{DiffData, ReplHistory, ReplRenderer, TurnDiff},
+    widgets::{ChatWidget, ChatRole, PromptWidget, MainLayoutWidget, dialog::DialogWidget},
     Result,
 };
 use crossterm::{
@@ -51,6 +51,10 @@ pub struct ReplState {
     pub permission_dialog: Option<shannon_core::permissions::PermissionPrompt>,
     /// Permission response channel sender (if dialog is active)
     pub permission_response_tx: Option<tokio::sync::mpsc::UnboundedSender<shannon_core::permissions::PermissionChoice>>,
+    /// Active confirm/alert dialog (if any)
+    pub active_dialog: Option<DialogWidget>,
+    /// Pending action to execute when dialog is confirmed
+    pub pending_dialog_action: Option<String>,
 }
 
 impl Default for ReplState {
@@ -68,6 +72,8 @@ impl Default for ReplState {
             welcome_active: false,
             permission_dialog: None,
             permission_response_tx: None,
+            active_dialog: None,
+            pending_dialog_action: None,
         }
     }
 }
@@ -233,6 +239,18 @@ impl Repl {
                 if let Some(ref dialog) = state.permission_dialog {
                     // Render permission dialog overlay
                     self.render_permission_dialog(f, f.area(), dialog);
+                } else if let Some(ref dialog) = state.active_dialog {
+                    // Render main layout first, then overlay the dialog
+                    MainLayoutWidget::render_complete(
+                        f,
+                        chat,
+                        prompt,
+                        &state.status,
+                        state.model.as_deref(),
+                        Some(state.tokens_used),
+                        &state.working_directory,
+                    );
+                    dialog.render(f, f.area());
                 } else {
                     MainLayoutWidget::render_complete(
                         f,
@@ -286,6 +304,11 @@ impl Repl {
         // If permission dialog is active, handle dialog-specific keys
         if self.state.permission_dialog.is_some() {
             return self.handle_permission_dialog_input(key);
+        }
+
+        // If a confirm/alert dialog is active, handle dialog keys
+        if self.state.active_dialog.is_some() {
+            return self.handle_active_dialog_input(key);
         }
 
         match key.code {
@@ -370,6 +393,90 @@ impl Repl {
         self.state.permission_dialog = None;
     }
 
+    /// Handle confirm/alert dialog keyboard input
+    fn handle_active_dialog_input(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
+        match key.code {
+            crossterm::event::KeyCode::Left => {
+                if let Some(ref mut dialog) = self.state.active_dialog {
+                    dialog.prev_button();
+                }
+            }
+            crossterm::event::KeyCode::Right => {
+                if let Some(ref mut dialog) = self.state.active_dialog {
+                    dialog.next_button();
+                }
+            }
+            crossterm::event::KeyCode::Enter => {
+                // Execute the selected action
+                let action = self.state.active_dialog.as_ref()
+                    .and_then(|d| d.selected_action().map(|a| a.to_string()));
+                let pending = self.state.pending_dialog_action.take();
+
+                // Close dialog first
+                self.state.active_dialog = None;
+
+                // Handle known actions
+                if let Some(ref act) = action {
+                    match act.as_str() {
+                        "confirm" => {
+                            // Execute the pending action
+                            if let Some(cmd) = pending {
+                                self.execute_pending_action(&cmd)?;
+                            }
+                        }
+                        "cancel" | "ok" => {
+                            // Just close the dialog (already done above)
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            crossterm::event::KeyCode::Esc => {
+                self.state.active_dialog = None;
+                self.state.pending_dialog_action = None;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Execute a pending dialog action after confirmation
+    fn execute_pending_action(&mut self, action: &str) -> Result<()> {
+        match action {
+            "clear_chat" => {
+                self.chat.clear();
+                self.chat.add_message(ChatRole::System, "Chat cleared.".to_string());
+            }
+            "quit" => {
+                self.running = false;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Show a confirm dialog for destructive operations
+    fn show_confirm_dialog(&mut self, title: &str, message: &str, action: &str) {
+        use crate::widgets::dialog::ConfirmDialog;
+        let dialog = ConfirmDialog::new(title.to_string())
+            .with_message(message.to_string())
+            .build();
+        self.state.active_dialog = Some(dialog);
+        self.state.pending_dialog_action = Some(action.to_string());
+    }
+
+    /// Show an alert dialog for information/errors
+    fn show_alert_dialog(&mut self, title: &str, message: &str, danger: bool) {
+        use crate::widgets::dialog::AlertDialog;
+        let mut builder = AlertDialog::new(title.to_string())
+            .with_message(message.to_string());
+        if danger {
+            builder = builder.with_danger();
+        }
+        self.state.active_dialog = Some(builder.build());
+        self.state.pending_dialog_action = None;
+    }
+
     /// Submit the current input
     fn submit_input(&mut self) -> Result<()> {
         let input = self.prompt.input().to_string();
@@ -444,23 +551,32 @@ impl Repl {
                     self.chat.add_message(ChatRole::System, cmd_list);
                 }
                 "/clear" => {
-                    self.chat.clear();
-                    self.chat.add_message(ChatRole::System, "Chat cleared.".to_string());
+                    if self.chat.len() > 1 {
+                        // Show confirm dialog for non-empty chat
+                        self.show_confirm_dialog(
+                            "Clear Chat",
+                            "Clear all messages? This cannot be undone.",
+                            "clear_chat",
+                        );
+                    } else {
+                        self.chat.clear();
+                        self.chat.add_message(ChatRole::System, "Chat cleared.".to_string());
+                    }
                 }
                 "/quit" | "/exit" => {
-                    // Show session summary if there were changes
-                    if let Some(started) = self.session_started_at {
-                        let summary = SessionSummary::from_diff_data(
-                            &self.diff_data,
-                            self.commands_run,
-                            self.tools_invoked,
-                            started,
+                    let had_activity = self.commands_run > 0
+                        || self.tools_invoked > 0
+                        || self.current_turn > 0;
+                    if had_activity {
+                        // Show confirm dialog for active session
+                        self.show_confirm_dialog(
+                            "End Session?",
+                            "You have unsaved activity. Quit anyway?",
+                            "quit",
                         );
-                        if summary.had_changes() || summary.total_turns > 0 {
-                            self.chat.add_message(ChatRole::System, summary.render());
-                        }
+                    } else {
+                        self.running = false;
                     }
-                    self.running = false;
                 }
                 "/model" => {
                     if args.is_empty() {
@@ -1240,6 +1356,7 @@ mod tests {
         // running is false after new(); only run() sets it to true.
         // Simulate the active state that run() would set.
         repl.running = true;
+        // With no activity, /exit should quit immediately
         repl.handle_command("/exit").unwrap();
         assert!(!repl.running);
     }
@@ -1248,8 +1365,74 @@ mod tests {
     fn test_repl_quit_command() {
         let mut repl = Repl::new().unwrap();
         repl.running = true;
+        // With no activity, /quit should quit immediately
         repl.handle_command("/quit").unwrap();
         assert!(!repl.running);
+    }
+
+    #[test]
+    fn test_repl_quit_with_activity_shows_dialog() {
+        let mut repl = Repl::new().unwrap();
+        repl.running = true;
+        repl.commands_run = 1;
+        repl.handle_command("/quit").unwrap();
+        // Should NOT quit directly — should show confirm dialog
+        assert!(repl.running);
+        assert!(repl.state.active_dialog.is_some());
+        assert_eq!(repl.state.pending_dialog_action.as_deref(), Some("quit"));
+    }
+
+    #[test]
+    fn test_repl_exit_with_tools_shows_dialog() {
+        let mut repl = Repl::new().unwrap();
+        repl.running = true;
+        repl.tools_invoked = 3;
+        repl.handle_command("/exit").unwrap();
+        assert!(repl.running);
+        assert!(repl.state.active_dialog.is_some());
+    }
+
+    #[test]
+    fn test_repl_confirm_dialog_quit() {
+        let mut repl = Repl::new().unwrap();
+        repl.running = true;
+        repl.commands_run = 1;
+        repl.handle_command("/quit").unwrap();
+        // Dialog should be showing
+        assert!(repl.state.active_dialog.is_some());
+        // Navigate to "Confirm" button (index 1) — default is "Cancel" (index 0)
+        let right_key = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Right,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        repl.handle_input(right_key).unwrap();
+        // Press Enter to confirm
+        let enter_key = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        repl.handle_input(enter_key).unwrap();
+        // Now should have quit
+        assert!(!repl.running);
+        assert!(repl.state.active_dialog.is_none());
+    }
+
+    #[test]
+    fn test_repl_confirm_dialog_escape_cancels() {
+        let mut repl = Repl::new().unwrap();
+        repl.running = true;
+        repl.commands_run = 1;
+        repl.handle_command("/quit").unwrap();
+        assert!(repl.state.active_dialog.is_some());
+        // Press Escape to cancel
+        let key = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Esc,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        repl.handle_input(key).unwrap();
+        // Should still be running
+        assert!(repl.running);
+        assert!(repl.state.active_dialog.is_none());
     }
 
     #[test]
