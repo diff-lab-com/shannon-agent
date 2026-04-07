@@ -9,8 +9,6 @@
 //! - /diff: Show git diff
 //! - /search: Search command history
 //! - /export: Export session data
-//! - /config: Manage configuration
-//! - /debug: Developer tools
 
 use crate::command::{Command, CommandBase, CommandSource, PromptCommand};
 use crate::registry::CommandRegistry;
@@ -23,8 +21,6 @@ mod status;
 mod diff;
 mod search;
 mod export;
-mod config;
-mod debug;
 
 /// Register all built-in commands
 pub fn register_all(registry: &CommandRegistry) {
@@ -44,8 +40,6 @@ pub fn all_commands() -> Vec<Command> {
         diff::command(),
         search::command(),
         export::command(),
-        config::command(),
-        debug::command(),
     ]
 }
 
