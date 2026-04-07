@@ -432,6 +432,11 @@ impl QueryEngine {
         }
     }
 
+    /// Get a reference to the tool registry
+    pub fn tools(&self) -> &ToolRegistry {
+        &self.tools
+    }
+
     /// Add a user message to the conversation
     pub fn add_user_message(&mut self, content: String) {
         use crate::api::MessageContent;

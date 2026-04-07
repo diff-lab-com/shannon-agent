@@ -29,7 +29,8 @@ use shannon_core::{
     tools::ToolRegistry,
 };
 use shannon_commands::{CommandRegistry, CommandParser, builtin_commands};
-// Tool types used by ToolRegistry registration (kept for future tool registration)
+// Tool types used by ToolRegistry registration
+use shannon_agents::{EnterWorktreeTool, ExitWorktreeTool};
 #[allow(unused_imports)]
 use shannon_tools::{BashTool, ReadTool, WriteTool};
 
@@ -129,6 +130,8 @@ impl Repl {
 
         // Register tools that implement shannon_core::Tool
         tool_registry.register(Box::new(shannon_tools::BashTool::new()))?;
+        tool_registry.register(Box::new(EnterWorktreeTool::new()))?;
+        tool_registry.register(Box::new(ExitWorktreeTool::new()))?;
 
         // Create LLM client
         let client_config = LlmClientConfig::default();
@@ -399,7 +402,7 @@ impl Repl {
         // Built-in REPL commands (not in the command registry)
         let repl_commands = [
             "/help", "/clear", "/quit", "/exit", "/model", "/init",
-            "/sessions", "/resume", "/history",
+            "/sessions", "/resume", "/history", "/worktree",
         ];
 
         let parts: Vec<&str> = input.splitn(2, ' ').collect();
@@ -422,6 +425,7 @@ impl Repl {
                     cmd_list.push_str("  /sessions  List saved sessions [--all] [--search <query>]\n");
                     cmd_list.push_str("  /resume    Resume a session by UUID or number\n");
                     cmd_list.push_str("  /history   Show current session stats [--export <path>]\n");
+                    cmd_list.push_str("  /worktree  Manage git worktrees [enter|exit|status]\n");
 
                     // Builtin commands from registry
                     let names = self.runtime.block_on(self.command_registry.list_names());
@@ -507,6 +511,7 @@ impl Repl {
                 "/sessions" => self.handle_sessions_command(args)?,
                 "/resume" => self.handle_resume_command(args)?,
                 "/history" => self.handle_history_command(args)?,
+                "/worktree" => self.handle_worktree_command(args)?,
                 _ => {}
             }
             return Ok(());
@@ -808,6 +813,104 @@ impl Repl {
         }
 
         self.chat.add_message(ChatRole::System, stats);
+        Ok(())
+    }
+
+    /// Handle /worktree command — manage git worktrees
+    fn handle_worktree_command(&mut self, args: &str) -> Result<()> {
+        let arg = args.trim();
+
+        if arg.is_empty() || arg == "status" {
+            // Show worktree status
+            let status = if arg.is_empty() {
+                "Usage: /worktree [enter <name>|exit [--keep|--remove]|status]\n".to_string()
+            } else {
+                String::new()
+            };
+
+            // Check active worktree via the global state
+            let active = shannon_agents::get_active_worktree();
+            match active.as_ref() {
+                Some(session) => {
+                    let info = format!(
+                        "{}Active worktree:\n  Branch: {}\n  Path: {}\n  Created: {}",
+                        status,
+                        session.branch_name,
+                        session.path.display(),
+                        session.created_at.format("%Y-%m-%d %H:%M"),
+                    );
+                    self.chat.add_message(ChatRole::System, info);
+                }
+                None => {
+                    let info = format!("{}No active worktree. Working in main repository.", status);
+                    self.chat.add_message(ChatRole::System, info);
+                }
+            }
+            return Ok(());
+        }
+
+        let parts: Vec<&str> = arg.splitn(3, ' ').collect();
+        match parts[0] {
+            "enter" => {
+                let name = parts.get(1).map(|s| *s).unwrap_or("");
+                if name.is_empty() {
+                    self.chat.add_message(
+                        ChatRole::System,
+                        "Usage: /worktree enter <name>".to_string(),
+                    );
+                    return Ok(());
+                }
+                // Execute the enter_worktree tool via the registry
+                let input = serde_json::json!({ "name": name });
+                match self.runtime.block_on(
+                    self.query_engine.as_ref().unwrap().tools().execute("enter_worktree", input)
+                ) {
+                    Ok(result) => {
+                        self.chat.add_message(
+                            ChatRole::System,
+                            format!("Entered worktree: {}", result.content),
+                        );
+                    }
+                    Err(e) => {
+                        self.chat.add_message(
+                            ChatRole::System,
+                            format!("Failed to enter worktree: {}", e),
+                        );
+                    }
+                }
+            }
+            "exit" => {
+                let action = parts.get(1).map(|s| *s).unwrap_or("keep");
+                let exit_action = match action {
+                    "--remove" => "remove",
+                    _ => "keep",
+                };
+                let input = serde_json::json!({ "action": exit_action });
+                match self.runtime.block_on(
+                    self.query_engine.as_ref().unwrap().tools().execute("exit_worktree", input)
+                ) {
+                    Ok(result) => {
+                        self.chat.add_message(
+                            ChatRole::System,
+                            format!("Exited worktree: {}", result.content),
+                        );
+                    }
+                    Err(e) => {
+                        self.chat.add_message(
+                            ChatRole::System,
+                            format!("Failed to exit worktree: {}", e),
+                        );
+                    }
+                }
+            }
+            _ => {
+                self.chat.add_message(
+                    ChatRole::System,
+                    "Unknown worktree action. Use: enter <name>, exit [--keep|--remove], or status".to_string(),
+                );
+            }
+        }
+
         Ok(())
     }
 

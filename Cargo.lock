@@ -2367,6 +2367,7 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
+ "shannon-agents",
  "shannon-commands",
  "shannon-core",
  "shannon-mcp",

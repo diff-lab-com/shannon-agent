@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 shannon-core = { path = "../shannon-core" }
+shannon-agents = { path = "../shannon-agents" }
 shannon-commands = { path = "../shannon-commands" }
 shannon-tools = { path = "../shannon-tools" }
 shannon-mcp = { path = "../shannon-mcp" }

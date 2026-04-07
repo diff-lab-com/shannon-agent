@@ -410,6 +410,11 @@ pub struct ExitWorktreeToolInput {
 static ACTIVE_WORKTREE: LazyLock<Arc<RwLock<Option<WorktreeSession>>>> =
     LazyLock::new(|| Arc::new(RwLock::new(None)));
 
+/// Get a snapshot of the currently active worktree session (if any).
+pub fn get_active_worktree() -> Option<WorktreeSession> {
+    ACTIVE_WORKTREE.read().unwrap().clone()
+}
+
 /// Validate that a worktree name contains only safe characters.
 fn validate_name(name: &str) -> Result<(), ToolError> {
     if name.is_empty() {
