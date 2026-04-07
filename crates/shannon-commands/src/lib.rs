@@ -21,6 +21,7 @@ mod parser;
 mod executor;
 mod command;
 mod context;
+mod repl_command;
 
 mod builtin;
 
@@ -33,6 +34,7 @@ pub use parser::{CommandParser, ParsedCommand};
 pub use command::ExecutionResult;
 pub use executor::CommandExecutor;
 pub use context::{CommandContext, ToolUseContext};
+pub use repl_command::{ReplCommand, CommandAdapter};
 
 /// Re-export built-in commands
 pub mod builtin_commands {

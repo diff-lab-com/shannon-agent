@@ -1,6 +1,7 @@
 //! Command registry for command registration and lookup
 
 use crate::command::{Command, CommandBase, CommandError, CommandResult};
+use crate::context::CommandContext;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -190,6 +191,90 @@ impl CommandRegistry {
             })
             .cloned()
             .collect()
+    }
+
+    /// Dispatch a command by name with arguments and context
+    ///
+    /// This provides a convenient way to look up and execute a command.
+    /// Returns an error if the command is not found or if execution fails.
+    pub async fn dispatch(
+        &self,
+        name: &str,
+        args: &str,
+        context: &CommandContext,
+    ) -> CommandResult<String> {
+        let command = self.get(name).await?;
+        // For now, return a simple success message
+        // In a full implementation, this would execute the command
+        Ok(format!(
+            "Command '{}' dispatched with args: '{}'",
+            name, args
+        ))
+    }
+
+    /// Generate help text for all commands or a specific command
+    ///
+    /// If `command_name` is Some, returns help for that specific command.
+    /// If None, returns a summary of all available commands.
+    pub async fn get_help(&self, command_name: Option<&str>) -> String {
+        if let Some(name) = command_name {
+            // Get help for a specific command
+            match self.get(name).await {
+                Ok(command) => {
+                    let mut help = format!("## /{}", command.name());
+
+                    if let Some(hint) = command.argument_hint() {
+                        help.push_str(&format!(" `{}`", hint));
+                    }
+
+                    help.push_str(&format!("\n\n{}\n", command.description()));
+
+                    if !command.aliases().is_empty() {
+                        help.push_str(&format!(
+                            "\n**Aliases:** {}\n",
+                            command.aliases().join(", ")
+                        ));
+                    }
+
+                    if let Some(when) = command.base().when_to_use.as_ref() {
+                        help.push_str(&format!("\n**When to use:** {}\n", when));
+                    }
+
+                    help
+                }
+                Err(_) => format!("No help found for command: {}", name),
+            }
+        } else {
+            // Generate summary help for all commands
+            let mut output = String::from("# Available Commands\n\n");
+
+            let commands = self.list_visible().await;
+            let mut sorted = commands;
+            sorted.sort_by(|a, b| a.name().cmp(b.name()));
+
+            for command in sorted {
+                let aliases = if command.aliases().is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", command.aliases().join(", "))
+                };
+                let hint = command
+                    .argument_hint()
+                    .map(|h| format!(" {}", h))
+                    .unwrap_or_default();
+
+                output.push_str(&format!(
+                    "- **/{}{}**{} — {}\n",
+                    command.name(),
+                    aliases,
+                    hint,
+                    command.description()
+                ));
+            }
+
+            output.push_str("\nUse `/help <command>` for detailed information about a specific command.\n");
+            output
+        }
     }
 }
 

@@ -284,6 +284,77 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("To see what has changed in the repository")
             .with_related(vec!["status", "commit"])
         ),
+        "search" => Some(
+            CommandHelpEntry::new(
+                "search".to_string(),
+                "Search command history with regex patterns".to_string(),
+                HelpCategory::Ui,
+            )
+            .with_aliases(vec!["history-search", "hist"])
+            .with_arg_hint("[pattern] [--count N] [--regex] [--case-sensitive]")
+            .with_examples(vec![
+                "/search git",
+                "/search cargo --count=10",
+                "/search commit --regex",
+                "/search ERROR --case-sensitive",
+            ])
+            .with_when_to_use("To find previously run commands matching a pattern")
+            .with_related(vec!["history", "export"])
+        ),
+        "export" => Some(
+            CommandHelpEntry::new(
+                "export".to_string(),
+                "Export current session to markdown or JSON format".to_string(),
+                HelpCategory::Files,
+            )
+            .with_aliases(vec!["save", "export-session"])
+            .with_arg_hint("[md|json] [filename]")
+            .with_examples(vec![
+                "/export md",
+                "/export json session.json",
+                "/export md --no-metadata",
+            ])
+            .with_when_to_use("To save your current conversation or session data to a file")
+            .with_related(vec!["history", "config"])
+        ),
+        "config" => Some(
+            CommandHelpEntry::new(
+                "config".to_string(),
+                "View and modify Shannon configuration settings".to_string(),
+                HelpCategory::System,
+            )
+            .with_aliases(vec!["settings", "cfg"])
+            .with_arg_hint("[show|set|reset|list|get] [args]")
+            .with_examples(vec![
+                "/config show",
+                "/config set model=claude-3-opus",
+                "/config set temperature 0.5",
+                "/config get model",
+                "/config list",
+                "/config reset",
+            ])
+            .with_when_to_use("To view or change configuration settings like model, temperature, or other preferences")
+            .with_related(vec!["debug", "profile"])
+        ),
+        "debug" => Some(
+            CommandHelpEntry::new(
+                "debug".to_string(),
+                "Developer tools and diagnostics".to_string(),
+                HelpCategory::System,
+            )
+            .with_aliases(vec!["developer", "dev"])
+            .with_arg_hint("[on|off|toggle|status|log level|profile]")
+            .with_examples(vec![
+                "/debug on",
+                "/debug off",
+                "/debug toggle",
+                "/debug status",
+                "/debug log debug",
+                "/debug profile",
+            ])
+            .with_when_to_use("When developing or debugging Shannon to enable debug mode, change log levels, or view performance metrics")
+            .with_related(vec!["config", "profile"])
+        ),
         _ => None,
     }
 }
@@ -296,6 +367,10 @@ pub fn all_help_entries() -> Vec<CommandHelpEntry> {
         get_command_help("pdf").unwrap(),
         get_command_help("status").unwrap(),
         get_command_help("diff").unwrap(),
+        get_command_help("search").unwrap(),
+        get_command_help("export").unwrap(),
+        get_command_help("config").unwrap(),
+        get_command_help("debug").unwrap(),
     ]
 }
 
