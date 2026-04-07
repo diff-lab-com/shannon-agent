@@ -840,13 +840,17 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let tool = ExitWorktreeTool::new();
 
-        // Ensure no active session.
-        *ACTIVE_WORKTREE.write().unwrap() = None;
+        // Ensure no active session (use write lock to prevent races).
+        {
+            let mut guard = ACTIVE_WORKTREE.write().unwrap();
+            *guard = None;
+            // Lock is released here
+        }
 
         let result = rt.block_on(tool.execute(json!({"action": "keep"})));
-        assert!(result.is_err());
+        assert!(result.is_err(), "Expected error when no active session, got: {:?}", result);
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("No active worktree session"));
+        assert!(err.contains("No active worktree session"), "Error message: {}", err);
     }
 
     #[test]
@@ -855,21 +859,25 @@ mod tests {
         let tool = ExitWorktreeTool::new();
 
         // Set up a fake session so we get past the "no session" check.
-        *ACTIVE_WORKTREE.write().unwrap() = Some(WorktreeSession {
-            id: "test".into(),
-            path: PathBuf::from("/tmp/nonexistent-worktree"),
-            branch_name: "worktree/test".into(),
-            original_branch: String::new(),
-            status: WorktreeStatus::Active,
-            created_at: chrono::Utc::now(),
-            agent: None,
-            metadata: HashMap::new(),
-        });
+        {
+            let mut guard = ACTIVE_WORKTREE.write().unwrap();
+            *guard = Some(WorktreeSession {
+                id: "test_invalid_action".into(),  // Use unique ID to avoid collision
+                path: PathBuf::from("/tmp/nonexistent-worktree-invalid"),
+                branch_name: "worktree/test-invalid".into(),
+                original_branch: String::new(),
+                status: WorktreeStatus::Active,
+                created_at: chrono::Utc::now(),
+                agent: None,
+                metadata: HashMap::new(),
+            });
+            // Lock is released here
+        }
 
         let result = rt.block_on(tool.execute(json!({"action": "invalid"})));
-        assert!(result.is_err());
+        assert!(result.is_err(), "Expected error for invalid action, got: {:?}", result);
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("Invalid action"));
+        assert!(err.contains("Invalid action"), "Error message: {}", err);
 
         // Clean up.
         *ACTIVE_WORKTREE.write().unwrap() = None;
