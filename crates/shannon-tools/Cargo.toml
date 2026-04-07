@@ -52,6 +52,9 @@ dirs = { workspace = true }
 # SHA-256 hashing for content deduplication
 sha2 = "0.10"
 
+# Shell command parsing for security
+shell-words = "1.1"
+
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3"

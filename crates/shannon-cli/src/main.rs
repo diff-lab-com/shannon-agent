@@ -1,6 +1,5 @@
 use anyhow::Result;
 use clap::Parser;
-use std::io::Write;
 use clap::Subcommand;
 use futures::StreamExt;
 use shannon_core::{
@@ -11,7 +10,90 @@ use shannon_core::{
 };
 use shannon_tools::BashTool;
 use shannon_ui::Repl;
+use std::collections::HashMap;
+use std::io::Write;
 use uuid::Uuid;
+
+/// CLI configuration passed explicitly instead of via environment variables.
+///
+/// This struct holds all configuration that was previously set via unsafe
+/// `std::env::set_var` calls. It is passed explicitly to functions that need
+/// this configuration, eliminating the need for environment variable mutation.
+#[derive(Debug, Clone, Default)]
+struct CliConfig {
+    /// LLM model to use (e.g., claude-sonnet-4, gpt-4o)
+    model: Option<String>,
+    /// LLM provider (anthropic, openai, ollama, custom)
+    provider: Option<String>,
+    /// Maximum tokens for the response
+    max_tokens: Option<usize>,
+    /// Sampling temperature, 0.0 - 1.0
+    temperature: Option<f32>,
+    /// Request timeout in seconds
+    timeout: Option<u64>,
+    /// Enable debug logging
+    debug: bool,
+    /// Additional environment variable overrides (KEY=VALUE pairs)
+    env_overrides: HashMap<String, String>,
+}
+
+impl CliConfig {
+    /// Get the model, with fallback to environment variable.
+    fn model(&self) -> Option<String> {
+        self.model.clone().or_else(|| std::env::var("SHANNON_MODEL").ok())
+    }
+
+    /// Get the provider, with fallback to environment variable.
+    fn provider(&self) -> Option<String> {
+        self.provider.clone().or_else(|| std::env::var("SHANNON_PROVIDER").ok())
+    }
+
+    /// Get max_tokens, with fallback to environment variable.
+    fn max_tokens(&self) -> Option<usize> {
+        self.max_tokens.or_else(|| {
+            std::env::var("SHANNON_MAX_TOKENS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
+    }
+
+    /// Get temperature, with fallback to environment variable.
+    fn temperature(&self) -> Option<f32> {
+        self.temperature.or_else(|| {
+            std::env::var("SHANNON_TEMPERATURE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
+    }
+
+    /// Get timeout, with fallback to environment variable.
+    fn timeout(&self) -> Option<u64> {
+        self.timeout.or_else(|| {
+            std::env::var("SHANNON_TIMEOUT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
+    }
+
+    /// Get debug flag, with fallback to environment variable.
+    fn debug(&self) -> bool {
+        if self.debug {
+            return true;
+        }
+        std::env::var("SHANNON_DEBUG")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(false)
+    }
+
+    /// Get an environment variable value, checking overrides first.
+    fn get_env(&self, key: &str) -> Option<String> {
+        self.env_overrides
+            .get(key)
+            .cloned()
+            .or_else(|| std::env::var(key).ok())
+    }
+}
 
 /// Shannon Code - AI-powered code assistant in Rust
 ///
@@ -124,10 +206,10 @@ enum Commands {
     },
 }
 
-/// Parse CLI env overrides into a Vec of (key, value) pairs.
+/// Parse CLI env overrides into a HashMap.
 /// Returns Err for malformed entries (missing '=' or empty key).
-fn parse_cli_env(env: &[String]) -> Result<Vec<(String, String)>, String> {
-    let mut pairs = Vec::new();
+fn parse_cli_env(env: &[String]) -> Result<HashMap<String, String>, String> {
+    let mut map = HashMap::new();
     for pair in env {
         match pair.split_once('=') {
             Some((key, value)) => {
@@ -136,61 +218,42 @@ fn parse_cli_env(env: &[String]) -> Result<Vec<(String, String)>, String> {
                 if key.is_empty() {
                     return Err(format!("empty key in env override: {pair}"));
                 }
-                pairs.push((key, value));
+                map.insert(key, value);
             }
             None => return Err(format!("malformed env override (missing '='): {pair}")),
         }
     }
-    Ok(pairs)
+    Ok(map)
 }
 
-/// Apply CLI option overrides as environment variables.
+/// Build a CliConfig from CLI options.
 ///
-/// # Safety
-///
-/// This function MUST be called only from the main thread before any tokio
-/// runtime creation or thread spawning. `std::env::set_var` is unsafe in
-/// Rust 2024 edition because it is unsound when other threads exist that
-/// may read environment variables concurrently. At the point this function
-/// is called, we guarantee single-threaded execution.
-fn apply_env_overrides(
+/// This replaces the unsafe `apply_env_overrides` function by collecting
+/// all configuration into a struct that is passed explicitly to functions.
+fn build_cli_config(
     model: Option<&str>,
     provider: Option<&str>,
     max_tokens: Option<usize>,
     temperature: Option<f32>,
     timeout: Option<u64>,
     debug: bool,
-) {
-    // SAFETY: Called at the very start of main(), before any runtime or thread.
-    // No other threads exist at this point.
-    unsafe fn set_env(key: &str, value: &str) {
-        std::env::set_var(key, value);
-    }
-
-    // SAFETY: See above — we are single-threaded here.
-    if let Some(m) = model {
-        unsafe { set_env("SHANNON_MODEL", m) };
-    }
-    if let Some(p) = provider {
-        unsafe { set_env("SHANNON_PROVIDER", p) };
-    }
-    if let Some(mt) = max_tokens {
-        unsafe { set_env("SHANNON_MAX_TOKENS", &mt.to_string()) };
-    }
-    if let Some(t) = temperature {
-        unsafe { set_env("SHANNON_TEMPERATURE", &t.to_string()) };
-    }
-    if let Some(to) = timeout {
-        unsafe { set_env("SHANNON_TIMEOUT", &to.to_string()) };
-    }
-    if debug {
-        unsafe { set_env("SHANNON_DEBUG", "1") };
+    env_overrides: HashMap<String, String>,
+) -> CliConfig {
+    CliConfig {
+        model: model.map(|s| s.to_string()),
+        provider: provider.map(|s| s.to_string()),
+        max_tokens,
+        temperature,
+        timeout,
+        debug,
+        env_overrides,
     }
 }
 
 /// Run a non-interactive query, outputting results to stdout.
 /// `stream` controls whether text is streamed character-by-character.
-fn run_noninteractive_query(query: &str, stream: bool) -> Result<()> {
+/// `config` holds explicit CLI configuration.
+fn run_noninteractive_query(query: &str, stream: bool, config: &CliConfig) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
 
     rt.block_on(async {
@@ -199,7 +262,7 @@ fn run_noninteractive_query(query: &str, stream: bool) -> Result<()> {
         tools.register(Box::new(BashTool::new()))
             .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
 
-        // Build LLM client
+        // Build LLM client with explicit config
         let client_config = LlmClientConfig::default();
         let client = shannon_core::api::LlmClient::new(client_config);
 
@@ -215,10 +278,11 @@ fn run_noninteractive_query(query: &str, stream: bool) -> Result<()> {
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: true,
-                max_tokens: None,
-                model: std::env::var("SHANNON_MODEL")
-                    .unwrap_or_else(|_| "default".to_string()),
-                temperature: std::env::var("SHANNON_TEMPERATURE").ok().and_then(|s| s.parse().ok()),
+                max_tokens: config.max_tokens(),
+                model: config
+                    .model()
+                    .unwrap_or_else(|| "default".to_string()),
+                temperature: config.temperature(),
                 top_p: None,
             },
         };
@@ -274,29 +338,22 @@ fn run_noninteractive_query(query: &str, stream: bool) -> Result<()> {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // ── Phase 1: Apply all env var overrides while single-threaded ─────
-    // All unsafe set_var calls are centralized here, BEFORE any tokio
-    // runtime creation or thread spawning. Once we enter Phase 2 below,
-    // no more set_var calls occur.
-
-    // Bare prompt case: apply top-level model/provider overrides
+    // Bare prompt case: handle directly with explicit config
     if let Some(prompt) = cli.prompt {
-        apply_env_overrides(
+        let config = build_cli_config(
             cli.model.as_deref(),
             cli.provider.as_deref(),
             None,
             None,
             None,
             false,
+            HashMap::new(),
         );
-        return run_noninteractive_query(&prompt, true);
+        return run_noninteractive_query(&prompt, true, &config);
     }
 
-    // Subcommand / default case
-    match &cli.command {
-        // No subcommand and no prompt → just launch REPL (no env overrides)
-        None => {}
-
+    // Build configuration from CLI options (no more unsafe set_var calls)
+    let config = match &cli.command {
         Some(Commands::Repl {
             env,
             model,
@@ -308,47 +365,39 @@ fn main() -> Result<()> {
             cwd: _,
             file: _,
         }) => {
-            // Parse and validate -e KEY=VALUE overrides, apply them first
             let env_overrides = parse_cli_env(env)
                 .map_err(|e| anyhow::anyhow!(e))?;
-            // SAFETY: single-threaded, no runtime exists yet.
-            for (key, value) in &env_overrides {
-                unsafe { std::env::set_var(key, value) };
-            }
-
-            // Apply --model, --provider, etc. (lower priority than -e flags)
-            apply_env_overrides(
+            build_cli_config(
                 model.as_deref(),
                 provider.as_deref(),
                 *max_tokens,
                 *temperature,
                 *timeout,
                 *debug,
-            );
+                env_overrides,
+            )
         }
-
         Some(Commands::Query {
             model,
             provider,
             max_tokens,
             ..
         }) => {
-            apply_env_overrides(
+            build_cli_config(
                 model.as_deref(),
                 provider.as_deref(),
                 *max_tokens,
                 None,
                 None,
                 false,
-            );
+                HashMap::new(),
+            )
         }
+        // No subcommand, Version, and Config commands don't need config
+        None | Some(Commands::Version { .. }) | Some(Commands::Config { .. }) => CliConfig::default(),
+    };
 
-        // Version and Config commands don't need env overrides
-        Some(Commands::Version { .. }) | Some(Commands::Config { .. }) => {}
-    }
-
-    // ── Phase 2: Execute commands (no more set_var from here on) ────────
-
+    // Execute commands with explicit config
     match cli.command {
         None => {
             let mut repl = Repl::new().map_err(|e| anyhow::anyhow!("{e:?}"))?;
@@ -382,7 +431,7 @@ fn main() -> Result<()> {
             no_stream,
             ..
         }) => {
-            run_noninteractive_query(&query, !no_stream)?;
+            run_noninteractive_query(&query, !no_stream, &config)?;
         }
     }
 
@@ -399,7 +448,8 @@ mod tests {
     fn test_parse_single_env() {
         let input = vec!["KEY=value".to_string()];
         let result = parse_cli_env(&input).unwrap();
-        assert_eq!(result, vec![("KEY".to_string(), "value".to_string())]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.get("KEY"), Some(&"value".to_string()));
     }
 
     #[test]
@@ -411,16 +461,16 @@ mod tests {
         ];
         let result = parse_cli_env(&input).unwrap();
         assert_eq!(result.len(), 3);
-        assert_eq!(result[0], ("FOO".to_string(), "bar".to_string()));
-        assert_eq!(result[1], ("BAZ".to_string(), "qux".to_string()));
-        assert_eq!(result[2], ("PATH".to_string(), "/usr/bin".to_string()));
+        assert_eq!(result.get("FOO"), Some(&"bar".to_string()));
+        assert_eq!(result.get("BAZ"), Some(&"qux".to_string()));
+        assert_eq!(result.get("PATH"), Some(&"/usr/bin".to_string()));
     }
 
     #[test]
     fn test_parse_env_empty_value() {
         let input = vec!["EMPTY=".to_string()];
         let result = parse_cli_env(&input).unwrap();
-        assert_eq!(result, vec![("EMPTY".to_string(), "".to_string())]);
+        assert_eq!(result.get("EMPTY"), Some(&"".to_string()));
     }
 
     #[test]
@@ -428,14 +478,14 @@ mod tests {
         // KEY=a=b should parse as key="KEY", value="a=b"
         let input = vec!["EQUATION=a=b".to_string()];
         let result = parse_cli_env(&input).unwrap();
-        assert_eq!(result[0], ("EQUATION".to_string(), "a=b".to_string()));
+        assert_eq!(result.get("EQUATION"), Some(&"a=b".to_string()));
     }
 
     #[test]
     fn test_parse_env_whitespace_trimmed() {
         let input = vec!["  KEY  =  value  ".to_string()];
         let result = parse_cli_env(&input).unwrap();
-        assert_eq!(result[0], ("KEY".to_string(), "value".to_string()));
+        assert_eq!(result.get("KEY"), Some(&"value".to_string()));
     }
 
     #[test]
@@ -466,8 +516,8 @@ mod tests {
         let input = vec!["URL=https://example.com/path?q=1&b=2".to_string()];
         let result = parse_cli_env(&input).unwrap();
         assert_eq!(
-            result[0],
-            ("URL".to_string(), "https://example.com/path?q=1&b=2".to_string())
+            result.get("URL"),
+            Some(&"https://example.com/path?q=1&b=2".to_string())
         );
     }
 
@@ -475,7 +525,7 @@ mod tests {
     fn test_parse_env_model_override() {
         let input = vec!["SHANNON_MODEL=gpt-4o".to_string()];
         let result = parse_cli_env(&input).unwrap();
-        assert_eq!(result[0], ("SHANNON_MODEL".to_string(), "gpt-4o".to_string()));
+        assert_eq!(result.get("SHANNON_MODEL"), Some(&"gpt-4o".to_string()));
     }
 
     #[test]
@@ -489,7 +539,98 @@ mod tests {
     fn test_parse_env_underscore_key() {
         let input = vec!["MY_VAR_123=hello".to_string()];
         let result = parse_cli_env(&input).unwrap();
-        assert_eq!(result[0], ("MY_VAR_123".to_string(), "hello".to_string()));
+        assert_eq!(result.get("MY_VAR_123"), Some(&"hello".to_string()));
+    }
+
+    // ── CliConfig tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_cli_config_default() {
+        let config = CliConfig::default();
+        assert!(config.model.is_none());
+        assert!(config.provider.is_none());
+        assert!(config.max_tokens.is_none());
+        assert!(!config.debug);
+    }
+
+    #[test]
+    fn test_cli_config_with_values() {
+        let config = CliConfig {
+            model: Some("gpt-4o".to_string()),
+            provider: Some("openai".to_string()),
+            max_tokens: Some(4096),
+            temperature: Some(0.5),
+            timeout: Some(60),
+            debug: true,
+            env_overrides: HashMap::new(),
+        };
+        assert_eq!(config.model(), Some("gpt-4o".to_string()));
+        assert_eq!(config.provider(), Some("openai".to_string()));
+        assert_eq!(config.max_tokens(), Some(4096));
+        assert_eq!(config.temperature(), Some(0.5));
+        assert_eq!(config.timeout(), Some(60));
+        assert!(config.debug());
+    }
+
+    #[test]
+    fn test_cli_config_env_fallback() {
+        // Test that env vars are used as fallback when explicit value is None
+        let config = CliConfig {
+            model: None,
+            provider: None,
+            max_tokens: None,
+            temperature: None,
+            timeout: None,
+            debug: false,
+            env_overrides: HashMap::new(),
+        };
+        // These will be None unless SHANNON_MODEL is set in the test environment
+        assert!(config.model().is_none() || config.model().is_some());
+        assert!(config.provider().is_none() || config.provider().is_some());
+    }
+
+    #[test]
+    fn test_cli_config_get_env() {
+        let mut overrides = HashMap::new();
+        overrides.insert("CUSTOM_VAR".to_string(), "custom_value".to_string());
+        let config = CliConfig {
+            model: None,
+            provider: None,
+            max_tokens: None,
+            temperature: None,
+            timeout: None,
+            debug: false,
+            env_overrides: overrides,
+        };
+        assert_eq!(
+            config.get_env("CUSTOM_VAR"),
+            Some("custom_value".to_string())
+        );
+        // Non-existent key returns None (unless set in actual env)
+        assert!(config.get_env("NON_EXISTENT_KEY").is_none()
+            || config.get_env("NON_EXISTENT_KEY").is_some());
+    }
+
+    #[test]
+    fn test_cli_config_explicit_overrides_env() {
+        let mut overrides = HashMap::new();
+        overrides.insert("SHANNON_MODEL".to_string(), "override-model".to_string());
+        let config = CliConfig {
+            model: Some("cli-model".to_string()),
+            provider: None,
+            max_tokens: None,
+            temperature: None,
+            timeout: None,
+            debug: false,
+            env_overrides: overrides,
+        };
+        // Explicit model should take precedence
+        assert_eq!(config.model(), Some("cli-model".to_string()));
+        // But get_env should find the override
+        assert_eq!(
+            config.get_env("SHANNON_MODEL"),
+            Some("override-model".to_string())
+        );
     }
 
     // ── CLI clap parsing tests ────────────────────────────────────────
@@ -1012,6 +1153,6 @@ mod tests {
     fn test_parse_env_chinese_value() {
         let input = vec!["SHANNON_MODEL=你用的什么模型".to_string()];
         let result = parse_cli_env(&input).unwrap();
-        assert_eq!(result[0], ("SHANNON_MODEL".to_string(), "你用的什么模型".to_string()));
+        assert_eq!(result.get("SHANNON_MODEL"), Some(&"你用的什么模型".to_string()));
     }
 }

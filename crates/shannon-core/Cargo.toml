@@ -18,6 +18,9 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 
+# Tool interface
+shannon-tool-interface = { path = "../shannon-tool-interface" }
+
 # HTTP client for Claude API
 reqwest = { workspace = true }
 
