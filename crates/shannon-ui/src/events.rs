@@ -30,8 +30,13 @@ impl EventHandler {
     pub fn next(&mut self) -> io::Result<Option<Event>> {
         // Poll for event with timeout
         if event::poll(self.tick_rate)? {
-            if let CrosstermEvent::Key(key) = event::read()? {
-                return Ok(Some(Event::Input(key)));
+            // Read and properly handle all event types to prevent escape sequence leakage
+            match event::read()? {
+                CrosstermEvent::Key(key) => return Ok(Some(Event::Input(key))),
+                // Consume and ignore mouse events to prevent escape sequences from appearing
+                CrosstermEvent::Mouse(_) => {}
+                // Ignore other event types (resize, focus, paste)
+                _ => {}
             }
         }
         Ok(Some(Event::Tick))
