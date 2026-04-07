@@ -40,6 +40,11 @@ pub mod builtin_commands {
     pub use crate::builtin::{register_all, all_commands};
 }
 
+/// Re-export help utilities for REPL integration
+pub mod help_utils {
+    pub use crate::builtin::help_utils::*;
+}
+
 /// Create a new command registry with all built-in commands registered
 pub fn create_registry() -> CommandRegistry {
     let registry = CommandRegistry::new();

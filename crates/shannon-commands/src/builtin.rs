@@ -46,3 +46,8 @@ pub mod commands {
     pub use super::status::command as status_command;
     pub use super::diff::command as diff_command;
 }
+
+/// Re-export help utilities for REPL integration
+pub mod help_utils {
+    pub use super::help::{generate_help, get_command_help, all_help_entries, HelpCategory, CommandHelpEntry};
+}

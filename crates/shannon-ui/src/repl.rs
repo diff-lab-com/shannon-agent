@@ -32,7 +32,7 @@ use shannon_core::{
     state::StateManager,
     tools::ToolRegistry,
 };
-use shannon_commands::{CommandRegistry, CommandParser, builtin_commands};
+use shannon_commands::{CommandRegistry, CommandParser, builtin_commands, help_utils};
 // Tool types used by ToolRegistry registration
 use shannon_agents::{EnterWorktreeTool, ExitWorktreeTool};
 #[allow(unused_imports)]
@@ -535,7 +535,17 @@ impl Repl {
         if repl_commands.contains(&cmd) {
             match cmd {
                 "/help" => {
-                    // List all commands from the registry plus REPL commands
+                    // Check if args specify a specific command
+                    if !args.is_empty() {
+                        // Try help system from shannon-commands first
+                        let help_text = help_utils::generate_help(Some(args));
+                        if !help_text.contains("No help found") {
+                            self.chat.add_message(ChatRole::System, help_text);
+                            return Ok(());
+                        }
+                    }
+
+                    // Show full help with REPL commands + builtin commands
                     let mut cmd_list = String::from("Available commands:\n");
 
                     // REPL-local commands
