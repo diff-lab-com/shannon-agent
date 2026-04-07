@@ -144,6 +144,50 @@ fn parse_cli_env(env: &[String]) -> Result<Vec<(String, String)>, String> {
     Ok(pairs)
 }
 
+/// Apply CLI option overrides as environment variables.
+///
+/// # Safety
+///
+/// This function MUST be called only from the main thread before any tokio
+/// runtime creation or thread spawning. `std::env::set_var` is unsafe in
+/// Rust 2024 edition because it is unsound when other threads exist that
+/// may read environment variables concurrently. At the point this function
+/// is called, we guarantee single-threaded execution.
+fn apply_env_overrides(
+    model: Option<&str>,
+    provider: Option<&str>,
+    max_tokens: Option<usize>,
+    temperature: Option<f32>,
+    timeout: Option<u64>,
+    debug: bool,
+) {
+    // SAFETY: Called at the very start of main(), before any runtime or thread.
+    // No other threads exist at this point.
+    unsafe fn set_env(key: &str, value: &str) {
+        std::env::set_var(key, value);
+    }
+
+    // SAFETY: See above — we are single-threaded here.
+    if let Some(m) = model {
+        unsafe { set_env("SHANNON_MODEL", m) };
+    }
+    if let Some(p) = provider {
+        unsafe { set_env("SHANNON_PROVIDER", p) };
+    }
+    if let Some(mt) = max_tokens {
+        unsafe { set_env("SHANNON_MAX_TOKENS", &mt.to_string()) };
+    }
+    if let Some(t) = temperature {
+        unsafe { set_env("SHANNON_TEMPERATURE", &t.to_string()) };
+    }
+    if let Some(to) = timeout {
+        unsafe { set_env("SHANNON_TIMEOUT", &to.to_string()) };
+    }
+    if debug {
+        unsafe { set_env("SHANNON_DEBUG", "1") };
+    }
+}
+
 /// Run a non-interactive query, outputting results to stdout.
 /// `stream` controls whether text is streamed character-by-character.
 fn run_noninteractive_query(query: &str, stream: bool) -> Result<()> {
@@ -230,26 +274,30 @@ fn run_noninteractive_query(query: &str, stream: bool) -> Result<()> {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Case 1: bare prompt → non-interactive query (like Claude Code)
+    // ── Phase 1: Apply all env var overrides while single-threaded ─────
+    // All unsafe set_var calls are centralized here, BEFORE any tokio
+    // runtime creation or thread spawning. Once we enter Phase 2 below,
+    // no more set_var calls occur.
+
+    // Bare prompt case: apply top-level model/provider overrides
     if let Some(prompt) = cli.prompt {
-        if let Some(m) = cli.model {
-            unsafe { std::env::set_var("SHANNON_MODEL", m) };
-        }
-        if let Some(p) = cli.provider {
-            unsafe { std::env::set_var("SHANNON_PROVIDER", p) };
-        }
+        apply_env_overrides(
+            cli.model.as_deref(),
+            cli.provider.as_deref(),
+            None,
+            None,
+            None,
+            false,
+        );
         return run_noninteractive_query(&prompt, true);
     }
 
-    // Case 2: subcommand or default
-    match cli.command {
-        // No subcommand and no prompt → launch REPL
-        None => {
-            let mut repl = Repl::new().map_err(|e| anyhow::anyhow!("{e:?}"))?;
-            repl.run().map_err(|e| anyhow::anyhow!("{e:?}"))?;
-        }
+    // Subcommand / default case
+    match &cli.command {
+        // No subcommand and no prompt → just launch REPL (no env overrides)
+        None => {}
+
         Some(Commands::Repl {
-            file: _,
             env,
             model,
             provider,
@@ -257,49 +305,60 @@ fn main() -> Result<()> {
             temperature,
             timeout,
             debug,
-            cwd,
+            cwd: _,
+            file: _,
         }) => {
-            // Handle working directory change first
+            // Parse and validate -e KEY=VALUE overrides, apply them first
+            let env_overrides = parse_cli_env(env)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            // SAFETY: single-threaded, no runtime exists yet.
+            for (key, value) in &env_overrides {
+                unsafe { std::env::set_var(key, value) };
+            }
+
+            // Apply --model, --provider, etc. (lower priority than -e flags)
+            apply_env_overrides(
+                model.as_deref(),
+                provider.as_deref(),
+                *max_tokens,
+                *temperature,
+                *timeout,
+                *debug,
+            );
+        }
+
+        Some(Commands::Query {
+            model,
+            provider,
+            max_tokens,
+            ..
+        }) => {
+            apply_env_overrides(
+                model.as_deref(),
+                provider.as_deref(),
+                *max_tokens,
+                None,
+                None,
+                false,
+            );
+        }
+
+        // Version and Config commands don't need env overrides
+        Some(Commands::Version { .. }) | Some(Commands::Config { .. }) => {}
+    }
+
+    // ── Phase 2: Execute commands (no more set_var from here on) ────────
+
+    match cli.command {
+        None => {
+            let mut repl = Repl::new().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            repl.run().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        }
+        Some(Commands::Repl { cwd, .. }) => {
             if let Some(dir) = cwd {
                 std::env::set_current_dir(&dir)
                     .map_err(|e| anyhow::anyhow!("Failed to set working directory: {}", e))?;
             }
-
-            // Parse and validate env overrides before spawning tokio runtime.
-            // We store them as a Vec to pass into the runtime, avoiding unsafe
-            // std::env::set_var which is unsound after threads exist.
-            let env_overrides = parse_cli_env(&env)
-                .map_err(|e| anyhow::anyhow!(e))?;
-
-            // Set env vars while still single-threaded (before tokio::main or runtime spawn).
-            // This is safe because no other threads exist at this point.
-            for (key, value) in &env_overrides {
-                // SAFETY: we are in the main function before any async runtime
-                // or thread spawning has occurred.
-                unsafe { std::env::set_var(key, value) };
-            }
-
-            // Apply CLI-provided model configuration as environment variables
-            // These have lower priority than -e flags but higher than config files
-            if let Some(m) = model {
-                unsafe { std::env::set_var("SHANNON_MODEL", m) };
-            }
-            if let Some(p) = provider {
-                unsafe { std::env::set_var("SHANNON_PROVIDER", p) };
-            }
-            if let Some(mt) = max_tokens {
-                unsafe { std::env::set_var("SHANNON_MAX_TOKENS", mt.to_string()) };
-            }
-            if let Some(t) = temperature {
-                unsafe { std::env::set_var("SHANNON_TEMPERATURE", t.to_string()) };
-            }
-            if let Some(to) = timeout {
-                unsafe { std::env::set_var("SHANNON_TIMEOUT", to.to_string()) };
-            }
-            if debug {
-                unsafe { std::env::set_var("SHANNON_DEBUG", "1") };
-            }
-
             let mut repl = Repl::new().map_err(|e| anyhow::anyhow!("{e:?}"))?;
             repl.run().map_err(|e| anyhow::anyhow!("{e:?}"))?;
         }
@@ -319,26 +378,13 @@ fn main() -> Result<()> {
         }
         Some(Commands::Query {
             query,
-            model,
-            provider,
-            max_tokens,
             output: _output_format,
             no_stream,
+            ..
         }) => {
-            // Apply model/provider overrides while still single-threaded
-            if let Some(m) = model {
-                unsafe { std::env::set_var("SHANNON_MODEL", m) };
-            }
-            if let Some(p) = provider {
-                unsafe { std::env::set_var("SHANNON_PROVIDER", p) };
-            }
-            if let Some(mt) = max_tokens {
-                unsafe { std::env::set_var("SHANNON_MAX_TOKENS", mt.to_string()) };
-            }
-
             run_noninteractive_query(&query, !no_stream)?;
         }
-    } // end match cli.command
+    }
 
     Ok(())
 }

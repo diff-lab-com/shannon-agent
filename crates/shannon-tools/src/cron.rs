@@ -1553,7 +1553,7 @@ mod tests {
         assert!(results[50].is_err());
         let err_msg = match &results[50] {
             Err(e) => e.to_string(),
-            _ => unreachable!(),
+            other => panic!("expected Err at results[50], got: {:?}", other),
         };
         assert!(err_msg.contains("max 50"));
     }

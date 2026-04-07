@@ -7,7 +7,6 @@ use crate::{
     Result,
 };
 use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -176,7 +175,7 @@ impl Repl {
         // Setup terminal
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+        execute!(stdout, EnterAlternateScreen)?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
@@ -231,8 +230,7 @@ impl Repl {
         disable_raw_mode()?;
         execute!(
             terminal.backend_mut(),
-            LeaveAlternateScreen,
-            DisableMouseCapture
+            LeaveAlternateScreen
         )?;
         terminal.show_cursor()?;
 
@@ -244,7 +242,11 @@ impl Repl {
         match event {
             crate::events::Event::Input(key) => {
                 if let Err(e) = self.handle_input(key) {
-                    eprintln!("Input error: {}", e);
+                    // Display error in UI chat instead of stderr to prevent escape sequence leakage
+                    self.chat.add_message(
+                        crate::widgets::ChatRole::System,
+                        format!("Input error: {}", e)
+                    );
                 }
             }
             crate::events::Event::Tick => {
