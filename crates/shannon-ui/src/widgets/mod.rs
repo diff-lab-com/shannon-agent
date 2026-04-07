@@ -388,28 +388,40 @@ impl PromptWidget {
         &self.input
     }
 
+    /// Convert char index to byte index
+    fn char_to_byte(&self, char_idx: usize) -> usize {
+        self.input
+            .char_indices()
+            .nth(char_idx)
+            .map(|(i, _)| i)
+            .unwrap_or(self.input.len())
+    }
+
     /// Add a character to the input
     pub fn add_char(&mut self, c: char) {
-        self.input.insert(self.cursor_position, c);
+        let byte_idx = self.char_to_byte(self.cursor_position);
+        self.input.insert(byte_idx, c);
         self.cursor_position += 1;
     }
 
     /// Remove the character before the cursor
     pub fn backspace(&mut self) {
         if self.cursor_position > 0 {
-            self.input.remove(self.cursor_position - 1);
             self.cursor_position -= 1;
+            let byte_idx = self.char_to_byte(self.cursor_position);
+            self.input.remove(byte_idx);
         }
     }
 
-    /// Move the cursor left
+    /// Move the cursor left by one character
     pub fn cursor_left(&mut self) {
         self.cursor_position = self.cursor_position.saturating_sub(1);
     }
 
-    /// Move the cursor right
+    /// Move the cursor right by one character
     pub fn cursor_right(&mut self) {
-        self.cursor_position = (self.cursor_position + 1).min(self.input.len());
+        let char_count = self.input.chars().count();
+        self.cursor_position = (self.cursor_position + 1).min(char_count);
     }
 
     /// Clear the input
@@ -420,7 +432,7 @@ impl PromptWidget {
 
     /// Set the input text
     pub fn set_input(&mut self, input: String) {
-        self.cursor_position = input.len();
+        self.cursor_position = input.chars().count();
         self.input = input;
     }
 

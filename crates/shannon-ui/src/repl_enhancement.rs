@@ -351,14 +351,29 @@ impl InputBuffer {
         }
     }
 
+    /// Convert a char index to a byte index for the given line.
+    fn char_to_byte(line: &str, char_idx: usize) -> usize {
+        line.char_indices()
+            .nth(char_idx)
+            .map(|(i, _)| i)
+            .unwrap_or(line.len())
+    }
+
+    /// Get the char count for the current line.
+    fn line_char_count(&self) -> usize {
+        self.lines.get(self.cursor_row).map(|l| l.chars().count()).unwrap_or(0)
+    }
+
     /// Insert a character at the cursor position.
     pub fn insert_char(&mut self, ch: char) {
         if self.cursor_row >= self.lines.len() {
             return;
         }
         let line = &mut self.lines[self.cursor_row];
-        let col = self.cursor_col.min(line.len());
-        line.insert(col, ch);
+        let char_count = line.chars().count();
+        let col = self.cursor_col.min(char_count);
+        let byte_idx = Self::char_to_byte(line, col);
+        line.insert(byte_idx, ch);
         self.cursor_col = col + 1;
     }
 
@@ -366,14 +381,15 @@ impl InputBuffer {
     pub fn backspace(&mut self) {
         if self.cursor_col > 0 {
             self.cursor_col -= 1;
-            self.lines[self.cursor_row].remove(self.cursor_col);
+            let byte_idx = Self::char_to_byte(&self.lines[self.cursor_row], self.cursor_col);
+            self.lines[self.cursor_row].remove(byte_idx);
         } else if self.cursor_row > 0 {
             // Merge with previous line
-            let prev_len = self.lines[self.cursor_row - 1].len();
+            let prev_char_count = self.lines[self.cursor_row - 1].chars().count();
             let current = self.lines.remove(self.cursor_row);
             self.cursor_row -= 1;
             self.lines[self.cursor_row].push_str(&current);
-            self.cursor_col = prev_len;
+            self.cursor_col = prev_char_count;
         }
     }
 
@@ -382,25 +398,26 @@ impl InputBuffer {
         if self.cursor_row >= self.lines.len() {
             return;
         }
-        let line = &mut self.lines[self.cursor_row];
-        if self.cursor_col < line.len() {
-            line.remove(self.cursor_col);
+        let char_count = self.lines[self.cursor_row].chars().count();
+        if self.cursor_col < char_count {
+            let byte_idx = Self::char_to_byte(&self.lines[self.cursor_row], self.cursor_col);
+            self.lines[self.cursor_row].remove(byte_idx);
         } else if self.cursor_row + 1 < self.lines.len() {
             let next = self.lines.remove(self.cursor_row + 1);
             self.lines[self.cursor_row].push_str(&next);
         }
     }
 
-    /// Move cursor left.
+    /// Move cursor left by one character.
     pub fn move_left(&mut self) {
         if self.cursor_col > 0 {
             self.cursor_col -= 1;
         }
     }
 
-    /// Move cursor right.
+    /// Move cursor right by one character.
     pub fn move_right(&mut self) {
-        let max = self.lines.get(self.cursor_row).map(|l| l.len()).unwrap_or(0);
+        let max = self.line_char_count();
         if self.cursor_col < max {
             self.cursor_col += 1;
         }
@@ -410,7 +427,7 @@ impl InputBuffer {
     pub fn move_up(&mut self) {
         if self.cursor_row > 0 {
             self.cursor_row -= 1;
-            let max = self.lines[self.cursor_row].len();
+            let max = self.line_char_count();
             self.cursor_col = self.cursor_col.min(max);
         }
     }
@@ -419,7 +436,7 @@ impl InputBuffer {
     pub fn move_down(&mut self) {
         if self.cursor_row + 1 < self.lines.len() {
             self.cursor_row += 1;
-            let max = self.lines[self.cursor_row].len();
+            let max = self.line_char_count();
             self.cursor_col = self.cursor_col.min(max);
         }
     }
@@ -430,7 +447,8 @@ impl InputBuffer {
             return;
         }
         let line = &mut self.lines[self.cursor_row];
-        let after: String = line.drain(self.cursor_col..).collect();
+        let byte_idx = Self::char_to_byte(line, self.cursor_col);
+        let after: String = line.drain(byte_idx..).collect();
 
         // Auto-indent: copy leading whitespace from current line
         let indent = if self.auto_indent {
@@ -441,7 +459,7 @@ impl InputBuffer {
 
         self.cursor_row += 1;
         self.lines.insert(self.cursor_row, format!("{}{}", after, indent));
-        self.cursor_col = after.len() + indent.len();
+        self.cursor_col = after.chars().count() + indent.chars().count();
     }
 
     /// Get the full text content of the buffer.
@@ -457,7 +475,7 @@ impl InputBuffer {
             text.lines().map(|l| l.to_string()).collect()
         };
         self.cursor_row = self.lines.len().saturating_sub(1);
-        self.cursor_col = self.lines.last().map(|l| l.len()).unwrap_or(0);
+        self.cursor_col = self.lines.last().map(|l| l.chars().count()).unwrap_or(0);
     }
 
     /// Clear the buffer.
