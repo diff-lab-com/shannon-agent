@@ -788,15 +788,33 @@ fn get_disk_space(path: &std::path::Path) -> Option<u64> {
     let path_cstr = CString::new(path.as_os_str().as_bytes()).ok()?;
     let mut stat: MaybeUninit<libc::statvfs> = MaybeUninit::uninit();
 
-    // SAFETY: path_cstr is a valid null-terminated C string, and statvfs
-    // writes to the uninitialized statvfs struct.
+    // SAFETY:
+    //
+    // 1. `path_cstr` is a valid null-terminated C string created from `path.as_os_str().as_bytes()`,
+    //    which is guaranteed to be valid for the lifetime of this function.
+    //
+    // 2. `stat.as_mut_ptr()` provides a valid pointer to uninitialized memory for the statvfs
+    //    struct. The `libc::statvfs` function writes to this memory when it succeeds.
+    //
+    // 3. The `result == 0` check ensures that `statvfs` succeeded before we call `assume_init()`.
+    //    When `statvfs` returns 0, it has fully initialized the statvfs struct. When it returns
+    //    non-zero, the struct may be uninitialized, so we correctly return `None` without
+    //    reading it.
+    //
+    // 4. `assume_init()` is safe here because:
+    //    - We only reach it if `result == 0` (statvfs succeeded)
+    //    - statvfs contract guarantees it writes to all fields of the struct on success
+    //    - The struct has no padding that would remain uninitialized
     let result = unsafe { libc::statvfs(path_cstr.as_ptr(), stat.as_mut_ptr()) };
 
     if result == 0 {
+        // SAFETY: statvfs returned 0, indicating success. The struct is now fully initialized.
         let stat = unsafe { stat.assume_init() };
         // Available space = block size * available blocks
         Some(stat.f_bsize as u64 * stat.f_bavail as u64)
     } else {
+        // statvfs failed; the stat struct may be uninitialized, so we must not read it.
+        // Returning None is the correct error handling path.
         None
     }
 }

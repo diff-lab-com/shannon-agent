@@ -1,0 +1,66 @@
+warning: associated items `estimate_tokens`, `needs_compression`, `compress`, and `summarize_messages` are never used
+warning: fields `state` and `cost_tracker` are never read
+warning: methods `execute_tool`, `process_turn`, and `validate_query` are never used
+warning: field `response` is never read
+warning: associated function `new` is never used
+warning: function `spawn_caffeinate` is never used
+warning: function `kill_caffeinate` is never used
+warning: field `token_type` is never read
+warning: method `is_expired` is never used
+warning: associated items `new`, `execute`, `execute_string`, and `registry` are never used
+warning: trait `Executable` is never used
+warning: constant `GIT_SAFETY` is never used
+warning: constant `COMMIT_ATTRIBUTION` is never used
+warning: function `get_prompt_template` is never used
+warning: function `get_default_branch` is never used
+warning: constant `REVIEW_PROMPT` is never used
+warning: function `get_review_prompt` is never used
+warning: enum `ReviewCategory` is never used
+warning: associated items `all` and `display_name` are never used
+warning: enum `Assessment` is never used
+warning: constant `PDF_PROMPT` is never used
+warning: fields `pages`, `extract_images`, `use_ocr`, `ocr_language`, `preserve_layout`, and `extract_tables` are never read
+warning: associated items `new`, `with_pages`, `with_images`, `with_ocr`, and `with_tables` are never used
+warning: enum `ImageFormat` is never used
+warning: function `get_pdf_prompt` is never used
+warning: associated items `all`, `display_name`, and `description` are never used
+warning: multiple associated items are never used
+warning: function `get_command_help` is never used
+warning: function `all_help_entries` is never used
+warning: function `generate_help` is never used
+warning: function `parse_git_status` is never used
+warning: function `format_status` is never used
+warning: function `format_branch_short` is never used
+warning: function `format_branch_verbose` is never used
+warning: multiple fields are never read
+warning: multiple associated items are never used
+warning: function `build_diff_command` is never used
+warning: function `parse_diff_stat` is never used
+warning: static `STATS_REGEX` is never used
+warning: constant `FUNCTION_PATTERN` is never used
+warning: constant `IMPORT_PATTERN` is never used
+warning: constant `STRUCT_PATTERN` is never used
+warning: constant `TEST_PATTERN` is never used
+warning: fields `name`, `description`, `created_at`, and `assignment_index` are never read
+warning: field `name` is never read
+warning: field `renderer` is never read
+warning: associated functions `welcome_message`, `tip_message`, and `height` are never used
+warning: associated items `new` and `with_description` are never used
+warning: multiple associated items are never used
+warning: multiple associated items are never used
+warning: multiple associated items are never used
+warning: constant `BLOCKS` is never used
+warning: multiple fields are never read
+warning: multiple methods are never used
+warning: fields `frames`, `current_frame`, and `message` are never read
+warning: methods `with_message`, `with_frames`, `tick`, and `render` are never used
+warning: fields `bars` and `show_labels` are never read
+warning: methods `add_bar`, `with_labels`, `clear`, `update`, and `render` are never used
+warning: fields `label`, `action`, `is_primary`, and `is_dangerous` are never read
+warning: associated items `new`, `primary`, and `dangerous` are never used
+warning: multiple fields are never read
+warning: multiple associated items are never used
+warning: associated items `new`, `with_message`, and `build` are never used
+warning: associated items `new`, `with_message`, `with_danger`, and `build` are never used
+warning: multiple associated items are never used
+warning: field `yank_buffer` is never read

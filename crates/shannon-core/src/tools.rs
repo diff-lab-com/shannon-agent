@@ -1,80 +1,14 @@
 //! # Tool System
 //!
 //! Dynamic tool registration, execution, and result handling.
+//!
+//! This module re-exports the core tool trait and types from `shannon_tool_interface`
+//! and provides the `ToolRegistry` for managing available tools.
 
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+pub use shannon_tool_interface::{Tool, ToolError, ToolOutput, ToolResult, ToolInfo};
+
 use serde_json::Value;
 use std::collections::HashMap;
-use thiserror::Error;
-
-/// Errors that can occur during tool execution
-#[derive(Error, Debug)]
-pub enum ToolError {
-    #[error("Tool not found: {0}")]
-    NotFound(String),
-
-    #[error("Invalid tool input: {0}")]
-    InvalidInput(String),
-
-    #[error("Tool execution failed: {0}")]
-    ExecutionFailed(String),
-
-    #[error("Tool registry error: {0}")]
-    RegistryError(String),
-}
-
-/// Result type for tool execution
-pub type ToolResult<T> = Result<T, ToolError>;
-
-/// Output from a tool execution
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolOutput {
-    pub content: String,
-    pub is_error: bool,
-    pub metadata: HashMap<String, Value>,
-}
-
-/// Trait defining a tool that can be executed by the query engine
-#[async_trait]
-pub trait Tool: Send + Sync {
-    /// Get the tool's name
-    fn name(&self) -> &str;
-
-    /// Get the tool's description
-    fn description(&self) -> &str;
-
-    /// Get the JSON schema for the tool's input parameters
-    fn input_schema(&self) -> Value;
-
-    /// Execute the tool with the given input
-    async fn execute(&self, input: Value) -> ToolResult<ToolOutput>;
-
-    /// Check if the tool requires authentication
-    fn requires_auth(&self) -> bool {
-        false
-    }
-
-    /// Get the tool's category
-    fn category(&self) -> &str {
-        "general"
-    }
-}
-
-/// Metadata about a registered tool, used for tool discovery.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolInfo {
-    /// Tool name
-    pub name: String,
-    /// Tool description
-    pub description: String,
-    /// Tool category
-    pub category: String,
-    /// Whether the tool requires authentication
-    pub requires_auth: bool,
-    /// JSON Schema describing the tool's input parameters
-    pub input_schema: Value,
-}
 
 /// Registry for managing available tools
 pub struct ToolRegistry {
@@ -181,6 +115,7 @@ impl Default for ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
 
     struct DummyTool {
         name: String,
@@ -206,11 +141,7 @@ mod tests {
         }
 
         async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
-            Ok(ToolOutput {
-                content: "Executed".to_string(),
-                is_error: false,
-                metadata: HashMap::new(),
-            })
+            Ok(ToolOutput::success("Executed".to_string()))
         }
     }
 
@@ -269,11 +200,7 @@ mod tests {
         async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
             // Simulate async work
             tokio::time::sleep(tokio::time::Duration::from_millis(self.delay_ms)).await;
-            Ok(ToolOutput {
-                content: format!("Processed: {}", input["input"].as_str().unwrap_or("")),
-                is_error: false,
-                metadata: HashMap::new(),
-            })
+            Ok(ToolOutput::success(format!("Processed: {}", input["input"].as_str().unwrap_or(""))))
         }
 
         fn requires_auth(&self) -> bool {
@@ -529,16 +456,10 @@ mod tests {
                 serde_json::json!({"type": "object"})
             }
 
-            async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
-                let mut metadata = HashMap::new();
-                metadata.insert("execution_time_ms".into(), serde_json::json!(100));
-                metadata.insert("timestamp".into(), serde_json::json!("2024-01-01T00:00:00Z"));
-
-                Ok(ToolOutput {
-                    content: "Success".to_string(),
-                    is_error: false,
-                    metadata,
-                })
+            async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
+                Ok(ToolOutput::success("Success".to_string())
+                    .with_metadata("execution_time_ms".to_string(), json!(100))
+                    .with_metadata("timestamp".to_string(), json!("2024-01-01T00:00:00Z")))
             }
         }
 
@@ -555,7 +476,7 @@ mod tests {
 
         assert_eq!(result.content, "Success");
         assert!(!result.is_error);
-        assert_eq!(result.metadata.get("execution_time_ms"), Some(&serde_json::json!(100)));
-        assert_eq!(result.metadata.get("timestamp"), Some(&serde_json::json!("2024-01-01T00:00:00Z")));
+        assert_eq!(result.metadata.get("execution_time_ms"), Some(&json!(100)));
+        assert_eq!(result.metadata.get("timestamp"), Some(&json!("2024-01-01T00:00:00Z")));
     }
 }

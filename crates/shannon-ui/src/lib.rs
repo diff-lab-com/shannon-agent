@@ -6,6 +6,7 @@ mod repl;
 mod widgets;
 mod events;
 mod render;
+pub mod adapter;
 pub mod vim;
 pub mod repl_enhancement;
 
@@ -15,6 +16,7 @@ pub use render::Renderer;
 pub use render::render_diff;
 pub use widgets::{ChatWidget, ChatRole, PromptWidget, MainLayoutWidget};
 pub use vim::{VimHandler, VimMode, VimAction};
+pub use adapter::{UiAdapter, UiResult, UiError, NullUiAdapter};
 
 /// Terminal UI application result type
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;

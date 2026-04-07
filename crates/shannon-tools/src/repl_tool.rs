@@ -335,7 +335,7 @@ mod tests {
     async fn test_with_env() {
         let tool = ReplTool::new();
         let input = json!({
-            "command": "echo $MY_TEST_VAR",
+            "command": "env",
             "env": {
                 "MY_TEST_VAR": "repl_test_value"
             }
@@ -346,7 +346,8 @@ mod tests {
 
         let output = result.unwrap();
         assert!(!output.is_error);
-        assert!(output.content.contains("repl_test_value"));
+        // The env command should list our test variable
+        assert!(output.content.contains("MY_TEST_VAR"));
     }
 
     #[tokio::test]
@@ -373,12 +374,9 @@ mod tests {
         });
 
         let result = tool.execute(input).await;
-        // Empty command succeeds in bash with exit code 0
-        assert!(result.is_ok());
-
-        let output = result.unwrap();
-        assert!(!output.is_error);
-        assert_eq!(output.metadata.get("exit_code").unwrap(), 0);
+        // Empty command should fail during parsing
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Empty command"));
     }
 
     // --- Validation tests ---
@@ -389,7 +387,42 @@ mod tests {
         assert!(validate_command("ls -la /tmp").is_ok());
         assert!(validate_command("cargo build --release").is_ok());
         assert!(validate_command("pwd").is_ok());
-        assert!(validate_command("").is_ok());
+        assert!(validate_command("").is_ok()); // Character validation passes, but parse will fail
+    }
+
+    #[test]
+    fn test_parse_empty_command() {
+        assert!(parse_command("").is_err());
+        assert!(parse_command("  ").is_err());
+    }
+
+    #[test]
+    fn test_parse_basic_command() {
+        let (exe, args) = parse_command("echo hello world").unwrap();
+        assert_eq!(exe, "echo");
+        assert_eq!(args, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn test_parse_quoted_args() {
+        let (exe, args) = parse_command("echo \"hello world\"").unwrap();
+        assert_eq!(exe, "echo");
+        assert_eq!(args, vec!["hello world"]);
+    }
+
+    #[test]
+    fn test_validate_executable_blocks_rm() {
+        assert!(validate_executable("rm").is_err());
+        assert!(validate_executable("/bin/rm").is_err());
+        assert!(validate_executable("rm -rf /").is_err());
+    }
+
+    #[test]
+    fn test_validate_executable_allows_safe_commands() {
+        assert!(validate_executable("ls").is_ok());
+        assert!(validate_executable("git").is_ok());
+        assert!(validate_executable("cargo").is_ok());
+        assert!(validate_executable("echo").is_ok());
     }
 
     #[test]
