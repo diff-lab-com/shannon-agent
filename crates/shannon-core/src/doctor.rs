@@ -826,6 +826,25 @@ fn get_disk_space(_path: &std::path::Path) -> Option<u64> {
 }
 
 // ===========================================================================
+// Test helpers
+// ===========================================================================
+
+/// Guard to restore HOME environment variable when dropped.
+///
+/// This ensures that even if a test panics, the original HOME value
+/// is restored, preventing test pollution.
+struct HomeGuard(Option<std::ffi::OsString>);
+
+impl Drop for HomeGuard {
+    fn drop(&mut self) {
+        match &self.0 {
+            Some(home) => unsafe { std::env::set_var("HOME", home) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+    }
+}
+
+// ===========================================================================
 // Tests
 // ===========================================================================
 
@@ -1084,16 +1103,13 @@ mod tests {
         let home_backup = std::env::var_os("HOME");
         unsafe { std::env::set_var("HOME", temp_dir.path()); }
 
+        // Restore HOME on drop (even if test panics)
+        let _guard = HomeGuard(home_backup);
+
         let doctor = Doctor::new();
         let check = doctor.check_configuration();
         // Should warn since no config file exists
         assert!(matches!(check.status, CheckStatus::Warn));
-
-        if let Some(home) = home_backup {
-            unsafe { std::env::set_var("HOME", home); }
-        } else {
-            unsafe { std::env::remove_var("HOME"); }
-        }
     }
 
     #[test]
@@ -1116,15 +1132,11 @@ mod tests {
         let home_backup = std::env::var_os("HOME");
         unsafe { std::env::set_var("HOME", temp_dir.path()); }
 
+        let _guard = HomeGuard(home_backup);
+
         let doctor = Doctor::new();
         let check = doctor.check_configuration();
         assert_eq!(check.status, CheckStatus::Pass);
-
-        if let Some(home) = home_backup {
-            unsafe { std::env::set_var("HOME", home); }
-        } else {
-            unsafe { std::env::remove_var("HOME"); }
-        }
     }
 
     #[test]
@@ -1138,15 +1150,11 @@ mod tests {
         let home_backup = std::env::var_os("HOME");
         unsafe { std::env::set_var("HOME", temp_dir.path()); }
 
+        let _guard = HomeGuard(home_backup);
+
         let doctor = Doctor::new();
         let check = doctor.check_configuration();
         assert_eq!(check.status, CheckStatus::Fail);
-
-        if let Some(home) = home_backup {
-            unsafe { std::env::set_var("HOME", home); }
-        } else {
-            unsafe { std::env::remove_var("HOME"); }
-        }
     }
 
     #[test]
