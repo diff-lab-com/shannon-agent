@@ -140,6 +140,19 @@ pub struct Repl {
     commands_run: usize,
     /// Total tools invoked in this session
     tools_invoked: usize,
+    /// Tab completion state for cycling through matches
+    tab_completion_state: TabCompletionState,
+}
+
+/// State for tab completion cycling
+#[derive(Debug, Clone, Default)]
+struct TabCompletionState {
+    /// The prefix text being completed (to detect when completion should reset)
+    last_prefix: String,
+    /// Current match index for cycling through completions
+    current_index: usize,
+    /// Available completion candidates
+    candidates: Vec<String>,
 }
 
 impl Repl {
@@ -207,6 +220,7 @@ impl Repl {
             output_renderer: ReplRenderer::new(),
             commands_run: 0,
             tools_invoked: 0,
+            tab_completion_state: TabCompletionState::default(),
         })
     }
 
@@ -370,9 +384,105 @@ impl Repl {
             crossterm::event::KeyCode::Esc => {
                 self.prompt.clear();
             }
+            crossterm::event::KeyCode::Tab => {
+                self.handle_tab_completion()?;
+            }
             _ => {}
         }
         Ok(())
+    }
+
+    /// Handle tab completion
+    fn handle_tab_completion(&mut self) -> Result<()> {
+        let input = self.prompt.input().to_string();
+
+        // Get available commands from registry
+        let command_names = self.runtime.block_on(self.command_registry.list_names());
+
+        // Perform completion
+        if let Some((completion, start, end)) = self.tab_complete_command(&input, &command_names) {
+            // Build the new input: input[..start] + completion + input[end..]
+            let mut new_input = String::new();
+            if start > 0 && start <= input.len() {
+                new_input.push_str(&input[..start]);
+            }
+            new_input.push_str(&completion);
+            if end < input.len() {
+                new_input.push_str(&input[end..]);
+            }
+
+            self.prompt.set_input(new_input);
+        }
+
+        Ok(())
+    }
+
+    /// Perform tab completion on the current input
+    ///
+    /// Returns the completed text and the range to replace (start, end).
+    /// If no completion is found, returns None.
+    fn tab_complete_command(&mut self, input: &str, available_commands: &[String]) -> Option<(String, usize, usize)> {
+        // Find the word to complete - look for the last /command or word boundary
+        let (prefix, word_start, word_end) = self.extract_completion_word(input);
+
+        // Reset completion state if the prefix changed
+        if self.tab_completion_state.last_prefix != prefix {
+            self.tab_completion_state.last_prefix = prefix.clone();
+            self.tab_completion_state.current_index = 0;
+
+            // Find candidates matching the prefix
+            self.tab_completion_state.candidates = if prefix.starts_with('/') {
+                // Command completion - match against commands with /
+                available_commands
+                    .iter()
+                    .filter(|cmd| {
+                        let with_slash = format!("/{}", cmd);
+                        with_slash.starts_with(&prefix)
+                    })
+                    .map(|cmd| format!("/{}", cmd))
+                    .collect()
+            } else {
+                // For non-commands starting empty, complete to all commands with /
+                if prefix.is_empty() {
+                    available_commands.iter().map(|c| format!("/{}", c)).collect()
+                } else {
+                    Vec::new()
+                }
+            };
+        }
+
+        if self.tab_completion_state.candidates.is_empty() {
+            return None;
+        }
+
+        // Get current candidate
+        let completion = &self.tab_completion_state.candidates[self.tab_completion_state.current_index];
+
+        // Cycle to next candidate for next tab press
+        self.tab_completion_state.current_index = (self.tab_completion_state.current_index + 1)
+            % self.tab_completion_state.candidates.len();
+
+        Some((completion.clone(), word_start, word_end))
+    }
+
+    /// Extract the word to complete from input
+    ///
+    /// Returns (prefix, start_pos, end_pos) where prefix is the text to complete,
+    /// and start/end are the byte indices in the input string.
+    fn extract_completion_word(&self, input: &str) -> (String, usize, usize) {
+        // Find the last word boundary or command start
+        // Find the last space or start of command
+        let start = if let Some(last_slash) = input.rfind('/') {
+            last_slash
+        } else if let Some(last_space) = input.rfind(' ') {
+            last_space + 1
+        } else {
+            0
+        };
+
+        let end = input.len();
+
+        (input[start..].to_string(), start, end)
     }
 
     /// Handle permission dialog keyboard input
@@ -1786,6 +1896,138 @@ impl UiAdapter for Repl {
         Err(UiError::NotSupported(
             "confirm not directly supported - use dialog widgets instead".to_string()
         ))
+    }
+}
+
+// ── Tab Completion Tests ───────────────────────────────────────────
+
+#[cfg(test)]
+mod tab_completion_tests {
+    use super::*;
+
+    fn create_repl() -> Repl {
+        Repl::new().expect("Repl::new should succeed in tests")
+    }
+
+    #[test]
+    fn test_extract_completion_word_empty() {
+        let repl = create_repl();
+        let (prefix, start, end) = repl.extract_completion_word("");
+        assert_eq!(prefix, "");
+        assert_eq!(start, 0);
+        assert_eq!(end, 0);
+    }
+
+    #[test]
+    fn test_extract_completion_word_with_slash() {
+        let repl = create_repl();
+        let (prefix, start, end) = repl.extract_completion_word("/co");
+        assert_eq!(prefix, "/co");
+        assert_eq!(start, 0);
+        assert_eq!(end, 3);
+    }
+
+    #[test]
+    fn test_extract_completion_word_with_space() {
+        let repl = create_repl();
+        let (prefix, start, end) = repl.extract_completion_word("cmd /co");
+        // Should find the / after the space
+        assert!(prefix.starts_with('/'));
+        assert_eq!(start, 4); // Position of /
+        assert_eq!(end, 7);
+    }
+
+    #[test]
+    fn test_extract_completion_word_no_slash() {
+        let repl = create_repl();
+        let (prefix, start, end) = repl.extract_completion_word("hello");
+        assert_eq!(prefix, "hello");
+        assert_eq!(start, 0);
+        assert_eq!(end, 5);
+    }
+
+    #[test]
+    fn test_tab_complete_command_partial() {
+        let mut repl = create_repl();
+        let commands = vec!["commit".to_string(), "config".to_string(), "help".to_string()];
+
+        let result = repl.tab_complete_command("/co", &commands);
+        assert!(result.is_some());
+        let (completion, start, end) = result.unwrap();
+        assert_eq!(start, 0);
+        assert_eq!(end, 3);
+        assert!(completion == "/commit" || completion == "/config");
+    }
+
+    #[test]
+    fn test_tab_complete_command_with_slash() {
+        let mut repl = create_repl();
+        let commands = vec!["commit".to_string(), "help".to_string()];
+
+        let result = repl.tab_complete_command("/", &commands);
+        assert!(result.is_some());
+        let (completion, start, end) = result.unwrap();
+        assert!(completion.starts_with('/'));
+        assert_eq!(start, 0);
+        assert_eq!(end, 1);
+    }
+
+    #[test]
+    fn test_tab_complete_command_empty_input() {
+        let mut repl = create_repl();
+        let commands = vec!["commit".to_string(), "help".to_string()];
+
+        // Empty input should NOT complete - user must type / first
+        let result = repl.tab_complete_command("", &commands);
+        assert!(result.is_none(), "Empty input should not auto-complete without /");
+    }
+
+    #[test]
+    fn test_tab_complete_command_cycles() {
+        let mut repl = create_repl();
+        let commands = vec!["commit".to_string(), "config".to_string(), "help".to_string()];
+
+        // First tab
+        let result1 = repl.tab_complete_command("/c", &commands);
+        assert!(result1.is_some());
+        let (comp1, _, _) = result1.unwrap();
+
+        // Second tab should give a different result (or cycle)
+        let result2 = repl.tab_complete_command("/c", &commands);
+        assert!(result2.is_some());
+        let (comp2, _, _) = result2.unwrap();
+
+        // Since there are 2 matches, we should get different completions
+        assert!(comp1.starts_with("/c"));
+        assert!(comp2.starts_with("/c"));
+    }
+
+    #[test]
+    fn test_tab_complete_command_no_match() {
+        let mut repl = create_repl();
+        let commands = vec!["commit".to_string(), "help".to_string()];
+
+        let result = repl.tab_complete_command("/xyz", &commands);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_tab_complete_command_resets_on_new_prefix() {
+        let mut repl = create_repl();
+        let commands = vec!["commit".to_string(), "config".to_string(), "help".to_string()];
+
+        // Complete /co - should have matches (commit and config)
+        let result1 = repl.tab_complete_command("/co", &commands);
+        assert!(result1.is_some());
+        let index_after_first = repl.tab_completion_state.current_index;
+        assert_eq!(index_after_first, 1); // Incremented after first call, or wrapped if only 1 match
+
+        // Complete /h - "help" is a command so should match (only one match)
+        let result2 = repl.tab_complete_command("/h", &commands);
+        assert!(result2.is_some());
+        assert_eq!(repl.tab_completion_state.last_prefix, "/h");
+        // Index was reset to 0, then (0+1)%1 = 0, so stays at 0 for single candidate
+        assert_eq!(repl.tab_completion_state.current_index, 0);
     }
 }
 
