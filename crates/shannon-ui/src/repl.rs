@@ -346,7 +346,12 @@ impl Repl {
                 }
             }
             crossterm::event::KeyCode::Enter => {
-                self.submit_input()?;
+                // Shift+Enter inserts newline for multi-line editing
+                if key.modifiers.contains(crossterm::event::KeyModifiers::SHIFT) {
+                    self.prompt.insert_newline();
+                } else {
+                    self.submit_input()?;
+                }
             }
             crossterm::event::KeyCode::Char(c) => {
                 self.prompt.add_char(c);
@@ -355,8 +360,11 @@ impl Repl {
                 self.prompt.backspace();
             }
             crossterm::event::KeyCode::Up => {
-                // If prompt has content, navigate command history
-                if !self.prompt.input().is_empty() || self.command_history.cursor() >= 0 {
+                // If prompt has multi-line content, move cursor up
+                if self.prompt.input().contains('\n') {
+                    self.prompt.cursor_up();
+                } else if !self.prompt.input().is_empty() || self.command_history.cursor() >= 0 {
+                    // Single-line: navigate command history
                     if self.command_history.cursor() < 0 {
                         // First up press: save current input
                         self.saved_input = self.prompt.input().to_string();
@@ -369,7 +377,11 @@ impl Repl {
                 }
             }
             crossterm::event::KeyCode::Down => {
-                if self.command_history.cursor() >= 0 {
+                // If prompt has multi-line content, move cursor down
+                if self.prompt.input().contains('\n') {
+                    self.prompt.cursor_down();
+                } else if self.command_history.cursor() >= 0 {
+                    // Single-line: navigate command history
                     if let Some(cmd) = self.command_history.down() {
                         self.prompt.set_input(cmd.to_string());
                     } else {
@@ -383,6 +395,14 @@ impl Repl {
             }
             crossterm::event::KeyCode::Esc => {
                 self.prompt.clear();
+            }
+            crossterm::event::KeyCode::Left => {
+                // Move cursor left within input
+                self.prompt.cursor_left();
+            }
+            crossterm::event::KeyCode::Right => {
+                // Move cursor right within input
+                self.prompt.cursor_right();
             }
             crossterm::event::KeyCode::Tab => {
                 self.handle_tab_completion()?;

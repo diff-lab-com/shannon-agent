@@ -360,10 +360,10 @@ impl ChatWidget {
     }
 }
 
-/// Input prompt widget
+/// Input prompt widget (multi-line enabled)
 pub struct PromptWidget {
-    input: String,
-    cursor_position: usize,
+    /// Inner input buffer with full multi-line support
+    buffer: crate::repl_enhancement::InputBuffer,
     placeholder: String,
 }
 
@@ -371,8 +371,7 @@ impl PromptWidget {
     /// Create a new prompt widget
     pub fn new() -> Self {
         Self {
-            input: String::new(),
-            cursor_position: 0,
+            buffer: crate::repl_enhancement::InputBuffer::new(),
             placeholder: "Type your message...".to_string(),
         }
     }
@@ -383,65 +382,68 @@ impl PromptWidget {
         self
     }
 
-    /// Get the current input
-    pub fn input(&self) -> &str {
-        &self.input
-    }
-
-    /// Convert char index to byte index
-    fn char_to_byte(&self, char_idx: usize) -> usize {
-        self.input
-            .char_indices()
-            .nth(char_idx)
-            .map(|(i, _)| i)
-            .unwrap_or(self.input.len())
+    /// Get the current input text
+    pub fn input(&self) -> String {
+        self.buffer.text()
     }
 
     /// Add a character to the input
     pub fn add_char(&mut self, c: char) {
-        let byte_idx = self.char_to_byte(self.cursor_position);
-        self.input.insert(byte_idx, c);
-        self.cursor_position += 1;
+        self.buffer.insert_char(c);
     }
 
     /// Remove the character before the cursor
     pub fn backspace(&mut self) {
-        if self.cursor_position > 0 {
-            self.cursor_position -= 1;
-            let byte_idx = self.char_to_byte(self.cursor_position);
-            self.input.remove(byte_idx);
-        }
-    }
-
-    /// Move the cursor left by one character
-    pub fn cursor_left(&mut self) {
-        self.cursor_position = self.cursor_position.saturating_sub(1);
-    }
-
-    /// Move the cursor right by one character
-    pub fn cursor_right(&mut self) {
-        let char_count = self.input.chars().count();
-        self.cursor_position = (self.cursor_position + 1).min(char_count);
+        self.buffer.backspace();
     }
 
     /// Clear the input
     pub fn clear(&mut self) {
-        self.input.clear();
-        self.cursor_position = 0;
+        self.buffer.clear();
     }
 
     /// Set the input text
     pub fn set_input(&mut self, input: String) {
-        self.cursor_position = input.chars().count();
-        self.input = input;
+        self.buffer.set_text(&input);
+    }
+
+    /// Insert a newline (for multi-line editing)
+    pub fn insert_newline(&mut self) {
+        self.buffer.newline();
+    }
+
+    /// Move cursor left
+    pub fn cursor_left(&mut self) {
+        self.buffer.move_left();
+    }
+
+    /// Move cursor right
+    pub fn cursor_right(&mut self) {
+        self.buffer.move_right();
+    }
+
+    /// Move cursor up
+    pub fn cursor_up(&mut self) {
+        self.buffer.move_up();
+    }
+
+    /// Move cursor down
+    pub fn cursor_down(&mut self) {
+        self.buffer.move_down();
+    }
+
+    /// Get current cursor position (column)
+    pub fn cursor_position(&self) -> usize {
+        self.buffer.cursor_col()
     }
 
     /// Render the prompt widget
     pub fn render(&self, frame: &mut Frame, area: Rect) {
-        let display_text = if self.input.is_empty() {
+        let input_text = self.input();
+        let display_text = if input_text.is_empty() {
             self.placeholder.clone()
         } else {
-            self.input.clone()
+            input_text
         };
 
         let text = Text::from(Line::from(vec![
@@ -594,7 +596,7 @@ mod tests {
     fn test_prompt_widget_creation() {
         let prompt = PromptWidget::new();
         assert_eq!(prompt.input(), "");
-        assert_eq!(prompt.cursor_position, 0);
+        assert_eq!(prompt.cursor_position(), 0);
     }
 
     #[test]
@@ -602,7 +604,7 @@ mod tests {
         let mut prompt = PromptWidget::new();
         prompt.add_char('a');
         assert_eq!(prompt.input(), "a");
-        assert_eq!(prompt.cursor_position, 1);
+        assert_eq!(prompt.cursor_position(), 1);
     }
 
     #[test]
@@ -612,7 +614,7 @@ mod tests {
         prompt.add_char('b');
         prompt.backspace();
         assert_eq!(prompt.input(), "a");
-        assert_eq!(prompt.cursor_position, 1);
+        assert_eq!(prompt.cursor_position(), 1);
     }
 
     #[test]
@@ -622,22 +624,22 @@ mod tests {
         prompt.add_char('b');
         prompt.clear();
         assert_eq!(prompt.input(), "");
-        assert_eq!(prompt.cursor_position, 0);
+        assert_eq!(prompt.cursor_position(), 0);
     }
 
     #[test]
     fn test_prompt_widget_cursor_movement() {
         let mut prompt = PromptWidget::new();
         prompt.set_input("abc".to_string());
-        assert_eq!(prompt.cursor_position, 3);
+        assert_eq!(prompt.cursor_position(), 3);
         prompt.cursor_left();
-        assert_eq!(prompt.cursor_position, 2);
+        assert_eq!(prompt.cursor_position(), 2);
         prompt.cursor_left();
-        assert_eq!(prompt.cursor_position, 1);
+        assert_eq!(prompt.cursor_position(), 1);
         prompt.cursor_right();
-        assert_eq!(prompt.cursor_position, 2);
+        assert_eq!(prompt.cursor_position(), 2);
         prompt.cursor_right();
-        assert_eq!(prompt.cursor_position, 3);
+        assert_eq!(prompt.cursor_position(), 3);
     }
 
     #[test]
@@ -645,7 +647,7 @@ mod tests {
         let mut prompt = PromptWidget::new();
         prompt.set_input("test input".to_string());
         assert_eq!(prompt.input(), "test input");
-        assert_eq!(prompt.cursor_position, 10);
+        assert_eq!(prompt.cursor_position(), 10);
     }
 
     #[test]
