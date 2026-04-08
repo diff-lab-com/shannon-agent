@@ -27,6 +27,25 @@ pub enum ShannonError {
     NotFound(String),
 }
 
+/// Message role (user, assistant, system, etc.)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolUse {
+    pub id: String,
+    pub name: String,
+    pub input: serde_json::Value,
+    pub output: Option<serde_json::Value>,
+}
+
+/// Message in a conversation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Message {
+    pub id: String,
+    pub role: String,
+    pub content: String,
+    pub timestamp: Timestamp,
+    pub metadata: serde_json::Value,
+}
+
 /// Generic entity trait
 pub trait Entity {
     /// Get the entity's unique ID
