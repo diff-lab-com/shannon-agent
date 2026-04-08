@@ -8,6 +8,7 @@ members = [
     "crates/shannon-core-query",
     "crates/shannon-core-memory",
     "crates/shannon-core-plugins",
+    "crates/shannon-core-features",
     "crates/shannon-cli",
     "crates/shannon-ui",
     "crates/shannon-mcp",

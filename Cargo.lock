@@ -2473,6 +2473,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "shannon-core-features"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "dirs",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "shannon-core-base",
+ "shannon-types",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "shannon-core-memory"
 version = "0.1.0"
 dependencies = [
