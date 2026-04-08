@@ -176,14 +176,11 @@ impl Repl {
         // Create permission request channel
         let (permission_req_tx, permission_req_rx) = tokio::sync::mpsc::unbounded_channel();
 
-        // Create command registry inside the runtime context so async
-        // register() works (register_sync requires an active tokio runtime).
-        let handle = runtime.handle().clone();
-        let command_registry = handle.block_on(async {
+        // Create command registry inside the runtime context so register_sync
+        // can access the tokio runtime handle.
+        let command_registry = runtime.block_on(async {
             let registry = CommandRegistry::new();
-            for cmd in builtin_commands::all_commands() {
-                let _ = registry.register(cmd).await;
-            }
+            builtin_commands::register_all(&registry);
             registry
         });
 
@@ -1796,46 +1793,53 @@ impl UiAdapter for Repl {
 mod ui_adapter_tests {
     use super::*;
 
+    fn create_repl() -> Repl {
+        Repl::new().expect("Repl::new should succeed in tests")
+    }
+
     #[test]
     fn test_repl_supports_streaming() {
-        let repl = Repl::new().unwrap();
+        let repl = create_repl();
         assert!(repl.supports_streaming());
     }
 
-    #[tokio::test]
-    async fn test_repl_adapter_display_output() {
-        let repl = Repl::new().unwrap();
-        // Should not error even though it's a no-op currently
-        let result = repl.display_output("test").await;
-        // Currently returns Ok(()) as a no-op
+    #[test]
+    fn test_repl_adapter_display_output() {
+        let repl = create_repl();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(repl.display_output("test"));
         assert!(result.is_ok() || matches!(result, Err(UiError::NotSupported(_))));
     }
 
-    #[tokio::test]
-    async fn test_repl_adapter_display_error() {
-        let repl = Repl::new().unwrap();
-        let result = repl.display_error("error").await;
+    #[test]
+    fn test_repl_adapter_display_error() {
+        let repl = create_repl();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(repl.display_error("error"));
         assert!(result.is_ok() || matches!(result, Err(UiError::NotSupported(_))));
     }
 
-    #[tokio::test]
-    async fn test_repl_adapter_display_progress() {
-        let repl = Repl::new().unwrap();
-        let result = repl.display_progress("loading", Some(50)).await;
+    #[test]
+    fn test_repl_adapter_display_progress() {
+        let repl = create_repl();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(repl.display_progress("loading", Some(50)));
         assert!(result.is_ok() || matches!(result, Err(UiError::NotSupported(_))));
     }
 
-    #[tokio::test]
-    async fn test_repl_adapter_read_input_not_supported() {
-        let repl = Repl::new().unwrap();
-        let result = repl.read_input("prompt: ").await;
+    #[test]
+    fn test_repl_adapter_read_input_not_supported() {
+        let repl = create_repl();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(repl.read_input("prompt: "));
         assert!(matches!(result, Err(UiError::NotSupported(_))));
     }
 
-    #[tokio::test]
-    async fn test_repl_adapter_confirm_not_supported() {
-        let repl = Repl::new().unwrap();
-        let result = repl.confirm("Continue?").await;
+    #[test]
+    fn test_repl_adapter_confirm_not_supported() {
+        let repl = create_repl();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(repl.confirm("Continue?"));
         assert!(matches!(result, Err(UiError::NotSupported(_))));
     }
 }
