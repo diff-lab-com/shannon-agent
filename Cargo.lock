@@ -2473,6 +2473,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "shannon-core-diagnostics"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "shannon-types",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "shannon-core-features"
 version = "0.1.0"
 dependencies = [
@@ -2483,6 +2497,20 @@ dependencies = [
  "serde",
  "serde_json",
  "shannon-core-base",
+ "shannon-types",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "shannon-core-maintenance"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
  "shannon-types",
  "thiserror 2.0.18",
  "tokio",
