@@ -5,7 +5,20 @@ use crate::error::{SkillError, SkillResult};
 use crate::definition::SkillResult as SkillExecutionResult;
 use regex::Regex;
 use std::path::Path;
+use std::sync::OnceLock;
 use tracing::debug;
+
+/// Cached regex pattern for inline shell commands: !`command`
+fn inline_shell_pattern() -> &'static Regex {
+    static PATTERN: OnceLock<Regex> = OnceLock::new();
+    PATTERN.get_or_init(|| Regex::new(r"!`([^`]+)`").unwrap())
+}
+
+/// Cached regex pattern for block shell commands: ```!\ncommand\n```
+fn block_shell_pattern() -> &'static Regex {
+    static PATTERN: OnceLock<Regex> = OnceLock::new();
+    PATTERN.get_or_init(|| Regex::new(r"```!\n(.+?)\n```").unwrap())
+}
 
 /// Engine for executing skills and generating prompt content
 pub struct SkillExecutor {
@@ -117,9 +130,9 @@ impl SkillExecutor {
             return Ok(false);
         };
 
-        // Pattern for shell commands: !`command` or ```!\ncommand\n```
-        let inline_pattern = Regex::new(r"!`([^`]+)`").unwrap();
-        let block_pattern = Regex::new(r"```!\n(.+?)\n```").unwrap();
+        // Use cached regex patterns for shell commands: !`command` or ```!\ncommand\n```
+        let inline_pattern = inline_shell_pattern();
+        let block_pattern = block_shell_pattern();
 
         let mut had_commands = false;
 

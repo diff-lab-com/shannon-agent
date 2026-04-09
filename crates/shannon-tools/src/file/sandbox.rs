@@ -253,14 +253,27 @@ impl PathSandbox {
                 Ok(r) => r,
                 Err(_) => {
                     // If root doesn't exist yet (e.g., a project dir not yet created),
-                    // try to use it as-is with trailing separator for prefix matching
-                    let root_str = root.to_string_lossy().to_string();
-                    let root_with_sep = if root_str.ends_with('/') {
-                        root_str
-                    } else {
-                        format!("{}/", root_str)
+                    // try to canonicalize it first for comparison, then fall back to prefix matching
+                    // Canonicalize the root path to resolve any symlinks before comparison
+                    let canonical_root = match std::fs::canonicalize(root) {
+                        Ok(r) => r,
+                        Err(_) => {
+                            // Root doesn't exist and can't be canonicalized,
+                            // use as-is with trailing separator for prefix matching
+                            let root_str = root.to_string_lossy().to_string();
+                            let root_with_sep = if root_str.ends_with('/') {
+                                root_str
+                            } else {
+                                format!("{}/", root_str)
+                            };
+                            if canonical_str.starts_with(&root_with_sep) {
+                                return Ok(());
+                            }
+                            continue;
+                        }
                     };
-                    if canonical_str.starts_with(&root_with_sep) || canonical == root.as_os_str() {
+                    // Compare canonicalized paths to prevent symlink escape
+                    if canonical == canonical_root.as_os_str() {
                         return Ok(());
                     }
                     continue;

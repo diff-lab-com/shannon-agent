@@ -25,6 +25,7 @@ mod search;
 mod export;
 mod config;
 mod debug;
+mod repl;
 
 /// Register all built-in commands
 pub fn register_all(registry: &CommandRegistry) {
@@ -35,7 +36,7 @@ pub fn register_all(registry: &CommandRegistry) {
 
 /// Get all built-in commands
 pub fn all_commands() -> Vec<Command> {
-    vec![
+    let mut cmds = vec![
         commit::command(),
         review_pr::command(),
         pdf::command(),
@@ -46,7 +47,9 @@ pub fn all_commands() -> Vec<Command> {
         export::command(),
         config::command(),
         debug::command(),
-    ]
+    ];
+    cmds.extend(repl::all_commands());
+    cmds
 }
 
 /// Create individual commands for direct access

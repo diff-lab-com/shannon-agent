@@ -649,19 +649,22 @@ impl Repl {
 
     /// Handle a command (starts with /)
     fn handle_command(&mut self, input: &str) -> Result<()> {
-        // Built-in REPL commands (not in the command registry)
-        let repl_commands = [
-            "/help", "/clear", "/quit", "/exit", "/model", "/init",
-            "/sessions", "/resume", "/history", "/worktree",
-        ];
-
         let parts: Vec<&str> = input.splitn(2, ' ').collect();
         let cmd = parts.first().copied().unwrap_or("");
         let args = parts.get(1).copied().unwrap_or("");
 
-        if repl_commands.contains(&cmd) {
-            match cmd {
-                "/help" => {
+        // Extract command name without leading slash
+        let cmd_name = cmd.strip_prefix('/').unwrap_or("");
+
+        // Check if command exists in the registry
+        let command_exists = self.runtime.block_on(
+            self.command_registry.contains(cmd_name)
+        );
+
+        if command_exists {
+            // Dispatch based on command name (REPL-local commands execute here)
+            match cmd_name {
+                "help" => {
                     // Check if args specify a specific command
                     if !args.is_empty() {
                         // Try help system from shannon-commands first
@@ -672,38 +675,11 @@ impl Repl {
                         }
                     }
 
-                    // Show full help with REPL commands + builtin commands
-                    let mut cmd_list = String::from("Available commands:\n");
-
-                    // REPL-local commands
-                    cmd_list.push_str("  /help      Show this help message\n");
-                    cmd_list.push_str("  /clear     Clear chat history\n");
-                    cmd_list.push_str("  /quit      Exit Shannon\n");
-                    cmd_list.push_str("  /exit      Exit Shannon (alias for /quit)\n");
-                    cmd_list.push_str("  /model     Show or set the AI model\n");
-                    cmd_list.push_str("  /init      Initialize project configuration\n");
-                    cmd_list.push_str("  /sessions  List saved sessions [--all] [--search <query>]\n");
-                    cmd_list.push_str("  /resume    Resume a session by UUID or number\n");
-                    cmd_list.push_str("  /history   Show current session stats [--export <path>]\n");
-                    cmd_list.push_str("  /worktree  Manage git worktrees [enter|exit|status]\n");
-
-                    // Builtin commands from registry
-                    let names = self.runtime.block_on(self.command_registry.list_names());
-                    if !names.is_empty() {
-                        cmd_list.push_str("\nBuilt-in commands:\n");
-                        let mut sorted = names;
-                        sorted.sort();
-                        for name in &sorted {
-                            if let Ok(command) = self.runtime.block_on(self.command_registry.get(name)) {
-                                let desc = command.description();
-                                cmd_list.push_str(&format!("  /{:<12} {}\n", name, desc));
-                            }
-                        }
-                    }
-
-                    self.chat.add_message(ChatRole::System, cmd_list);
+                    // Show full help from command registry
+                    let help_text = help_utils::generate_help(None);
+                    self.chat.add_message(ChatRole::System, help_text);
                 }
-                "/clear" => {
+                "clear" => {
                     if self.chat.len() > 1 {
                         // Show confirm dialog for non-empty chat
                         self.show_confirm_dialog(
@@ -716,7 +692,7 @@ impl Repl {
                         self.chat.add_message(ChatRole::System, "Chat cleared.".to_string());
                     }
                 }
-                "/quit" | "/exit" => {
+                "quit" | "exit" => {
                     let had_activity = self.commands_run > 0
                         || self.tools_invoked > 0
                         || self.current_turn > 0;
@@ -731,7 +707,7 @@ impl Repl {
                         self.running = false;
                     }
                 }
-                "/model" => {
+                "model" => {
                     if args.is_empty() {
                         self.chat.add_message(
                             ChatRole::System,
@@ -745,7 +721,7 @@ impl Repl {
                         );
                     }
                 }
-                "/init" => {
+                "init" => {
                     let mut init_info = String::new();
                     let cwd = &self.state.working_directory;
 
@@ -777,33 +753,31 @@ impl Repl {
                         format!("Project initialized.\n{}", init_info),
                     );
                 }
-                "/sessions" => self.handle_sessions_command(args)?,
-                "/resume" => self.handle_resume_command(args)?,
-                "/history" => self.handle_history_command(args)?,
-                "/worktree" => self.handle_worktree_command(args)?,
-                _ => {}
+                "sessions" => self.handle_sessions_command(args)?,
+                "resume" => self.handle_resume_command(args)?,
+                "history" => self.handle_history_command(args)?,
+                "worktree" => self.handle_worktree_command(args)?,
+                _ => {
+                    // Command is in registry but not handled by REPL (e.g., commit, diff, etc.)
+                    // For now, just show the command description
+                    if let Ok(command) = self.runtime.block_on(self.command_registry.get(cmd_name)) {
+                        let desc = command.description();
+                        self.chat.add_message(
+                            ChatRole::System,
+                            format!("/{} — {}", cmd_name, desc),
+                        );
+                    }
+                }
             }
-            return Ok(());
+            Ok(())
+        } else {
+            // Command not found in registry
+            self.chat.add_message(
+                ChatRole::System,
+                format!("Unknown command: {}. Type /help for available commands.", cmd),
+            );
+            Ok(())
         }
-
-        // Try to parse and look up from the command registry
-        if let Ok(parsed) = self.command_parser.parse(input) {
-            if let Ok(command) = self.runtime.block_on(self.command_registry.get(&parsed.name)) {
-                let desc = command.description();
-                self.chat.add_message(
-                    ChatRole::System,
-                    format!("/{} — {}", parsed.name, desc),
-                );
-                return Ok(());
-            }
-        }
-
-        self.chat.add_message(
-            ChatRole::System,
-            format!("Unknown command: {}. Type /help for available commands.", cmd),
-        );
-
-        Ok(())
     }
 
     /// Handle /sessions command — list persisted sessions
@@ -1610,9 +1584,10 @@ mod tests {
         repl.handle_command("/help").unwrap();
         // Only the help message is present (welcome is added in run(), not new())
         assert!(repl.chat.len() >= 1);
-        // Last message should contain "Available commands"
+        // Last message should contain the help header
         let last_msg = &repl.chat.last_message().unwrap().content;
-        assert!(last_msg.contains("Available commands"));
+        // Help output now uses markdown format from command registry
+        assert!(last_msg.contains("Shannon Code Commands"));
         assert!(last_msg.contains("/help"));
         assert!(last_msg.contains("/quit"));
     }

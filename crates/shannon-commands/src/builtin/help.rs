@@ -355,6 +355,98 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("When developing or debugging Shannon to enable debug mode, change log levels, or view performance metrics")
             .with_related(vec!["config", "profile"])
         ),
+        // REPL-specific commands
+        "clear" => Some(
+            CommandHelpEntry::new(
+                "clear".to_string(),
+                "Clear chat history".to_string(),
+                HelpCategory::Ui,
+            )
+            .with_aliases(vec!["cls"])
+            .with_examples(vec!["/clear"])
+            .with_when_to_use("Use to clear the chat history when the screen gets cluttered")
+            .with_related(vec!["history", "export"])
+        ),
+        "quit" | "exit" => Some(
+            CommandHelpEntry::new(
+                "quit".to_string(),
+                "Exit Shannon REPL".to_string(),
+                HelpCategory::Ui,
+            )
+            .with_aliases(vec!["exit", "q"])
+            .with_examples(vec!["/quit", "/exit", "/q"])
+            .with_when_to_use("Use to exit the Shannon REPL")
+            .with_related(vec![])
+        ),
+        "model" => Some(
+            CommandHelpEntry::new(
+                "model".to_string(),
+                "Show or set the AI model".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("[model name]")
+            .with_examples(vec!["/model", "/model claude-3-opus"])
+            .with_when_to_use("Use to change the AI model or see the current model")
+            .with_related(vec!["config"])
+        ),
+        "init" => Some(
+            CommandHelpEntry::new(
+                "init".to_string(),
+                "Initialize project configuration (CLAUDE.md, detect git)".to_string(),
+                HelpCategory::System,
+            )
+            .with_aliases(vec!["initialize"])
+            .with_examples(vec!["/init"])
+            .with_when_to_use("Use when starting work in a new project directory")
+            .with_related(vec!["config"])
+        ),
+        "sessions" => Some(
+            CommandHelpEntry::new(
+                "sessions".to_string(),
+                "List saved sessions".to_string(),
+                HelpCategory::Ui,
+            )
+            .with_aliases(vec!["list-sessions"])
+            .with_arg_hint("[--all] [--search <query>]")
+            .with_examples(vec!["/sessions", "/sessions --all", "/sessions --search bugfix"])
+            .with_when_to_use("Use to see previously saved sessions that can be resumed")
+            .with_related(vec!["resume", "history"])
+        ),
+        "resume" => Some(
+            CommandHelpEntry::new(
+                "resume".to_string(),
+                "Resume a saved session by UUID or number".to_string(),
+                HelpCategory::Ui,
+            )
+            .with_aliases(vec!["restore"])
+            .with_arg_hint("<number-or-uuid>")
+            .with_examples(vec!["/resume 1", "/resume <uuid>"])
+            .with_when_to_use("Use to continue a previous session")
+            .with_related(vec!["sessions", "history"])
+        ),
+        "history" => Some(
+            CommandHelpEntry::new(
+                "history".to_string(),
+                "Show current session stats or export to file".to_string(),
+                HelpCategory::Ui,
+            )
+            .with_aliases(vec!["stats"])
+            .with_arg_hint("[--export <path>]")
+            .with_examples(vec!["/history", "/history --export session.md"])
+            .with_when_to_use("Use to see session statistics or export the conversation")
+            .with_related(vec!["sessions", "resume", "export"])
+        ),
+        "worktree" => Some(
+            CommandHelpEntry::new(
+                "worktree".to_string(),
+                "Manage git worktrees (enter, exit, status)".to_string(),
+                HelpCategory::Git,
+            )
+            .with_arg_hint("[enter <name>|exit [--keep|--remove]|status]")
+            .with_examples(vec!["/worktree status", "/worktree enter feature-branch", "/worktree exit --remove"])
+            .with_when_to_use("Use to work in isolated git branches using worktrees")
+            .with_related(vec!["status", "commit"])
+        ),
         _ => None,
     }
 }
@@ -371,6 +463,14 @@ pub fn all_help_entries() -> Vec<CommandHelpEntry> {
         get_command_help("export").unwrap(),
         get_command_help("config").unwrap(),
         get_command_help("debug").unwrap(),
+        get_command_help("clear").unwrap(),
+        get_command_help("quit").unwrap(),
+        get_command_help("model").unwrap(),
+        get_command_help("init").unwrap(),
+        get_command_help("sessions").unwrap(),
+        get_command_help("resume").unwrap(),
+        get_command_help("history").unwrap(),
+        get_command_help("worktree").unwrap(),
     ]
 }
 
