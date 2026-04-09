@@ -8,8 +8,12 @@ pub mod internal_logging;
 pub mod notifier;
 
 pub use diagnostics::{
-    DiagnosticCategory, DiagnosticLevel, DiagnosticResult, DiagnosticsEngine,
+    DiagnosticCategory, DiagnosticEvent, DiagnosticLevel, DiagnosticSummary, DiagnosticTracker, ErrorPattern,
 };
-pub use doctor::{Doctor, DoctorCheck, SystemHealth};
-pub use internal_logging::{InternalLog, InternalLogEntry, InternalLogLevel, InternalLogger};
-pub use notifier::{Notification, NotificationChannel, NotificationPriority, Notifier};
+pub use doctor::{
+    CheckStatus, DiagnosticCheck, DiagnosticCategory as DoctorDiagnosticCategory, Doctor, DoctorError, DoctorReport,
+};
+pub use internal_logging::{InternalLogEntry, InternalLogLevel, InternalLogger};
+pub use notifier::{
+    CallbackNotifier, FileNotifier, LogNotifier, Notification, NotificationHandler, NotificationLevel, Notifier, NotifierError,
+};

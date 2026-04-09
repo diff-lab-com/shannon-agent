@@ -14,3 +14,9 @@ thiserror = "2"
 tracing = "0.1"
 notify = "7"
 async-trait = "0.1"
+dirs = "5"
+regex = "1.11"
+dashmap = "6"
+
+[dev-dependencies]
+tempfile = "3"

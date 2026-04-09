@@ -1,154 +1,142 @@
-//! Away summary service
+//! Away Summary
+//!
+//! Generates a short session recap when the user returns after being away.
+//! Uses recent conversation messages to create a concise "where we left off" summary.
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
-use uuid::Uuid;
 
-/// Away summary
+/// Recent message window for away summary generation
+const RECENT_MESSAGE_WINDOW: usize = 30;
+
+/// A conversation message for summary generation
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AwaySummary {
-    pub id: Uuid,
-    pub start_time: chrono::DateTime<chrono::Utc>,
-    pub end_time: chrono::DateTime<chrono::Utc>,
-    pub activities_count: usize,
-    pub summary: String,
-    pub key_points: Vec<String>,
+pub struct ConversationMessage {
+    pub role: String,
+    pub content: String,
+    pub timestamp: Option<String>,
 }
 
-impl AwaySummary {
-    pub fn new(start_time: chrono::DateTime<chrono::Utc>) -> Self {
-        Self {
-            id: Uuid::new_v4(),
-            start_time,
-            end_time: start_time,
-            activities_count: 0,
-            summary: String::new(),
-            key_points: Vec::new(),
-        }
+/// Away summary generator
+pub struct AwaySummaryGenerator;
+
+impl AwaySummaryGenerator {
+    pub fn new() -> Self {
+        Self
     }
 
-    pub fn with_end_time(mut self, end_time: chrono::DateTime<chrono::Utc>) -> Self {
-        self.end_time = end_time;
-        self
-    }
-
-    pub fn with_activities_count(mut self, count: usize) -> Self {
-        self.activities_count = count;
-        self
-    }
-
-    pub fn with_summary(mut self, summary: String) -> Self {
-        self.summary = summary;
-        self
-    }
-
-    pub fn with_key_points(mut self, key_points: Vec<String>) -> Self {
-        self.key_points = key_points;
-        self
-    }
-}
-
-/// Away summary service
-pub struct AwaySummaryService {
-    storage_path: PathBuf,
-}
-
-impl AwaySummaryService {
-    pub fn new(storage_path: PathBuf) -> Self {
-        Self { storage_path }
-    }
-
-    /// Generate an away summary
-    pub async fn generate_summary(&self, activities: Vec<String>) -> Result<AwaySummary, SummaryError> {
-        let start_time = chrono::Utc::now() - chrono::Duration::hours(1);
-        let end_time = chrono::Utc::now();
-
-        // TODO: Implement actual summary generation with AI
-        let summary = format!("Session summary: {} activities", activities.len());
-        let activities_count = activities.len();
-        let key_points = activities;
-
-        Ok(AwaySummary {
-            id: Uuid::new_v4(),
-            start_time,
-            end_time,
-            activities_count,
-            summary,
-            key_points,
-        })
-    }
-
-    /// Save a summary
-    pub async fn save_summary(&self, summary: &AwaySummary) -> Result<(), SummaryError> {
-        std::fs::create_dir_all(&self.storage_path)
-            .map_err(|e| SummaryError::StorageError(e.to_string()))?;
-
-        let file_path = self.storage_path.join(format!("{}.json", summary.id));
-        let json = serde_json::to_string_pretty(summary)
-            .map_err(|e| SummaryError::SerializationError(e.to_string()))?;
-
-        std::fs::write(file_path, json)
-            .map_err(|e| SummaryError::StorageError(e.to_string()))?;
-
-        Ok(())
-    }
-
-    /// Load a summary
-    pub async fn load_summary(&self, id: &Uuid) -> Result<Option<AwaySummary>, SummaryError> {
-        let file_path = self.storage_path.join(format!("{}.json", id));
-
-        if !file_path.exists() {
-            return Ok(None);
+    /// Generate a short "where we left off" summary from recent messages
+    pub fn generate(
+        &self,
+        messages: &[ConversationMessage],
+        session_memory: Option<&str>,
+    ) -> Option<String> {
+        if messages.is_empty() {
+            return None;
         }
 
-        let json = std::fs::read_to_string(&file_path)
-            .map_err(|e| SummaryError::StorageError(e.to_string()))?;
+        let recent: Vec<&ConversationMessage> = messages
+            .iter()
+            .rev()
+            .take(RECENT_MESSAGE_WINDOW)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
 
-        let summary: AwaySummary = serde_json::from_str(&json)
-            .map_err(|e| SummaryError::SerializationError(e.to_string()))?;
+        // Build summary from recent messages -- only user messages are actionable context
+        let last_user_msg = recent
+            .iter()
+            .rev()
+            .find(|m| m.role == "user")
+            .map(|m| m.content.as_str());
 
-        Ok(Some(summary))
-    }
+        let task_hint = last_user_msg
+            .map(|s| {
+                let truncated = s.chars().take(200).collect::<String>();
+                format!("Recent context: {}", truncated)
+            })
+            .unwrap_or_default();
 
-    /// List all summaries
-    pub async fn list_summaries(&self) -> Result<Vec<AwaySummary>, SummaryError> {
-        let mut summaries = Vec::new();
+        let memory_hint = session_memory
+            .map(|m| format!("Session memory: {}", m))
+            .unwrap_or_default();
 
-        if !self.storage_path.exists() {
-            return Ok(summaries);
+        if task_hint.is_empty() && memory_hint.is_empty() {
+            return None;
         }
 
-        for entry in std::fs::read_dir(&self.storage_path)
-            .map_err(|e| SummaryError::StorageError(e.to_string()))?
-        {
-            let entry = entry.map_err(|e| SummaryError::StorageError(e.to_string()))?;
-            let file_path = entry.path();
-
-            if file_path.extension().and_then(|s| s.to_str()) != Some("json") {
-                continue;
-            }
-
-            let json = std::fs::read_to_string(&file_path)
-                .map_err(|e| SummaryError::StorageError(e.to_string()))?;
-
-            if let Ok(summary) = serde_json::from_str(&json) {
-                summaries.push(summary);
-            }
-        }
-
-        Ok(summaries)
+        Some(format!("{}\n{}", memory_hint, task_hint))
     }
 }
 
-/// Summary errors
-#[derive(Debug, thiserror::Error)]
-pub enum SummaryError {
-    #[error("Storage error: {0}")]
-    StorageError(String),
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    #[error("Serialization error: {0}")]
-    SerializationError(String),
+    fn make_messages(msgs: Vec<(&str, &str)>) -> Vec<ConversationMessage> {
+        msgs.into_iter()
+            .map(|(role, content)| ConversationMessage {
+                role: role.to_string(),
+                content: content.to_string(),
+                timestamp: None,
+            })
+            .collect()
+    }
 
-    #[error("Generation failed: {0}")]
-    GenerationFailed(String),
+    #[test]
+    fn test_empty_messages() {
+        let generator = AwaySummaryGenerator::new();
+        assert!(generator.generate(&[], None).is_none());
+    }
+
+    #[test]
+    fn test_with_user_message() {
+        let generator = AwaySummaryGenerator::new();
+        let msgs = make_messages(vec![
+            ("user", "Fix the auth bug in login.rs"),
+            ("assistant", "I'll investigate the auth bug now."),
+        ]);
+        let summary = generator.generate(&msgs, None);
+        assert!(summary.is_some());
+        let s = summary.unwrap();
+        assert!(s.contains("auth bug"));
+    }
+
+    #[test]
+    fn test_with_memory() {
+        let generator = AwaySummaryGenerator::new();
+        let msgs = make_messages(vec![("user", "What is the project structure?")]);
+        let summary = generator.generate(&msgs, Some("Building a Rust CLI tool"));
+        assert!(summary.is_some());
+        let s = summary.unwrap();
+        assert!(s.contains("Building a Rust CLI tool"));
+    }
+
+    #[test]
+    fn test_recent_window() {
+        let generator = AwaySummaryGenerator::new();
+        let mut msgs = Vec::new();
+        for i in 0..50 {
+            msgs.push(ConversationMessage {
+                role: if i % 2 == 0 {
+                    "user".to_string()
+                } else {
+                    "assistant".to_string()
+                },
+                content: format!("Message {}", i),
+                timestamp: None,
+            });
+        }
+        let summary = generator.generate(&msgs, None);
+        assert!(summary.is_some());
+    }
+
+    #[test]
+    fn test_no_actionable_content() {
+        // Only assistant messages (no user message) means no actionable content
+        let generator = AwaySummaryGenerator::new();
+        let msgs = make_messages(vec![("assistant", "Okay.")]);
+        let summary = generator.generate(&msgs, None);
+        assert!(summary.is_none());
+    }
 }

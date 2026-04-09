@@ -18,6 +18,7 @@ pub mod state;
 pub mod settings;
 pub mod hooks;
 pub mod permissions;
+pub mod message;
 
 // Re-export key types
 pub use error::{CoreError, CoreResult};
@@ -25,6 +26,6 @@ pub use state::{StateManager, SessionState, SessionData, SessionInfo, SessionPer
 pub use settings::{Settings, SettingsManager, SettingsError};
 pub use hooks::{HookManager, HookEvent, HookResult, HookDecision, HookEventType, HookError};
 pub use permissions::{
-    PermissionManager, Permission, PermissionLevel, PermissionChoice, PermissionPrompt,
-    PermissionConfig, PermissionError,
+    PermissionManager, Permission, PermissionLevel, PermissionChoice, PermissionPrompt, PermissionError,
 };
+pub use message::{Message, MessageContent, ContentBlock, ImageSource, ToolResultContent};

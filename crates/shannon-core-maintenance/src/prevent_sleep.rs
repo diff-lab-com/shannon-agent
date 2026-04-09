@@ -1,83 +1,167 @@
-//! Prevent sleep service
+//! Prevent Sleep
+//!
+//! Platform-aware sleep prevention during long-running operations.
+//! On macOS, uses `caffeinate` to prevent idle sleep.
+//! On other platforms, provides a no-op implementation.
 
-use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(target_os = "macos")]
+use std::sync::Mutex;
 
-/// Sleep prevention method
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SleepPreventionMethod {
-    DisplayOn,
-    SystemIdle,
-    PowerRequest,
+/// Reference count for nested sleep prevention
+static PREVENT_SLEEP_REF_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Stored caffeinate child process (macOS only)
+#[cfg(target_os = "macos")]
+static CAFFEINATE_CHILD: Mutex<Option<std::process::Child>> = Mutex::new(None);
+
+/// Whether prevent sleep is currently active
+pub fn is_preventing_sleep() -> bool {
+    PREVENT_SLEEP_REF_COUNT.load(Ordering::SeqCst) > 0
 }
 
-/// Prevent sleep service
-pub struct PreventSleepService {
-    method: SleepPreventionMethod,
-    enabled: bool,
-}
-
-impl PreventSleepService {
-    pub fn new(method: SleepPreventionMethod) -> Self {
-        Self {
-            method,
-            enabled: false,
+/// Start preventing sleep (reference counted)
+pub fn start_prevent_sleep() {
+    let prev = PREVENT_SLEEP_REF_COUNT.fetch_add(1, Ordering::SeqCst);
+    if prev == 0 {
+        #[cfg(target_os = "macos")]
+        {
+            spawn_caffeinate();
         }
-    }
-
-    /// Enable sleep prevention
-    pub fn enable(&mut self) -> Result<(), SleepError> {
-        if self.enabled {
-            return Ok(());
-        }
-
-        // TODO: Implement actual sleep prevention based on method
-        tracing::info!("Sleep prevention enabled: {:?}", self.method);
-
-        self.enabled = true;
-        Ok(())
-    }
-
-    /// Disable sleep prevention
-    pub fn disable(&mut self) -> Result<(), SleepError> {
-        if !self.enabled {
-            return Ok(());
-        }
-
-        // TODO: Disable actual sleep prevention
-        tracing::info!("Sleep prevention disabled");
-
-        self.enabled = false;
-        Ok(())
-    }
-
-    /// Check if currently enabled
-    pub fn is_enabled(&self) -> bool {
-        self.enabled
-    }
-
-    /// Get current method
-    pub fn method(&self) -> SleepPreventionMethod {
-        self.method
-    }
-
-    /// Set method
-    pub fn set_method(&mut self, method: SleepPreventionMethod) {
-        self.method = method;
+        tracing::debug!(
+            "Sleep prevention started (ref count: {})",
+            prev + 1
+        );
     }
 }
 
-/// Sleep errors
-#[derive(Debug, thiserror::Error)]
-pub enum SleepError {
-    #[error("Failed to enable sleep prevention: {0}")]
-    EnableFailed(String),
+/// Stop preventing sleep (reference counted)
+pub fn stop_prevent_sleep() {
+    let prev = PREVENT_SLEEP_REF_COUNT.fetch_sub(1, Ordering::SeqCst);
+    if prev == 1 {
+        #[cfg(target_os = "macos")]
+        {
+            kill_caffeinate();
+        }
+        tracing::debug!("Sleep prevention stopped");
+    }
+}
 
-    #[error("Failed to disable sleep prevention: {0}")]
-    DisableFailed(String),
+/// Force stop sleep prevention regardless of reference count
+pub fn force_stop_prevent_sleep() {
+    PREVENT_SLEEP_REF_COUNT.store(0, Ordering::SeqCst);
+    #[cfg(target_os = "macos")]
+    {
+        kill_caffeinate();
+    }
+    tracing::debug!("Sleep prevention force stopped");
+}
 
-    #[error("Method not supported: {0:?}")]
-    MethodNotSupported(SleepPreventionMethod),
+/// Platform: spawn caffeinate process (macOS)
+#[cfg(target_os = "macos")]
+fn spawn_caffeinate() {
+    use std::process::{Command, Stdio};
 
-    #[error("Permission denied")]
-    PermissionDenied,
+    match Command::new("caffeinate")
+        .args(["-i", "-t", "300"]) // -i: prevent idle sleep, -t: 5 min timeout
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => {
+            tracing::debug!("Started caffeinate (pid: {:?})", child.id());
+            if let Ok(mut guard) = CAFFEINATE_CHILD.lock() {
+                // Kill any previous caffeinate process
+                if let Some(ref mut prev) = *guard {
+                    let _ = prev.kill();
+                    let _ = prev.wait();
+                }
+                *guard = Some(child);
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Failed to start caffeinate: {}", e);
+        }
+    }
+}
+
+/// Platform: kill caffeinate process (macOS)
+#[cfg(target_os = "macos")]
+fn kill_caffeinate() {
+    if let Ok(mut guard) = CAFFEINATE_CHILD.lock() {
+        if let Some(ref mut child) = *guard {
+            let _ = child.kill();
+            let _ = child.wait();
+            tracing::debug!("Stopped caffeinate");
+        }
+        *guard = None;
+    }
+}
+
+/// Platform: no-op for non-macOS
+#[cfg(not(target_os = "macos"))]
+fn spawn_caffeinate() {}
+
+/// Platform: no-op for non-macOS
+#[cfg(not(target_os = "macos"))]
+fn kill_caffeinate() {}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+    use std::sync::OnceLock;
+
+    // Mutex to serialize tests that share the global atomic state
+    static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        TEST_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+    use super::*;
+
+    // Reset state before each test to avoid interference
+    fn reset_state() {
+        PREVENT_SLEEP_REF_COUNT.store(0, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn test_initial_state() {
+        let _guard = lock();
+        reset_state();
+        assert!(!is_preventing_sleep());
+    }
+
+    #[test]
+    fn test_reference_counting() {
+        let _guard = lock();
+        reset_state();
+        assert!(!is_preventing_sleep());
+        start_prevent_sleep();
+        assert!(is_preventing_sleep());
+        stop_prevent_sleep();
+        assert!(!is_preventing_sleep());
+    }
+
+    #[test]
+    fn test_nested() {
+        let _guard = lock();
+        reset_state();
+        start_prevent_sleep();
+        start_prevent_sleep();
+        assert!(is_preventing_sleep());
+        stop_prevent_sleep();
+        assert!(is_preventing_sleep()); // Still active
+        stop_prevent_sleep();
+        assert!(!is_preventing_sleep());
+    }
+
+    #[test]
+    fn test_force_stop() {
+        let _guard = lock();
+        reset_state();
+        start_prevent_sleep();
+        start_prevent_sleep();
+        force_stop_prevent_sleep();
+        assert!(!is_preventing_sleep());
+    }
 }

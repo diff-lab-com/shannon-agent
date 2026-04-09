@@ -38,7 +38,7 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 use tokio::sync::{mpsc, Mutex, Notify};
 
-use crate::tools::ToolOutput;
+use super::tools::ToolOutput;
 
 // ---------------------------------------------------------------------------
 // Error types

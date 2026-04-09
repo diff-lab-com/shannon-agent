@@ -9,6 +9,7 @@ pub use shannon_tool_interface::{Tool, ToolError, ToolOutput, ToolResult, ToolIn
 
 use serde_json::Value;
 use std::collections::HashMap;
+use futures_util::future;
 
 /// Registry for managing available tools
 pub struct ToolRegistry {
@@ -116,6 +117,7 @@ impl Default for ToolRegistry {
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use futures_util::future;
     use serde_json::json;
 
     struct DummyTool {
@@ -241,7 +243,7 @@ mod tests {
         }
 
         // Wait for all executions
-        let results = futures::future::join_all(handles).await;
+        let results = future::join_all(handles).await;
 
         // All should succeed
         for result in results {
@@ -387,7 +389,7 @@ mod tests {
         }
 
         // Wait for all registrations
-        let results = futures::future::join_all(handles).await;
+        let results = future::join_all(handles).await;
 
         // All should succeed
         for result in results {

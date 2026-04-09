@@ -52,7 +52,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use shannon_core_base::permissions::{PermissionError, PermissionManager};
-use crate::tools::{ToolError, ToolOutput, ToolRegistry};
+use super::tools::{ToolError, ToolOutput, ToolRegistry};
 
 // ---------------------------------------------------------------------------
 // Error types
@@ -578,7 +578,6 @@ impl ToolExecutionService {
         if let Err(perm_err) = self
             .permission_manager
             .check_tool_permission(session_id, tool_name)
-            .await
         {
             let reason = perm_err.to_string();
             let progress = ToolProgress::failed(&tool_id, tool_name, &reason);
@@ -791,7 +790,7 @@ mod tests {
         fn input_schema(&self) -> Value {
             serde_json::json!({"type": "object"})
         }
-        async fn execute(&self, _input: Value) -> crate::tools::ToolResult<ToolOutput> {
+        async fn execute(&self, _input: Value) -> super::super::ToolResult<super::super::ToolOutput> {
             Ok(ToolOutput {
                 content: "something went wrong".to_string(),
                 is_error: true,
@@ -814,8 +813,8 @@ mod tests {
         fn input_schema(&self) -> Value {
             serde_json::json!({"type": "object"})
         }
-        async fn execute(&self, _input: Value) -> crate::tools::ToolResult<ToolOutput> {
-            Err(crate::tools::ToolError::ExecutionFailed("boom".to_string()))
+        async fn execute(&self, _input: Value) -> super::super::ToolResult<super::super::ToolOutput> {
+            Err(super::super::ToolError::ExecutionFailed("boom".to_string()))
         }
     }
 
