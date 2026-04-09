@@ -74,6 +74,7 @@ pub mod housekeeping;
 pub mod credential_manager;
 pub mod billing;
 pub mod enhanced_suggestions;
+pub mod ui_adapter;
 
 // Re-export key types for convenience
 pub use query_engine::{QueryEngine, QueryContext, QueryEvent};
@@ -213,6 +214,11 @@ pub use enhanced_suggestions::{
     ContextSuggestionEngine, ContextualSuggestion, SuggestionTrigger,
     SuggestionContext as EnhancedSuggestionContext, SuggestionError,
 };
+pub use ui_adapter::{
+    UiAdapter, UiError, UiResult,
+    DefaultUiAdapter, NullUiAdapter,
+    DisplayMessage, MessageSeverity, UserChoice,
+};
 // Backward-compatible re-exports for the claude_md -> project_memory rename
 pub use project_memory::{
     ProjectMemoryConfig as ClaudeMdConfig,
@@ -265,6 +271,7 @@ pub mod error {
     pub use crate::credential_manager::CredentialError;
     pub use crate::billing::BillingError;
     pub use crate::project_memory::ProjectMemoryError;
+    pub use crate::ui_adapter::UiError;
 }
 
 /// Version information

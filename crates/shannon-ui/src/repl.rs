@@ -1844,52 +1844,43 @@ mod tests {
 
 // ── UiAdapter Implementation for Repl ─────────────────────────────────────
 
-use crate::adapter::{UiAdapter, UiError, UiResult};
+use crate::adapter::{UiAdapter, UiError, UiResult, DisplayMessage, MessageSeverity};
 use async_trait::async_trait;
 
-/// Implement UiAdapter for Repl to allow it to be used as a UI backend
+/// Implement UiAdapter for Repl to allow it to be used as a UI backend.
 #[async_trait]
 impl UiAdapter for Repl {
     fn supports_streaming(&self) -> bool {
         true // Terminal UI supports streaming output
     }
 
-    async fn display_output(&self, content: &str) -> UiResult<()> {
-        // Add the output to the chat widget
-        // Note: In a real async context, we'd need to handle this differently
-        // For now, we use a sync approach since the UI is currently synchronous
-        // This is a limitation of the current architecture that would be
-        // addressed in a full refactor
-        Ok(())
-    }
-
-    async fn display_error(&self, error: &str) -> UiResult<()> {
-        // Display error in the chat widget
-        // In the current architecture, errors are added to chat
+    async fn display(&self, message: &DisplayMessage) -> UiResult<()> {
+        // The TUI event loop handles rendering via the chat widget.
+        // This method exists so the Repl satisfies the trait; actual output
+        // flows through QueryEvent streams in the main loop.
+        let _ = message;
         Ok(())
     }
 
     async fn display_progress(&self, message: &str, percent: Option<u8>) -> UiResult<()> {
-        // Update status with progress message
-        // The percent can be used to show progress bars
+        // Update status with progress message.
         let _ = (message, percent);
         Ok(())
     }
 
     async fn read_input(&self, prompt: &str) -> UiResult<String> {
-        // Read input from user
-        // In the current terminal UI, this is handled by the event loop
+        // In the current terminal UI, input is handled by the event loop.
         let _ = prompt;
         Err(UiError::NotSupported(
-            "read_input not supported in terminal UI - use the prompt widget instead".to_string()
+            "read_input not supported in terminal UI - use the prompt widget instead".to_string(),
         ))
     }
 
     async fn confirm(&self, message: &str) -> UiResult<bool> {
-        // Show a confirmation dialog
+        // Confirmation is handled through dialog widgets in the event loop.
         let _ = message;
         Err(UiError::NotSupported(
-            "confirm not directly supported - use dialog widgets instead".to_string()
+            "confirm not directly supported - use dialog widgets instead".to_string(),
         ))
     }
 }
@@ -2041,19 +2032,12 @@ mod ui_adapter_tests {
     }
 
     #[test]
-    fn test_repl_adapter_display_output() {
+    fn test_repl_adapter_display() {
         let repl = create_repl();
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(repl.display_output("test"));
-        assert!(result.is_ok() || matches!(result, Err(UiError::NotSupported(_))));
-    }
-
-    #[test]
-    fn test_repl_adapter_display_error() {
-        let repl = create_repl();
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(repl.display_error("error"));
-        assert!(result.is_ok() || matches!(result, Err(UiError::NotSupported(_))));
+        let msg = DisplayMessage::info("test");
+        let result = rt.block_on(repl.display(&msg));
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -2061,7 +2045,7 @@ mod ui_adapter_tests {
         let repl = create_repl();
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(repl.display_progress("loading", Some(50)));
-        assert!(result.is_ok() || matches!(result, Err(UiError::NotSupported(_))));
+        assert!(result.is_ok());
     }
 
     #[test]
