@@ -796,20 +796,15 @@ fn get_disk_space(path: &std::path::Path) -> Option<u64> {
     // 2. `stat.as_mut_ptr()` provides a valid pointer to uninitialized memory for the statvfs
     //    struct. The `libc::statvfs` function writes to this memory when it succeeds.
     //
-    // 3. The `result == 0` check ensures that `statvfs` succeeded before we call `assume_init()`.
-    //    When `statvfs` returns 0, it has fully initialized the statvfs struct. When it returns
-    //    non-zero, the struct may be uninitialized, so we correctly return `None` without
-    //    reading it.
-    //
-    // 4. `assume_init()` is safe here because:
-    //    - We only reach it if `result == 0` (statvfs succeeded)
-    //    - statvfs contract guarantees it writes to all fields of the struct on success
-    //    - The struct has no padding that would remain uninitialized
+    // 3. We use `assume_init_read()` instead of `assume_init()` to make the intent clearer:
+    //    we're reading the value that `statvfs` just wrote. This is the idiomatic way to
+    //    extract an initialized value from MaybeUninit after an FFI call.
     let result = unsafe { libc::statvfs(path_cstr.as_ptr(), stat.as_mut_ptr()) };
 
     if result == 0 {
-        // SAFETY: statvfs returned 0, indicating success. The struct is now fully initialized.
-        let stat = unsafe { stat.assume_init() };
+        // SAFETY: statvfs returned 0, indicating success. The struct is now fully initialized
+        // by the FFI call. We use `assume_init_read()` to move the initialized value out.
+        let stat = unsafe { stat.assume_init_read() };
         // Available space = block size * available blocks
         Some(stat.f_bsize as u64 * stat.f_bavail as u64)
     } else {
@@ -834,6 +829,46 @@ fn get_disk_space(_path: &std::path::Path) -> Option<u64> {
 /// This ensures that even if a test panics, the original HOME value
 /// is restored, preventing test pollution.
 struct HomeGuard(Option<std::ffi::OsString>);
+
+/// Guard to restore API key environment variables when dropped.
+///
+/// This ensures that even if a test panics, the original API key values
+/// are restored, preventing test pollution.
+struct ApiKeyGuard {
+    anthropic: Option<std::ffi::OsString>,
+    claude: Option<std::ffi::OsString>,
+    shannon: Option<std::ffi::OsString>,
+}
+
+impl ApiKeyGuard {
+    /// Create a new guard by removing API key variables and storing their original values.
+    fn remove() -> Self {
+        Self {
+            anthropic: std::env::var_os("ANTHROPIC_API_KEY"),
+            claude: std::env::var_os("CLAUDE_API_KEY"),
+            shannon: std::env::var_os("SHANNON_API_KEY"),
+        }
+    }
+}
+
+impl Drop for ApiKeyGuard {
+    fn drop(&mut self) {
+        // SAFETY: These restore the environment to its previous state.
+        // The Drop guard pattern ensures this runs even if the test panics.
+        match &self.anthropic {
+            Some(val) => unsafe { std::env::set_var("ANTHROPIC_API_KEY", val) },
+            None => unsafe { std::env::remove_var("ANTHROPIC_API_KEY") },
+        }
+        match &self.claude {
+            Some(val) => unsafe { std::env::set_var("CLAUDE_API_KEY", val) },
+            None => unsafe { std::env::remove_var("CLAUDE_API_KEY") },
+        }
+        match &self.shannon {
+            Some(val) => unsafe { std::env::set_var("SHANNON_API_KEY", val) },
+            None => unsafe { std::env::remove_var("SHANNON_API_KEY") },
+        }
+    }
+}
 
 impl Drop for HomeGuard {
     fn drop(&mut self) {
@@ -1066,10 +1101,8 @@ mod tests {
 
     #[test]
     fn test_check_api_key_no_key() {
-        // Ensure the env vars are not set for this test
-        unsafe { std::env::remove_var("ANTHROPIC_API_KEY"); }
-        unsafe { std::env::remove_var("CLAUDE_API_KEY"); }
-        unsafe { std::env::remove_var("SHANNON_API_KEY"); }
+        // Ensure the env vars are not set for this test, then restore on drop
+        let _guard = ApiKeyGuard::remove();
 
         let doctor = Doctor::new();
         let check = doctor.check_api_key();
