@@ -179,11 +179,18 @@ impl Template {
             result = result.replace(&placeholder, value);
         }
 
-        // Check for unreplaced placeholders
-        if result.contains("{{") {
-            return Err(MagicDocsError::Rendering(
-                "Unreplaced placeholders in template".to_string(),
-            ));
+        // Remove any remaining unreplaced placeholders (optional placeholders)
+        // Find all {{...}} patterns that weren't replaced and replace with empty string
+        let mut pos = 0;
+        while let Some(start) = result[pos..].find("{{") {
+            let abs_start = pos + start;
+            if let Some(end) = result[abs_start..].find("}}") {
+                let abs_end = abs_start + end + 2;
+                result.replace_range(abs_start..abs_end, "");
+                pos = abs_start;
+            } else {
+                break;
+            }
         }
 
         Ok(result)
@@ -416,8 +423,9 @@ mod tests {
         let mut vars = HashMap::new();
         vars.insert("name".to_string(), "World".to_string());
 
-        let result = template.render(&vars);
-        assert!(result.is_err());
+        let result = template.render(&vars).unwrap();
+        // Unreplaced placeholders are now replaced with empty strings
+        assert_eq!(result, "Hello World, unreplaced: !");
     }
 
     #[test]

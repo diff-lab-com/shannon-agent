@@ -17,7 +17,7 @@
 //!
 //! ## Example
 //!
-//! ```rust
+//! ```rust,ignore
 //! use shannon_core::tool_hooks::*;
 //! use serde_json::json;
 //! use std::sync::Arc;

@@ -16,3 +16,4 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 reqwest = { workspace = true }
 dirs = "5"
+regex = "1"

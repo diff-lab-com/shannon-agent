@@ -494,8 +494,12 @@ mod tests {
 
         let period = BillingPeriod::monthly(2024, 1);
 
-        let record1 = UsageRecord::new("user123".to_string(), "tokens".to_string(), 1000, 0.01);
-        let record2 = UsageRecord::new("user123".to_string(), "tokens".to_string(), 2000, 0.02);
+        // Create records with timestamps within the billing period
+        let mut record1 = UsageRecord::new("user123".to_string(), "tokens".to_string(), 1000, 0.01);
+        record1.timestamp = Utc.with_ymd_and_hms(2024, 1, 15, 12, 0, 0).unwrap();
+
+        let mut record2 = UsageRecord::new("user123".to_string(), "tokens".to_string(), 2000, 0.02);
+        record2.timestamp = Utc.with_ymd_and_hms(2024, 1, 15, 14, 30, 0).unwrap();
 
         manager.usage_records.push(record1);
         manager.usage_records.push(record2);
@@ -503,6 +507,7 @@ mod tests {
         let totals = manager.daily_totals("user123", "tokens", &period);
         // Both records should be counted for the same day
         assert!(!totals.is_empty());
+        assert_eq!(totals.get("2024-01-15"), Some(&3000));
     }
 
     #[test]

@@ -748,6 +748,7 @@ mod tests {
     use shannon_core_base::permissions::Permission;
     use shannon_core_base::permissions::PermissionLevel;
     use crate::tools::Tool;
+    use shannon_tool_interface::{ToolResult, ToolOutput, ToolError};
 
     /// A simple test tool that echoes its input.
     struct EchoTool;
@@ -790,7 +791,7 @@ mod tests {
         fn input_schema(&self) -> Value {
             serde_json::json!({"type": "object"})
         }
-        async fn execute(&self, _input: Value) -> super::super::ToolResult<super::super::ToolOutput> {
+        async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
             Ok(ToolOutput {
                 content: "something went wrong".to_string(),
                 is_error: true,
@@ -813,8 +814,8 @@ mod tests {
         fn input_schema(&self) -> Value {
             serde_json::json!({"type": "object"})
         }
-        async fn execute(&self, _input: Value) -> super::super::ToolResult<super::super::ToolOutput> {
-            Err(super::super::ToolError::ExecutionFailed("boom".to_string()))
+        async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
+            Err(ToolError::ExecutionFailed("boom".to_string()))
         }
     }
 
