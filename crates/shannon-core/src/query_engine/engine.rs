@@ -163,6 +163,16 @@ impl QueryEngine {
                 // Build messages for API call
                 let mut messages = conversation.messages.clone();
 
+                // Auto-compress conversation when approaching token limits
+                if conversation.needs_compression(&config) {
+                    let _ = tx.send(Ok(QueryEvent::Progress {
+                        query_id,
+                        message: "Compressing conversation context...".to_string(),
+                    }));
+                    conversation.compress(&config);
+                    messages = conversation.messages.clone();
+                }
+
                 // Add pending tool results from previous turn
                 for (tool_use_id, result_content) in tool_results.drain(..) {
                     messages.push(Message {

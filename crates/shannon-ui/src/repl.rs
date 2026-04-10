@@ -246,6 +246,11 @@ impl Repl {
             "Welcome to Shannon! Type your message and press Enter. Type /help for commands.".to_string(),
         );
 
+        // Check for updates on startup (non-blocking)
+        if let Some(update_msg) = self.check_for_updates() {
+            self.chat.add_message(ChatRole::System, update_msg);
+        }
+
         // Main event loop
         while self.running {
             // Check for permission requests (non-blocking)
@@ -757,6 +762,7 @@ impl Repl {
                 "resume" => self.handle_resume_command(args)?,
                 "history" => self.handle_history_command(args)?,
                 "worktree" => self.handle_worktree_command(args)?,
+                "credentials" | "creds" | "cred" => self.handle_credentials_command(args)?,
                 _ => {
                     // Command is in registry but not handled by REPL (e.g., commit, diff, etc.)
                     // For now, just show the command description
@@ -1157,6 +1163,167 @@ impl Repl {
         Ok(())
     }
 
+    /// Handle /credentials command — manage stored credentials
+    fn handle_credentials_command(&mut self, args: &str) -> Result<()> {
+        use shannon_commands::builtin_commands::register_all; // ensure module accessible
+        // Import credential utilities from the builtin credentials module.
+        // The module is private to shannon-commands, but we access through the crate's re-exports.
+        let parts: Vec<&str> = args.splitn(3, ' ').collect();
+        let action_str = parts.first().copied().unwrap_or("");
+
+        let output = match action_str.to_lowercase().as_str() {
+            "list" | "ls" | "" => self.credentials_list(),
+            "store" | "add" | "set" => {
+                let service = parts.get(1).copied().unwrap_or("");
+                let value = parts.get(2).copied().unwrap_or("");
+                if service.is_empty() || value.is_empty() {
+                    "Usage: /credentials store <service> <value>".to_string()
+                } else {
+                    self.credentials_store(service, value)
+                }
+            }
+            "get" => {
+                let service = parts.get(1).copied().unwrap_or("");
+                if service.is_empty() {
+                    "Usage: /credentials get <service>".to_string()
+                } else {
+                    self.credentials_get(service)
+                }
+            }
+            "delete" | "remove" | "rm" => {
+                let service = parts.get(1).copied().unwrap_or("");
+                if service.is_empty() {
+                    "Usage: /credentials delete <service>".to_string()
+                } else {
+                    self.credentials_delete(service)
+                }
+            }
+            "count" => self.credentials_count(),
+            "help" | "?" => self.credentials_help(),
+            _ => self.credentials_list(),
+        };
+
+        self.chat.add_message(ChatRole::System, output);
+        Ok(())
+    }
+
+    /// List stored credentials
+    fn credentials_list(&self) -> String {
+        use shannon_core::credential_manager::CredentialManager;
+        let mut output = String::from("Stored Credentials:\n\n");
+        match CredentialManager::new().and_then(|mut m| { m.load()?; Ok(m) }) {
+            Ok(manager) => {
+                let creds = manager.list();
+                if creds.is_empty() {
+                    output.push_str("  No credentials stored.\n");
+                } else {
+                    for c in &creds {
+                        output.push_str(&format!("  {} — {} (created: {})\n",
+                            c.service, c.name, c.created_at.format("%Y-%m-%d %H:%M")));
+                    }
+                }
+            }
+            Err(e) => output.push_str(&format!("  Error: {}\n", e)),
+        }
+        output.push_str("\nUse /credentials help for usage information.");
+        output
+    }
+
+    /// Store a credential
+    fn credentials_store(&self, service: &str, value: &str) -> String {
+        use shannon_core::credential_manager::{CredentialManager, Credential};
+        match CredentialManager::new().and_then(|mut m| { m.load()?; Ok(m) }) {
+            Ok(mut manager) => {
+                let cred = Credential::new(service, service, value);
+                match manager.store_or_update(cred) {
+                    Ok(_) => format!("Credential stored for service: {}", service),
+                    Err(e) => format!("Failed to store credential: {}", e),
+                }
+            }
+            Err(e) => format!("Error: {}", e),
+        }
+    }
+
+    /// Get a credential (masked)
+    fn credentials_get(&self, service: &str) -> String {
+        use shannon_core::credential_manager::CredentialManager;
+        match CredentialManager::new().and_then(|mut m| { m.load()?; Ok(m) }) {
+            Ok(manager) => match manager.retrieve(service) {
+                Ok(cred) => {
+                    let val = &cred.value;
+                    let masked = if val.len() <= 8 {
+                        "*".repeat(val.len())
+                    } else {
+                        format!("{}****{}", &val[..4], &val[val.len()-4..])
+                    };
+                    format!("Credential for '{}': {}", service, masked)
+                }
+                Err(e) => format!("Not found for '{}': {}", service, e),
+            },
+            Err(e) => format!("Error: {}", e),
+        }
+    }
+
+    /// Delete a credential
+    fn credentials_delete(&self, service: &str) -> String {
+        use shannon_core::credential_manager::CredentialManager;
+        match CredentialManager::new().and_then(|mut m| { m.load()?; Ok(m) }) {
+            Ok(mut manager) => match manager.delete(service) {
+                Ok(_) => format!("Credential deleted for service: {}", service),
+                Err(e) => format!("Failed to delete for '{}': {}", service, e),
+            },
+            Err(e) => format!("Error: {}", e),
+        }
+    }
+
+    /// Count stored credentials
+    fn credentials_count(&self) -> String {
+        use shannon_core::credential_manager::CredentialManager;
+        match CredentialManager::new().and_then(|mut m| { m.load()?; Ok(m) }) {
+            Ok(manager) => format!("Stored credentials: {}", manager.count()),
+            Err(e) => format!("Error: {}", e),
+        }
+    }
+
+    /// Show credentials help
+    fn credentials_help(&self) -> String {
+        "Credential Management:\n\n\
+         /credentials list              - Show stored credentials\n\
+         /credentials store <svc> <val> - Store a credential\n\
+         /credentials get <service>     - Retrieve a credential (masked)\n\
+         /credentials delete <service>  - Delete a credential\n\
+         /credentials count             - Show stored credential count\n".to_string()
+    }
+
+    /// Check for Shannon updates on startup (non-blocking)
+    fn check_for_updates(&self) -> Option<String> {
+        use shannon_core::updater::{AutoUpdater, UpdaterConfig};
+        use std::time::Duration;
+
+        let config = UpdaterConfig {
+            repo: "shannon-code/shannon".to_string(),
+            check_interval: Duration::from_secs(86400),
+            enabled: true,
+            include_prereleases: false,
+        };
+        let mut updater = AutoUpdater::new(config);
+
+        match self.runtime.block_on(updater.check_for_update()) {
+            shannon_core::updater::UpdateStatus::UpdateAvailable { current, latest, release } => {
+                Some(format!(
+                    "Update available: {} → {} ({}). Download: {}",
+                    current, latest, release.tag_name, release.html_url
+                ))
+            }
+            shannon_core::updater::UpdateStatus::CheckFailed { error } => {
+                // Silently ignore update check failures — don't block startup
+                let _ = error;
+                None
+            }
+            _ => None,
+        }
+    }
+
     /// Handle a query (send to AI)
     fn handle_query(&mut self, input: &str) -> Result<()> {
         self.state.status = "Processing...".to_string();
@@ -1200,6 +1367,9 @@ impl Repl {
 
         // Process query with real-time streaming UI updates
         let query_result = self.runtime.block_on(async {
+            // Prevent system sleep during long-running queries
+            shannon_core::prevent_sleep::start_prevent_sleep();
+
             // Pass permission request channel for UI integration
             let permission_channel = Some(self.permission_req_tx.clone());
             let mut stream = query_engine.process_query(context, permission_channel).await;
@@ -1292,6 +1462,9 @@ impl Repl {
 
             Ok::<(String, u64, usize, TurnDiff, String, usize), String>((response_text, tokens_in_turn, tools_in_session, turn_diff, progress_status, steps_done))
         });
+
+        // Stop preventing sleep after query completes
+        shannon_core::prevent_sleep::stop_prevent_sleep();
 
         match query_result {
             Ok((response, tokens, tools, turn, final_status, steps)) => {

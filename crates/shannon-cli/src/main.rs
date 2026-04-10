@@ -406,7 +406,7 @@ fn main() -> Result<()> {
         Some(Commands::Repl { cwd, .. }) => {
             if let Some(dir) = cwd {
                 std::env::set_current_dir(&dir)
-                    .map_err(|e| anyhow::anyhow!("Failed to set working directory: {}", e))?;
+                    .map_err(|e| anyhow::anyhow!("Failed to set working directory: {e}"))?;
             }
             let mut repl = Repl::new().map_err(|e| anyhow::anyhow!("{e:?}"))?;
             repl.run().map_err(|e| anyhow::anyhow!("{e:?}"))?;

@@ -126,19 +126,37 @@ shannon-code/
 ├── docs/
 │   └── SPEC.md                  # This document
 └── crates/
-    ├── shannon-core/             # Core engine (46,789 lines)
+    ├── shannon-core/             # Core facade + local modules (47,824 lines)
     │   └── src/
-    │       ├── lib.rs           # 52 module declarations + re-exports
-    │       ├── query_engine.rs  # Main query orchestrator
+    │       ├── lib.rs           # 52 module declarations + re-exports + sub-crate access
+    │       ├── query_engine/    # Query orchestrator with streaming & compression
     │       ├── tools.rs         # Tool trait + registry
     │       ├── api.rs           # API client (streaming)
     │       ├── permissions.rs   # Permission system
     │       ├── state.rs         # Session persistence
-    │       ├── settings.rs      # Configuration management
+    │       ├── credential_manager.rs  # Secure credential storage
+    │       ├── updater.rs       # Auto-update via GitHub Releases
     │       └── ...              # 45 more modules
+    ├── shannon-core-base/        # Sub-crate: base types (5,253 lines)
+    │   └── src/  { settings, permissions, hooks, state }
+    ├── shannon-core-api/         # Sub-crate: API client (3,027 lines)
+    │   └── src/  { LLM client, streaming, message types }
+    ├── shannon-core-tools/       # Sub-crate: tool infra (6,300 lines)
+    │   └── src/  { ToolRegistry, permission_classifier, streaming executor }
+    ├── shannon-core-query/       # Sub-crate: query engine (614 lines)
+    │   └── src/  { QueryEngine, compact }
+    ├── shannon-core-memory/      # Sub-crate: memory system (1,446 lines)
+    │   └── src/  { MemoryStore, auto-dream consolidation }
+    ├── shannon-core-plugins/     # Sub-crate: plugin system (808 lines)
+    │   └── src/  { PluginManager, MCP advanced, bridge service }
+    ├── shannon-core-features/    # Sub-crate: feature modules (4,478 lines)
+    │   └── src/  { updater, billing, credential_manager, voice_mode, magic_docs, oauth }
+    ├── shannon-core-maintenance/ # Sub-crate: maintenance (3,898 lines)
+    │   └── src/  { rate_limit, prevent_sleep, policy_limits, housekeeping, ai_limits }
+    ├── shannon-core-diagnostics/ # Sub-crate: diagnostics (3,293 lines)
+    │   └── src/  { diagnostics, doctor, notifier, internal_logging }
     ├── shannon-tools/            # Tool implementations (25,338 lines)
     │   └── src/
-    │       ├── lib.rs           # 28 module declarations
     │       ├── file/            # File operations (8 files)
     │       ├── system.rs        # Bash, Sleep, PowerShell
     │       ├── git.rs           # Git integration (5 tools)
@@ -150,7 +168,6 @@ shannon-code/
     │       ├── coordinator.rs   # Team orchestration
     │       ├── teammate.rs      # Agent lifecycle
     │       ├── task_board.rs    # Shared task state
-    │       ├── multi_agent.rs   # Parallel dispatch
     │       └── ...
     ├── shannon-ui/               # Terminal UI (5,981 lines)
     │   └── src/
@@ -162,20 +179,18 @@ shannon-code/
     │   └── src/
     │       ├── protocol.rs      # JSON-RPC + MCP types
     │       ├── transport.rs     # stdio/SSE/HTTP/WebSocket
-    │       ├── client.rs        # MCP client
-    │       └── auth.rs          # OAuth 2.0 PKCE
+    │       └── ...
     ├── shannon-commands/        # Slash commands (3,101 lines)
     │   └── src/
-    │       ├── builtin/         # 6 built-in commands
+    │       ├── builtin/         # Built-in commands (commit, config, credentials, etc.)
     │       └── ...
     ├── shannon-skills/          # Skill framework (2,286 lines)
     │   └── src/
     │       ├── definition.rs   # Skill types
     │       ├── loader.rs        # Disk loading
-    │       ├── executor.rs      # Argument substitution
     │       └── ...
     ├── shannon-types/            # Shared types (37 lines)
-    └── shannon-cli/              # CLI entry (68 lines)
+    └── shannon-cli/              # CLI entry point
 ```
 
 ### 2.3 Inter-Crate Dependency Graph
@@ -184,6 +199,15 @@ shannon-code/
 shannon-cli
   └─→ shannon-ui
         └─→ shannon-core
+              ├─→ shannon-core-base
+              ├─→ shannon-core-api
+              ├─→ shannon-core-tools
+              ├─→ shannon-core-query
+              ├─→ shannon-core-memory
+              ├─→ shannon-core-plugins
+              ├─→ shannon-core-features
+              ├─→ shannon-core-maintenance
+              ├─→ shannon-core-diagnostics
               ├─→ shannon-tools
               │     └─→ shannon-core (re-exports)
               ├─→ shannon-agents
@@ -1201,17 +1225,26 @@ let client = ClaudeClient::with_vcr(vcr);
 
 ### 9.2 Per-Crate Breakdown
 
-| Crate | Lines | Test Files | Key Modules |
-|-------|-------|------------|-------------|
-| shannon-core | 47,824 | 52 | 52 modules |
-| shannon-tools | 25,338 | 20 | 28 modules |
-| shannon-agents | 6,580 | 4 | 9 modules |
-| shannon-ui | 5,981 | 8 | 6 modules |
-| shannon-commands | 3,101 | 7 | 5 modules |
-| shannon-mcp | 2,269 | 4 | 5 modules |
-| shannon-skills | 2,286 | 8 | 7 modules |
-| shannon-types | 37 | 0 | 1 module |
-| shannon-cli | 83 | 0 | 1 file |
+| Crate | Lines | Key Modules |
+|-------|-------|-------------|
+| shannon-core | 47,824 | 52 modules (facade + local) |
+| shannon-core-base | 5,253 | settings, permissions, hooks, state |
+| shannon-core-api | 3,027 | LLM client, streaming, message types |
+| shannon-core-tools | 6,300 | ToolRegistry, permission_classifier, streaming executor |
+| shannon-core-query | 614 | QueryEngine, compact |
+| shannon-core-memory | 1,446 | MemoryStore, auto-dream consolidation |
+| shannon-core-plugins | 808 | PluginManager, MCP advanced, bridge service |
+| shannon-core-features | 4,478 | updater, billing, credentials, voice_mode, oauth |
+| shannon-core-maintenance | 3,898 | rate_limit, prevent_sleep, policy_limits, housekeeping |
+| shannon-core-diagnostics | 3,293 | diagnostics, doctor, notifier, internal_logging |
+| shannon-tools | 25,338 | 28 tool modules |
+| shannon-agents | 6,580 | coordinator, teammate, task_board |
+| shannon-ui | 5,981 | repl, vim, render, widgets |
+| shannon-commands | 3,101 | 11 builtin commands |
+| shannon-mcp | 2,269 | protocol, transport, client, auth |
+| shannon-skills | 2,286 | definition, loader, executor |
+| shannon-types | 37 | Shared type definitions |
+| shannon-cli | 83 | CLI entry point |
 
 ### 9.3 Build Configuration
 

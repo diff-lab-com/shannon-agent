@@ -24,6 +24,7 @@ mod diff;
 mod search;
 mod export;
 mod config;
+mod credentials;
 mod debug;
 mod repl;
 
@@ -46,6 +47,7 @@ pub fn all_commands() -> Vec<Command> {
         search::command(),
         export::command(),
         config::command(),
+        credentials::command(),
         debug::command(),
     ];
     cmds.extend(repl::all_commands());
