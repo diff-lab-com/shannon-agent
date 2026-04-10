@@ -126,9 +126,9 @@ shannon-code/
 ├── docs/
 │   └── SPEC.md                  # This document
 └── crates/
-    ├── shannon-core/             # Core facade + local modules (47,824 lines)
+    ├── shannon-core/             # Core engine (52 modules, ~49,000 lines)
     │   └── src/
-    │       ├── lib.rs           # 52 module declarations + re-exports + sub-crate access
+    │       ├── lib.rs           # Module declarations + re-exports
     │       ├── query_engine/    # Query orchestrator with streaming & compression
     │       ├── tools.rs         # Tool trait + registry
     │       ├── api.rs           # API client (streaming)
@@ -137,24 +137,6 @@ shannon-code/
     │       ├── credential_manager.rs  # Secure credential storage
     │       ├── updater.rs       # Auto-update via GitHub Releases
     │       └── ...              # 45 more modules
-    ├── shannon-core-base/        # Sub-crate: base types (5,253 lines)
-    │   └── src/  { settings, permissions, hooks, state }
-    ├── shannon-core-api/         # Sub-crate: API client (3,027 lines)
-    │   └── src/  { LLM client, streaming, message types }
-    ├── shannon-core-tools/       # Sub-crate: tool infra (6,300 lines)
-    │   └── src/  { ToolRegistry, permission_classifier, streaming executor }
-    ├── shannon-core-query/       # Sub-crate: query engine (614 lines)
-    │   └── src/  { QueryEngine, compact }
-    ├── shannon-core-memory/      # Sub-crate: memory system (1,446 lines)
-    │   └── src/  { MemoryStore, auto-dream consolidation }
-    ├── shannon-core-plugins/     # Sub-crate: plugin system (808 lines)
-    │   └── src/  { PluginManager, MCP advanced, bridge service }
-    ├── shannon-core-features/    # Sub-crate: feature modules (4,478 lines)
-    │   └── src/  { updater, billing, credential_manager, voice_mode, magic_docs, oauth }
-    ├── shannon-core-maintenance/ # Sub-crate: maintenance (3,898 lines)
-    │   └── src/  { rate_limit, prevent_sleep, policy_limits, housekeeping, ai_limits }
-    ├── shannon-core-diagnostics/ # Sub-crate: diagnostics (3,293 lines)
-    │   └── src/  { diagnostics, doctor, notifier, internal_logging }
     ├── shannon-tools/            # Tool implementations (25,338 lines)
     │   └── src/
     │       ├── file/            # File operations (8 files)
@@ -199,15 +181,6 @@ shannon-code/
 shannon-cli
   └─→ shannon-ui
         └─→ shannon-core
-              ├─→ shannon-core-base
-              ├─→ shannon-core-api
-              ├─→ shannon-core-tools
-              ├─→ shannon-core-query
-              ├─→ shannon-core-memory
-              ├─→ shannon-core-plugins
-              ├─→ shannon-core-features
-              ├─→ shannon-core-maintenance
-              ├─→ shannon-core-diagnostics
               ├─→ shannon-tools
               │     └─→ shannon-core (re-exports)
               ├─→ shannon-agents
@@ -1214,10 +1187,9 @@ let client = ClaudeClient::with_vcr(vcr);
 
 | Metric | Value |
 |--------|-------|
-| Total Lines of Code | 93,529 |
-| Source Files (.rs) | 145 |
-| Test Functions | 2,037 |
-| Test Files | 103 |
+| Total Lines of Code | ~94,000 |
+| Source Files (.rs) | ~120 |
+| Test Functions | 3,180 |
 | Workspace Crates | 9 |
 | Public Modules | 93 |
 | Public Structs | ~200 |
@@ -1227,16 +1199,7 @@ let client = ClaudeClient::with_vcr(vcr);
 
 | Crate | Lines | Key Modules |
 |-------|-------|-------------|
-| shannon-core | 47,824 | 52 modules (facade + local) |
-| shannon-core-base | 5,253 | settings, permissions, hooks, state |
-| shannon-core-api | 3,027 | LLM client, streaming, message types |
-| shannon-core-tools | 6,300 | ToolRegistry, permission_classifier, streaming executor |
-| shannon-core-query | 614 | QueryEngine, compact |
-| shannon-core-memory | 1,446 | MemoryStore, auto-dream consolidation |
-| shannon-core-plugins | 808 | PluginManager, MCP advanced, bridge service |
-| shannon-core-features | 4,478 | updater, billing, credentials, voice_mode, oauth |
-| shannon-core-maintenance | 3,898 | rate_limit, prevent_sleep, policy_limits, housekeeping |
-| shannon-core-diagnostics | 3,293 | diagnostics, doctor, notifier, internal_logging |
+| shannon-core | ~49,000 | 52 modules (query, tools, api, permissions, state, plugins, etc.) |
 | shannon-tools | 25,338 | 28 tool modules |
 | shannon-agents | 6,580 | coordinator, teammate, task_board |
 | shannon-ui | 5,981 | repl, vim, render, widgets |

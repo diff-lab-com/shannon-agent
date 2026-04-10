@@ -277,22 +277,6 @@ pub mod error {
 /// Version information
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Sub-crate re-exports for granular dependency usage
-///
-/// Downstream crates can depend on individual sub-crates instead of the full
-/// shannon-core, or access them through this module.
-pub mod sub {
-    pub use shannon_core_base as base;
-    pub use shannon_core_api as api_ext;
-    pub use shannon_core_tools as tools_ext;
-    pub use shannon_core_query as query;
-    pub use shannon_core_memory as memory_ext;
-    pub use shannon_core_plugins as plugins_ext;
-    pub use shannon_core_features as features;
-    pub use shannon_core_maintenance as maintenance;
-    pub use shannon_core_diagnostics as diagnostics_ext;
-}
-
 /// Common Result type for Shannon operations
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
