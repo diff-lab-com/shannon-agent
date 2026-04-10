@@ -86,6 +86,7 @@ pub use lsp_diagnostics::{
     LspDiagnostic, DiagnosticSeverity, RelatedInfo,
     DiagnosticRegistry, DiagnosticSummary,
 };
+pub use grep::GrepTool;
 pub use ask_user::{
     AskUserQuestionTool, AskUserInput, Question, QuestionOption, QuestionAnswer,
     QuestionHandler, SharedQuestionHandler, TerminalQuestionHandler,
@@ -122,5 +123,89 @@ pub use system::{SecurityLevel, SecurityAnalysis, analyze_command_security};
 
 // Re-export from shannon_core
 pub use shannon_core::{
-    tools::{Tool, ToolError, ToolResult, ToolOutput},
+    tools::{Tool, ToolError, ToolResult, ToolOutput, ToolRegistry},
 };
+
+/// Register all standard tools into the given registry.
+///
+/// Some tools (plan mode) require shared state and are registered with sensible
+/// defaults. Callers can override by re-registering with custom instances after this call.
+pub fn register_default_tools(registry: &mut ToolRegistry) -> Result<(), Box<dyn std::error::Error>> {
+    // ── File operations ────────────────────────────────────────────────
+    registry.register(Box::new(ReadTool::new()))?;
+    registry.register(Box::new(WriteTool::new()))?;
+    registry.register(Box::new(EditTool::new()))?;
+    registry.register(Box::new(GlobTool::new()))?;
+
+    // ── System operations ──────────────────────────────────────────────
+    registry.register(Box::new(BashTool::new()))?;
+    registry.register(Box::new(SleepTool::new()))?;
+    registry.register(Box::new(PowerShellTool::new()))?;
+    registry.register(Box::new(ReplTool::new()))?;
+
+    // ── Git operations ─────────────────────────────────────────────────
+    registry.register(Box::new(GitBranchTool::new()))?;
+    registry.register(Box::new(GitDiffTool::new()))?;
+    registry.register(Box::new(GitLogTool::new()))?;
+    registry.register(Box::new(GitStashTool::new()))?;
+    registry.register(Box::new(GitSafetyTool::new()))?;
+
+    // ── Web operations ─────────────────────────────────────────────────
+    registry.register(Box::new(WebFetchTool::new()))?;
+    registry.register(Box::new(WebSearchTool::new()))?;
+
+    // ── Search ─────────────────────────────────────────────────────────
+    registry.register(Box::new(GrepTool::new()))?;
+
+    // ── Agent & team ───────────────────────────────────────────────────
+    registry.register(Box::new(AgentTool::new()))?;
+    registry.register(Box::new(SendMessageTool::new()))?;
+    registry.register(Box::new(TeamDeleteTool::new()))?;
+
+    // ── Task management ────────────────────────────────────────────────
+    registry.register(Box::new(TodoWriteTool::new()))?;
+    registry.register(Box::new(TaskCreateTool::new()))?;
+    registry.register(Box::new(TaskListTool::new()))?;
+    registry.register(Box::new(TaskUpdateTool::new()))?;
+    registry.register(Box::new(TaskGetTool::new()))?;
+    registry.register(Box::new(TaskTool::new()))?;
+    registry.register(Box::new(TaskOutputTool::new()))?;
+    registry.register(Box::new(TaskStopTool::new()))?;
+
+    // ── Notebook ───────────────────────────────────────────────────────
+    registry.register(Box::new(NotebookEditTool::new()))?;
+
+    // ── Worktree ───────────────────────────────────────────────────────
+    registry.register(Box::new(WorktreeTool::new()))?;
+
+    // ── Plan mode (shared state) ───────────────────────────────────────
+    let plan_state = new_plan_mode_state();
+    registry.register(Box::new(EnterPlanModeTool::new(plan_state.clone())))?;
+    registry.register(Box::new(ExitPlanModeTool::new(plan_state)))?;
+
+    // ── LSP ────────────────────────────────────────────────────────────
+    registry.register(Box::new(GoToDefinitionTool::new()))?;
+    registry.register(Box::new(FindReferencesTool::new()))?;
+    registry.register(Box::new(HoverTool::new()))?;
+    registry.register(Box::new(DocumentSymbolTool::new()))?;
+
+    // ── Interactive ────────────────────────────────────────────────────
+    registry.register(Box::new(AskUserQuestionTool::with_terminal_handler()))?;
+
+    // ── Skill & discovery ──────────────────────────────────────────────
+    registry.register(Box::new(SkillTool::new()))?;
+    // Note: ToolSearchTool requires Arc<RwLock<ToolRegistry>> — register separately if needed
+
+    // ── Cron ───────────────────────────────────────────────────────────
+    registry.register(Box::new(CronTool::new()))?;
+
+    // ── Config ─────────────────────────────────────────────────────────
+    registry.register(Box::new(ConfigTool::new()))?;
+
+    // ── Utility tools ──────────────────────────────────────────────────
+    registry.register(Box::new(BriefTool::new()))?;
+    registry.register(Box::new(StructuredOutputTool::new()))?;
+    registry.register(Box::new(McpAuthTool::new()))?;
+
+    Ok(())
+}

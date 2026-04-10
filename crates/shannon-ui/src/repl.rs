@@ -33,10 +33,8 @@ use shannon_core::{
     tools::ToolRegistry,
 };
 use shannon_commands::{CommandRegistry, CommandParser, builtin_commands, help_utils};
-// Tool types used by ToolRegistry registration
-use shannon_agents::{EnterWorktreeTool, ExitWorktreeTool};
-#[allow(unused_imports)]
-use shannon_tools::{BashTool, ReadTool, WriteTool};
+// Tool registration
+use shannon_tools::register_default_tools;
 
 /// Application state for the REPL
 #[derive(Debug, Clone)]
@@ -160,13 +158,9 @@ impl Repl {
     pub fn new() -> Result<Self> {
         let runtime = Runtime::new()?;
 
-        // Create tool registry
+        // Create tool registry and register all tools
         let mut tool_registry = ToolRegistry::new();
-
-        // Register tools that implement shannon_core::Tool
-        tool_registry.register(Box::new(shannon_tools::BashTool::new()))?;
-        tool_registry.register(Box::new(EnterWorktreeTool::new()))?;
-        tool_registry.register(Box::new(ExitWorktreeTool::new()))?;
+        register_default_tools(&mut tool_registry).map_err(|e| anyhow::anyhow!("Failed to register tools: {}", e))?;
 
         // Create LLM client
         let client_config = LlmClientConfig::default();
@@ -1341,9 +1335,9 @@ impl Repl {
             String::new(),
         );
 
-        // Clone necessary data for the async block
-        let input_clone = input.to_string();
-        let query_engine = self.query_engine.as_ref().expect("QueryEngine not initialized");
+        // Take the query engine out — spawn requires 'static ownership
+        // We'll restore it after the query completes
+        let query_engine = self.query_engine.take().expect("QueryEngine not initialized");
 
         // Create query context
         let query_id = Uuid::new_v4();
@@ -1352,7 +1346,7 @@ impl Repl {
         let context = QueryContext {
             query_id,
             session_id,
-            user_message: input_clone.clone(),
+            user_message: input.to_string(),
             metadata: shannon_core::query_engine::QueryMetadata {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: true,
@@ -1366,42 +1360,42 @@ impl Repl {
         };
 
         // Process query with real-time streaming UI updates
-        let query_result = self.runtime.block_on(async {
-            // Prevent system sleep during long-running queries
-            shannon_core::prevent_sleep::start_prevent_sleep();
+        // Use shared state between the async query task and the main UI loop
+        use std::sync::{Arc, Mutex};
+        let streaming_buffer: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+        let streaming_status: Arc<Mutex<String>> = Arc::new(Mutex::new("Processing...".to_string()));
+        let streaming_done: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
 
-            // Pass permission request channel for UI integration
-            let permission_channel = Some(self.permission_req_tx.clone());
+        let buffer_clone = streaming_buffer.clone();
+        let status_clone = streaming_status.clone();
+        let done_clone = streaming_done.clone();
+        let permission_tx = self.permission_req_tx.clone();
+
+        // Spawn the query processing in a separate thread so the UI can render
+        let query_handle = self.runtime.spawn(async move {
+            shannon_core::prevent_sleep::start_prevent_sleep();
+            let permission_channel = Some(permission_tx);
             let mut stream = query_engine.process_query(context, permission_channel).await;
 
             let mut response_text = String::new();
-            let mut current_buffer = String::new();
             let mut tokens_in_turn = 0u64;
             let mut tool_calls: Vec<String> = Vec::new();
             let mut tools_in_session: usize = 0;
             let mut progress_status = "Processing...".to_string();
             let mut steps_done = 0usize;
+            let mut turn_diff = TurnDiff::new(0);
 
-            // Process stream events with real-time feedback
             while let Some(event_result) = stream.next().await {
                 match event_result {
-                    Ok(QueryEvent::Started { .. }) => {
-                        // Query started - initial message already added
-                    }
+                    Ok(QueryEvent::Started { .. }) => {}
                     Ok(QueryEvent::Text { content, .. }) => {
-                        // Accumulate text and periodically flush to UI
-                        current_buffer.push_str(&content);
                         response_text.push_str(&content);
-
-                        // Flush every ~50 characters for real-time display
-                        if current_buffer.len() >= 50 {
-                            // In a true async UI, we would update the message here
-                            // For now, we accumulate and display at the end
-                            current_buffer.clear();
+                        // Push update to shared buffer for UI rendering
+                        if let Ok(mut buf) = buffer_clone.lock() {
+                            *buf = response_text.clone();
                         }
                     }
                     Ok(QueryEvent::ToolUseRequest { tool_name, tool_input, .. }) => {
-                        // Display tool use to user
                         steps_done += 1;
                         progress_status = format!("Running: {} (step {})", tool_name, steps_done);
                         let tool_display = format!("\n🔧 Using: {} with input: {}", tool_name,
@@ -1411,7 +1405,13 @@ impl Repl {
                         tool_calls.push(tool_name.clone());
                         tools_in_session += 1;
 
-                        // Track file modifications from write/edit tools
+                        if let Ok(mut s) = status_clone.lock() {
+                            *s = progress_status.clone();
+                        }
+                        if let Ok(mut buf) = buffer_clone.lock() {
+                            *buf = response_text.clone();
+                        }
+
                         let tool_name_str = tool_name.as_str();
                         if tool_name_str == "write" || tool_name_str == "edit" || tool_name_str == "WriteTool" {
                             if let Some(path) = tool_input.get("file_path").and_then(|v| v.as_str()) {
@@ -1420,37 +1420,38 @@ impl Repl {
                         }
                     }
                     Ok(QueryEvent::ToolUseResult { tool_name, result, is_error, .. }) => {
-                        // Display tool result
                         let prefix = if is_error { "❌ " } else { "✅ " };
                         let result_display = format!("\n{} {} result: {}", prefix, tool_name,
                             result.chars().take(200).collect::<String>()
                         );
                         response_text.push_str(&result_display);
+                        if let Ok(mut buf) = buffer_clone.lock() {
+                            *buf = response_text.clone();
+                        }
                     }
                     Ok(QueryEvent::TurnCompleted { turn_number, tokens_used, .. }) => {
-                        // Update token count
                         tokens_in_turn += tokens_used;
                         let turn_info = format!("\n\n[Turn {} completed, {} tokens]", turn_number, tokens_used);
                         response_text.push_str(&turn_info);
                     }
                     Ok(QueryEvent::Progress { message, .. }) => {
-                        // Show progress update
                         progress_status = format!("Processing: {}", message);
                         let progress = format!("\n⏳ {}", message);
                         response_text.push_str(&progress);
+                        if let Ok(mut s) = status_clone.lock() {
+                            *s = progress_status.clone();
+                        }
+                        if let Ok(mut buf) = buffer_clone.lock() {
+                            *buf = response_text.clone();
+                        }
                     }
                     Ok(QueryEvent::Usage { input_tokens, output_tokens, cost_usd, .. }) => {
-                        // Display usage statistics
                         let usage = format!("\n📊 Tokens: {} in + {} out = ${:.4}",
                             input_tokens, output_tokens, cost_usd);
                         response_text.push_str(&usage);
                     }
-                    Ok(QueryEvent::Cost { total_cost_usd: _, input_tokens: _, output_tokens: _, .. }) => {
-                        // Display cost tracking info
-                    }
-                    Ok(QueryEvent::Completed { .. }) => {
-                        // Query completed successfully
-                    }
+                    Ok(QueryEvent::Cost { .. }) => {}
+                    Ok(QueryEvent::Completed { .. }) => {}
                     Ok(QueryEvent::Failed { error, .. }) => {
                         return Err(format!("Query failed: {}", error));
                     }
@@ -1463,31 +1464,87 @@ impl Repl {
             Ok::<(String, u64, usize, TurnDiff, String, usize), String>((response_text, tokens_in_turn, tools_in_session, turn_diff, progress_status, steps_done))
         });
 
-        // Stop preventing sleep after query completes
+        // Poll the streaming buffer while the query runs, updating the UI in real-time
+        {
+            let terminal_backend = CrosstermBackend::new(io::stdout());
+            let mut polling_terminal = Terminal::new(terminal_backend)?;
+            let mut last_rendered_len = 0usize;
+
+            loop {
+                // Check if the query is done
+                let is_done = done_clone.lock().map(|g| *g).unwrap_or(false);
+                let query_finished = is_done || query_handle.is_finished();
+
+                // Read the latest streaming buffer
+                let current_text = streaming_buffer.lock()
+                    .map(|g| g.clone())
+                    .unwrap_or_default();
+                let current_status = streaming_status.lock()
+                    .map(|g| g.clone())
+                    .unwrap_or_default();
+
+                // Update the chat message if there's new content
+                if current_text.len() != last_rendered_len {
+                    self.chat.update_message(assistant_msg_index, current_text.clone());
+                    last_rendered_len = current_text.len();
+                }
+
+                // Update status display
+                self.state.status = current_status;
+
+                // Render the UI
+                let chat = &self.chat;
+                let prompt = &self.prompt;
+                let state = self.state.clone();
+                polling_terminal.draw(|f| {
+                    MainLayoutWidget::render_complete(
+                        f,
+                        chat,
+                        prompt,
+                        &state.status,
+                        state.model.as_deref(),
+                        Some(state.tokens_used),
+                        &state.working_directory,
+                    );
+                })?;
+
+                if query_finished {
+                    break;
+                }
+
+                // Small sleep to avoid busy-waiting
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+
+        // Get the final result
         shannon_core::prevent_sleep::stop_prevent_sleep();
 
+        let query_result = self.runtime.block_on(async {
+            match query_handle.await {
+                Ok(result) => result,
+                Err(_) => Err("Query task panicked".to_string()),
+            }
+        });
+
         match query_result {
-            Ok((response, tokens, tools, turn, final_status, steps)) => {
-                // Update the assistant message with the complete response
+            Ok((response, tokens, tools, turn, _final_status, steps)) => {
                 self.chat.update_message(assistant_msg_index, response);
                 self.state.tokens_used += tokens;
                 self.tools_invoked += tools;
 
-                // Record turn diff
                 if turn.total_files_touched() > 0 {
                     self.diff_data.record_turn_diff(turn);
                 }
                 self.current_turn += 1;
 
-                // Update progress tracking state
                 self.state.query_steps_done = steps;
-                self.state.query_steps_total = steps; // Completed = total since query is done
+                self.state.query_steps_total = steps;
                 if steps > 0 {
                     self.state.status = format!("Ready ({} steps completed)", steps);
                 } else {
                     self.state.status = "Ready".to_string();
                 }
-                let _ = final_status; // Used for future async UI rendering
             }
             Err(e) => {
                 self.chat.update_message(assistant_msg_index, format!("❌ Error: {}", e));
