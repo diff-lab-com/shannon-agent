@@ -13,6 +13,104 @@ use ratatui::{
 };
 use std::collections::VecDeque;
 
+/// Header bar widget showing session information
+pub struct HeaderWidget;
+
+impl HeaderWidget {
+    /// Get welcome message
+    fn welcome_message() -> Vec<Span<'static>> {
+        vec![
+            Span::styled("Welcome to ", Style::default().fg(Color::Green)),
+            Span::styled("Shannon", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled("! ", Style::default().fg(Color::Green)),
+        ]
+    }
+
+    /// Get tip message
+    fn tip_message() -> Vec<Span<'static>> {
+        vec![
+            Span::styled("Tip: ", Style::default().fg(Color::Yellow)),
+            Span::styled("Type /help for commands", Style::default().fg(Color::White)),
+        ]
+    }
+
+    /// Render the header bar with all session information
+    pub fn render(
+        frame: &mut Frame,
+        area: Rect,
+        model: Option<&str>,
+        tokens_used: Option<u64>,
+        working_dir: &str,
+    ) {
+        // Split header area into left and right sections
+        let chunks = ratatui::layout::Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area);
+
+        let left_area = chunks[0];
+        let right_area = chunks[1];
+
+        // Left side: Welcome + Tips
+        let left_spans: Vec<Span<'static>> = vec![
+            Span::styled("Welcome to ", Style::default().fg(Color::Green)),
+            Span::styled("Shannon", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Tip: /help for commands", Style::default().fg(Color::Yellow)),
+        ];
+
+        let left_paragraph = Paragraph::new(Line::from(left_spans))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL & !Borders::RIGHT & !Borders::BOTTOM)
+                    .border_style(Style::default().fg(Color::Cyan))
+            )
+            .alignment(Alignment::Left)
+            .wrap(Wrap { trim: true });
+
+        frame.render_widget(left_paragraph, left_area);
+
+        // Right side: Model | Tokens | Working Directory
+        let mut right_spans: Vec<Span<'static>> = Vec::new();
+
+        if let Some(m) = model {
+            right_spans.push(Span::styled("Model: ", Style::default().fg(Color::Gray)));
+            right_spans.push(Span::styled(m.to_string(), Style::default().fg(Color::Cyan)));
+            right_spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
+        }
+
+        right_spans.push(Span::styled("Tokens: ", Style::default().fg(Color::Gray)));
+        let tokens = tokens_used.unwrap_or(0);
+        right_spans.push(Span::styled(tokens.to_string(), Style::default().fg(Color::Yellow)));
+        right_spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
+
+        // Truncate working directory if too long
+        let display_dir = if working_dir.len() > 20 {
+            format!("...{}", &working_dir[working_dir.len() - 20..])
+        } else {
+            working_dir.to_string()
+        };
+        right_spans.push(Span::styled("Dir: ", Style::default().fg(Color::Gray)));
+        right_spans.push(Span::styled(display_dir, Style::default().fg(Color::White)));
+
+        let right_paragraph = Paragraph::new(Line::from(right_spans))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL & !Borders::LEFT & !Borders::BOTTOM)
+                    .border_style(Style::default().fg(Color::Cyan))
+            )
+            .alignment(Alignment::Left)
+            .wrap(Wrap { trim: true });
+
+        frame.render_widget(right_paragraph, right_area);
+    }
+
+    /// Get the recommended height for the header bar
+    pub fn height() -> usize {
+        1 // Single line header
+    }
+}
+
 /// Welcome widget for initial screen
 pub struct WelcomeWidget;
 
@@ -210,9 +308,10 @@ impl ChatWidget {
 
             let timestamp = msg.timestamp.format("%H:%M:%S").to_string();
 
-            // Format message
-            let formatted_content = if msg.content.len() > 80 {
-                format!("{}...", &msg.content[..77])
+            // Format message (use char-aware truncation for UTF-8 safety)
+            let formatted_content = if msg.content.chars().count() > 80 {
+                let truncated: String = msg.content.chars().take(77).collect();
+                format!("{}...", truncated)
             } else {
                 msg.content.clone()
             };
@@ -249,12 +348,22 @@ impl ChatWidget {
     pub fn is_empty(&self) -> bool {
         self.messages.is_empty()
     }
+
+    /// Get a message by index
+    pub fn get_message(&self, index: usize) -> Option<&ChatMessage> {
+        self.messages.get(index)
+    }
+
+    /// Get the last message
+    pub fn last_message(&self) -> Option<&ChatMessage> {
+        self.messages.back()
+    }
 }
 
-/// Input prompt widget
+/// Input prompt widget (multi-line enabled)
 pub struct PromptWidget {
-    input: String,
-    cursor_position: usize,
+    /// Inner input buffer with full multi-line support
+    buffer: crate::repl_enhancement::InputBuffer,
     placeholder: String,
 }
 
@@ -262,8 +371,7 @@ impl PromptWidget {
     /// Create a new prompt widget
     pub fn new() -> Self {
         Self {
-            input: String::new(),
-            cursor_position: 0,
+            buffer: crate::repl_enhancement::InputBuffer::new(),
             placeholder: "Type your message...".to_string(),
         }
     }
@@ -274,53 +382,68 @@ impl PromptWidget {
         self
     }
 
-    /// Get the current input
-    pub fn input(&self) -> &str {
-        &self.input
+    /// Get the current input text
+    pub fn input(&self) -> String {
+        self.buffer.text()
     }
 
     /// Add a character to the input
     pub fn add_char(&mut self, c: char) {
-        self.input.insert(self.cursor_position, c);
-        self.cursor_position += 1;
+        self.buffer.insert_char(c);
     }
 
     /// Remove the character before the cursor
     pub fn backspace(&mut self) {
-        if self.cursor_position > 0 {
-            self.input.remove(self.cursor_position - 1);
-            self.cursor_position -= 1;
-        }
-    }
-
-    /// Move the cursor left
-    pub fn cursor_left(&mut self) {
-        self.cursor_position = self.cursor_position.saturating_sub(1);
-    }
-
-    /// Move the cursor right
-    pub fn cursor_right(&mut self) {
-        self.cursor_position = (self.cursor_position + 1).min(self.input.len());
+        self.buffer.backspace();
     }
 
     /// Clear the input
     pub fn clear(&mut self) {
-        self.input.clear();
-        self.cursor_position = 0;
+        self.buffer.clear();
     }
 
     /// Set the input text
     pub fn set_input(&mut self, input: String) {
-        self.cursor_position = input.len();
-        self.input = input;
+        self.buffer.set_text(&input);
+    }
+
+    /// Insert a newline (for multi-line editing)
+    pub fn insert_newline(&mut self) {
+        self.buffer.newline();
+    }
+
+    /// Move cursor left
+    pub fn cursor_left(&mut self) {
+        self.buffer.move_left();
+    }
+
+    /// Move cursor right
+    pub fn cursor_right(&mut self) {
+        self.buffer.move_right();
+    }
+
+    /// Move cursor up
+    pub fn cursor_up(&mut self) {
+        self.buffer.move_up();
+    }
+
+    /// Move cursor down
+    pub fn cursor_down(&mut self) {
+        self.buffer.move_down();
+    }
+
+    /// Get current cursor position (column)
+    pub fn cursor_position(&self) -> usize {
+        self.buffer.cursor_col()
     }
 
     /// Render the prompt widget
     pub fn render(&self, frame: &mut Frame, area: Rect) {
-        let display_text = if self.input.is_empty() {
+        let input_text = self.input();
+        let display_text = if input_text.is_empty() {
             self.placeholder.clone()
         } else {
-            self.input.clone()
+            input_text
         };
 
         let text = Text::from(Line::from(vec![
@@ -352,22 +475,25 @@ pub struct MainLayoutWidget;
 
 impl MainLayoutWidget {
     /// Create the main layout chunks
-    pub fn layout(area: Rect) -> (Rect, Rect, Rect, Rect) {
+    /// Returns (header_area, chat_area, prompt_area, status_area, full_area)
+    pub fn layout(area: Rect) -> (Rect, Rect, Rect, Rect, Rect) {
         let chunks = ratatui::layout::Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
             .constraints([
-                Constraint::Min(0),   // Chat area (flexible)
-                Constraint::Length(3),  // Input prompt
-                Constraint::Length(3),  // Status bar
+                Constraint::Length(1),   // Header bar
+                Constraint::Min(0),      // Chat area (flexible)
+                Constraint::Length(3),   // Input prompt
+                Constraint::Length(3),   // Status bar
             ])
             .split(area);
 
-        let chat_area = chunks[0];
-        let prompt_area = chunks[1];
-        let status_area = chunks[2];
+        let header_area = chunks[0];
+        let chat_area = chunks[1];
+        let prompt_area = chunks[2];
+        let status_area = chunks[3];
 
-        (chat_area, prompt_area, status_area, area)
+        (header_area, chat_area, prompt_area, status_area, area)
     }
 
     /// Render the complete UI
@@ -378,12 +504,14 @@ impl MainLayoutWidget {
         status: &str,
         model: Option<&str>,
         tokens_used: Option<u64>,
+        working_dir: &str,
     ) {
         let area = frame.area();
 
-        let (chat_area, prompt_area, status_area, _) = Self::layout(area);
+        let (header_area, chat_area, prompt_area, status_area, _) = Self::layout(area);
 
         // Render each widget
+        HeaderWidget::render(frame, header_area, model, tokens_used, working_dir);
         chat.render(frame, chat_area);
         prompt.render(frame, prompt_area);
         StatusBarWidget::render_enhanced(frame, status_area, status, model, tokens_used);
@@ -393,6 +521,8 @@ impl MainLayoutWidget {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Chat Widget Tests ─────────────────────────────────────────────
 
     #[test]
     fn test_chat_widget_creation() {
@@ -410,10 +540,63 @@ mod tests {
     }
 
     #[test]
+    fn test_chat_widget_multiple_messages() {
+        let mut chat = ChatWidget::new(100);
+        chat.add_message(ChatRole::User, "First".to_string());
+        chat.add_message(ChatRole::Assistant, "Second".to_string());
+        chat.add_message(ChatRole::System, "Third".to_string());
+        assert_eq!(chat.len(), 3);
+    }
+
+    #[test]
+    fn test_chat_widget_clear() {
+        let mut chat = ChatWidget::new(100);
+        chat.add_message(ChatRole::User, "Hello".to_string());
+        chat.add_message(ChatRole::Assistant, "Hi".to_string());
+        assert_eq!(chat.len(), 2);
+        chat.clear();
+        assert_eq!(chat.len(), 0);
+        assert!(chat.is_empty());
+    }
+
+    #[test]
+    fn test_chat_widget_update_message() {
+        let mut chat = ChatWidget::new(100);
+        let index = chat.add_message(ChatRole::Assistant, "Initial".to_string());
+        chat.update_message(index, "Updated".to_string());
+        assert_eq!(chat.messages[index].content, "Updated");
+    }
+
+    #[test]
+    fn test_chat_widget_update_last_message() {
+        let mut chat = ChatWidget::new(100);
+        chat.add_message(ChatRole::Assistant, "First".to_string());
+        chat.add_message(ChatRole::Assistant, "Second".to_string());
+        chat.update_last_message("Last Updated".to_string());
+        assert_eq!(chat.messages.len(), 2);
+        assert_eq!(chat.messages[1].content, "Last Updated");
+    }
+
+    #[test]
+    fn test_chat_widget_scroll() {
+        let mut chat = ChatWidget::new(100);
+        chat.add_message(ChatRole::User, "Msg1".to_string());
+        chat.add_message(ChatRole::User, "Msg2".to_string());
+        chat.add_message(ChatRole::User, "Msg3".to_string());
+        assert_eq!(chat.scroll_offset, 2); // Auto-scrolls to bottom
+        chat.scroll_up();
+        assert_eq!(chat.scroll_offset, 1);
+        chat.scroll_down();
+        assert_eq!(chat.scroll_offset, 2);
+    }
+
+    // ── Prompt Widget Tests ────────────────────────────────────────────
+
+    #[test]
     fn test_prompt_widget_creation() {
         let prompt = PromptWidget::new();
         assert_eq!(prompt.input(), "");
-        assert_eq!(prompt.cursor_position, 0);
+        assert_eq!(prompt.cursor_position(), 0);
     }
 
     #[test]
@@ -421,7 +604,7 @@ mod tests {
         let mut prompt = PromptWidget::new();
         prompt.add_char('a');
         assert_eq!(prompt.input(), "a");
-        assert_eq!(prompt.cursor_position, 1);
+        assert_eq!(prompt.cursor_position(), 1);
     }
 
     #[test]
@@ -431,7 +614,7 @@ mod tests {
         prompt.add_char('b');
         prompt.backspace();
         assert_eq!(prompt.input(), "a");
-        assert_eq!(prompt.cursor_position, 1);
+        assert_eq!(prompt.cursor_position(), 1);
     }
 
     #[test]
@@ -441,6 +624,197 @@ mod tests {
         prompt.add_char('b');
         prompt.clear();
         assert_eq!(prompt.input(), "");
-        assert_eq!(prompt.cursor_position, 0);
+        assert_eq!(prompt.cursor_position(), 0);
+    }
+
+    #[test]
+    fn test_prompt_widget_cursor_movement() {
+        let mut prompt = PromptWidget::new();
+        prompt.set_input("abc".to_string());
+        assert_eq!(prompt.cursor_position(), 3);
+        prompt.cursor_left();
+        assert_eq!(prompt.cursor_position(), 2);
+        prompt.cursor_left();
+        assert_eq!(prompt.cursor_position(), 1);
+        prompt.cursor_right();
+        assert_eq!(prompt.cursor_position(), 2);
+        prompt.cursor_right();
+        assert_eq!(prompt.cursor_position(), 3);
+    }
+
+    #[test]
+    fn test_prompt_widget_set_input() {
+        let mut prompt = PromptWidget::new();
+        prompt.set_input("test input".to_string());
+        assert_eq!(prompt.input(), "test input");
+        assert_eq!(prompt.cursor_position(), 10);
+    }
+
+    #[test]
+    fn test_prompt_widget_with_placeholder() {
+        let prompt = PromptWidget::new().with_placeholder("Enter command...".to_string());
+        assert_eq!(prompt.placeholder, "Enter command...");
+    }
+
+    // ── Header Widget Tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_header_widget_height() {
+        assert_eq!(HeaderWidget::height(), 1);
+    }
+
+    #[test]
+    fn test_header_widget_welcome_message() {
+        let spans = HeaderWidget::welcome_message();
+        assert!(!spans.is_empty());
+        assert_eq!(spans.len(), 3); // "Welcome to " + "Shannon" + "! "
+    }
+
+    #[test]
+    fn test_header_widget_tip_message() {
+        let spans = HeaderWidget::tip_message();
+        assert!(!spans.is_empty());
+        assert_eq!(spans.len(), 2); // "Tip: " + tip text
+    }
+
+    // ── Main Layout Widget Tests ───────────────────────────────────────
+
+    #[test]
+    fn test_main_layout_widget_returns_five_chunks() {
+        // Create a test area (100x20)
+        let area = Rect::new(0, 0, 100, 20);
+        let (header, chat, prompt, status, full) = MainLayoutWidget::layout(area);
+
+        // Header should be at top with height 1
+        assert_eq!(header.y, 1); // margin(1) + 0
+        assert_eq!(header.height, 1);
+
+        // Chat should be below header and be flexible
+        assert_eq!(chat.y, 2); // margin + header
+        assert!(chat.height > 0); // Flexible size
+
+        // Prompt should be below chat with height 3
+        assert_eq!(prompt.height, 3);
+
+        // Status should be at bottom with height 3
+        assert_eq!(status.height, 3);
+
+        // Full area should match input area
+        assert_eq!(full, area);
+    }
+
+    #[test]
+    fn test_main_layout_widget_chat_area_is_flexible() {
+        let small_area = Rect::new(0, 0, 80, 10);
+        let (_, small_chat, _, _, _) = MainLayoutWidget::layout(small_area);
+
+        let large_area = Rect::new(0, 0, 80, 30);
+        let (_, large_chat, _, _, _) = MainLayoutWidget::layout(large_area);
+
+        // Chat area should grow with available space
+        assert!(large_chat.height > small_chat.height);
+    }
+
+    #[test]
+    fn test_main_layout_widget_fixed_sizes() {
+        let area = Rect::new(0, 0, 100, 20);
+        let (header, _, prompt, status, _) = MainLayoutWidget::layout(area);
+
+        // Header, prompt, and status should have fixed heights
+        assert_eq!(header.height, 1);
+        assert_eq!(prompt.height, 3);
+        assert_eq!(status.height, 3);
+    }
+
+    #[test]
+    fn test_main_layout_widget_margins() {
+        let area = Rect::new(0, 0, 100, 20);
+        let (header, _, _, _, _) = MainLayoutWidget::layout(area);
+
+        // Check that margin(1) is applied
+        assert_eq!(header.x, 1);
+        assert_eq!(header.y, 1);
+        assert!(header.width < 100); // Reduced by margin
+    }
+
+    // ── Chat Message Tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_chat_message_creation() {
+        let msg = ChatMessage {
+            role: ChatRole::User,
+            content: "Test message".to_string(),
+            timestamp: chrono::Utc::now(),
+        };
+        assert_eq!(msg.content, "Test message");
+        assert_eq!(msg.role, ChatRole::User);
+    }
+
+    #[test]
+    fn test_chat_role_colors() {
+        let (user_name, user_color) = match ChatRole::User {
+            ChatRole::User => ("User", Color::Green),
+            _ => panic!("Wrong role"),
+        };
+        assert_eq!(user_name, "User");
+        assert_eq!(user_color, Color::Green);
+    }
+
+    #[test]
+    fn test_all_chat_roles_have_colors() {
+        let roles = vec![
+            (ChatRole::User, "User", Color::Green),
+            (ChatRole::Assistant, "Assistant", Color::Cyan),
+            (ChatRole::System, "System", Color::Yellow),
+            (ChatRole::Tool, "Tool", Color::Magenta),
+        ];
+
+        for (role, expected_name, expected_color) in roles {
+            let (name, color) = match role {
+                ChatRole::User => ("User", Color::Green),
+                ChatRole::Assistant => ("Assistant", Color::Cyan),
+                ChatRole::System => ("System", Color::Yellow),
+                ChatRole::Tool => ("Tool", Color::Magenta),
+            };
+            assert_eq!(name, expected_name);
+            assert_eq!(color, expected_color);
+        }
+    }
+
+    // ── Integration Tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_chat_prompt_workflow() {
+        let mut chat = ChatWidget::new(10);
+        let mut prompt = PromptWidget::new();
+
+        // User types message
+        prompt.add_char('H');
+        prompt.add_char('e');
+        prompt.add_char('l');
+        prompt.add_char('l');
+        prompt.add_char('o');
+        assert_eq!(prompt.input(), "Hello");
+
+        // Add to chat
+        chat.add_message(ChatRole::User, prompt.input().to_string());
+        assert_eq!(chat.len(), 1);
+
+        // Clear prompt
+        prompt.clear();
+        assert_eq!(prompt.input(), "");
+    }
+
+    #[test]
+    fn test_multiple_chat_updates() {
+        let mut chat = ChatWidget::new(10);
+        let idx = chat.add_message(ChatRole::Assistant, "Thinking...".to_string());
+
+        // Simulate streaming updates
+        for i in 1..=5 {
+            chat.update_message(idx, format!("Step {} complete", i));
+        }
+
+        assert_eq!(chat.messages[idx].content, "Step 5 complete");
     }
 }

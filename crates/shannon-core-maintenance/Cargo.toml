@@ -1,0 +1,22 @@
+[package]
+name = "shannon-core-maintenance"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+
+# Additional dependencies for maintenance
+dirs = "5"
+
+shannon-types = { path = "../shannon-types" }
+shannon-core-base = { path = "../shannon-core-base" }
+
+[dev-dependencies]
+tempfile = "3"

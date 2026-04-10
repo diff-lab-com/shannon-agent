@@ -12,6 +12,12 @@
 //! - Day-of-week name support (MON, TUE, ..., SUN)
 //! - Range (1-5) and step (*/5) expressions
 //! - Next fire time calculation for scheduling
+//!
+//! # Security Audit (S3)
+//!
+//! Verified 2026-04-08: No `unreachable!()` macros in production code.
+//! All error paths return proper `ToolError` values. Test code may use
+//! `panic!()` which is acceptable for test assertions.
 
 use crate::{Tool, ToolError, ToolResult, ToolOutput};
 use async_trait::async_trait;
@@ -1553,7 +1559,7 @@ mod tests {
         assert!(results[50].is_err());
         let err_msg = match &results[50] {
             Err(e) => e.to_string(),
-            _ => unreachable!(),
+            other => panic!("expected Err at results[50], got: {:?}", other),
         };
         assert!(err_msg.contains("max 50"));
     }

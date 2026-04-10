@@ -5,7 +5,20 @@ use crate::error::{SkillError, SkillResult};
 use crate::definition::SkillResult as SkillExecutionResult;
 use regex::Regex;
 use std::path::Path;
+use std::sync::OnceLock;
 use tracing::debug;
+
+/// Cached regex pattern for inline shell commands: !`command`
+fn inline_shell_pattern() -> &'static Regex {
+    static PATTERN: OnceLock<Regex> = OnceLock::new();
+    PATTERN.get_or_init(|| Regex::new(r"!`([^`]+)`").unwrap())
+}
+
+/// Cached regex pattern for block shell commands: ```!\ncommand\n```
+fn block_shell_pattern() -> &'static Regex {
+    static PATTERN: OnceLock<Regex> = OnceLock::new();
+    PATTERN.get_or_init(|| Regex::new(r"```!\n(.+?)\n```").unwrap())
+}
 
 /// Engine for executing skills and generating prompt content
 pub struct SkillExecutor {
@@ -117,9 +130,9 @@ impl SkillExecutor {
             return Ok(false);
         };
 
-        // Pattern for shell commands: !`command` or ```!\ncommand\n```
-        let inline_pattern = Regex::new(r"!`([^`]+)`").unwrap();
-        let block_pattern = Regex::new(r"```!\n(.+?)\n```").unwrap();
+        // Use cached regex patterns for shell commands: !`command` or ```!\ncommand\n```
+        let inline_pattern = inline_shell_pattern();
+        let block_pattern = block_shell_pattern();
 
         let mut had_commands = false;
 
@@ -157,6 +170,40 @@ pub struct ShellExecutor {
     env: std::collections::HashMap<String, String>,
 }
 
+/// Validates a shell command string for dangerous metacharacters to prevent injection.
+///
+/// Rejects commands containing characters that enable command chaining,
+/// substitution, or redirection while allowing basic commands with arguments.
+fn validate_shell_command(command: &str) -> SkillResult<()> {
+    let dangerous_patterns: &[(&str, &str)] = &[
+        (";", "command chaining"),
+        ("|", "pipe"),
+        ("&&", "command chaining"),
+        ("||", "command chaining"),
+        ("$(", "command substitution"),
+        ("`", "command substitution"),
+        (">", "output redirection"),
+        (">>", "output redirection"),
+        ("<", "input redirection"),
+        ("\n", "newline"),
+    ];
+
+    for (pattern, description) in dangerous_patterns {
+        if command.contains(pattern) {
+            return Err(SkillError::ExecutionFailed {
+                name: "shell".to_string(),
+                message: format!(
+                    "Command rejected: contains {} ({:?}). \
+                     Only single basic commands with arguments are allowed.",
+                    description, pattern
+                ),
+            });
+        }
+    }
+
+    Ok(())
+}
+
 impl ShellExecutor {
     /// Create a new shell executor
     pub fn new() -> Self {
@@ -165,13 +212,30 @@ impl ShellExecutor {
         }
     }
 
-    /// Execute a shell command and return its output
+    /// Execute a shell command and return its output.
+    ///
+    /// Commands are parsed into executable + args and executed directly
+    /// (no shell invocation) to prevent command injection.
     pub fn execute(&self, command: &str, cwd: &Path) -> SkillResult<String> {
         debug!("Executing shell command: {}", command);
 
-        let output = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(command)
+        validate_shell_command(command)?;
+
+        let parts = shell_words::split(command)
+            .map_err(|e| SkillError::ExecutionFailed {
+                name: "shell".to_string(),
+                message: format!("Failed to parse command: {}", e),
+            })?;
+
+        if parts.is_empty() {
+            return Err(SkillError::ExecutionFailed {
+                name: "shell".to_string(),
+                message: "Empty command".to_string(),
+            });
+        }
+
+        let output = std::process::Command::new(&parts[0])
+            .args(&parts[1..])
             .current_dir(cwd)
             .envs(&self.env)
             .output()
@@ -241,5 +305,38 @@ mod tests {
 
         let result = executor.execute(&skill, &context).unwrap();
         assert_eq!(result.prompt_content, "Hello World!");
+    }
+
+    #[test]
+    fn test_validate_shell_command_accepts_safe() {
+        assert!(validate_shell_command("echo hello").is_ok());
+        assert!(validate_shell_command("ls -la /tmp").is_ok());
+        assert!(validate_shell_command("cat file.txt").is_ok());
+    }
+
+    #[test]
+    fn test_validate_shell_command_rejects_chaining() {
+        assert!(validate_shell_command("echo hello; rm -rf /").is_err());
+        assert!(validate_shell_command("echo hello && rm -rf /").is_err());
+        assert!(validate_shell_command("echo hello || rm -rf /").is_err());
+        assert!(validate_shell_command("echo hello | cat").is_err());
+    }
+
+    #[test]
+    fn test_validate_shell_command_rejects_substitution() {
+        assert!(validate_shell_command("echo $(whoami)").is_err());
+        assert!(validate_shell_command("echo `whoami`").is_err());
+    }
+
+    #[test]
+    fn test_validate_shell_command_rejects_redirection() {
+        assert!(validate_shell_command("echo hello > /tmp/out").is_err());
+        assert!(validate_shell_command("echo hello >> /tmp/out").is_err());
+        assert!(validate_shell_command("cat < /etc/passwd").is_err());
+    }
+
+    #[test]
+    fn test_validate_shell_command_rejects_newlines() {
+        assert!(validate_shell_command("echo hello\nrm -rf /").is_err());
     }
 }

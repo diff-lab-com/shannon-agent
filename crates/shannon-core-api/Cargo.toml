@@ -1,0 +1,25 @@
+[package]
+name = "shannon-core-api"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+shannon-core-base = { path = "../shannon-core-base" }
+shannon-types = { path = "../shannon-types" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+async-trait = { workspace = true }
+futures-util = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tokio-util = { workspace = true }
+bytes = { workspace = true }
+http = "1"
+url = "2"
+event-listener = "5"
+tempfile = "3"

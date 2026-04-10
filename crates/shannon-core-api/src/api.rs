@@ -9,8 +9,8 @@
 //! - Comprehensive error handling
 //! - Request/response models compatible with common LLM APIs
 
-use futures::{Stream, StreamExt};
-use futures::task::{Context, Poll};
+use futures_util::{Stream, StreamExt};
+use futures_util::task::{Context, Poll};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

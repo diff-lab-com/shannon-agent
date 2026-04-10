@@ -788,15 +788,28 @@ fn get_disk_space(path: &std::path::Path) -> Option<u64> {
     let path_cstr = CString::new(path.as_os_str().as_bytes()).ok()?;
     let mut stat: MaybeUninit<libc::statvfs> = MaybeUninit::uninit();
 
-    // SAFETY: path_cstr is a valid null-terminated C string, and statvfs
-    // writes to the uninitialized statvfs struct.
+    // SAFETY:
+    //
+    // 1. `path_cstr` is a valid null-terminated C string created from `path.as_os_str().as_bytes()`,
+    //    which is guaranteed to be valid for the lifetime of this function.
+    //
+    // 2. `stat.as_mut_ptr()` provides a valid pointer to uninitialized memory for the statvfs
+    //    struct. The `libc::statvfs` function writes to this memory when it succeeds.
+    //
+    // 3. We use `assume_init_read()` instead of `assume_init()` to make the intent clearer:
+    //    we're reading the value that `statvfs` just wrote. This is the idiomatic way to
+    //    extract an initialized value from MaybeUninit after an FFI call.
     let result = unsafe { libc::statvfs(path_cstr.as_ptr(), stat.as_mut_ptr()) };
 
     if result == 0 {
-        let stat = unsafe { stat.assume_init() };
+        // SAFETY: statvfs returned 0, indicating success. The struct is now fully initialized
+        // by the FFI call. We use `assume_init_read()` to move the initialized value out.
+        let stat = unsafe { stat.assume_init_read() };
         // Available space = block size * available blocks
         Some(stat.f_bsize as u64 * stat.f_bavail as u64)
     } else {
+        // statvfs failed; the stat struct may be uninitialized, so we must not read it.
+        // Returning None is the correct error handling path.
         None
     }
 }
@@ -805,6 +818,65 @@ fn get_disk_space(path: &std::path::Path) -> Option<u64> {
 #[cfg(not(target_family = "unix"))]
 fn get_disk_space(_path: &std::path::Path) -> Option<u64> {
     None
+}
+
+// ===========================================================================
+// Test helpers
+// ===========================================================================
+
+/// Guard to restore HOME environment variable when dropped.
+///
+/// This ensures that even if a test panics, the original HOME value
+/// is restored, preventing test pollution.
+struct HomeGuard(Option<std::ffi::OsString>);
+
+/// Guard to restore API key environment variables when dropped.
+///
+/// This ensures that even if a test panics, the original API key values
+/// are restored, preventing test pollution.
+struct ApiKeyGuard {
+    anthropic: Option<std::ffi::OsString>,
+    claude: Option<std::ffi::OsString>,
+    shannon: Option<std::ffi::OsString>,
+}
+
+impl ApiKeyGuard {
+    /// Create a new guard by removing API key variables and storing their original values.
+    fn remove() -> Self {
+        Self {
+            anthropic: std::env::var_os("ANTHROPIC_API_KEY"),
+            claude: std::env::var_os("CLAUDE_API_KEY"),
+            shannon: std::env::var_os("SHANNON_API_KEY"),
+        }
+    }
+}
+
+impl Drop for ApiKeyGuard {
+    fn drop(&mut self) {
+        // SAFETY: These restore the environment to its previous state.
+        // The Drop guard pattern ensures this runs even if the test panics.
+        match &self.anthropic {
+            Some(val) => unsafe { std::env::set_var("ANTHROPIC_API_KEY", val) },
+            None => unsafe { std::env::remove_var("ANTHROPIC_API_KEY") },
+        }
+        match &self.claude {
+            Some(val) => unsafe { std::env::set_var("CLAUDE_API_KEY", val) },
+            None => unsafe { std::env::remove_var("CLAUDE_API_KEY") },
+        }
+        match &self.shannon {
+            Some(val) => unsafe { std::env::set_var("SHANNON_API_KEY", val) },
+            None => unsafe { std::env::remove_var("SHANNON_API_KEY") },
+        }
+    }
+}
+
+impl Drop for HomeGuard {
+    fn drop(&mut self) {
+        match &self.0 {
+            Some(home) => unsafe { std::env::set_var("HOME", home) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+    }
 }
 
 // ===========================================================================
@@ -1029,10 +1101,8 @@ mod tests {
 
     #[test]
     fn test_check_api_key_no_key() {
-        // Ensure the env vars are not set for this test
-        unsafe { std::env::remove_var("ANTHROPIC_API_KEY"); }
-        unsafe { std::env::remove_var("CLAUDE_API_KEY"); }
-        unsafe { std::env::remove_var("SHANNON_API_KEY"); }
+        // Ensure the env vars are not set for this test, then restore on drop
+        let _guard = ApiKeyGuard::remove();
 
         let doctor = Doctor::new();
         let check = doctor.check_api_key();
@@ -1066,16 +1136,13 @@ mod tests {
         let home_backup = std::env::var_os("HOME");
         unsafe { std::env::set_var("HOME", temp_dir.path()); }
 
+        // Restore HOME on drop (even if test panics)
+        let _guard = HomeGuard(home_backup);
+
         let doctor = Doctor::new();
         let check = doctor.check_configuration();
         // Should warn since no config file exists
         assert!(matches!(check.status, CheckStatus::Warn));
-
-        if let Some(home) = home_backup {
-            unsafe { std::env::set_var("HOME", home); }
-        } else {
-            unsafe { std::env::remove_var("HOME"); }
-        }
     }
 
     #[test]
@@ -1098,15 +1165,11 @@ mod tests {
         let home_backup = std::env::var_os("HOME");
         unsafe { std::env::set_var("HOME", temp_dir.path()); }
 
+        let _guard = HomeGuard(home_backup);
+
         let doctor = Doctor::new();
         let check = doctor.check_configuration();
         assert_eq!(check.status, CheckStatus::Pass);
-
-        if let Some(home) = home_backup {
-            unsafe { std::env::set_var("HOME", home); }
-        } else {
-            unsafe { std::env::remove_var("HOME"); }
-        }
     }
 
     #[test]
@@ -1120,15 +1183,11 @@ mod tests {
         let home_backup = std::env::var_os("HOME");
         unsafe { std::env::set_var("HOME", temp_dir.path()); }
 
+        let _guard = HomeGuard(home_backup);
+
         let doctor = Doctor::new();
         let check = doctor.check_configuration();
         assert_eq!(check.status, CheckStatus::Fail);
-
-        if let Some(home) = home_backup {
-            unsafe { std::env::set_var("HOME", home); }
-        } else {
-            unsafe { std::env::remove_var("HOME"); }
-        }
     }
 
     #[test]

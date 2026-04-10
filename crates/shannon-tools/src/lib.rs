@@ -117,6 +117,8 @@ pub use file::sandbox_adapter::{
     SandboxAdapter, PathSandboxAdapter, SandboxViolation, SandboxResult,
     SandboxConfig as SandboxAdapterConfig,
 };
+pub use file::sandbox::{PathSandbox, SandboxConfig as PathSandboxConfig, SandboxError};
+pub use system::{SecurityLevel, SecurityAnalysis, analyze_command_security};
 
 // Re-export from shannon_core
 pub use shannon_core::{

@@ -277,17 +277,206 @@ static STATS_REGEX: once_cell::sync::Lazy<regex::Regex> =
 
 /// Common diff patterns
 pub mod patterns {
-    /// Match function/method definitions
-    pub const FUNCTION_PATTERN: &str = r"^[\+\-]((public|private|protected|internal|static|async|)\s+)*fun \w+";
+    /// Match function/method definitions (Rust, Kotlin, Python, TypeScript)
+    pub const FUNCTION_PATTERN: &str =
+        r"^[\+\-]\s*((pub\s+)?(async\s+)?fn\s+\w+|(public|private|protected|static|async)\s+fun\s+\w+|def\s+\w+)";
 
     /// Match import statements
-    pub const IMPORT_PATTERN: &str = r"^[\+\-](import|use|from) ";
+    pub const IMPORT_PATTERN: &str =
+        r"^[\+\-]\s*(use\s+|import\s+|from\s+\S+\s+import|#include\s+)";
 
-    /// Match struct/class definitions
-    pub const STRUCT_PATTERN: &str = r"^[\+\-](struct|class|interface|type) \w+";
+    /// Match struct/class/interface/enum definitions
+    pub const STRUCT_PATTERN: &str =
+        r"^[\+\-]\s*(pub\s+)?(struct|class|interface|enum|type)\s+\w+";
 
-    /// Match test functions
-    pub const TEST_PATTERN: &str = r"^[\+\-].*#\[test\]|^[\+\-]\s*(fun|def|fn) test";
+    /// Match test functions (Rust #[test], Python def test_, JS/TS test()/it())
+    pub const TEST_PATTERN: &str =
+        r"^[\+\-].*#\[test\]|^[\+\-].*#\[tokio::test\]|^[\+\-]\s*(fn|def|fun)\s+test_|^[\+\-].*\b(it|test|describe)\s*\(";
+
+    /// Match doc comments (Rust ///, JS/Javadoc **, JS //@, Python """)
+    pub const DOC_COMMENT_PATTERN: &str =
+        r"^[\+\-]\s*///|^[\+\-]\s*\*\*|^[\+\-]\s*//\s*@";
+
+    /// Match configuration changes (Cargo.toml, package.json, YAML, etc.)
+    pub const CONFIG_PATTERN: &str =
+        r"^[\+\-].*(dependencies|version|features|\[package\]|\[dependencies\])";
+}
+
+/// Category of a code change identified by the diff analyzer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ChangeCategory {
+    /// Function or method definition changed
+    Function,
+    /// Import or include statement changed
+    Import,
+    /// Struct, class, enum, or type definition changed
+    TypeDefinition,
+    /// Test function changed
+    Test,
+    /// Documentation comment changed
+    Documentation,
+    /// Configuration file changed
+    Configuration,
+    /// Unclassified change
+    Other,
+}
+
+impl ChangeCategory {
+    /// Human-readable label for this category.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Function => "function",
+            Self::Import => "import",
+            Self::TypeDefinition => "type",
+            Self::Test => "test",
+            Self::Documentation => "docs",
+            Self::Configuration => "config",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// A single diff line that has been categorized.
+#[derive(Debug, Clone)]
+pub struct CategorizedChange {
+    /// The category of this change.
+    pub category: ChangeCategory,
+    /// The original diff line (including +/- prefix).
+    pub line: String,
+    /// Line number in the diff output (1-based).
+    pub line_number: usize,
+}
+
+/// Summary of categorized changes across an entire diff.
+#[derive(Debug, Clone, Default)]
+pub struct DiffAnalysis {
+    /// Changes grouped by category.
+    pub by_category: std::collections::HashMap<ChangeCategory, Vec<CategorizedChange>>,
+}
+
+impl DiffAnalysis {
+    /// Count changes in a specific category.
+    pub fn count(&self, category: ChangeCategory) -> usize {
+        self.by_category.get(&category).map_or(0, |v| v.len())
+    }
+
+    /// Total number of categorized changes.
+    pub fn total(&self) -> usize {
+        self.by_category.values().map(|v| v.len()).sum()
+    }
+
+    /// Whether any test-related changes were detected.
+    pub fn has_test_changes(&self) -> bool {
+        self.count(ChangeCategory::Test) > 0
+    }
+
+    /// Render a brief summary of the analysis.
+    pub fn summary(&self) -> String {
+        if self.total() == 0 {
+            return "No categorized changes.".to_string();
+        }
+
+        let mut parts = Vec::new();
+        for cat in &[
+            ChangeCategory::Function,
+            ChangeCategory::TypeDefinition,
+            ChangeCategory::Import,
+            ChangeCategory::Test,
+            ChangeCategory::Documentation,
+            ChangeCategory::Configuration,
+            ChangeCategory::Other,
+        ] {
+            let count = self.count(*cat);
+            if count > 0 {
+                parts.push(format!("{}: {}", cat.label(), count));
+            }
+        }
+        parts.join(", ")
+    }
+}
+
+/// Analyzes diff output to categorize changed lines.
+pub struct DiffAnalyzer {
+    function_re: regex::Regex,
+    import_re: regex::Regex,
+    struct_re: regex::Regex,
+    test_re: regex::Regex,
+    doc_re: regex::Regex,
+    config_re: regex::Regex,
+}
+
+impl DiffAnalyzer {
+    /// Create a new analyzer with compiled regex patterns.
+    pub fn new() -> Self {
+        Self {
+            function_re: regex::Regex::new(patterns::FUNCTION_PATTERN).unwrap(),
+            import_re: regex::Regex::new(patterns::IMPORT_PATTERN).unwrap(),
+            struct_re: regex::Regex::new(patterns::STRUCT_PATTERN).unwrap(),
+            test_re: regex::Regex::new(patterns::TEST_PATTERN).unwrap(),
+            doc_re: regex::Regex::new(patterns::DOC_COMMENT_PATTERN).unwrap(),
+            config_re: regex::Regex::new(patterns::CONFIG_PATTERN).unwrap(),
+        }
+    }
+
+    /// Categorize a single diff line.
+    pub fn categorize_line(&self, line: &str) -> ChangeCategory {
+        // Order matters: test before function since test fns are also fns
+        if self.test_re.is_match(line) {
+            return ChangeCategory::Test;
+        }
+        if self.struct_re.is_match(line) {
+            return ChangeCategory::TypeDefinition;
+        }
+        if self.import_re.is_match(line) {
+            return ChangeCategory::Import;
+        }
+        if self.function_re.is_match(line) {
+            return ChangeCategory::Function;
+        }
+        if self.doc_re.is_match(line) {
+            return ChangeCategory::Documentation;
+        }
+        if self.config_re.is_match(line) {
+            return ChangeCategory::Configuration;
+        }
+        ChangeCategory::Other
+    }
+
+    /// Analyze a full diff output, categorizing all changed lines.
+    pub fn analyze(&self, diff_output: &str) -> DiffAnalysis {
+        let mut analysis = DiffAnalysis::default();
+
+        for (i, line) in diff_output.lines().enumerate() {
+            // Only categorize addition/deletion lines (skip context, headers, etc.)
+            if !line.starts_with('+') && !line.starts_with('-') {
+                continue;
+            }
+            // Skip +++ / --- file headers
+            if line.starts_with("+++") || line.starts_with("---") {
+                continue;
+            }
+
+            let category = self.categorize_line(line);
+            let change = CategorizedChange {
+                category,
+                line: line.to_string(),
+                line_number: i + 1,
+            };
+            analysis
+                .by_category
+                .entry(category)
+                .or_default()
+                .push(change);
+        }
+
+        analysis
+    }
+}
+
+impl Default for DiffAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]
@@ -324,5 +513,118 @@ mod tests {
         assert_eq!(options.context_lines, Some(5));
         assert!(options.stats);
         assert_eq!(options.path_filter, Some("src/".to_string()));
+    }
+
+    // ── ChangeCategory Tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_change_category_labels() {
+        assert_eq!(ChangeCategory::Function.label(), "function");
+        assert_eq!(ChangeCategory::Import.label(), "import");
+        assert_eq!(ChangeCategory::TypeDefinition.label(), "type");
+        assert_eq!(ChangeCategory::Test.label(), "test");
+        assert_eq!(ChangeCategory::Documentation.label(), "docs");
+        assert_eq!(ChangeCategory::Configuration.label(), "config");
+        assert_eq!(ChangeCategory::Other.label(), "other");
+    }
+
+    // ── DiffAnalyzer Tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_analyzer_categorizes_rust_fn() {
+        let analyzer = DiffAnalyzer::new();
+        assert_eq!(analyzer.categorize_line("+pub fn hello() {}"), ChangeCategory::Function);
+        assert_eq!(analyzer.categorize_line("+async fn do_work() {}"), ChangeCategory::Function);
+    }
+
+    #[test]
+    fn test_analyzer_categorizes_test_before_fn() {
+        let analyzer = DiffAnalyzer::new();
+        // Test pattern should take priority over function pattern
+        assert_eq!(analyzer.categorize_line("+    fn test_something() {"), ChangeCategory::Test);
+    }
+
+    #[test]
+    fn test_analyzer_categorizes_import() {
+        let analyzer = DiffAnalyzer::new();
+        assert_eq!(analyzer.categorize_line("+use std::collections::HashMap;"), ChangeCategory::Import);
+        assert_eq!(analyzer.categorize_line("+import React from 'react';"), ChangeCategory::Import);
+    }
+
+    #[test]
+    fn test_analyzer_categorizes_struct() {
+        let analyzer = DiffAnalyzer::new();
+        assert_eq!(analyzer.categorize_line("+pub struct MyStruct {"), ChangeCategory::TypeDefinition);
+        assert_eq!(analyzer.categorize_line("+enum Color {"), ChangeCategory::TypeDefinition);
+    }
+
+    #[test]
+    fn test_analyzer_categorizes_doc_comments() {
+        let analyzer = DiffAnalyzer::new();
+        assert_eq!(analyzer.categorize_line("+/// This is a doc comment"), ChangeCategory::Documentation);
+    }
+
+    #[test]
+    fn test_analyzer_categorizes_config() {
+        let analyzer = DiffAnalyzer::new();
+        assert_eq!(analyzer.categorize_line("+version = \"1.0\""), ChangeCategory::Configuration);
+    }
+
+    #[test]
+    fn test_analyzer_categorizes_other() {
+        let analyzer = DiffAnalyzer::new();
+        assert_eq!(analyzer.categorize_line("+    let x = 42;"), ChangeCategory::Other);
+    }
+
+    #[test]
+    fn test_analyzer_skips_file_headers() {
+        let analyzer = DiffAnalyzer::new();
+        // +++ and --- are file headers, not categorizable changes
+        assert_eq!(analyzer.categorize_line("+++ b/src/main.rs"), ChangeCategory::Other);
+        assert_eq!(analyzer.categorize_line("--- a/src/main.rs"), ChangeCategory::Other);
+    }
+
+    // ── DiffAnalysis Tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_diff_analysis_empty() {
+        let analysis = DiffAnalysis::default();
+        assert_eq!(analysis.total(), 0);
+        assert_eq!(analysis.count(ChangeCategory::Function), 0);
+        assert!(!analysis.has_test_changes());
+        assert_eq!(analysis.summary(), "No categorized changes.");
+    }
+
+    #[test]
+    fn test_diff_analysis_full() {
+        let analyzer = DiffAnalyzer::new();
+        let diff = "\
+diff --git a/src/main.rs b/src/main.rs
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,3 +1,5 @@
+ use std::io;
++use std::collections::HashMap;
++/// Doc comment
++pub struct Config {
++    field: String,
++}
++pub fn main() {}
++    fn test_main() {}
++    let x = 42;
+";
+
+        let analysis = analyzer.analyze(diff);
+        assert!(analysis.count(ChangeCategory::Import) >= 1, "should detect import");
+        assert!(analysis.count(ChangeCategory::Documentation) >= 1, "should detect doc");
+        assert!(analysis.count(ChangeCategory::TypeDefinition) >= 1, "should detect struct");
+        assert!(analysis.count(ChangeCategory::Function) >= 1, "should detect fn");
+        assert!(analysis.has_test_changes(), "should detect test fn");
+        assert!(analysis.total() >= 5, "should categorize at least 5 lines");
+
+        let summary = analysis.summary();
+        assert!(summary.contains("import"), "summary should mention import");
+        assert!(summary.contains("function"), "summary should mention function");
+        assert!(summary.contains("test"), "summary should mention test");
     }
 }

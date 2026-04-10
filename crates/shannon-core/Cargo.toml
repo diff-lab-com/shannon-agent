@@ -18,6 +18,20 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 
+# Tool interface
+shannon-tool-interface = { path = "../shannon-tool-interface" }
+
+# Sub-crate dependencies
+shannon-core-base = { path = "../shannon-core-base" }
+shannon-core-api = { path = "../shannon-core-api" }
+shannon-core-tools = { path = "../shannon-core-tools" }
+shannon-core-query = { path = "../shannon-core-query" }
+shannon-core-memory = { path = "../shannon-core-memory" }
+shannon-core-plugins = { path = "../shannon-core-plugins" }
+shannon-core-features = { path = "../shannon-core-features" }
+shannon-core-maintenance = { path = "../shannon-core-maintenance" }
+shannon-core-diagnostics = { path = "../shannon-core-diagnostics" }
+
 # HTTP client for Claude API
 reqwest = { workspace = true }
 

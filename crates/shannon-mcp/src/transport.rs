@@ -146,12 +146,22 @@ impl Transport for StdioTransport {
     }
 
     async fn close(&mut self) -> Result<(), TransportError> {
-        if let Some(ref mut child) = self.child {
-            let _ = child.kill();
-            let _ = child.wait();
+        if let Some(mut child) = self.child.take() {
+            // Try to kill the child process gracefully
+            if let Err(e) = child.kill() {
+                debug!("Failed to kill child process: {}", e);
+            }
+            // Wait for the process to exit to prevent zombie processes
+            match child.wait() {
+                Ok(status) => {
+                    debug!("Child process exited with status: {}", status);
+                }
+                Err(e) => {
+                    debug!("Failed to wait for child process: {}", e);
+                }
+            }
             self.stdin = None;
             self.stdout_reader = None;
-            self.child = None;
         }
         Ok(())
     }
@@ -159,8 +169,13 @@ impl Transport for StdioTransport {
 
 impl Drop for StdioTransport {
     fn drop(&mut self) {
-        if let Some(ref mut child) = self.child {
-            let _ = child.kill();
+        if let Some(mut child) = self.child.take() {
+            // Clean up the child process to prevent resource leaks
+            if let Err(e) = child.kill() {
+                debug!("Failed to kill child process during drop: {}", e);
+            }
+            // Wait for the process to exit to prevent zombie processes
+            // Note: In Drop, we can't do much if wait() fails, but we try anyway
             let _ = child.wait();
         }
     }

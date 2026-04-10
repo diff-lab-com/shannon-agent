@@ -12,7 +12,7 @@ use shannon_core::tools::{Tool, ToolError, ToolOutput, ToolResult};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::RwLock;
+use std::sync::{Arc, LazyLock, RwLock};
 use tokio::sync::RwLock as AsyncRwLock;
 
 /// Configuration for worktree manager
@@ -407,7 +407,13 @@ pub struct ExitWorktreeToolInput {
 }
 
 /// Global state tracking the currently active worktree session (process-wide).
-static ACTIVE_WORKTREE: RwLock<Option<WorktreeSession>> = RwLock::new(None);
+static ACTIVE_WORKTREE: LazyLock<Arc<RwLock<Option<WorktreeSession>>>> =
+    LazyLock::new(|| Arc::new(RwLock::new(None)));
+
+/// Get a snapshot of the currently active worktree session (if any).
+pub fn get_active_worktree() -> Option<WorktreeSession> {
+    ACTIVE_WORKTREE.read().unwrap().clone()
+}
 
 /// Validate that a worktree name contains only safe characters.
 fn validate_name(name: &str) -> Result<(), ToolError> {
@@ -456,11 +462,26 @@ fn generate_random_name() -> String {
 // ---- EnterWorktreeTool ---------------------------------------------------
 
 /// Tool that creates a git worktree and switches the session into it.
-pub struct EnterWorktreeTool;
+pub struct EnterWorktreeTool {
+    session: Arc<RwLock<Option<WorktreeSession>>>,
+}
 
 impl EnterWorktreeTool {
+    /// Create a tool that uses the shared (process-wide) session state.
     pub fn new() -> Self {
-        Self
+        Self {
+            session: Arc::clone(&ACTIVE_WORKTREE),
+        }
+    }
+
+    /// Create a tool with its own isolated session state (for testing).
+    #[cfg(test)]
+    pub fn new_isolated() -> (Self, Arc<RwLock<Option<WorktreeSession>>>) {
+        let session = Arc::new(RwLock::new(None));
+        let tool = Self {
+            session: Arc::clone(&session),
+        };
+        (tool, session)
     }
 }
 
@@ -492,7 +513,8 @@ impl Tool for EnterWorktreeTool {
 
         // Prevent double-entry.
         {
-            let guard = ACTIVE_WORKTREE
+            let guard = self
+                .session
                 .read()
                 .map_err(|e| ToolError::ExecutionFailed(format!("Lock error: {}", e)))?;
             if guard.is_some() {
@@ -547,7 +569,8 @@ impl Tool for EnterWorktreeTool {
         };
 
         {
-            let mut guard = ACTIVE_WORKTREE
+            let mut guard = self
+                .session
                 .write()
                 .map_err(|e| ToolError::ExecutionFailed(format!("Lock error: {}", e)))?;
             *guard = Some(session);
@@ -579,11 +602,26 @@ impl Tool for EnterWorktreeTool {
 // ---- ExitWorktreeTool ----------------------------------------------------
 
 /// Tool that exits the current worktree session, optionally removing it.
-pub struct ExitWorktreeTool;
+pub struct ExitWorktreeTool {
+    session: Arc<RwLock<Option<WorktreeSession>>>,
+}
 
 impl ExitWorktreeTool {
+    /// Create a tool that uses the shared (process-wide) session state.
     pub fn new() -> Self {
-        Self
+        Self {
+            session: Arc::clone(&ACTIVE_WORKTREE),
+        }
+    }
+
+    /// Create a tool with its own isolated session state (for testing).
+    #[cfg(test)]
+    pub fn new_isolated() -> (Self, Arc<RwLock<Option<WorktreeSession>>>) {
+        let session = Arc::new(RwLock::new(None));
+        let tool = Self {
+            session: Arc::clone(&session),
+        };
+        (tool, session)
     }
 }
 
@@ -616,7 +654,8 @@ impl Tool for ExitWorktreeTool {
             .map_err(|e| ToolError::InvalidInput(format!("Invalid exit_worktree input: {}", e)))?;
 
         let session = {
-            let guard = ACTIVE_WORKTREE
+            let guard = self
+                .session
                 .read()
                 .map_err(|e| ToolError::ExecutionFailed(format!("Lock error: {}", e)))?;
             guard
@@ -632,7 +671,8 @@ impl Tool for ExitWorktreeTool {
             "keep" => {
                 // Clear session state.
                 {
-                    let mut guard = ACTIVE_WORKTREE
+                    let mut guard = self
+                        .session
                         .write()
                         .map_err(|e| ToolError::ExecutionFailed(format!("Lock error: {}", e)))?;
                     *guard = None;
@@ -688,7 +728,8 @@ impl Tool for ExitWorktreeTool {
 
                 // Clear session state.
                 {
-                    let mut guard = ACTIVE_WORKTREE
+                    let mut guard = self
+                        .session
                         .write()
                         .map_err(|e| ToolError::ExecutionFailed(format!("Lock error: {}", e)))?;
                     *guard = None;
@@ -830,7 +871,7 @@ mod tests {
     #[test]
     fn test_enter_worktree_tool_execute_invalid_json() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let tool = EnterWorktreeTool::new();
+        let (tool, _session) = EnterWorktreeTool::new_isolated();
         let result = rt.block_on(tool.execute(json!({"name": 123})));
         assert!(result.is_err());
     }
@@ -838,41 +879,40 @@ mod tests {
     #[test]
     fn test_exit_worktree_tool_execute_no_session() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let tool = ExitWorktreeTool::new();
+        let (tool, _session) = ExitWorktreeTool::new_isolated();
 
-        // Ensure no active session.
-        *ACTIVE_WORKTREE.write().unwrap() = None;
+        // The isolated session starts as None, so this should error.
 
         let result = rt.block_on(tool.execute(json!({"action": "keep"})));
-        assert!(result.is_err());
+        assert!(result.is_err(), "Expected error when no active session, got: {:?}", result);
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("No active worktree session"));
+        assert!(err.contains("No active worktree session"), "Error message: {}", err);
     }
 
     #[test]
     fn test_exit_worktree_tool_execute_invalid_action() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let tool = ExitWorktreeTool::new();
+        let (tool, session) = ExitWorktreeTool::new_isolated();
 
         // Set up a fake session so we get past the "no session" check.
-        *ACTIVE_WORKTREE.write().unwrap() = Some(WorktreeSession {
-            id: "test".into(),
-            path: PathBuf::from("/tmp/nonexistent-worktree"),
-            branch_name: "worktree/test".into(),
-            original_branch: String::new(),
-            status: WorktreeStatus::Active,
-            created_at: chrono::Utc::now(),
-            agent: None,
-            metadata: HashMap::new(),
-        });
+        {
+            let mut guard = session.write().unwrap();
+            *guard = Some(WorktreeSession {
+                id: "test_invalid_action".into(),
+                path: PathBuf::from("/tmp/nonexistent-worktree-invalid"),
+                branch_name: "worktree/test-invalid".into(),
+                original_branch: String::new(),
+                status: WorktreeStatus::Active,
+                created_at: chrono::Utc::now(),
+                agent: None,
+                metadata: HashMap::new(),
+            });
+        }
 
         let result = rt.block_on(tool.execute(json!({"action": "invalid"})));
-        assert!(result.is_err());
+        assert!(result.is_err(), "Expected error for invalid action, got: {:?}", result);
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("Invalid action"));
-
-        // Clean up.
-        *ACTIVE_WORKTREE.write().unwrap() = None;
+        assert!(err.contains("Invalid action"), "Error message: {}", err);
     }
 
     #[test]

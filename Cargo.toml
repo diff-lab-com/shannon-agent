@@ -2,6 +2,15 @@
 resolver = "2"
 members = [
     "crates/shannon-core",
+    "crates/shannon-core-base",
+    "crates/shannon-core-api",
+    "crates/shannon-core-tools",
+    "crates/shannon-core-query",
+    "crates/shannon-core-memory",
+    "crates/shannon-core-plugins",
+    "crates/shannon-core-features",
+    "crates/shannon-core-maintenance",
+    "crates/shannon-core-diagnostics",
     "crates/shannon-cli",
     "crates/shannon-ui",
     "crates/shannon-mcp",
@@ -10,6 +19,7 @@ members = [
     "crates/shannon-types",
     "crates/shannon-commands",
     "crates/shannon-skills",
+    "crates/shannon-tool-interface",
 ]
 
 [workspace.package]
@@ -25,11 +35,13 @@ homepage = "https://github.com/your-org/shannon-code"
 # Async runtime
 tokio = { version = "1.43", features = ["full"] }
 tokio-util = "0.7"
+tokio-stream = "0.1"
 async-trait = "0.1"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_yaml = "0.9"
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
@@ -52,6 +64,7 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 # Utilities
 uuid = { version = "1.12", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+futures = "0.3"
 futures-util = "0.3"
 dirs = "5.0"
 dotenvy = "0.15"

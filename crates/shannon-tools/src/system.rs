@@ -96,6 +96,41 @@ const READ_ONLY_PATTERNS: &[&str] = &[
     "git diff",            // Git diff
 ];
 
+/// PowerShell-specific destructive patterns
+const PS_DESTRUCTIVE_PATTERNS: &[&str] = &[
+    "Remove-Item -Recurse -Force",  // Recursive force delete
+    "rm -Recurse -Force",           // Alias recursive delete
+    "ri -Recurse -Force",           // Alias recursive delete
+    "Remove-Item * -Recurse",       // Delete all in dir
+    "Format-Volume",                // Format volume
+    "Stop-Computer",                // Shutdown
+    "Restart-Computer",             // Reboot
+    "Clear-Content",                // Clear file contents
+    "Remove-Service",               // Remove service
+    "Set-ExecutionPolicy Unrestricted", // Lower security policy
+    "Invoke-WebRequest | Invoke-Expression", // Download & execute
+    "iex",                          // Invoke-Expression (code execution)
+    "IEX",                          // Invoke-Expression variant
+    "Invoke-Expression",            // Direct code execution
+    "& 'cmd.exe /c'",               // Cmd bypass
+    "Start-Process -Verb RunAs",    // Privilege escalation
+    "net user",                     // User manipulation
+    "net localgroup",               // Group manipulation
+    "reg delete",                   // Registry deletion
+    "reg add HKLM",                 // Registry modification (system)
+];
+
+/// PowerShell confirmation-required patterns
+const PS_CONFIRMATION_PATTERNS: &[&str] = &[
+    "Remove-Item",          // Delete files
+    "Move-Item",            // Move files
+    "Copy-Item -Force",     // Force copy
+    "Set-Content",          // Overwrite file content
+    "New-Item -Force",      // Force create
+    "Stop-Process",         // Kill process
+    "taskkill",             // Kill process
+];
+
 /// Analyze a bash command for security risks
 pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
     let mut warnings = Vec::new();
@@ -609,6 +644,47 @@ impl Tool for PowerShellTool {
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let ps_input: PowerShellInput = serde_json::from_value(input)
             .map_err(|e| ToolError::InvalidInput(format!("Invalid PowerShell input: {}", e)))?;
+
+        // PowerShell security analysis
+        let lower_cmd = ps_input.command.to_lowercase();
+
+        // Check destructive patterns - reject immediately
+        for pattern in PS_DESTRUCTIVE_PATTERNS {
+            if lower_cmd.contains(&pattern.to_lowercase()) {
+                return Ok(ToolOutput {
+                    content: format!(
+                        "PowerShell command rejected due to critical security risk:\n{}\n\nPattern: {}",
+                        ps_input.command, pattern
+                    ),
+                    is_error: true,
+                    metadata: {
+                        let mut map = std::collections::HashMap::new();
+                        map.insert("security_rejected".to_string(), json!(true));
+                        map.insert("pattern".to_string(), json!(pattern));
+                        map
+                    },
+                });
+            }
+        }
+
+        // Check confirmation-required patterns
+        for pattern in PS_CONFIRMATION_PATTERNS {
+            if lower_cmd.contains(&pattern.to_lowercase()) {
+                return Ok(ToolOutput {
+                    content: format!(
+                        "PowerShell command requires confirmation:\n{}\n\nPattern: {}\nUse with explicit approval only.",
+                        ps_input.command, pattern
+                    ),
+                    is_error: true,
+                    metadata: {
+                        let mut map = std::collections::HashMap::new();
+                        map.insert("requires_confirmation".to_string(), json!(true));
+                        map.insert("pattern".to_string(), json!(pattern));
+                        map
+                    },
+                });
+            }
+        }
 
         let output = Self::execute_command(
             &ps_input.command,

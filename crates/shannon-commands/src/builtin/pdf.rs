@@ -114,7 +114,7 @@ impl PdfOptions {
 }
 
 /// Extracted PDF content
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PdfContent {
     /// File path
     pub source_path: String,
@@ -145,6 +145,28 @@ pub struct PdfPage {
     pub tables: Vec<PdfTable>,
 }
 
+impl PdfPage {
+    /// Create a new page with just text content
+    pub fn new(number: usize, text: String) -> Self {
+        Self {
+            number,
+            text,
+            images: Vec::new(),
+            tables: Vec::new(),
+        }
+    }
+
+    /// Get word count of the page text
+    pub fn word_count(&self) -> usize {
+        self.text.split_whitespace().count()
+    }
+
+    /// Check if the page has any content
+    pub fn has_content(&self) -> bool {
+        !self.text.trim().is_empty() || !self.images.is_empty() || !self.tables.is_empty()
+    }
+}
+
 /// Image extracted from PDF
 #[derive(Debug, Clone)]
 pub struct PdfImage {
@@ -162,13 +184,49 @@ pub struct PdfImage {
 }
 
 /// Image format
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageFormat {
     Jpeg,
     Png,
     Tiff,
     Pnm,
     Pdf,
+}
+
+impl ImageFormat {
+    /// Get the file extension for this format
+    pub fn extension(&self) -> &'static str {
+        match self {
+            ImageFormat::Jpeg => "jpg",
+            ImageFormat::Png => "png",
+            ImageFormat::Tiff => "tiff",
+            ImageFormat::Pnm => "pnm",
+            ImageFormat::Pdf => "pdf",
+        }
+    }
+
+    /// Get the MIME type
+    pub fn mime_type(&self) -> &'static str {
+        match self {
+            ImageFormat::Jpeg => "image/jpeg",
+            ImageFormat::Png => "image/png",
+            ImageFormat::Tiff => "image/tiff",
+            ImageFormat::Pnm => "image/x-portable-anymap",
+            ImageFormat::Pdf => "application/pdf",
+        }
+    }
+
+    /// Parse from extension string
+    pub fn from_extension(ext: &str) -> Option<Self> {
+        match ext.to_lowercase().as_str() {
+            "jpg" | "jpeg" => Some(ImageFormat::Jpeg),
+            "png" => Some(ImageFormat::Png),
+            "tiff" | "tif" => Some(ImageFormat::Tiff),
+            "pnm" => Some(ImageFormat::Pnm),
+            "pdf" => Some(ImageFormat::Pdf),
+            _ => None,
+        }
+    }
 }
 
 /// Table extracted from PDF
@@ -187,8 +245,61 @@ pub struct PdfTable {
     pub rows: Vec<Vec<String>>,
 }
 
+impl PdfTable {
+    /// Create a new table
+    pub fn new(index: usize, page: usize, headers: Vec<String>, rows: Vec<Vec<String>>) -> Self {
+        Self { index, page, headers, rows }
+    }
+
+    /// Get the number of data rows (excluding header)
+    pub fn row_count(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// Get column count from headers
+    pub fn column_count(&self) -> usize {
+        self.headers.len()
+    }
+
+    /// Format as a simple text table
+    pub fn to_text(&self) -> String {
+        let mut output = String::new();
+        let col_widths: Vec<usize> = self.headers.iter().enumerate().map(|(i, h)| {
+            let data_width = self.rows.iter()
+                .filter_map(|r| r.get(i).map(|c| c.len()))
+                .max()
+                .unwrap_or(0);
+            h.len().max(data_width).max(4)
+        }).collect();
+
+        // Header
+        for (i, header) in self.headers.iter().enumerate() {
+            let width = col_widths.get(i).copied().unwrap_or(4);
+            output.push_str(&format!(" {:width$} |", header, width = width));
+        }
+        output.push('\n');
+
+        // Separator
+        for width in &col_widths {
+            output.push_str(&format!(" {} |", "-".repeat(*width)));
+        }
+        output.push('\n');
+
+        // Rows
+        for row in &self.rows {
+            for (i, cell) in row.iter().enumerate() {
+                let width = col_widths.get(i).copied().unwrap_or(4);
+                output.push_str(&format!(" {:width$} |", cell, width = width));
+            }
+            output.push('\n');
+        }
+
+        output
+    }
+}
+
 /// PDF metadata
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PdfMetadata {
     /// Title
     pub title: Option<String>,
@@ -284,5 +395,93 @@ mod tests {
 
         assert!(prompt.contains("test.pdf"));
         assert!(prompt.contains("OCR: Enabled"));
+    }
+
+    #[test]
+    fn test_image_format_extension() {
+        assert_eq!(ImageFormat::Jpeg.extension(), "jpg");
+        assert_eq!(ImageFormat::Png.extension(), "png");
+        assert_eq!(ImageFormat::Tiff.extension(), "tiff");
+        assert_eq!(ImageFormat::Pnm.extension(), "pnm");
+        assert_eq!(ImageFormat::Pdf.extension(), "pdf");
+    }
+
+    #[test]
+    fn test_image_format_mime_type() {
+        assert_eq!(ImageFormat::Jpeg.mime_type(), "image/jpeg");
+        assert_eq!(ImageFormat::Png.mime_type(), "image/png");
+        assert_eq!(ImageFormat::Pdf.mime_type(), "application/pdf");
+    }
+
+    #[test]
+    fn test_image_format_from_extension() {
+        assert_eq!(ImageFormat::from_extension("jpg"), Some(ImageFormat::Jpeg));
+        assert_eq!(ImageFormat::from_extension("jpeg"), Some(ImageFormat::Jpeg));
+        assert_eq!(ImageFormat::from_extension("PNG"), Some(ImageFormat::Png));
+        assert_eq!(ImageFormat::from_extension("tiff"), Some(ImageFormat::Tiff));
+        assert_eq!(ImageFormat::from_extension("xyz"), None);
+    }
+
+    #[test]
+    fn test_pdf_metadata_default() {
+        let meta = PdfMetadata::default();
+        assert!(meta.title.is_none());
+        assert!(meta.author.is_none());
+        assert_eq!(meta.page_count, 0);
+        assert!(!meta.encrypted);
+    }
+
+    #[test]
+    fn test_pdf_page_new() {
+        let page = PdfPage::new(1, "Hello world this is page one".to_string());
+        assert_eq!(page.number, 1);
+        assert_eq!(page.word_count(), 6);
+        assert!(page.has_content());
+        assert!(page.images.is_empty());
+        assert!(page.tables.is_empty());
+    }
+
+    #[test]
+    fn test_pdf_page_empty() {
+        let page = PdfPage::new(1, String::new());
+        assert!(!page.has_content());
+        assert_eq!(page.word_count(), 0);
+    }
+
+    #[test]
+    fn test_pdf_table_new() {
+        let table = PdfTable::new(
+            0,
+            1,
+            vec!["Name".to_string(), "Age".to_string()],
+            vec![
+                vec!["Alice".to_string(), "30".to_string()],
+                vec!["Bob".to_string(), "25".to_string()],
+            ],
+        );
+        assert_eq!(table.row_count(), 2);
+        assert_eq!(table.column_count(), 2);
+    }
+
+    #[test]
+    fn test_pdf_table_to_text() {
+        let table = PdfTable::new(
+            0,
+            1,
+            vec!["Name".to_string(), "Age".to_string()],
+            vec![vec!["Alice".to_string(), "30".to_string()]],
+        );
+        let text = table.to_text();
+        assert!(text.contains("Name"));
+        assert!(text.contains("Alice"));
+        assert!(text.contains("30"));
+    }
+
+    #[test]
+    fn test_pdf_content_default() {
+        let content = PdfContent::default();
+        assert!(content.source_path.is_empty());
+        assert_eq!(content.total_pages, 0);
+        assert!(content.pages.is_empty());
     }
 }

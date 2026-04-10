@@ -21,6 +21,7 @@ mod parser;
 mod executor;
 mod command;
 mod context;
+mod repl_command;
 
 mod builtin;
 
@@ -33,6 +34,7 @@ pub use parser::{CommandParser, ParsedCommand};
 pub use command::ExecutionResult;
 pub use executor::CommandExecutor;
 pub use context::{CommandContext, ToolUseContext};
+pub use repl_command::{ReplCommand, CommandAdapter};
 
 /// Re-export built-in commands
 pub mod builtin_commands {
@@ -40,9 +42,14 @@ pub mod builtin_commands {
     pub use crate::builtin::{register_all, all_commands};
 }
 
+/// Re-export help utilities for REPL integration
+pub mod help_utils {
+    pub use crate::builtin::help_utils::*;
+}
+
 /// Create a new command registry with all built-in commands registered
 pub fn create_registry() -> CommandRegistry {
-    let mut registry = CommandRegistry::new();
-    builtin::register_all(&mut registry);
+    let registry = CommandRegistry::new();
+    builtin::register_all(&registry);
     registry
 }

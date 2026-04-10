@@ -1,10 +1,12 @@
 [package]
 name = "shannon-ui"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 
 [dependencies]
 shannon-core = { path = "../shannon-core" }
+shannon-agents = { path = "../shannon-agents" }
+shannon-commands = { path = "../shannon-commands" }
 shannon-tools = { path = "../shannon-tools" }
 shannon-mcp = { path = "../shannon-mcp" }
 shannon-types = { path = "../shannon-types" }
@@ -18,3 +20,7 @@ futures = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+atty = "0.2"
+anyhow = "1.0"
+async-trait = "0.1"
+thiserror = "2.0"

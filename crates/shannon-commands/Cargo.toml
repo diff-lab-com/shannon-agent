@@ -28,5 +28,12 @@ once_cell = "1.19"
 # Async utilities
 futures = "0.3"
 
+# Date/time handling
+chrono = "0.4"
+
+# Config file support
+dirs = "5.0"
+toml = { version = "0.8", optional = true }
+
 [dev-dependencies]
 tokio-test = "0.4"

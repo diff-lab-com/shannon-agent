@@ -44,7 +44,7 @@ impl DialogButton {
 }
 
 /// Dialog widget for modal interactions
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct DialogWidget {
     title: String,
     subtitle: Option<String>,

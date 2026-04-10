@@ -224,10 +224,17 @@ impl AgentCoordinator {
 
         drop(teams);
 
-        let _ = self.event_sender.send(CoordinatorEvent::AgentJoined {
+        if let Err(e) = self.event_sender.send(CoordinatorEvent::AgentJoined {
             team: team_name.to_string(),
             agent: agent_name.clone(),
-        });
+        }) {
+            tracing::warn!(
+                team = %team_name,
+                agent = %agent_name,
+                error = %e,
+                "Failed to send AgentJoined event - no active receivers"
+            );
+        }
 
         tracing::info!(
             team = %team_name,
@@ -371,10 +378,17 @@ impl AgentCoordinator {
 
         self.task_board.assign_task(task_id, agent_name.clone()).await?;
 
-        let _ = self.event_sender.send(CoordinatorEvent::TaskAssigned {
+        if let Err(e) = self.event_sender.send(CoordinatorEvent::TaskAssigned {
             task_id,
             agent: agent_name.clone(),
-        });
+        }) {
+            tracing::warn!(
+                task_id = %task_id,
+                agent = %agent_name,
+                error = %e,
+                "Failed to send TaskAssigned event - no active receivers"
+            );
+        }
 
         Ok(agent_name)
     }
@@ -396,7 +410,14 @@ impl AgentCoordinator {
         _task_board: &TaskBoard,
         event_sender: &broadcast::Sender<CoordinatorEvent>,
     ) -> Result<(), AgentError> {
-        let _ = event_sender.send(CoordinatorEvent::MessageSent(message.clone()));
+        if let Err(e) = event_sender.send(CoordinatorEvent::MessageSent(message.clone())) {
+            tracing::warn!(
+                from = %message.from,
+                to = %message.to,
+                error = %e,
+                "Failed to send MessageSent event - no active receivers"
+            );
+        }
 
         if message.to == "*" {
             // Broadcast to all agents in all teams
@@ -413,7 +434,14 @@ impl AgentCoordinator {
                 if let Some(agent) = team.members.get(&message.to) {
                     let response = agent.handle_message(message.clone()).await?;
                     // Handle response if needed
-                    let _ = event_sender.send(CoordinatorEvent::MessageSent(response));
+                    if let Err(e) = event_sender.send(CoordinatorEvent::MessageSent(response)) {
+                        tracing::warn!(
+                            from = %message.from,
+                            to = %message.to,
+                            error = %e,
+                            "Failed to send MessageSent event for response - no active receivers"
+                        );
+                    }
                     return Ok(());
                 }
             }
@@ -434,10 +462,16 @@ impl AgentCoordinator {
         for (_team_name, team) in teams_lock.iter() {
             for (agent_name, agent) in team.members.iter() {
                 let status = agent.status().await;
-                let _ = event_sender.send(CoordinatorEvent::StatusChanged {
+                if let Err(e) = event_sender.send(CoordinatorEvent::StatusChanged {
                     agent: agent_name.clone(),
                     status,
-                });
+                }) {
+                    tracing::warn!(
+                        agent = %agent_name,
+                        error = %e,
+                        "Failed to send StatusChanged event - no active receivers"
+                    );
+                }
             }
         }
     }
@@ -465,10 +499,17 @@ impl AgentCoordinator {
                 );
 
                 let _ = teammate.handle_message(shutdown_msg).await;
-                let _ = self.event_sender.send(CoordinatorEvent::AgentLeft {
+                if let Err(e) = self.event_sender.send(CoordinatorEvent::AgentLeft {
                     team: team_name.clone(),
                     agent: agent_name.clone(),
-                });
+                }) {
+                    tracing::warn!(
+                        team = %team_name,
+                        agent = %agent_name,
+                        error = %e,
+                        "Failed to send AgentLeft event during shutdown - no active receivers"
+                    );
+                }
             }
         }
 

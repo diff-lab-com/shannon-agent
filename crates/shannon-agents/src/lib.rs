@@ -20,7 +20,8 @@ pub use teammate::{Teammate, TeammateConfig, TeammateStatus, TeammateState};
 pub use task_board::{TaskBoard, TaskAssignment, TaskBoardEvent, TaskBoardSummary};
 pub use worktree::{WorktreeManager, WorktreeConfig, WorktreeSession, WorktreeStatus, ExitAction,
     EnterWorktreeTool, ExitWorktreeTool,
-    EnterWorktreeToolInput, ExitWorktreeToolInput};
+    EnterWorktreeToolInput, ExitWorktreeToolInput,
+    get_active_worktree};
 pub use message::{AgentMessage, MessagePriority, MessageType, MessageContent, ProtocolMessage};
 pub use task::{AgentTask, TaskStatus, TaskDependency, TaskPriority, DependencyType};
 pub use error::{AgentError, CoordinationError, TaskError};

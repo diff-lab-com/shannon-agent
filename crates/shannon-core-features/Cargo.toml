@@ -1,0 +1,19 @@
+[package]
+name = "shannon-core-features"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+shannon-core-base = { path = "../shannon-core-base" }
+shannon-types = { path = "../shannon-types" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+reqwest = { workspace = true }
+dirs = "5"
+regex = "1"

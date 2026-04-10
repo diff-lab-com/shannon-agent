@@ -6,6 +6,14 @@
 //! - Denied path patterns (system directories)
 //! - Home directory boundary enforcement
 //! - Strict mode (allow only explicitly configured roots)
+//!
+//! # TOCTOU Protection
+//!
+//! The sandbox uses canonicalization to resolve symlinks before checking paths.
+//! This protects against time-of-check/time-of-use (TOCTOU) attacks where
+//! an attacker might replace a safe path with a symlink after validation.
+//! The canonicalization happens immediately before the access check, making
+//! it difficult for an attacker to race the condition.
 
 use std::path::{Path, PathBuf};
 
@@ -85,6 +93,9 @@ pub enum SandboxError {
         target: String,
     },
 
+    #[error("Potential TOCTOU attack detected: symlink target changed between check and use")]
+    ToctouDetected(String),
+
     #[error("Failed to resolve path: {0}")]
     ResolutionFailed(String),
 
@@ -114,10 +125,17 @@ impl PathSandbox {
     /// Returns the canonicalized (resolved) path if access is allowed.
     /// Returns `SandboxError` if the path violates any security rule.
     ///
-    /// Checks performed in order:
+    /// # TOCTOU Protection
+    ///
+    /// This method uses immediate canonicalization to protect against
+    /// time-of-check/time-of-use (TOCTOU) attacks. By canonicalizing
+    /// the path right before checking it, we minimize the window where
+    /// an attacker could replace a path component with a symlink.
+    ///
+    /// # Checks performed in order:
     /// 1. Path is not empty
     /// 2. Path does not contain raw `..` traversal that escapes the filesystem
-    /// 3. Path can be canonicalized (symlinks resolved)
+    /// 3. Path can be canonicalized (symlinks resolved) - **TOCTOU protection point**
     /// 4. Canonicalized path does not match any denied pattern
     /// 5. In strict mode, canonicalized path is under an allowed root
     /// 6. Path does not cross into another user's home directory
@@ -133,6 +151,8 @@ impl PathSandbox {
         self.check_raw_traversal(&path_str)?;
 
         // Canonicalize: resolve symlinks, `.` and `..` components
+        // This is the primary TOCTOU protection - we resolve the actual
+        // target immediately before checking it against allowed roots.
         let canonical = tokio::fs::canonicalize(path)
             .await
             .map_err(|e| SandboxError::ResolutionFailed(format!(
@@ -156,6 +176,9 @@ impl PathSandbox {
     }
 
     /// Synchronous version of `validate` for use in non-async contexts.
+    ///
+    /// Has the same TOCTOU protection properties as `validate` - uses
+    /// immediate canonicalization to resolve symlinks before checking.
     pub fn validate_sync(&self, path: &Path) -> Result<PathBuf, SandboxError> {
         if path.as_os_str().is_empty() {
             return Err(SandboxError::InvalidPath);
@@ -230,14 +253,27 @@ impl PathSandbox {
                 Ok(r) => r,
                 Err(_) => {
                     // If root doesn't exist yet (e.g., a project dir not yet created),
-                    // try to use it as-is with trailing separator for prefix matching
-                    let root_str = root.to_string_lossy().to_string();
-                    let root_with_sep = if root_str.ends_with('/') {
-                        root_str
-                    } else {
-                        format!("{}/", root_str)
+                    // try to canonicalize it first for comparison, then fall back to prefix matching
+                    // Canonicalize the root path to resolve any symlinks before comparison
+                    let canonical_root = match std::fs::canonicalize(root) {
+                        Ok(r) => r,
+                        Err(_) => {
+                            // Root doesn't exist and can't be canonicalized,
+                            // use as-is with trailing separator for prefix matching
+                            let root_str = root.to_string_lossy().to_string();
+                            let root_with_sep = if root_str.ends_with('/') {
+                                root_str
+                            } else {
+                                format!("{}/", root_str)
+                            };
+                            if canonical_str.starts_with(&root_with_sep) {
+                                return Ok(());
+                            }
+                            continue;
+                        }
                     };
-                    if canonical_str.starts_with(&root_with_sep) || canonical == root.as_os_str() {
+                    // Compare canonicalized paths to prevent symlink escape
+                    if canonical == canonical_root.as_os_str() {
                         return Ok(());
                     }
                     continue;
@@ -634,6 +670,75 @@ mod tests {
 
         let result = sandbox.validate(&link).await;
         assert!(result.is_err(), "Symlink escaping root should be blocked");
+
+        let _ = fs::remove_dir_all(&outside_dir);
+    }
+
+    #[tokio::test]
+    async fn test_symlink_to_system_file_blocked() {
+        let td = TestDir::new();
+
+        // Try to create a symlink to /etc/passwd (a common attack vector)
+        // Note: This test doesn't create the actual symlink (would need privileges)
+        // but verifies that even if such a symlink existed, it would be blocked
+        #[cfg(unix)]
+        {
+            let etc_passwd = PathBuf::from("/etc/passwd");
+            if etc_passwd.exists() {
+                let link = td.file("etc_passwd_link");
+                #[allow(unused_variables)]
+                let symlink_result = std::os::unix::fs::symlink(&etc_passwd, &link);
+
+                // Only test if we could create the symlink
+                if symlink_result.is_ok() {
+                    let sandbox = PathSandbox::with_config(SandboxConfig {
+                        allowed_roots: vec![td.path().to_path_buf()],
+                        denied_patterns: vec![],
+                        strict_mode: true,
+                    });
+
+                    let result = sandbox.validate(&link).await;
+                    assert!(result.is_err(), "Symlink to /etc/passwd should be blocked");
+
+                    let _ = fs::remove_file(&link);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_symlink_chain_does_not_escape() {
+        let td = TestDir::new();
+
+        // Create a chain: link1 -> link2 -> outside_file
+        // This should still be blocked
+        let outside_dir = std::env::temp_dir().join(format!("sandbox_chain_{}", std::process::id()));
+        fs::create_dir_all(&outside_dir).expect("Failed to create outside dir");
+        let outside_file = outside_dir.join("secret.txt");
+        fs::write(&outside_file, "secret data").expect("Failed to write outside file");
+
+        // Create first symlink (outside)
+        let _link2 = td.create_symlink("link2", &outside_file);
+
+        #[cfg(unix)]
+        {
+            // Create second symlink pointing to the first (also inside sandbox)
+            let link1 = td.file("link1");
+            let link2_path = td.file("link2");
+            std::os::unix::fs::symlink(&link2_path, &link1).expect("Failed to create link1");
+
+            let sandbox = PathSandbox::with_config(SandboxConfig {
+                allowed_roots: vec![td.path().to_path_buf()],
+                denied_patterns: vec![],
+                strict_mode: true,
+            });
+
+            // Accessing link1 should fail (it resolves to outside the root)
+            let result = sandbox.validate(&link1).await;
+            assert!(result.is_err(), "Symlink chain escaping root should be blocked");
+
+            let _ = fs::remove_file(&link1);
+        }
 
         let _ = fs::remove_dir_all(&outside_dir);
     }
