@@ -113,7 +113,7 @@ impl LlmClient {
             .client
             .post(&url)
             .header("content-type", "application/json")
-            .json(&request_body);
+            .json(&super::adapter::serialize_request(&request_body, &self.config.provider));
 
         for (key, value) in headers {
             request = request.header(&key, &value);
@@ -141,7 +141,7 @@ impl LlmClient {
             });
         }
 
-        Ok(super::streaming::sse_stream_from_response(response))
+        Ok(super::streaming::sse_stream_from_response(response, self.config.provider.clone()))
     }
 
     /// Send a message and wait for complete response (non-streaming)
@@ -171,7 +171,7 @@ impl LlmClient {
             .client
             .post(&url)
             .header("content-type", "application/json")
-            .json(&request_body);
+            .json(&super::adapter::serialize_request(&request_body, &self.config.provider));
 
         for (key, value) in headers {
             request = request.header(&key, &value);

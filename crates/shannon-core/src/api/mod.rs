@@ -9,6 +9,7 @@
 //! - Comprehensive error handling
 //! - Request/response models compatible with common LLM APIs
 
+pub mod adapter;
 pub mod error;
 pub mod types;
 pub mod streaming;

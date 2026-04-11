@@ -320,7 +320,7 @@ pub enum StreamEvent {
 }
 
 /// Delta for content block streaming
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ContentDelta {
     #[serde(rename = "text_delta")]

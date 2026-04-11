@@ -7,7 +7,7 @@ use futures::{Stream, StreamExt, task::{Context, Poll}};
 use std::pin::Pin;
 
 use super::error::ApiError;
-use super::types::StreamEvent;
+use super::types::{LlmProvider, StreamEvent};
 
 /// Stream of API events
 pub type MessageStream = Pin<Box<dyn Stream<Item = Result<StreamEvent, ApiError>> + Send>>;
@@ -25,13 +25,14 @@ pub struct SseStream {
     buffer: String,
     pending_events: Vec<Result<StreamEvent, ApiError>>,
     done: bool,
+    provider: LlmProvider,
 }
 
 impl SseStream {
     /// Create a new SSE stream from a reqwest response.
     ///
     /// Takes ownership of the response and consumes its byte stream.
-    pub fn new(response: reqwest::Response) -> Self {
+    pub fn new(response: reqwest::Response, provider: LlmProvider) -> Self {
         let byte_stream = response.bytes_stream();
         // Convert Bytes to Vec<u8> to avoid direct dependency on bytes crate
         let mapped = Box::pin(byte_stream.map(|result| result.map(|b| b.to_vec())));
@@ -40,6 +41,7 @@ impl SseStream {
             buffer: String::new(),
             pending_events: Vec::new(),
             done: false,
+            provider,
         }
     }
 
@@ -50,14 +52,14 @@ impl SseStream {
             let line = self.buffer[..newline_pos].to_string();
             self.buffer = self.buffer[newline_pos + 1..].to_string();
 
-            if let Some(event) = Self::parse_sse_line(&line) {
+            if let Some(event) = self.parse_sse_line(&line) {
                 self.pending_events.push(event);
             }
         }
     }
 
-    /// Parse a single SSE line into an event.
-    fn parse_sse_line(line: &str) -> Option<Result<StreamEvent, ApiError>> {
+    /// Parse a single SSE line into an event using provider-specific normalization.
+    fn parse_sse_line(&self, line: &str) -> Option<Result<StreamEvent, ApiError>> {
         let line = line.trim();
 
         // Skip empty lines and SSE comments
@@ -79,12 +81,7 @@ impl SseStream {
             return Some(Ok(StreamEvent::MessageStop));
         }
 
-        match serde_json::from_str::<StreamEvent>(json_str) {
-            Ok(event) => Some(Ok(event)),
-            Err(e) => Some(Err(ApiError::InvalidResponse(format!(
-                "Failed to parse SSE event: {} (data: {})", e, json_str
-            )))),
-        }
+        super::adapter::normalize_sse_event(json_str, &self.provider)
     }
 }
 
@@ -125,7 +122,7 @@ impl Stream for SseStream {
                     // Stream ended — process any remaining data in buffer
                     if !self.buffer.trim().is_empty() {
                         let remaining = std::mem::take(&mut self.buffer);
-                        if let Some(event) = Self::parse_sse_line(&remaining) {
+                        if let Some(event) = self.parse_sse_line(&remaining) {
                             self.done = true;
                             return Poll::Ready(Some(event));
                         }
@@ -145,7 +142,7 @@ impl Stream for SseStream {
 ///
 /// Properly handles SSE events that span HTTP chunk boundaries
 /// by buffering partial lines until complete.
-pub fn sse_stream_from_response(response: reqwest::Response) -> MessageStream {
-    let sse = SseStream::new(response);
+pub fn sse_stream_from_response(response: reqwest::Response, provider: LlmProvider) -> MessageStream {
+    let sse = SseStream::new(response, provider);
     Box::pin(sse)
 }
