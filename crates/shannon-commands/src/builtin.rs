@@ -12,7 +12,7 @@
 //! - /config: Manage configuration
 //! - /debug: Developer tools
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand};
+use crate::command::Command;
 use crate::registry::CommandRegistry;
 
 mod commit;

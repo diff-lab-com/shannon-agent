@@ -3,13 +3,12 @@
 // This module provides authentication implementations including
 // OAuth 2.0 PKCE and API key authentication.
 
-use crate::{McpError, McpResult};
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use thiserror::Error;
-use tracing::{debug, info, warn};
+use tracing::info;
 
 /// Authentication error types
 #[derive(Error, Debug)]

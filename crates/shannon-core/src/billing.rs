@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::debug;
@@ -509,6 +509,7 @@ fn days_in_current_month(now: DateTime<Utc>) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration;
 
     fn make_record(model: &str, input: u64, output: u64, cost: f64) -> UsageRecord {
         UsageRecord::new(model, input, output, cost)

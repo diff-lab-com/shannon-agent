@@ -37,7 +37,7 @@ impl<T: Transport> McpClient<T> {
     }
 
     /// Connect to the server and initialize the session
-    pub async fn connect(mut self) -> McpResult<Self>
+    pub async fn connect(self) -> McpResult<Self>
     where
         T: 'static,
     {
@@ -337,7 +337,7 @@ impl<T: Transport> McpClient<T> {
     /// Handle incoming notifications
     async fn handle_notification(
         notification: JsonRpcNotification,
-        server_capabilities: &Arc<Mutex<Option<ServerCapabilities>>>,
+        _server_capabilities: &Arc<Mutex<Option<ServerCapabilities>>>,
     ) {
         debug!(method = %notification.method, "Handling notification");
 

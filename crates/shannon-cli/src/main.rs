@@ -8,7 +8,7 @@ use shannon_core::{
     state::StateManager,
     tools::ToolRegistry,
 };
-use shannon_tools::BashTool;
+use shannon_tools::register_default_tools;
 use shannon_ui::Repl;
 use std::collections::HashMap;
 use std::io::Write;
@@ -93,6 +93,61 @@ impl CliConfig {
             .cloned()
             .or_else(|| std::env::var(key).ok())
     }
+}
+
+// ── TOML Config File Loading ───────────────────────────────────────────
+
+/// Configuration read from TOML config files.
+///
+/// Loaded from (in order, later wins):
+///   1. `~/.shannon/config.toml` — global user config
+///   2. `.shannon.toml` in the current working directory — project-local config
+///
+/// Values here act as defaults; CLI args and env vars take precedence.
+#[derive(Debug, Clone, serde::Deserialize, Default)]
+#[serde(default)]
+struct ShannonTomlConfig {
+    model: Option<String>,
+    provider: Option<String>,
+    max_tokens: Option<usize>,
+    temperature: Option<f32>,
+    timeout: Option<u64>,
+    debug: Option<bool>,
+    api_key: Option<String>,
+    base_url: Option<String>,
+}
+
+/// Load TOML config from disk, merging global + project-local files.
+fn load_toml_config() -> ShannonTomlConfig {
+    let mut merged = ShannonTomlConfig::default();
+
+    // 1. Global config: ~/.shannon/config.toml
+    if let Some(home) = dirs::home_dir() {
+        let global_path = home.join(".shannon").join("config.toml");
+        if let Ok(content) = std::fs::read_to_string(&global_path) {
+            if let Ok(cfg) = toml::from_str::<ShannonTomlConfig>(&content) {
+                merged = cfg;
+            }
+        }
+    }
+
+    // 2. Project-local config: .shannon.toml
+    let local_path = std::path::Path::new(".shannon.toml");
+    if let Ok(content) = std::fs::read_to_string(local_path) {
+        if let Ok(cfg) = toml::from_str::<ShannonTomlConfig>(&content) {
+            // Merge: local overrides global
+            if cfg.model.is_some() { merged.model = cfg.model; }
+            if cfg.provider.is_some() { merged.provider = cfg.provider; }
+            if cfg.max_tokens.is_some() { merged.max_tokens = cfg.max_tokens; }
+            if cfg.temperature.is_some() { merged.temperature = cfg.temperature; }
+            if cfg.timeout.is_some() { merged.timeout = cfg.timeout; }
+            if cfg.debug.is_some() { merged.debug = cfg.debug; }
+            if cfg.api_key.is_some() { merged.api_key = cfg.api_key; }
+            if cfg.base_url.is_some() { merged.base_url = cfg.base_url; }
+        }
+    }
+
+    merged
 }
 
 /// Shannon Code - AI-powered code assistant in Rust
@@ -239,13 +294,16 @@ fn build_cli_config(
     debug: bool,
     env_overrides: HashMap<String, String>,
 ) -> CliConfig {
+    // Load TOML config as fallback defaults
+    let toml_cfg = load_toml_config();
+
     CliConfig {
-        model: model.map(|s| s.to_string()),
-        provider: provider.map(|s| s.to_string()),
-        max_tokens,
-        temperature,
-        timeout,
-        debug,
+        model: model.map(|s| s.to_string()).or(toml_cfg.model),
+        provider: provider.map(|s| s.to_string()).or(toml_cfg.provider),
+        max_tokens: max_tokens.or(toml_cfg.max_tokens),
+        temperature: temperature.or(toml_cfg.temperature),
+        timeout: timeout.or(toml_cfg.timeout),
+        debug: debug || toml_cfg.debug.unwrap_or(false),
         env_overrides,
     }
 }
@@ -257,9 +315,9 @@ fn run_noninteractive_query(query: &str, stream: bool, config: &CliConfig) -> Re
     let rt = tokio::runtime::Runtime::new()?;
 
     rt.block_on(async {
-        // Build tool registry
+        // Build tool registry with all standard tools
         let mut tools = ToolRegistry::new();
-        tools.register(Box::new(BashTool::new()))
+        register_default_tools(&mut tools)
             .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
 
         // Build LLM client with explicit config
@@ -419,10 +477,57 @@ fn main() -> Result<()> {
             }
         }
         Some(Commands::Config { setting }) => {
-            if let Some(key) = setting {
-                println!("Config: {key}");
-            } else {
-                println!("Show all config");
+            use shannon_tools::config::ConfigManager;
+            let mut manager = ConfigManager::new();
+            if let Err(e) = manager.load() {
+                eprintln!("Warning: could not load config: {e}");
+            }
+
+            match setting {
+                None => {
+                    // List all config keys
+                    let keys = manager.list(None);
+                    if keys.is_empty() {
+                        println!("No configuration set. Config file: {}", manager.config_path().display());
+                    } else {
+                        println!("Configuration ({} key(s)):", keys.len());
+                        for key in &keys {
+                            let val = manager.get(key).unwrap_or(serde_json::Value::Null);
+                            println!("  {key} = {val}");
+                        }
+                        println!("\nConfig file: {}", manager.config_path().display());
+                    }
+                }
+                Some(key) => {
+                    // Support "key=value" syntax for setting, or plain key for getting
+                    if let Some((k, v)) = key.split_once('=') {
+                        let k = k.trim();
+                        let v = v.trim();
+                        let value: serde_json::Value = if v == "true" {
+                            serde_json::json!(true)
+                        } else if v == "false" {
+                            serde_json::json!(false)
+                        } else if let Ok(n) = v.parse::<i64>() {
+                            serde_json::json!(n)
+                        } else if let Ok(n) = v.parse::<f64>() {
+                            serde_json::json!(n)
+                        } else {
+                            serde_json::json!(v)
+                        };
+                        manager.set(k.to_string(), value.clone());
+                        if let Err(e) = manager.save() {
+                            eprintln!("Error saving config: {e}");
+                        } else {
+                            println!("Set {k} = {value}");
+                        }
+                    } else {
+                        // Get a specific key
+                        match manager.get(key.trim()) {
+                            Some(val) => println!("{key} = {val}"),
+                            None => println!("Config key not found: {key}"),
+                        }
+                    }
+                }
             }
         }
         Some(Commands::Query {

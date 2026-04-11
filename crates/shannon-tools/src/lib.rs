@@ -22,6 +22,8 @@
 //! - REPL operations (REPL for batch command execution)
 //! - MCP auth operations (McpAuth for OAuth authentication with MCP servers)
 
+use std::sync::Arc;
+
 pub mod file;
 pub mod system;
 pub mod git;
@@ -206,6 +208,12 @@ pub fn register_default_tools(registry: &mut ToolRegistry) -> Result<(), Box<dyn
     registry.register(Box::new(BriefTool::new()))?;
     registry.register(Box::new(StructuredOutputTool::new()))?;
     registry.register(Box::new(McpAuthTool::new()))?;
+
+    // ── MCP resource tools ─────────────────────────────────────────────
+    registry.register(Box::new(McpResourceTool::new()))?;
+    let mcp_manager = Arc::new(shannon_mcp::McpResourceManager::new());
+    registry.register(Box::new(ListMcpResourcesTool::new(mcp_manager.clone())))?;
+    registry.register(Box::new(ReadMcpResourceTool::new(mcp_manager)))?;
 
     Ok(())
 }

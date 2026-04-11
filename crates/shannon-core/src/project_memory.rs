@@ -233,7 +233,7 @@ impl ProjectMemoryManager {
     }
 
     /// Parse project memory file content
-    pub fn parse_memory_file_content(&self, content: &str, path: &Path) -> Result<ProjectMemoryConfig, ProjectMemoryError> {
+    pub fn parse_memory_file_content(&self, content: &str, _path: &Path) -> Result<ProjectMemoryConfig, ProjectMemoryError> {
         // Check for YAML frontmatter (--- delimited)
         let (metadata, body) = if content.starts_with("---") {
             // Has YAML frontmatter

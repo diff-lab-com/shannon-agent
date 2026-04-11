@@ -104,7 +104,7 @@ pub fn parse_git_status(output: &str) -> Option<GitStatusInfo> {
     let mut branch = String::new();
     let mut staged = Vec::new();
     let mut unstaged = Vec::new();
-    let mut untracked = Vec::new();
+    let untracked = Vec::new();
     let mut conflicts = Vec::new();
 
     for line in output.lines() {

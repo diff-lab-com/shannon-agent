@@ -122,6 +122,13 @@ impl QueryEngine {
         let client_base_url = self.client.base_url().to_string();
         let client_max_tokens = self.client.max_tokens();
         let user_message = context.user_message.clone();
+        let system_prompt = config.system_prompt.clone();
+        // Clone existing conversation to preserve multi-turn context
+        let mut conversation = self.conversation.clone();
+        conversation.messages.push(Message {
+            role: "user".to_string(),
+            content: MessageContent::Text(user_message),
+        });
 
         // Spawn background task to handle query processing
         tokio::spawn(async move {
@@ -134,12 +141,6 @@ impl QueryEngine {
                 ..Default::default()
             };
             let client = LlmClient::new(client_config);
-
-            let mut conversation = ConversationState::default();
-            conversation.messages.push(Message {
-                role: "user".to_string(),
-                content: MessageContent::Text(user_message),
-            });
 
             let mut turn = 0;
             let mut tool_results: Vec<(String, String)> = Vec::new();
@@ -189,7 +190,7 @@ impl QueryEngine {
                 let tools_schema = Some(tools.to_tool_definitions());
 
                 // Call the API
-                match client.send_message_stream(messages, tools_schema).await {
+                match client.send_message_stream(messages, tools_schema, system_prompt.clone()).await {
                     Ok(mut stream) => {
                         let mut current_tool_use: Option<(String, String)> = None;
                         let mut accumulated_tool_input = String::new();
@@ -536,7 +537,7 @@ impl QueryEngine {
         };
 
         // Call the API (stub - would use actual streaming)
-        match self.client.send_message_stream(messages, tools_schema).await {
+        match self.client.send_message_stream(messages, tools_schema, self.config.system_prompt.clone()).await {
             Ok(mut stream) => {
                 // Process streaming events
                 while let Some(event_result) = stream.next().await {

@@ -4,7 +4,6 @@
 // including JSON-RPC messages, requests, responses, and notifications.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use uuid::Uuid;
 
 /// JSON-RPC message envelope

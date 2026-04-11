@@ -3,10 +3,10 @@
 use crate::command::CommandError;
 use nom::{
     branch::alt,
-    bytes::complete::{tag, take_till, take_while1},
-    character::complete::{char, space0, space1},
+    bytes::complete::{tag, take_while1},
+    character::complete::{space1},
     combinator::{map, opt, rest},
-    sequence::{pair, preceded, tuple},
+    sequence::{preceded, tuple},
     IResult,
 };
 use std::collections::HashMap;

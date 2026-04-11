@@ -15,6 +15,8 @@ pub use types::{
 
 // Re-export ConversationState for use within this crate and tests.
 // It was crate-private in the original flat file; tests in this module need it.
+// Note: Currently unused but kept for potential future test use.
+#[allow(unused_imports)]
 pub(crate) use streaming::ConversationState;
 
 #[cfg(test)]
@@ -836,6 +838,7 @@ mod tests {
             max_context_tokens: Some(50_000),
             compression_threshold: 0.6,
             keep_recent_messages: 5,
+            system_prompt: None,
         };
         assert_eq!(config.max_turns, 5);
         assert_eq!(config.max_budget_usd, Some(1.0));
@@ -1084,6 +1087,7 @@ mod tests {
             max_context_tokens: Some(1000),
             compression_threshold: 0.9,
             keep_recent_messages: 1,
+            system_prompt: None,
         };
         assert_eq!(config.max_turns, 1);
         assert_eq!(config.max_budget_usd, Some(0.01));

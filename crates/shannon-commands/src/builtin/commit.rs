@@ -61,7 +61,7 @@ pub fn command() -> Command {
 }
 
 /// Get the prompt template for the commit command
-pub fn get_prompt_template(default_branch: &str, attribution: bool) -> String {
+pub fn get_prompt_template(_default_branch: &str, attribution: bool) -> String {
     let attribution_text = if attribution { COMMIT_ATTRIBUTION } else { "" };
 
     format!(

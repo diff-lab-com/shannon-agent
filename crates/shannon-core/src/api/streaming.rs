@@ -1,6 +1,10 @@
 //! Streaming response types and SSE implementation.
+//!
+//! Handles Server-Sent Events (SSE) streaming from LLM API providers.
+//! Properly buffers partial events that span HTTP chunk boundaries.
 
-use futures::{Stream, task::{Context, Poll}};
+use futures::{Stream, StreamExt, task::{Context, Poll}};
+use std::pin::Pin;
 
 use super::error::ApiError;
 use super::types::StreamEvent;
@@ -8,50 +12,78 @@ use super::types::StreamEvent;
 /// Stream of API events
 pub type MessageStream = Pin<Box<dyn Stream<Item = Result<StreamEvent, ApiError>> + Send>>;
 
-use std::pin::Pin;
+/// Internal byte-chunk stream type from reqwest
+type ByteChunkStream = Pin<Box<dyn Stream<Item = Result<Vec<u8>, reqwest::Error>> + Send>>;
 
-/// SSE stream implementation
-#[allow(dead_code)]
+/// SSE stream that properly handles chunk boundaries.
+///
+/// Reads chunks from reqwest's byte stream, buffers partial lines,
+/// and emits complete SSE events. Handles the common case where
+/// a single SSE `data:` line spans multiple HTTP chunks.
 pub struct SseStream {
-    response: reqwest::Response,
+    chunks: ByteChunkStream,
     buffer: String,
+    pending_events: Vec<Result<StreamEvent, ApiError>>,
     done: bool,
 }
 
 impl SseStream {
-    pub(crate) fn new(response: reqwest::Response) -> Self {
+    /// Create a new SSE stream from a reqwest response.
+    ///
+    /// Takes ownership of the response and consumes its byte stream.
+    pub fn new(response: reqwest::Response) -> Self {
+        let byte_stream = response.bytes_stream();
+        // Convert Bytes to Vec<u8> to avoid direct dependency on bytes crate
+        let mapped = Box::pin(byte_stream.map(|result| result.map(|b| b.to_vec())));
         Self {
-            response,
+            chunks: mapped,
             buffer: String::new(),
+            pending_events: Vec::new(),
             done: false,
         }
     }
 
-    fn parse_sse_line(&mut self, line: &str) -> Option<Result<StreamEvent, ApiError>> {
+    /// Parse all complete SSE lines from the buffer, queuing parsed events.
+    /// Incomplete lines remain in the buffer for the next chunk.
+    fn drain_buffer(&mut self) {
+        while let Some(newline_pos) = self.buffer.find('\n') {
+            let line = self.buffer[..newline_pos].to_string();
+            self.buffer = self.buffer[newline_pos + 1..].to_string();
+
+            if let Some(event) = Self::parse_sse_line(&line) {
+                self.pending_events.push(event);
+            }
+        }
+    }
+
+    /// Parse a single SSE line into an event.
+    fn parse_sse_line(line: &str) -> Option<Result<StreamEvent, ApiError>> {
         let line = line.trim();
 
-        // Skip empty lines and comments
+        // Skip empty lines and SSE comments
         if line.is_empty() || line.starts_with(':') {
             return None;
         }
 
-        // Parse SSE format: "data: {...}"
-        if let Some(json_str) = line.strip_prefix("data: ") {
-            if json_str == "[DONE]" {
-                self.done = true;
-                return Some(Ok(StreamEvent::MessageStop));
-            }
-
-            match serde_json::from_str::<StreamEvent>(json_str) {
-                Ok(event) => Some(Ok(event)),
-                Err(e) => Some(Err(ApiError::InvalidResponse(format!(
-                    "Failed to parse SSE event: {}", e
-                )))),
-            }
+        // SSE event fields: only process "data:" lines
+        let json_str = if let Some(s) = line.strip_prefix("data: ") {
+            s
+        } else if let Some(s) = line.strip_prefix("data:") {
+            s.trim()
         } else {
-            Some(Err(ApiError::InvalidResponse(format!(
-                "Invalid SSE line: {}", line
-            ))))
+            // Ignore other SSE fields (event:, id:, retry:)
+            return None;
+        };
+
+        if json_str == "[DONE]" {
+            return Some(Ok(StreamEvent::MessageStop));
+        }
+
+        match serde_json::from_str::<StreamEvent>(json_str) {
+            Ok(event) => Some(Ok(event)),
+            Err(e) => Some(Err(ApiError::InvalidResponse(format!(
+                "Failed to parse SSE event: {} (data: {})", e, json_str
+            )))),
         }
     }
 }
@@ -61,22 +93,59 @@ impl Stream for SseStream {
 
     fn poll_next(
         mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
+        cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
+        // Return any pending events first
+        if !self.pending_events.is_empty() {
+            return Poll::Ready(Some(self.pending_events.remove(0)));
+        }
+
         if self.done {
             return Poll::Ready(None);
         }
 
-        // Process buffered lines first
-        while let Some(pos) = self.buffer.find('\n') {
-            let line = self.buffer[..pos].to_string();
-            self.buffer = self.buffer[pos + 1..].to_string();
+        // Try to get more data from the HTTP stream
+        loop {
+            match self.chunks.as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok(data))) => {
+                    let text = String::from_utf8_lossy(&data);
+                    self.buffer.push_str(&text);
+                    self.drain_buffer();
 
-            if let Some(event) = self.parse_sse_line(&line) {
-                return Poll::Ready(Some(event));
+                    if !self.pending_events.is_empty() {
+                        return Poll::Ready(Some(self.pending_events.remove(0)));
+                    }
+                    // No complete events yet — continue reading
+                }
+                Poll::Ready(Some(Err(e))) => {
+                    self.done = true;
+                    return Poll::Ready(Some(Err(ApiError::HttpError(e))));
+                }
+                Poll::Ready(None) => {
+                    // Stream ended — process any remaining data in buffer
+                    if !self.buffer.trim().is_empty() {
+                        let remaining = std::mem::take(&mut self.buffer);
+                        if let Some(event) = Self::parse_sse_line(&remaining) {
+                            self.done = true;
+                            return Poll::Ready(Some(event));
+                        }
+                    }
+                    self.done = true;
+                    return Poll::Ready(None);
+                }
+                Poll::Pending => {
+                    return Poll::Pending;
+                }
             }
         }
-
-        Poll::Ready(None)
     }
+}
+
+/// Create a MessageStream from a reqwest response.
+///
+/// Properly handles SSE events that span HTTP chunk boundaries
+/// by buffering partial lines until complete.
+pub fn sse_stream_from_response(response: reqwest::Response) -> MessageStream {
+    let sse = SseStream::new(response);
+    Box::pin(sse)
 }

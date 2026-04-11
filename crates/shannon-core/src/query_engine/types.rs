@@ -144,6 +144,8 @@ pub struct QueryEngineConfig {
     pub compression_threshold: f32,
     /// Number of recent messages to keep in full during compression
     pub keep_recent_messages: usize,
+    /// System prompt for the LLM (default: coding assistant)
+    pub system_prompt: Option<String>,
 }
 
 impl Default for QueryEngineConfig {
@@ -157,6 +159,13 @@ impl Default for QueryEngineConfig {
             max_context_tokens: Some(100_000),
             compression_threshold: 0.8,
             keep_recent_messages: 10,
+            system_prompt: Some(
+                "You are Shannon, an expert coding assistant. You help users with software engineering tasks \
+                 including writing code, debugging, refactoring, and explaining code. \
+                 Be concise, accurate, and follow best practices. When using tools, prefer the most \
+                 direct approach. Always respond in the same language the user uses."
+                    .to_string(),
+            ),
         }
     }
 }

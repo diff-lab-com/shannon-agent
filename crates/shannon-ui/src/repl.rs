@@ -338,7 +338,13 @@ impl Repl {
         }
 
         match key.code {
-            crossterm::event::KeyCode::Char('q') => self.running = false,
+            crossterm::event::KeyCode::Char('q') => {
+                if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
+                    self.running = false;
+                } else {
+                    self.prompt.add_char('q');
+                }
+            }
             crossterm::event::KeyCode::Char('c') => {
                 if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
                     self.running = false;
@@ -752,6 +758,7 @@ impl Repl {
                         format!("Project initialized.\n{}", init_info),
                     );
                 }
+                "config" => self.handle_config_command(args)?,
                 "sessions" => self.handle_sessions_command(args)?,
                 "resume" => self.handle_resume_command(args)?,
                 "history" => self.handle_history_command(args)?,
@@ -1157,10 +1164,124 @@ impl Repl {
         Ok(())
     }
 
+    /// Handle /config command — manage runtime configuration
+    fn handle_config_command(&mut self, args: &str) -> Result<()> {
+        use shannon_tools::config::ConfigManager;
+
+        let mut manager = ConfigManager::new();
+        if let Err(e) = manager.load() {
+            self.chat.add_message(
+                ChatRole::System,
+                format!("Warning: could not load config: {}", e),
+            );
+        }
+
+        let parts: Vec<&str> = args.splitn(3, ' ').collect();
+        let action = parts.first().copied().unwrap_or("");
+
+        let output = match action {
+            "" | "list" | "ls" => {
+                let prefix = if action.is_empty() { None } else { parts.get(1).map(|s| *s) };
+                let keys = manager.list(prefix);
+                if keys.is_empty() {
+                    format!("No configuration keys found.\nConfig file: {}", manager.config_path().display())
+                } else {
+                    let mut out = format!("Configuration ({} key(s)):\n", keys.len());
+                    for key in &keys {
+                        let val = manager.get(key).unwrap_or(serde_json::Value::Null);
+                        out.push_str(&format!("  {} = {}\n", key, val));
+                    }
+                    out.push_str(&format!("\nConfig file: {}", manager.config_path().display()));
+                    out
+                }
+            }
+            "get" => {
+                let key = parts.get(1).map(|s| *s).unwrap_or("");
+                if key.is_empty() {
+                    "Usage: /config get <key>".to_string()
+                } else {
+                    match manager.get(key) {
+                        Some(val) => format!("{} = {}", key, val),
+                        None => format!("Config key not found: {}", key),
+                    }
+                }
+            }
+            "set" => {
+                let key = parts.get(1).map(|s| *s).unwrap_or("");
+                let value_str = parts.get(2).map(|s| *s).unwrap_or("");
+                if key.is_empty() || value_str.is_empty() {
+                    "Usage: /config set <key> <value>".to_string()
+                } else {
+                    let value: serde_json::Value = if value_str == "true" {
+                        serde_json::json!(true)
+                    } else if value_str == "false" {
+                        serde_json::json!(false)
+                    } else if let Ok(n) = value_str.parse::<i64>() {
+                        serde_json::json!(n)
+                    } else if let Ok(n) = value_str.parse::<f64>() {
+                        serde_json::json!(n)
+                    } else {
+                        serde_json::json!(value_str)
+                    };
+                    manager.set(key.to_string(), value.clone());
+                    match manager.save() {
+                        Ok(_) => format!("Set {} = {}", key, value),
+                        Err(e) => format!("Error saving config: {}", e),
+                    }
+                }
+            }
+            "delete" | "remove" | "rm" => {
+                let key = parts.get(1).map(|s| *s).unwrap_or("");
+                if key.is_empty() {
+                    "Usage: /config delete <key>".to_string()
+                } else {
+                    let existed = manager.delete(key);
+                    if existed {
+                        match manager.save() {
+                            Ok(_) => format!("Deleted config key: {}", key),
+                            Err(e) => format!("Error saving config: {}", e),
+                        }
+                    } else {
+                        format!("Config key not found: {}", key)
+                    }
+                }
+            }
+            "reset" => {
+                let key = parts.get(1).map(|s| *s).unwrap_or("");
+                if key.is_empty() {
+                    "Usage: /config reset <key>".to_string()
+                } else {
+                    let existed = manager.reset(key);
+                    if existed {
+                        let val = manager.get(key).unwrap_or(serde_json::Value::Null);
+                        match manager.save() {
+                            Ok(_) => format!("Reset {} to default: {}", key, val),
+                            Err(e) => format!("Error saving config: {}", e),
+                        }
+                    } else {
+                        format!("No default found for key: {}", key)
+                    }
+                }
+            }
+            "help" | "?" => {
+                "Configuration Management:\n\n\
+                 /config list [prefix]        - Show config keys\n\
+                 /config get <key>            - Get a config value\n\
+                 /config set <key> <value>    - Set a config value\n\
+                 /config delete <key>         - Delete a config key\n\
+                 /config reset <key>          - Reset to default\n".to_string()
+            }
+            _ => {
+                format!("Unknown config action: {}. Use /config help for usage.", action)
+            }
+        };
+
+        self.chat.add_message(ChatRole::System, output);
+        Ok(())
+    }
+
     /// Handle /credentials command — manage stored credentials
     fn handle_credentials_command(&mut self, args: &str) -> Result<()> {
-        use shannon_commands::builtin_commands::register_all; // ensure module accessible
-        // Import credential utilities from the builtin credentials module.
         // The module is private to shannon-commands, but we access through the crate's re-exports.
         let parts: Vec<&str> = args.splitn(3, ' ').collect();
         let action_str = parts.first().copied().unwrap_or("");
@@ -1326,7 +1447,7 @@ impl Repl {
         self.state.query_steps_total = 0;
 
         // Start a new turn diff for tracking file changes
-        let mut turn_diff = TurnDiff::new(self.current_turn);
+        let _turn_diff = TurnDiff::new(self.current_turn);
 
         // Clear the "Thinking..." message and start streaming
         // Create an assistant message that will be updated in real-time
@@ -1461,7 +1582,7 @@ impl Repl {
                 }
             }
 
-            Ok::<(String, u64, usize, TurnDiff, String, usize), String>((response_text, tokens_in_turn, tools_in_session, turn_diff, progress_status, steps_done))
+            Ok::<(QueryEngine, String, u64, usize, TurnDiff, String, usize), String>((query_engine, response_text, tokens_in_turn, tools_in_session, turn_diff, progress_status, steps_done))
         });
 
         // Poll the streaming buffer while the query runs, updating the UI in real-time
@@ -1528,7 +1649,14 @@ impl Repl {
         });
 
         match query_result {
-            Ok((response, tokens, tools, turn, _final_status, steps)) => {
+            Ok((mut engine, response, tokens, tools, turn, _final_status, steps)) => {
+                // Restore the engine with updated conversation state
+                engine.add_user_message(input.to_string());
+                engine.add_assistant_message(vec![shannon_core::api::ContentBlock::Text {
+                    text: response.clone(),
+                }]);
+                self.query_engine = Some(engine);
+
                 self.chat.update_message(assistant_msg_index, response);
                 self.state.tokens_used += tokens;
                 self.tools_invoked += tools;
@@ -1547,6 +1675,16 @@ impl Repl {
                 }
             }
             Err(e) => {
+                // Engine was consumed by the task; recreate it for next query
+                let mut new_engine = QueryEngine::with_defaults(
+                    shannon_core::api::LlmClient::new(shannon_core::api::LlmClientConfig::default()),
+                    ToolRegistry::new(),
+                    PermissionManager::new(),
+                    StateManager::new(),
+                );
+                new_engine.add_user_message(input.to_string());
+                self.query_engine = Some(new_engine);
+
                 self.chat.update_message(assistant_msg_index, format!("❌ Error: {}", e));
                 self.state.status = "Ready".to_string();
             }
@@ -1990,7 +2128,7 @@ mod tests {
 
     #[test]
     fn test_diff_data_tracking() {
-        let mut repl = Repl::new().unwrap();
+        let repl = Repl::new().unwrap();
         assert_eq!(repl.diff_data.total_additions(), 0);
         assert_eq!(repl.diff_data.total_files_modified(), 0);
     }
@@ -2001,7 +2139,6 @@ mod tests {
         repl.running = true;
         // The quit command should show summary if there are turns
         // With no activity, it should still work
-        let msg_count = repl.chat.len();
         repl.handle_command("/quit").unwrap();
         // After quit, running should be false
         assert!(!repl.running);
@@ -2074,7 +2211,7 @@ mod tests {
 
 // ── UiAdapter Implementation for Repl ─────────────────────────────────────
 
-use crate::adapter::{UiAdapter, UiError, UiResult, DisplayMessage, MessageSeverity};
+use crate::adapter::{UiAdapter, UiError, UiResult, DisplayMessage};
 use async_trait::async_trait;
 
 /// Implement UiAdapter for Repl to allow it to be used as a UI backend.

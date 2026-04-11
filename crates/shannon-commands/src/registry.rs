@@ -1,6 +1,6 @@
 //! Command registry for command registration and lookup
 
-use crate::command::{Command, CommandBase, CommandError, CommandResult};
+use crate::command::{Command, CommandError, CommandResult};
 use crate::context::CommandContext;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -136,10 +136,11 @@ impl CommandRegistry {
     /// Remove a command by name
     pub async fn unregister(&self, name: &str) -> CommandResult<()> {
         let commands = self.commands.read().await;
-        let cmd = commands.get(name).cloned();
+        let _cmd = commands.get(name).cloned();
         drop(commands);
 
-        if let Some(cmd) = cmd {
+        let commands = self.commands.read().await;
+        if commands.get(name).is_some() {
             // Remove aliases
             let mut aliases = self.aliases.write().await;
             aliases.retain(|_, v| v != name);
@@ -201,9 +202,9 @@ impl CommandRegistry {
         &self,
         name: &str,
         args: &str,
-        context: &CommandContext,
+        _context: &CommandContext,
     ) -> CommandResult<String> {
-        let command = self.get(name).await?;
+        let _command = self.get(name).await?;
         // For now, return a simple success message
         // In a full implementation, this would execute the command
         Ok(format!(

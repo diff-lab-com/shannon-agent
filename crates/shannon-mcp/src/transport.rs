@@ -3,7 +3,6 @@
 // This module defines the transport abstraction and implementations
 // for different communication protocols: stdio, SSE, HTTP, and WebSocket.
 
-use crate::{McpError, McpResult};
 use async_trait::async_trait;
 use futures_util::{StreamExt, SinkExt};
 use std::io::{self, BufRead, BufReader, Write};

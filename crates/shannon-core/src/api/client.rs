@@ -1,6 +1,5 @@
 //! LLM API client with multi-provider and streaming support.
 
-use futures::StreamExt;
 use reqwest::Client;
 use std::time::Duration;
 
@@ -92,11 +91,12 @@ impl LlmClient {
         &self,
         messages: Vec<Message>,
         tools: Option<Vec<ToolDefinition>>,
+        system: Option<String>,
     ) -> Result<MessageStream, ApiError> {
         let request_body = MessageRequest {
             model: self.config.model.clone(),
             max_tokens: self.config.max_tokens,
-            system: None,
+            system,
             messages,
             tools,
             stream: Some(true),
@@ -141,35 +141,7 @@ impl LlmClient {
             });
         }
 
-        let reader = response;
-        let bytes_stream = reader.bytes_stream();
-
-        let event_stream = bytes_stream.then(|bytes_result| async move {
-            let bytes = bytes_result.map_err(|e| ApiError::HttpError(e))?;
-            let text = String::from_utf8_lossy(&bytes);
-
-            for line in text.lines() {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with(':') {
-                    continue;
-                }
-
-                if let Some(json_str) = line.strip_prefix("data: ") {
-                    if json_str == "[DONE]" {
-                        return Ok(StreamEvent::MessageStop);
-                    }
-
-                    match serde_json::from_str::<StreamEvent>(json_str) {
-                        Ok(event) => return Ok(event),
-                        Err(e) => return Err(ApiError::InvalidResponse(format!("Parse error: {}", e))),
-                    }
-                }
-            }
-
-            Err(ApiError::StreamEndedUnexpectedly)
-        });
-
-        Ok(Box::pin(event_stream))
+        Ok(super::streaming::sse_stream_from_response(response))
     }
 
     /// Send a message and wait for complete response (non-streaming)
@@ -177,11 +149,12 @@ impl LlmClient {
         &self,
         messages: Vec<Message>,
         tools: Option<Vec<ToolDefinition>>,
+        system: Option<String>,
     ) -> Result<Vec<ContentBlock>, ApiError> {
         let request_body = MessageRequest {
             model: self.config.model.clone(),
             max_tokens: self.config.max_tokens,
-            system: None,
+            system,
             messages,
             tools,
             stream: Some(false),

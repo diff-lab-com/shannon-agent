@@ -3,7 +3,7 @@
 //! This trait provides a consistent interface for commands that can be
 //! executed from the REPL, regardless of their internal implementation.
 
-use crate::command::{CommandContext, CommandError, CommandResult};
+use crate::command::{CommandContext, CommandResult};
 use async_trait::async_trait;
 
 /// A command that can be executed from the REPL

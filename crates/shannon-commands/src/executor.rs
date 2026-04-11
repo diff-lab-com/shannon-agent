@@ -1,6 +1,6 @@
 //! Command executor - executes commands with context
 
-use crate::command::{Command, CommandContext, CommandError, CommandResult, Executable, ExecutionResult};
+use crate::command::{Command, CommandContext, CommandError, CommandResult, ExecutionResult};
 use crate::parser::ParsedCommand;
 use crate::registry::CommandRegistry;
 use std::sync::Arc;
@@ -66,7 +66,7 @@ impl CommandExecutor {
     pub async fn execute(
         &self,
         parsed: &ParsedCommand,
-        context: &CommandContext,
+        _context: &CommandContext,
     ) -> CommandResult<ExecutionResult> {
         // Get command from registry
         let command = self.registry.get(&parsed.name).await?;
@@ -140,7 +140,7 @@ impl CommandExecutor {
         &self,
         command_name: &str,
         args: &str,
-        context: &CommandContext,
+        _context: &CommandContext,
     ) -> CommandResult<String> {
         let command = self.registry.get(command_name).await?;
 
@@ -179,20 +179,20 @@ impl SharedExecutor {
     pub async fn execute(
         &self,
         parsed: &ParsedCommand,
-        context: &CommandContext,
+        _context: &CommandContext,
     ) -> CommandResult<ExecutionResult> {
         let executor = self.inner.read().await;
-        executor.execute(parsed, context).await
+        executor.execute(parsed, _context).await
     }
 
     /// Execute a command string
     pub async fn execute_string(
         &self,
         input: &str,
-        context: &CommandContext,
+        _context: &CommandContext,
     ) -> CommandResult<Vec<ExecutionResult>> {
         let executor = self.inner.read().await;
-        executor.execute_string(input, context).await
+        executor.execute_string(input, _context).await
     }
 
     /// Get the registry
