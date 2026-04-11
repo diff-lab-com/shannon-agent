@@ -39,6 +39,7 @@ pub fn command() -> Command {
         context: ExecutionContext::Inline,
         agent: None,
         paths: vec![],
+        prompt_template: None,
     })
 }
 

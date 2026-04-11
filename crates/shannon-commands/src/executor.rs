@@ -145,9 +145,12 @@ impl CommandExecutor {
         let command = self.registry.get(command_name).await?;
 
         match &*command {
-            Command::Prompt(_) => {
-                // Generate the prompt based on command template
-                Ok(format!("Prompt for command '{}' with args: '{}'", command_name, args))
+            Command::Prompt(cmd) => {
+                if let Some(ref template) = cmd.prompt_template {
+                    Ok(template.replace("{args}", args))
+                } else {
+                    Ok(format!("Execute the /{} command with args: '{}'", command_name, args))
+                }
             }
             _ => Err(CommandError::ExecutionError(
                 "Command is not a prompt command".to_string(),

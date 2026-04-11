@@ -167,6 +167,9 @@ pub struct PromptCommand {
 
     /// Glob patterns for file paths this applies to
     pub paths: Vec<String>,
+
+    /// Prompt template for AI processing (supports {args} placeholder)
+    pub prompt_template: Option<String>,
 }
 
 /// Execution context for commands

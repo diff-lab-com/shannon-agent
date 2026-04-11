@@ -2,6 +2,35 @@
 
 use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
 
+/// Prompt template for the /diff command.
+///
+/// Instructs the AI to run git diff and provide a structured analysis
+/// using the same categories defined in [`ChangeCategory`].
+const DIFF_PROMPT: &str = r##"
+Analyze the git diff for this repository and provide a structured summary.
+
+Steps:
+1. Run `git diff {args}` — if args is empty, use `git diff HEAD` to show all uncommitted changes.
+   For staged changes, the user would pass `--staged`.
+   For a commit range, the user passes e.g. `main...HEAD`.
+2. Read the diff output and categorize every changed line into these categories:
+   - **function**: function or method definitions added/removed/modified
+   - **import**: import, use, or include statements changed
+   - **type**: struct, class, enum, or type definition changes
+   - **test**: test functions or test-related code changed
+   - **docs**: documentation comments changed
+   - **config**: configuration file changes (Cargo.toml, package.json, YAML, etc.)
+   - **other**: anything not in the above categories
+3. Provide a summary including:
+   - Total files changed, insertions, and deletions
+   - Category breakdown (e.g., "function: 12, import: 3, test: 5")
+   - Whether test changes are present (important for merge decisions)
+   - Any potential risks or notable patterns
+
+Format the output as a clear, concise summary with bullet points.
+If the diff is large, focus on the most significant changes first.
+"##;
+
 /// Create the /diff command
 pub fn command() -> Command {
     Command::Prompt(PromptCommand {
@@ -39,6 +68,7 @@ pub fn command() -> Command {
         context: ExecutionContext::Inline,
         agent: None,
         paths: vec![],
+        prompt_template: Some(DIFF_PROMPT.to_string()),
     })
 }
 

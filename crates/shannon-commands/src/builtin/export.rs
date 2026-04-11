@@ -3,6 +3,39 @@
 use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
 use serde_json::Value as JsonValue;
 
+/// Prompt template for the /export command.
+///
+/// Instructs the AI to format the conversation for export using the
+/// markdown and JSON structures defined in this module.
+const EXPORT_PROMPT: &str = r##"
+Export the current session conversation to a file.
+
+Arguments: {args}
+- If args contains "json": output as structured JSON with title, messages, and metadata
+- If args contains "md" or is empty: output as formatted markdown
+- If a filename is provided (e.g., "session.md" or "output.json"), write to that file
+- If no filename is provided, generate one like "shannon_session_YYYYMMDD_HHMMSS.md"
+
+For **Markdown** format, include:
+- Title: "Shannon Session Export"
+- Metadata section: model used, working directory, session duration
+- Conversation: each message with role header (User/Assistant/System/Tool) and timestamp
+- Separator lines between messages
+
+For **JSON** format, include:
+```json
+{
+  "title": "...",
+  "started_at": <timestamp>,
+  "format_version": "1.0",
+  "metadata": { "model": "...", "tokens_used": N, ... },
+  "messages": [{ "role": "...", "content": "...", "timestamp": N }]
+}
+```
+
+Use the Bash tool to write the output file.
+"##;
+
 /// Create the /export command
 pub fn command() -> Command {
     Command::Prompt(PromptCommand {
@@ -36,6 +69,7 @@ pub fn command() -> Command {
         context: ExecutionContext::Inline,
         agent: None,
         paths: vec![],
+        prompt_template: Some(EXPORT_PROMPT.to_string()),
     })
 }
 

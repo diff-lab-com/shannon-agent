@@ -56,6 +56,7 @@ pub fn command() -> Command {
         context: ExecutionContext::Inline,
         agent: None,
         paths: vec!["*.pdf".to_string()],
+        prompt_template: None,
     })
 }
 

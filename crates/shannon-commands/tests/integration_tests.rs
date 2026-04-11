@@ -41,6 +41,7 @@ fn make_prompt_command(name: &str, desc: &str) -> Command {
         context: Default::default(),
         agent: None,
         paths: vec![],
+        prompt_template: None,
     })
 }
 

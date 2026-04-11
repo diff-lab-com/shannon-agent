@@ -3,26 +3,57 @@
 use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
 
 /// PR review prompt template
+///
+/// Uses the structured review categories and severity levels from the
+/// types defined in this module to guide the AI toward consistent output.
 const REVIEW_PROMPT: &str = r##"
 You are an expert code reviewer. Follow these steps:
 
-1. If no PR number is provided in the args, run `gh pr list` to show open PRs
-2. If a PR number is provided, run `gh pr view <number>` to get PR details
-3. Run `gh pr diff <number>` to get the diff
-4. Analyze the changes and provide a thorough code review that includes:
-   - Overview of what the PR does
-   - Analysis of code quality and style
-   - Specific suggestions for improvements
-   - Any potential issues or risks
+1. If no PR number is provided in the args, run `gh pr list` to show open PRs and stop.
+2. If a PR number is provided, run `gh pr view <number>` to get PR details.
+3. Run `gh pr diff <number>` to get the diff.
+4. Run `gh pr checks <number>` to check CI status.
+5. Analyze the changes and provide a structured code review.
 
-Keep your review concise but thorough. Focus on:
-- Code correctness
-- Following project conventions
-- Performance implications
-- Test coverage
-- Security considerations
+## Review Categories
 
-Format your review with clear sections and bullet points.
+Check each category and report issues found:
+- Code Correctness: Logic errors, off-by-one bugs, null handling, race conditions
+- Style & Conventions: Naming, formatting, project pattern adherence
+- Performance: N+1 queries, unnecessary allocations, algorithmic complexity
+- Security: Input validation, injection risks, credential exposure, auth issues
+- Test Coverage: Missing tests, edge cases, test quality
+- Documentation: Missing/wrong docs, broken examples, misleading comments
+
+## Severity Levels
+
+Rate each issue:
+- CRITICAL: Will cause bugs, security vulnerabilities, or data loss
+- HIGH: Likely to cause problems or significantly degrade quality
+- MEDIUM: Should be fixed but not blocking
+- LOW: Minor improvement, style nit
+- INFO: Observation, no action required
+
+## Output Format
+
+### Overview
+Brief summary of what this PR does and why.
+
+### Issues
+List each issue with:
+- Severity level and category
+- File and line location (if applicable)
+- Description of the problem
+- Suggested fix
+
+### Positives
+What the PR does well (good patterns, thorough tests, etc.)
+
+### Assessment
+One of: **Approve**, **Approve with Suggestions**, **Request Changes**, or **Needs Work**
+Brief justification for the assessment.
+
+Keep the review concise. Skip categories with no issues found.
 "##;
 
 /// Create the /review-pr command
@@ -63,6 +94,7 @@ pub fn command() -> Command {
         context: ExecutionContext::Inline,
         agent: None,
         paths: vec![],
+        prompt_template: Some(REVIEW_PROMPT.to_string()),
     })
 }
 

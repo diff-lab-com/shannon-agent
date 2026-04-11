@@ -330,6 +330,7 @@ mod tests {
             context: crate::command::ExecutionContext::Inline,
             agent: None,
             paths: vec![],
+            prompt_template: None,
         })
     }
 
