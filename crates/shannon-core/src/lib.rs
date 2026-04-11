@@ -1,6 +1,10 @@
 //! # Shannon Core
 //!
 //! Core engine for Shannon Code - query processing, tool orchestration, and state management.
+
+// Warn on .unwrap() in production code so new instances are caught by CI.
+// Existing instances will show as warnings — fix incrementally.
+#![warn(clippy::unwrap_used)]
 //!
 //! ## Architecture
 //!

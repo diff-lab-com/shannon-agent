@@ -344,6 +344,16 @@ impl SettingsManager {
     /// 2. .env files (.env → .env.local → .env.production)
     /// 3. Environment variables (highest priority)
     pub fn load(&mut self) -> Result<(), SettingsError> {
+        self.load_from_files()?;
+        self.load_from_dotenv()?;
+        self.load_from_env()?;
+        Ok(())
+    }
+
+    /// Load settings from JSON files only (user + project).
+    /// Skips .env and environment variable overrides.
+    /// Useful for testing file I/O round-trips in isolation.
+    pub fn load_from_files(&mut self) -> Result<(), SettingsError> {
         // Start with user settings
         if self.user_config_path.exists() {
             let content = std::fs::read_to_string(&self.user_config_path)?;
@@ -377,12 +387,6 @@ impl SettingsManager {
             project_settings.validate()?;
             self.settings.merge(project_settings);
         }
-
-        // Override from .env files
-        self.load_from_dotenv()?;
-
-        // Override from environment variables (highest priority)
-        self.load_from_env()?;
 
         Ok(())
     }
@@ -842,11 +846,11 @@ mod tests {
         // Save
         manager.save().unwrap();
 
-        // Create new manager and load
+        // Create new manager and load from files only (no env overrides)
         let mut manager2 = SettingsManager::new();
         manager2.user_config_path = manager.user_config_path.clone();
         manager2.project_config_path = manager.project_config_path.clone();
-        manager2.load().unwrap();
+        manager2.load_from_files().unwrap();
 
         // Verify loaded settings
         assert_eq!(manager2.settings.model, Some("claude-opus-4-6".to_string()));

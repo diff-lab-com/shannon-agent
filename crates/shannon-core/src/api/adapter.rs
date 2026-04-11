@@ -18,7 +18,7 @@ use super::types::{
 pub fn serialize_request(request: &MessageRequest, provider: &LlmProvider) -> Value {
     match provider {
         LlmProvider::Anthropic | LlmProvider::Custom => serde_json::to_value(request)
-            .unwrap_or_else(|_| serde_json::to_value(request).unwrap_or_default()),
+            .unwrap_or_default(),
         LlmProvider::OpenAI => serialize_openai_request(request),
         LlmProvider::Ollama => serialize_ollama_request(request),
     }
@@ -313,6 +313,7 @@ struct OpenAiResponseMessage {
 struct OpenAiResponseToolCall {
     id: String,
     #[serde(rename = "type")]
+    #[allow(dead_code)] // Part of OpenAI wire format, kept for future use
     call_type: Option<String>,
     function: OpenAiResponseFunction,
 }
