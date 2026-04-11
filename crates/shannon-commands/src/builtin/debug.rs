@@ -2,6 +2,34 @@
 
 use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
 
+/// Debug prompt template
+///
+/// Instructs the AI to handle the subcommands defined in [`DebugSubcommand`]
+/// using the formatting helpers in this module.
+const DEBUG_PROMPT: &str = r##"
+Developer debugging tools.
+
+Arguments: {args}
+
+Subcommands:
+- **log [level]** — Set log verbosity. Levels: trace, debug, info (default), warn, error
+- **profile [start|stop]** — Begin or end performance profiling
+- **trace [on|off]** — Toggle execution tracing
+- **info** — Show system diagnostics (OS, arch, working dir, git status)
+- **help** — Show this help
+
+If no subcommand is given or the argument is unrecognized, show the help.
+
+For `info`, run shell commands to gather:
+1. OS and architecture (`uname -a` or equivalent)
+2. Working directory
+3. Git status (if in a repo)
+4. Environment info (Rust version if available)
+
+For `log`, report the requested level. For `profile`, acknowledge start/stop.
+For `trace`, acknowledge the toggle state.
+"##;
+
 /// Create the /debug command
 pub fn command() -> Command {
     Command::Prompt(PromptCommand {
@@ -35,7 +63,7 @@ pub fn command() -> Command {
         context: ExecutionContext::Inline,
         agent: None,
         paths: vec![],
-        prompt_template: None,
+        prompt_template: Some(DEBUG_PROMPT.to_string()),
     })
 }
 

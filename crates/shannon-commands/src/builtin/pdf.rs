@@ -3,20 +3,44 @@
 use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
 
 /// PDF processing prompt template
+///
+/// Instructs the AI to use poppler-utils (`pdftotext`, `pdfinfo`, `pdfimages`)
+/// to extract content, then produce a structured analysis using the same
+/// categories defined in [`PdfContent`], [`PdfPage`], and [`PdfTable`].
 const PDF_PROMPT: &str = r##"
-You are analyzing a PDF document. The content has been extracted using OCR/text extraction.
+Process and analyze a PDF document.
 
-## Analysis Guidelines
+Arguments: {args}
+- The first argument should be the path to a PDF file (required)
+- Optional flags: --pages <range> (e.g., 1-3,5), --ocr, --images, --tables
 
-1. **Content Overview**: Summarize the document's purpose and main topics
-2. **Key Information**: Extract important data, figures, tables, or quotes
-3. **Structure**: Identify sections, headings, and organization
-4. **Quality Assessment**: Note any OCR errors, missing content, or formatting issues
-5. **Relevance**: Assess how this document relates to the user's task
+## Steps
+
+1. Run `pdfinfo {args}` to get metadata (title, author, pages, encrypted status).
+2. Run `pdftotext -layout {args} -` to extract full text with layout preserved.
+   - If --pages is specified, use `pdftotext -f <first> -l <last> -layout <file> -`
+3. If --images is specified, run `pdfimages -list <file>` to list embedded images.
+4. If --tables is specified, look for structured table patterns in the extracted text.
+5. If --ocr is specified and the text is sparse/empty, note that OCR (e.g., tesseract) would be needed.
 
 ## Output Format
 
-Provide your analysis in clear sections with bullet points for key findings.
+### Document Metadata
+- Title, Author, Pages, Creation date, whether encrypted
+
+### Content Summary
+- Purpose and main topics of the document
+- Section structure with headings
+
+### Key Findings
+- Important data, figures, tables, or quotes (bullet points)
+- If tables found, format them as markdown tables
+
+### Quality Notes
+- OCR errors, missing content, formatting issues
+- Whether the extraction appears complete
+
+If the file does not exist or is not a PDF, report the error clearly.
 "##;
 
 /// Create the /pdf command
@@ -56,7 +80,7 @@ pub fn command() -> Command {
         context: ExecutionContext::Inline,
         agent: None,
         paths: vec!["*.pdf".to_string()],
-        prompt_template: None,
+        prompt_template: Some(PDF_PROMPT.to_string()),
     })
 }
 
@@ -333,36 +357,24 @@ pub struct PdfMetadata {
     pub encrypted: bool,
 }
 
-/// Get PDF analysis prompt
+/// Get PDF analysis prompt with file path and options context
 pub fn get_pdf_prompt(file_path: &str, options: &PdfOptions) -> String {
-    let mut prompt = format!(
-        "## PDF Analysis Request\n\nFile: {}\n",
-        file_path
-    );
+    let mut args = file_path.to_string();
 
     if let Some(pages) = &options.pages {
-        prompt.push_str(&format!("Pages: {:?}\n", pages));
-    } else {
-        prompt.push_str("Pages: All\n");
+        args.push_str(&format!(" --pages {:?}", pages));
     }
-
     if options.use_ocr {
-        prompt.push_str(&format!(
-            "OCR: Enabled (language: {})\n",
-            options.ocr_language.as_deref().unwrap_or("auto")
-        ));
+        args.push_str(" --ocr");
     }
-
     if options.extract_images {
-        prompt.push_str("Image extraction: Enabled\n");
+        args.push_str(" --images");
     }
-
     if options.extract_tables {
-        prompt.push_str("Table extraction: Enabled\n");
+        args.push_str(" --tables");
     }
 
-    prompt.push_str(&format!("\n{}\n", PDF_PROMPT));
-    prompt
+    PDF_PROMPT.replace("{args}", &args)
 }
 
 #[cfg(test)]
@@ -395,7 +407,7 @@ mod tests {
         let prompt = get_pdf_prompt("test.pdf", &options);
 
         assert!(prompt.contains("test.pdf"));
-        assert!(prompt.contains("OCR: Enabled"));
+        assert!(prompt.contains("--ocr"));
     }
 
     #[test]
