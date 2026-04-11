@@ -74,6 +74,7 @@ pub fn command() -> Command {
 }
 
 /// Export format
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportFormat {
     /// Markdown format
@@ -82,6 +83,7 @@ pub enum ExportFormat {
     Json,
 }
 
+#[allow(dead_code)]
 impl ExportFormat {
     /// Parse format from string
     pub fn from_str(s: &str) -> Option<Self> {
@@ -110,6 +112,7 @@ impl ExportFormat {
 }
 
 /// Session message for export
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ExportMessage {
     /// Message role (user, assistant, system, tool)
@@ -123,6 +126,7 @@ pub struct ExportMessage {
 }
 
 /// Session data for export
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ExportSession {
     /// Session title
@@ -139,6 +143,7 @@ pub struct ExportSession {
 }
 
 /// Session metadata
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct SessionMetadata {
     /// Model used
@@ -158,6 +163,7 @@ pub struct SessionMetadata {
 }
 
 /// Export options
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ExportOptions {
     /// Export format
@@ -185,6 +191,7 @@ impl Default for ExportOptions {
 }
 
 /// Parse export arguments into options
+#[allow(dead_code)]
 pub fn parse_export_args(args: &str) -> Result<ExportOptions, String> {
     let tokens: Vec<&str> = args.split_whitespace().collect();
     let mut options = ExportOptions::default();
@@ -221,6 +228,7 @@ pub fn parse_export_args(args: &str) -> Result<ExportOptions, String> {
 }
 
 /// Generate a default filename based on current time
+#[allow(dead_code)]
 pub fn generate_filename(format: ExportFormat) -> String {
     use chrono::Local;
 
@@ -231,6 +239,7 @@ pub fn generate_filename(format: ExportFormat) -> String {
 }
 
 /// Export session to markdown
+#[allow(dead_code)]
 pub fn export_to_markdown(session: &ExportSession, options: &ExportOptions) -> String {
     let mut md = String::new();
 
@@ -291,6 +300,7 @@ pub fn export_to_markdown(session: &ExportSession, options: &ExportOptions) -> S
 }
 
 /// Export session to JSON
+#[allow(dead_code)]
 pub fn export_to_json(session: &ExportSession, options: &ExportOptions) -> String {
     let mut json_obj = serde_json::json!({
         "title": session.title,
@@ -333,6 +343,7 @@ pub fn export_to_json(session: &ExportSession, options: &ExportOptions) -> Strin
 }
 
 /// Format a Unix timestamp as readable string
+#[allow(dead_code)]
 fn format_timestamp(secs: u64) -> String {
     use chrono::{DateTime, Local, Utc};
 
@@ -344,6 +355,7 @@ fn format_timestamp(secs: u64) -> String {
 }
 
 /// Write export to file
+#[allow(dead_code)]
 pub fn write_export(content: &str, filename: &str) -> Result<(), String> {
     std::fs::write(filename, content)
         .map_err(|e| format!("Failed to write export to '{}': {}", filename, e))

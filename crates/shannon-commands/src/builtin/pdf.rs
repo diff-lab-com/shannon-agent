@@ -85,6 +85,7 @@ pub fn command() -> Command {
 }
 
 /// PDF processing options
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct PdfOptions {
     /// Specific page numbers to extract (1-indexed)
@@ -139,6 +140,7 @@ impl PdfOptions {
 }
 
 /// Extracted PDF content
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct PdfContent {
     /// File path
@@ -155,6 +157,7 @@ pub struct PdfContent {
 }
 
 /// Single page from PDF
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct PdfPage {
     /// Page number (1-indexed)
@@ -193,6 +196,7 @@ impl PdfPage {
 }
 
 /// Image extracted from PDF
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct PdfImage {
     /// Image index
@@ -209,6 +213,7 @@ pub struct PdfImage {
 }
 
 /// Image format
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageFormat {
     Jpeg,
@@ -255,6 +260,7 @@ impl ImageFormat {
 }
 
 /// Table extracted from PDF
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct PdfTable {
     /// Table index
@@ -324,6 +330,7 @@ impl PdfTable {
 }
 
 /// PDF metadata
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct PdfMetadata {
     /// Title
@@ -358,6 +365,7 @@ pub struct PdfMetadata {
 }
 
 /// Get PDF analysis prompt with file path and options context
+#[allow(dead_code)]
 pub fn get_pdf_prompt(file_path: &str, options: &PdfOptions) -> String {
     let mut args = file_path.to_string();
 

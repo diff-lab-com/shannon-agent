@@ -466,6 +466,18 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("Use to work in isolated git branches using worktrees")
             .with_related(vec!["status", "commit"])
         ),
+        "doctor" => Some(
+            CommandHelpEntry::new(
+                "doctor".to_string(),
+                "Run system diagnostics and health checks".to_string(),
+                HelpCategory::System,
+            )
+            .with_aliases(vec!["check", "diagnostics"])
+            .with_arg_hint("[check name]")
+            .with_examples(vec!["/doctor", "/doctor network"])
+            .with_when_to_use("Use to diagnose issues with your Shannon Code installation and environment")
+            .with_related(vec!["config", "debug"])
+        ),
         _ => None,
     }
 }
@@ -490,6 +502,7 @@ pub fn all_help_entries() -> Vec<CommandHelpEntry> {
         get_command_help("resume").unwrap(),
         get_command_help("history").unwrap(),
         get_command_help("worktree").unwrap(),
+        get_command_help("doctor").unwrap(),
     ]
 }
 

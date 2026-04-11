@@ -72,6 +72,8 @@ pub struct AgentTask {
     pub blocks: Vec<Uuid>,
     /// Present continuous form shown in progress spinner
     pub active_form: Option<String>,
+    /// Capabilities required to perform this task
+    pub required_capabilities: Vec<String>,
     /// Additional metadata
     pub metadata: serde_json::Value,
     /// Creation timestamp
@@ -94,6 +96,7 @@ impl AgentTask {
             blocked_by: Vec::new(),
             blocks: Vec::new(),
             active_form: None,
+            required_capabilities: Vec::new(),
             metadata: serde_json::Value::Null,
             created_at: now,
             updated_at: now,

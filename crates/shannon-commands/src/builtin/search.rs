@@ -53,6 +53,7 @@ pub fn command() -> Command {
 }
 
 /// Search options parsed from command arguments
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct SearchOptions {
     /// Search pattern
@@ -84,6 +85,7 @@ impl Default for SearchOptions {
 }
 
 /// Parse search arguments into options
+#[allow(dead_code)]
 pub fn parse_search_args(args: &str) -> Result<SearchOptions, String> {
     let mut options = SearchOptions::default();
     let mut pattern_parts = Vec::new();
@@ -124,6 +126,7 @@ pub fn parse_search_args(args: &str) -> Result<SearchOptions, String> {
 }
 
 /// Search history entries with given options
+#[allow(dead_code)]
 pub fn search_history(entries: &[String], options: &SearchOptions) -> Vec<HistoryMatch> {
     let mut matches = Vec::new();
 
@@ -176,6 +179,7 @@ pub fn search_history(entries: &[String], options: &SearchOptions) -> Vec<Histor
 }
 
 /// A history match result
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct HistoryMatch {
     /// Index in the history
@@ -189,6 +193,7 @@ pub struct HistoryMatch {
 }
 
 /// Format search results for display
+#[allow(dead_code)]
 pub fn format_results(matches: &[HistoryMatch], options: &SearchOptions) -> String {
     if matches.is_empty() {
         return format!("No matches found for pattern: {}", options.pattern);
@@ -229,6 +234,7 @@ pub fn format_results(matches: &[HistoryMatch], options: &SearchOptions) -> Stri
 }
 
 /// Format a Unix timestamp as a readable date/time
+#[allow(dead_code)]
 fn format_timestamp(secs: u64) -> String {
     use chrono::{DateTime, Local, Utc};
 

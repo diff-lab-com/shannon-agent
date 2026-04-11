@@ -73,6 +73,7 @@ pub fn command() -> Command {
 }
 
 /// Diff scope
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffScope {
     /// Unstaged changes (default)
@@ -98,6 +99,7 @@ impl Default for DiffScope {
 }
 
 /// Diff options
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct DiffOptions {
     /// Diff scope
@@ -125,6 +127,7 @@ pub struct DiffOptions {
     pub stats: bool,
 }
 
+#[allow(dead_code)]
 impl DiffOptions {
     /// Create new default options
     pub fn new() -> Self {
@@ -188,6 +191,7 @@ impl DiffOptions {
 }
 
 /// Build git diff command from options
+#[allow(dead_code)]
 pub fn build_diff_command(options: &DiffOptions) -> String {
     let mut cmd = String::from("git diff");
 
@@ -226,6 +230,7 @@ pub fn build_diff_command(options: &DiffOptions) -> String {
 }
 
 /// Diff statistics
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct DiffStats {
     /// Files changed
@@ -242,6 +247,7 @@ pub struct DiffStats {
 }
 
 /// Statistics for a single file
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct FileStats {
     /// File path
@@ -255,6 +261,7 @@ pub struct FileStats {
 }
 
 /// Parse git diff --stat output
+#[allow(dead_code)]
 pub fn parse_diff_stat(output: &str) -> Option<DiffStats> {
     let mut files_changed = 0;
     let mut total_insertions = 0;
@@ -300,6 +307,7 @@ pub fn parse_diff_stat(output: &str) -> Option<DiffStats> {
 }
 
 // Simple regex for parsing stat lines
+#[allow(dead_code)]
 static STATS_REGEX: once_cell::sync::Lazy<regex::Regex> =
     once_cell::sync::Lazy::new(|| {
         regex::Regex::new(r"(\d+) insertion[s]?,?\s*(\d+) deletion[s]?").unwrap()
@@ -333,6 +341,7 @@ pub mod patterns {
 }
 
 /// Category of a code change identified by the diff analyzer.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChangeCategory {
     /// Function or method definition changed
@@ -351,6 +360,7 @@ pub enum ChangeCategory {
     Other,
 }
 
+#[allow(dead_code)]
 impl ChangeCategory {
     /// Human-readable label for this category.
     pub fn label(&self) -> &'static str {
@@ -367,6 +377,7 @@ impl ChangeCategory {
 }
 
 /// A single diff line that has been categorized.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct CategorizedChange {
     /// The category of this change.
@@ -378,12 +389,14 @@ pub struct CategorizedChange {
 }
 
 /// Summary of categorized changes across an entire diff.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct DiffAnalysis {
     /// Changes grouped by category.
     pub by_category: std::collections::HashMap<ChangeCategory, Vec<CategorizedChange>>,
 }
 
+#[allow(dead_code)]
 impl DiffAnalysis {
     /// Count changes in a specific category.
     pub fn count(&self, category: ChangeCategory) -> usize {
@@ -426,6 +439,7 @@ impl DiffAnalysis {
 }
 
 /// Analyzes diff output to categorize changed lines.
+#[allow(dead_code)]
 pub struct DiffAnalyzer {
     function_re: regex::Regex,
     import_re: regex::Regex,
@@ -435,6 +449,7 @@ pub struct DiffAnalyzer {
     config_re: regex::Regex,
 }
 
+#[allow(dead_code)]
 impl DiffAnalyzer {
     /// Create a new analyzer with compiled regex patterns.
     pub fn new() -> Self {

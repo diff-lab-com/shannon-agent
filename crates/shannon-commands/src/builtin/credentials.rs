@@ -57,6 +57,7 @@ pub fn command() -> Command {
 }
 
 /// Credential actions
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum CredentialAction {
     /// List all stored credentials (masked)
@@ -74,6 +75,7 @@ pub enum CredentialAction {
 }
 
 /// Parse credential action from argument string
+#[allow(dead_code)]
 pub fn parse_credential_action(arg: &str) -> CredentialAction {
     match arg.to_lowercase().as_str() {
         "list" | "ls" => CredentialAction::List,
@@ -87,6 +89,7 @@ pub fn parse_credential_action(arg: &str) -> CredentialAction {
 }
 
 /// Create a loaded CredentialManager
+#[allow(dead_code)]
 fn get_manager() -> Result<shannon_core::credential_manager::CredentialManager, String> {
     let mut manager = shannon_core::credential_manager::CredentialManager::new()
         .map_err(|e| format!("{}", e))?;
@@ -95,6 +98,7 @@ fn get_manager() -> Result<shannon_core::credential_manager::CredentialManager, 
 }
 
 /// Format credentials list output
+#[allow(dead_code)]
 pub fn format_credentials_list() -> String {
     let mut output = String::from("Stored Credentials:\n\n");
 
@@ -130,6 +134,7 @@ pub fn format_credentials_list() -> String {
 }
 
 /// Format credential store response
+#[allow(dead_code)]
 pub fn format_credential_store(service: &str, value: &str) -> String {
     match get_manager() {
         Ok(mut manager) => {
@@ -144,6 +149,7 @@ pub fn format_credential_store(service: &str, value: &str) -> String {
 }
 
 /// Format credential get response (value is masked)
+#[allow(dead_code)]
 pub fn format_credential_get(service: &str) -> String {
     match get_manager() {
         Ok(manager) => {
@@ -166,6 +172,7 @@ pub fn format_credential_get(service: &str) -> String {
 }
 
 /// Format credential delete response
+#[allow(dead_code)]
 pub fn format_credential_delete(service: &str) -> String {
     match get_manager() {
         Ok(mut manager) => {
@@ -179,6 +186,7 @@ pub fn format_credential_delete(service: &str) -> String {
 }
 
 /// Format credential count response
+#[allow(dead_code)]
 pub fn format_credential_count() -> String {
     match get_manager() {
         Ok(manager) => {

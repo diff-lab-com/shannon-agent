@@ -26,6 +26,7 @@ mod export;
 mod config;
 mod credentials;
 mod debug;
+mod doctor;
 mod repl;
 
 /// Register all built-in commands
@@ -49,6 +50,7 @@ pub fn all_commands() -> Vec<Command> {
         config::command(),
         credentials::command(),
         debug::command(),
+        doctor::command(),
     ];
     cmds.extend(repl::all_commands());
     cmds

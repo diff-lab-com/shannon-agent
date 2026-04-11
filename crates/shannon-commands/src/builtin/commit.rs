@@ -97,6 +97,7 @@ You have the capability to call multiple tools in a single response. Stage and c
 }
 
 /// Get default git branch
+#[allow(dead_code)]
 pub fn get_default_branch() -> &'static str {
     "main"
 }

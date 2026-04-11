@@ -316,6 +316,7 @@ impl AgentCoordinator {
                 blocked_by: Vec::new(),
                 blocks: Vec::new(),
                 active_form: None,
+                required_capabilities: Vec::new(),
                 metadata: serde_json::Value::Null,
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
@@ -331,50 +332,25 @@ impl AgentCoordinator {
         team_name: &str,
         task_id: Uuid,
     ) -> Result<String, AgentError> {
-        let teams = self.teams.read().await;
+        // Fetch the task's required capabilities first (if it exists on the board).
+        let required_capabilities = self.task_board.get_task(task_id).await
+            .map(|t| t.required_capabilities.clone())
+            .unwrap_or_default();
 
-        let team = teams.get(team_name)
-            .ok_or_else(|| AgentError::Coordination(
-                CoordinationError::TeamNotFound(team_name.to_string())
-            ))?;
-
-        // Collect member names to avoid async closure issues
-        let member_names: Vec<_> = team.members.keys().cloned().collect();
-
-        // Find available agent based on assignment strategy
         let agent_name = match self.config.assignment_strategy {
             AssignmentStrategy::RoundRobin => {
-                // Simplified: use first member
-                member_names.first().cloned()
+                self.assign_round_robin(team_name).await?
             }
             AssignmentStrategy::LeastLoaded => {
-                let mut best_agent = None;
-                let mut min_tasks = usize::MAX;
-
-                for name in &member_names {
-                    let tasks = self.task_board.get_agent_task_count(name).await;
-                    if tasks < min_tasks {
-                        min_tasks = tasks;
-                        best_agent = Some(name.clone());
-                    }
-                }
-                best_agent
+                self.assign_least_loaded(team_name).await?
             }
             AssignmentStrategy::CapabilityBased => {
-                // Simplified: use first available member
-                member_names.first().cloned()
+                self.assign_capability_based(team_name, &required_capabilities).await?
             }
             AssignmentStrategy::FirstAvailable => {
-                // Simplified: use first available member
-                member_names.first().cloned()
+                self.assign_first_available(team_name).await?
             }
         };
-
-        let agent_name = agent_name.ok_or_else(|| {
-            AgentError::Communication("No available agents".to_string())
-        })?;
-
-        drop(teams);
 
         self.task_board.assign_task(task_id, agent_name.clone()).await?;
 
@@ -391,6 +367,147 @@ impl AgentCoordinator {
         }
 
         Ok(agent_name)
+    }
+
+    /// Round-robin assignment: cycles through agents using assignment_index.
+    async fn assign_round_robin(
+        &self,
+        team_name: &str,
+    ) -> Result<String, AgentError> {
+        let mut teams = self.teams.write().await;
+
+        let team = teams.get_mut(team_name)
+            .ok_or_else(|| AgentError::Coordination(
+                CoordinationError::TeamNotFound(team_name.to_string())
+            ))?;
+
+        let member_names: Vec<_> = team.members.keys().cloned().collect();
+
+        if member_names.is_empty() {
+            return Err(AgentError::Communication("No available agents".to_string()));
+        }
+
+        let index = team.assignment_index % member_names.len();
+        let agent_name = member_names[index].clone();
+        team.assignment_index = team.assignment_index.wrapping_add(1);
+
+        Ok(agent_name)
+    }
+
+    /// Least-loaded assignment: pick the agent with the fewest assigned tasks.
+    async fn assign_least_loaded(
+        &self,
+        team_name: &str,
+    ) -> Result<String, AgentError> {
+        let teams = self.teams.read().await;
+
+        let team = teams.get(team_name)
+            .ok_or_else(|| AgentError::Coordination(
+                CoordinationError::TeamNotFound(team_name.to_string())
+            ))?;
+
+        let member_names: Vec<_> = team.members.keys().cloned().collect();
+
+        if member_names.is_empty() {
+            return Err(AgentError::Communication("No available agents".to_string()));
+        }
+
+        drop(teams);
+
+        let mut best_agent: Option<String> = None;
+        let mut min_tasks = usize::MAX;
+
+        for name in &member_names {
+            let tasks = self.task_board.get_agent_task_count(name).await;
+            if tasks < min_tasks {
+                min_tasks = tasks;
+                best_agent = Some(name.clone());
+            }
+        }
+
+        best_agent.ok_or_else(|| AgentError::Communication("No available agents".to_string()))
+    }
+
+    /// Capability-based assignment: match task requirements against agent capabilities.
+    /// Falls back to FirstAvailable when no agent matches all required capabilities.
+    async fn assign_capability_based(
+        &self,
+        team_name: &str,
+        required_capabilities: &[String],
+    ) -> Result<String, AgentError> {
+        let teams = self.teams.read().await;
+
+        let team = teams.get(team_name)
+            .ok_or_else(|| AgentError::Coordination(
+                CoordinationError::TeamNotFound(team_name.to_string())
+            ))?;
+
+        let member_names: Vec<_> = team.members.keys().cloned().collect();
+
+        if member_names.is_empty() {
+            return Err(AgentError::Communication("No available agents".to_string()));
+        }
+
+        // If no capabilities are required, fall back to first available.
+        if required_capabilities.is_empty() {
+            return member_names.first().cloned()
+                .ok_or_else(|| AgentError::Communication("No available agents".to_string()));
+        }
+
+        // Find agents that possess ALL required capabilities.
+        let mut matching_agents: Vec<String> = Vec::new();
+        for name in &member_names {
+            if let Some(teammate) = team.members.get(name) {
+                let has_all = required_capabilities.iter()
+                    .all(|cap| teammate.has_capability(cap));
+                if has_all {
+                    matching_agents.push(name.clone());
+                }
+            }
+        }
+
+        if !matching_agents.is_empty() {
+            // Among matching agents, pick the least loaded for fairness.
+            drop(teams);
+            let mut best_agent: Option<String> = None;
+            let mut min_tasks = usize::MAX;
+
+            for name in &matching_agents {
+                let tasks = self.task_board.get_agent_task_count(name).await;
+                if tasks < min_tasks {
+                    min_tasks = tasks;
+                    best_agent = Some(name.clone());
+                }
+            }
+
+            return best_agent.ok_or_else(|| AgentError::Communication("No available agents".to_string()));
+        }
+
+        // Fallback: no agent matches all capabilities, use first available.
+        tracing::warn!(
+            team = %team_name,
+            required = ?required_capabilities,
+            "No agent matches required capabilities, falling back to FirstAvailable"
+        );
+
+        member_names.first().cloned()
+            .ok_or_else(|| AgentError::Communication("No available agents".to_string()))
+    }
+
+    /// First-available assignment: pick the first member in the team.
+    async fn assign_first_available(
+        &self,
+        team_name: &str,
+    ) -> Result<String, AgentError> {
+        let teams = self.teams.read().await;
+
+        let team = teams.get(team_name)
+            .ok_or_else(|| AgentError::Coordination(
+                CoordinationError::TeamNotFound(team_name.to_string())
+            ))?;
+
+        team.members.keys().next().cloned()
+            .ok_or_else(|| AgentError::Communication("No available agents".to_string()))
     }
 
     /// Get the task board

@@ -11,6 +11,7 @@ use ratatui::{
 };
 
 /// Selection item for lists
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct SelectItem<T> {
     pub label: String,
@@ -18,6 +19,7 @@ pub struct SelectItem<T> {
     pub description: Option<String>,
 }
 
+#[allow(dead_code)]
 impl<T> SelectItem<T> {
     pub fn new(label: impl Into<String>, value: T) -> Self {
         Self {
@@ -34,6 +36,7 @@ impl<T> SelectItem<T> {
 }
 
 /// Multi-select widget for choosing multiple options
+#[allow(dead_code)]
 pub struct MultiSelectWidget {
     items: Vec<SelectItem<String>>,
     selected_indices: Vec<usize>,
@@ -43,6 +46,7 @@ pub struct MultiSelectWidget {
     show_indices: bool,
 }
 
+#[allow(dead_code)]
 impl MultiSelectWidget {
     /// Create a new multi-select widget
     pub fn new(title: String) -> Self {
@@ -200,6 +204,7 @@ impl MultiSelectWidget {
 }
 
 /// File selector widget
+#[allow(dead_code)]
 pub struct FileSelectorWidget {
     current_path: String,
     files: Vec<String>,
@@ -211,6 +216,7 @@ pub struct FileSelectorWidget {
     filter: Option<String>,
 }
 
+#[allow(dead_code)]
 impl FileSelectorWidget {
     /// Create a new file selector
     pub fn new(title: String) -> Self {
@@ -434,6 +440,7 @@ impl FileSelectorWidget {
 }
 
 /// Fuzzy picker widget with search functionality
+#[allow(dead_code)]
 pub struct FuzzyPickerWidget {
     items: Vec<SelectItem<String>>,
     filtered_items: Vec<usize>,
@@ -443,12 +450,14 @@ pub struct FuzzyPickerWidget {
     state: PickerState,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickerState {
     Browsing,
     Searching,
 }
 
+#[allow(dead_code)]
 impl FuzzyPickerWidget {
     /// Create a new fuzzy picker
     pub fn new(title: String) -> Self {

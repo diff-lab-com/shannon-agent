@@ -68,6 +68,7 @@ pub fn command() -> Command {
 }
 
 /// Debug subcommands
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum DebugSubcommand {
     /// Toggle or configure logging
@@ -83,6 +84,7 @@ pub enum DebugSubcommand {
 }
 
 /// Log level configuration
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LogLevel {
     Trace,
@@ -105,6 +107,7 @@ impl std::fmt::Display for LogLevel {
 }
 
 /// Parse debug subcommand from argument
+#[allow(dead_code)]
 pub fn parse_debug_subcommand(arg: &str) -> DebugSubcommand {
     match arg.to_lowercase().as_str() {
         "log" | "logging" => DebugSubcommand::Log,
@@ -117,6 +120,7 @@ pub fn parse_debug_subcommand(arg: &str) -> DebugSubcommand {
 }
 
 /// Parse log level from string
+#[allow(dead_code)]
 pub fn parse_log_level(s: &str) -> Option<LogLevel> {
     match s.to_lowercase().as_str() {
         "trace" => Some(LogLevel::Trace),
@@ -129,6 +133,7 @@ pub fn parse_log_level(s: &str) -> Option<LogLevel> {
 }
 
 /// Format debug help output
+#[allow(dead_code)]
 pub fn format_debug_help() -> String {
     let mut output = String::from("Developer Debug Commands:\n\n");
 
@@ -148,6 +153,7 @@ pub fn format_debug_help() -> String {
 }
 
 /// Format log level response
+#[allow(dead_code)]
 pub fn format_log_response(level: Option<LogLevel>) -> String {
     match level {
         Some(lvl) => format!("Log level set to: {}", lvl),
@@ -156,6 +162,7 @@ pub fn format_log_response(level: Option<LogLevel>) -> String {
 }
 
 /// Format profile response
+#[allow(dead_code)]
 pub fn format_profile_response(action: &str) -> String {
     match action {
         "start" => "Profiling started. Use '/debug profile stop' to end and view results.".to_string(),
@@ -172,6 +179,7 @@ pub fn format_profile_response(action: &str) -> String {
 }
 
 /// Format trace response
+#[allow(dead_code)]
 pub fn format_trace_response(enabled: bool) -> String {
     if enabled {
         "Execution tracing enabled. Operations will be logged to trace output.".to_string()
@@ -181,6 +189,7 @@ pub fn format_trace_response(enabled: bool) -> String {
 }
 
 /// Format system info diagnostics
+#[allow(dead_code)]
 pub fn format_system_info() -> String {
     let mut output = String::from("System Diagnostics:\n\n");
 

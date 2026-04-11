@@ -341,10 +341,12 @@ impl ConfirmDialog {
 }
 
 /// Alert dialog builder
+#[allow(dead_code)]
 pub struct AlertDialog {
     dialog: DialogWidget,
 }
 
+#[allow(dead_code)]
 impl AlertDialog {
     /// Create a new alert dialog
     pub fn new(title: String) -> Self {
@@ -378,12 +380,14 @@ impl AlertDialog {
 }
 
 /// Input dialog for text input
+#[allow(dead_code)]
 pub struct InputDialog {
     dialog: DialogWidget,
     value: String,
     placeholder: String,
 }
 
+#[allow(dead_code)]
 impl InputDialog {
     /// Create a new input dialog
     pub fn new(title: String) -> Self {
