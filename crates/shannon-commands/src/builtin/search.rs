@@ -3,6 +3,18 @@
 use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Search prompt template
+const SEARCH_PROMPT: &str = r##"
+Search through command history for matching entries.
+
+Arguments: {args}
+- The first non-flag tokens form the search pattern
+- Flags: --count N (max results, default 20), --regex (use regex matching), --case-sensitive (exact case), --no-timestamps
+
+Display matching history entries in reverse chronological order (most recent first).
+If no pattern is given, show the last 20 commands.
+"##;
+
 /// Create the /search command
 pub fn command() -> Command {
     Command::Prompt(PromptCommand {
@@ -36,7 +48,7 @@ pub fn command() -> Command {
         context: ExecutionContext::Inline,
         agent: None,
         paths: vec![],
-        prompt_template: None,
+        prompt_template: Some(SEARCH_PROMPT.to_string()),
     })
 }
 

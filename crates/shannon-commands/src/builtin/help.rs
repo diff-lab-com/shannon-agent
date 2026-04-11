@@ -2,6 +2,24 @@
 
 use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
 
+/// Help prompt template
+const HELP_PROMPT: &str = r##"
+Show help information for Shannon Code commands.
+
+Arguments: {args}
+- If a command name is provided (e.g., "commit", "diff"), show detailed help for that command
+- If no argument is provided, show a categorized list of all available commands
+
+Categories:
+- Git & Version Control: commit, status, diff, review-pr, worktree
+- Code Review & Analysis: review-pr, diff
+- Files & Documents: pdf, export
+- System & Configuration: config, debug, credentials
+- User Interface: search, clear, help, history
+
+For each command, show: name, aliases, description, argument hint, usage examples, and related commands.
+"##;
+
 /// Create the /help command
 pub fn command() -> Command {
     Command::Prompt(PromptCommand {
@@ -35,7 +53,7 @@ pub fn command() -> Command {
         context: ExecutionContext::Inline,
         agent: None,
         paths: vec![],
-        prompt_template: None,
+        prompt_template: Some(HELP_PROMPT.to_string()),
     })
 }
 

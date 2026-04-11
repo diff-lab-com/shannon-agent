@@ -2,6 +2,23 @@
 
 use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
 
+/// Credentials prompt template
+const CREDENTIALS_PROMPT: &str = r##"
+Manage stored credentials and API keys.
+
+Arguments: {args}
+
+Subcommands:
+- **list** — Show all stored credentials (values are masked)
+- **store <service> <value>** — Store a new credential for a service
+- **get <service>** — Retrieve a credential value (masked display)
+- **delete <service>** — Delete a stored credential
+- **count** — Show the number of stored credentials
+- **help** — Show usage information
+
+If no subcommand is given, default to listing all credentials.
+"##;
+
 /// Create the /credentials command
 pub fn command() -> Command {
     Command::Prompt(PromptCommand {
@@ -35,7 +52,7 @@ pub fn command() -> Command {
         context: ExecutionContext::Inline,
         agent: None,
         paths: vec![],
-        prompt_template: None,
+        prompt_template: Some(CREDENTIALS_PROMPT.to_string()),
     })
 }
 

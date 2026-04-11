@@ -2,6 +2,24 @@
 
 use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
 
+/// Config prompt template
+const CONFIG_PROMPT: &str = r##"
+Manage Shannon Code configuration settings.
+
+Arguments: {args}
+
+Subcommands:
+- **list** — Show all configuration keys, types, and defaults
+- **get <key>** — Get the current value of a config key (model, max_tokens, temperature, timeout, debug, provider)
+- **set <key> <value>** — Set a config key to a new value (validates type: integer, float, boolean, string)
+- **reset <key>** — Reset a key to its default value
+- **help** — Show usage information
+
+Known keys: model (string), max_tokens (integer), temperature (float), timeout (integer), debug (boolean), provider (string)
+
+If no subcommand is given, default to listing all settings.
+"##;
+
 /// Create the /config command
 pub fn command() -> Command {
     Command::Prompt(PromptCommand {
@@ -35,7 +53,7 @@ pub fn command() -> Command {
         context: ExecutionContext::Inline,
         agent: None,
         paths: vec![],
-        prompt_template: None,
+        prompt_template: Some(CONFIG_PROMPT.to_string()),
     })
 }
 

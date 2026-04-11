@@ -2,6 +2,28 @@
 
 use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
 
+/// Status prompt template
+const STATUS_PROMPT: &str = r##"
+Show the git repository status.
+
+Arguments: {args}
+- If args contains "--short", show a compact summary
+- Otherwise, show full status with file details
+
+Steps:
+1. Run `git status {args}` to get the current status
+2. Run `git branch --show-current` to get the branch name
+3. Run `git log --oneline -5` to show recent commits
+
+Present the output clearly:
+- Current branch and upstream tracking
+- Staged changes (files ready to commit)
+- Unstaged changes (modified but not staged)
+- Untracked files
+- Conflicts (if any)
+- Recent commit history
+"##;
+
 /// Create the /status command
 pub fn command() -> Command {
     Command::Prompt(PromptCommand {
@@ -39,7 +61,7 @@ pub fn command() -> Command {
         context: ExecutionContext::Inline,
         agent: None,
         paths: vec![],
-        prompt_template: None,
+        prompt_template: Some(STATUS_PROMPT.to_string()),
     })
 }
 
