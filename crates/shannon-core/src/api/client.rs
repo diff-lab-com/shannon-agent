@@ -199,10 +199,12 @@ impl LlmClient {
             });
         }
 
-        let api_response: MessageResponse = response
-            .json()
-            .await
-            .map_err(|e| ApiError::InvalidResponse(format!("JSON decode error: {}", e)))?;
+        // Read the raw text first so we can apply provider-specific normalization
+        let body = response.text().await.map_err(|e| {
+            ApiError::InvalidResponse(format!("Failed to read response body: {}", e))
+        })?;
+
+        let api_response = super::adapter::normalize_response(&body, &self.config.provider)?;
 
         Ok(api_response.content)
     }

@@ -259,25 +259,199 @@ fn convert_message_for_openai(msg: &Message) -> Value {
 
 /// Normalize a provider-specific SSE JSON payload into our `StreamEvent`.
 ///
-/// Returns `None` if the line should be skipped (heartbeat, comment, etc.).
-/// Returns `Some(Err(..))` on parse failures.
+/// Returns a `Vec` because a single SSE chunk can contain multiple logical
+/// events (e.g. several simultaneous tool-call starts from OpenAI).
+///
+/// `openai_state` is only used for `OpenAI` provider and must be the
+/// per-stream state — never shared across concurrent streams.
 pub fn normalize_sse_event(
     json_str: &str,
     provider: &LlmProvider,
-) -> Option<Result<StreamEvent, ApiError>> {
+    openai_state: &mut OpenaiStreamState,
+) -> Vec<Result<StreamEvent, ApiError>> {
     match provider {
         LlmProvider::Anthropic | LlmProvider::Custom => {
             // Anthropic SSE events are already in our StreamEvent format
             match serde_json::from_str::<StreamEvent>(json_str) {
-                Ok(event) => Some(Ok(event)),
-                Err(e) => Some(Err(ApiError::InvalidResponse(format!(
+                Ok(event) => vec![Ok(event)],
+                Err(e) => vec![Err(ApiError::InvalidResponse(format!(
                     "Failed to parse Anthropic SSE event: {} (data: {})",
                     e, json_str
-                )))),
+                )))],
             }
         }
-        LlmProvider::OpenAI => normalize_openai_event(json_str),
+        LlmProvider::OpenAI => normalize_openai_event(json_str, openai_state),
         LlmProvider::Ollama => normalize_ollama_event(json_str),
+    }
+}
+
+// ── Non-Streaming Response Normalization ────────────────────────────────────
+
+/// OpenAI non-streaming response shape (differs from Anthropic MessageResponse).
+#[derive(Deserialize)]
+struct OpenAiMessageResponse {
+    id: Option<String>,
+    choices: Vec<OpenAiMessageChoice>,
+    model: Option<String>,
+    usage: Option<OpenAiUsage>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiMessageChoice {
+    message: OpenAiResponseMessage,
+    finish_reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiResponseMessage {
+    content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<OpenAiResponseToolCall>>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiResponseToolCall {
+    id: String,
+    #[serde(rename = "type")]
+    call_type: Option<String>,
+    function: OpenAiResponseFunction,
+}
+
+#[derive(Deserialize)]
+struct OpenAiResponseFunction {
+    name: String,
+    arguments: String,
+}
+
+/// Ollama non-streaming response shape.
+#[derive(Deserialize)]
+struct OllamaMessageResponse {
+    message: Option<OllamaResponseMessage>,
+    #[serde(default)]
+    done: bool,
+    #[serde(default)]
+    prompt_eval_count: Option<u32>,
+    #[serde(default)]
+    eval_count: Option<u32>,
+    model: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct OllamaResponseMessage {
+    content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<OllamaToolCall>>,
+}
+
+/// Normalize a provider-specific non-streaming JSON response into our
+/// `MessageResponse` type used throughout the codebase.
+///
+/// Anthropic responses are already in `MessageResponse` format, so they pass
+/// through directly. OpenAI and Ollama have different shapes and are converted.
+pub fn normalize_response(
+    json_str: &str,
+    provider: &LlmProvider,
+) -> Result<super::types::MessageResponse, ApiError> {
+    match provider {
+        LlmProvider::Anthropic | LlmProvider::Custom => {
+            serde_json::from_str(json_str).map_err(|e| {
+                ApiError::InvalidResponse(format!(
+                    "Failed to parse Anthropic response: {}",
+                    e
+                ))
+            })
+        }
+        LlmProvider::OpenAI => {
+            let resp: OpenAiMessageResponse = serde_json::from_str(json_str).map_err(|e| {
+                ApiError::InvalidResponse(format!("Failed to parse OpenAI response: {}", e))
+            })?;
+
+            let choice = resp.choices.into_iter().next().ok_or_else(|| {
+                ApiError::InvalidResponse("OpenAI response has no choices".to_string())
+            })?;
+
+            let mut content = Vec::new();
+
+            // Text content
+            if let Some(text) = choice.message.content {
+                if !text.is_empty() {
+                    content.push(ContentBlock::Text { text });
+                }
+            }
+
+            // Tool calls
+            if let Some(tool_calls) = choice.message.tool_calls {
+                for tc in tool_calls {
+                    let input: Value = serde_json::from_str(&tc.function.arguments).unwrap_or(Value::Null);
+                    content.push(ContentBlock::ToolUse {
+                        id: tc.id,
+                        name: tc.function.name,
+                        input,
+                    });
+                }
+            }
+
+            Ok(super::types::MessageResponse {
+                id: resp.id.unwrap_or_default(),
+                role: "assistant".to_string(),
+                content,
+                model: resp.model.unwrap_or_default(),
+                stop_reason: choice.finish_reason,
+                usage: resp
+                    .usage
+                    .map(|u| super::types::Usage {
+                        input_tokens: u.prompt_tokens.unwrap_or(0),
+                        output_tokens: u.completion_tokens.unwrap_or(0),
+                    })
+                    .unwrap_or(super::types::Usage {
+                        input_tokens: 0,
+                        output_tokens: 0,
+                    }),
+            })
+        }
+        LlmProvider::Ollama => {
+            let resp: OllamaMessageResponse = serde_json::from_str(json_str).map_err(|e| {
+                ApiError::InvalidResponse(format!("Failed to parse Ollama response: {}", e))
+            })?;
+
+            let msg = resp.message.ok_or_else(|| {
+                ApiError::InvalidResponse("Ollama response has no message".to_string())
+            })?;
+
+            let mut content = Vec::new();
+
+            if let Some(text) = msg.content {
+                if !text.is_empty() {
+                    content.push(ContentBlock::Text { text });
+                }
+            }
+
+            if let Some(tool_calls) = msg.tool_calls {
+                for (idx, tc) in tool_calls.into_iter().enumerate() {
+                    content.push(ContentBlock::ToolUse {
+                        id: format!("call_{}", idx),
+                        name: tc.function.name,
+                        input: tc.function.arguments,
+                    });
+                }
+            }
+
+            Ok(super::types::MessageResponse {
+                id: String::new(),
+                role: "assistant".to_string(),
+                content,
+                model: resp.model.unwrap_or_default(),
+                stop_reason: if resp.done {
+                    Some("end_turn".to_string())
+                } else {
+                    None
+                },
+                usage: super::types::Usage {
+                    input_tokens: resp.prompt_eval_count.unwrap_or(0),
+                    output_tokens: resp.eval_count.unwrap_or(0),
+                },
+            })
+        }
     }
 }
 
@@ -324,37 +498,53 @@ struct OpenAiUsage {
     completion_tokens: Option<u32>,
 }
 
-/// State for tracking tool call indices across streaming chunks.
-static mut OPENAI_TOOL_INDEX: usize = 0;
+/// Per-stream state for OpenAI response normalization.
+///
+/// Previously a `static mut` global — now owned by each `SseStream` to
+/// avoid data races when multiple streams run concurrently.
+pub struct OpenaiStreamState {
+    pub tool_index: usize,
+}
 
-fn next_tool_index() -> usize {
-    unsafe {
-        let idx = OPENAI_TOOL_INDEX;
-        OPENAI_TOOL_INDEX += 1;
+impl OpenaiStreamState {
+    pub fn new() -> Self {
+        Self { tool_index: 0 }
+    }
+
+    pub fn next_tool_index(&mut self) -> usize {
+        let idx = self.tool_index;
+        self.tool_index += 1;
         idx
     }
-}
 
-fn reset_openai_state() {
-    unsafe {
-        OPENAI_TOOL_INDEX = 0;
+    pub fn reset(&mut self) {
+        self.tool_index = 0;
     }
 }
 
-fn normalize_openai_event(json_str: &str) -> Option<Result<StreamEvent, ApiError>> {
+impl Default for OpenaiStreamState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn normalize_openai_event(
+    json_str: &str,
+    state: &mut OpenaiStreamState,
+) -> Vec<Result<StreamEvent, ApiError>> {
     let chunk: OpenAiChunk = match serde_json::from_str(json_str) {
         Ok(c) => c,
         Err(e) => {
-            return Some(Err(ApiError::InvalidResponse(format!(
+            return vec![Err(ApiError::InvalidResponse(format!(
                 "Failed to parse OpenAI chunk: {} (data: {})",
                 e, json_str
-            ))));
+            )))];
         }
     };
 
     // If we have usage info, emit a MessageDelta with usage
     if let Some(usage) = chunk.usage {
-        return Some(Ok(StreamEvent::MessageDelta {
+        return vec![Ok(StreamEvent::MessageDelta {
             delta: MessageDeltaDelta {
                 stop_reason: chunk
                     .choices
@@ -366,18 +556,18 @@ fn normalize_openai_event(json_str: &str) -> Option<Result<StreamEvent, ApiError
                 input_tokens: usage.prompt_tokens.unwrap_or(0),
                 output_tokens: usage.completion_tokens.unwrap_or(0),
             },
-        }));
+        })];
     }
 
     let choice = match chunk.choices.first() {
         Some(c) => c,
-        None => return None,
+        None => return vec![],
     };
 
     // Finish reason → end events
     if let Some(ref reason) = choice.finish_reason {
-        reset_openai_state();
-        return Some(Ok(StreamEvent::MessageDelta {
+        state.reset();
+        return vec![Ok(StreamEvent::MessageDelta {
             delta: MessageDeltaDelta {
                 stop_reason: Some(reason.clone()),
                 stop_sequence: None,
@@ -386,14 +576,14 @@ fn normalize_openai_event(json_str: &str) -> Option<Result<StreamEvent, ApiError
                 input_tokens: 0,
                 output_tokens: 0,
             },
-        }));
+        })];
     }
 
-    // Tool calls
+    // Tool calls — return ALL events, not just the first one
     if let Some(ref tool_calls) = choice.delta.tool_calls {
         let mut events = Vec::new();
         for tc in tool_calls {
-            let idx = tc.index.unwrap_or_else(|| next_tool_index());
+            let idx = tc.index.unwrap_or_else(|| state.next_tool_index());
 
             if let Some(ref id) = tc.id {
                 // New tool call starting
@@ -423,23 +613,20 @@ fn normalize_openai_event(json_str: &str) -> Option<Result<StreamEvent, ApiError
                 }
             }
         }
-        // Return the first event; subsequent ones will be generated on future calls.
-        // Since we can only return one, stash the rest... but in practice tool calls
-        // arrive one at a time in streaming.
-        return events.into_iter().next().map(Ok);
+        return events.into_iter().map(Ok).collect();
     }
 
     // Text content
     if let Some(ref content) = choice.delta.content {
-        return Some(Ok(StreamEvent::ContentBlockDelta {
+        return vec![Ok(StreamEvent::ContentBlockDelta {
             index: 0,
             delta: ContentDelta::TextDelta {
                 text: content.clone(),
             },
-        }));
+        })];
     }
 
-    None
+    vec![]
 }
 
 // ── Ollama Response Parsing ────────────────────────────────────────────────
@@ -472,20 +659,20 @@ struct OllamaToolFunction {
     arguments: Value,
 }
 
-fn normalize_ollama_event(json_str: &str) -> Option<Result<StreamEvent, ApiError>> {
+fn normalize_ollama_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> {
     let chunk: OllamaChunk = match serde_json::from_str(json_str) {
         Ok(c) => c,
         Err(e) => {
-            return Some(Err(ApiError::InvalidResponse(format!(
+            return vec![Err(ApiError::InvalidResponse(format!(
                 "Failed to parse Ollama chunk: {} (data: {})",
                 e, json_str
-            ))));
+            )))];
         }
     };
 
     if chunk.done {
         // Final chunk with usage info
-        return Some(Ok(StreamEvent::MessageDelta {
+        return vec![Ok(StreamEvent::MessageDelta {
             delta: MessageDeltaDelta {
                 stop_reason: Some("end_turn".to_string()),
                 stop_sequence: None,
@@ -494,11 +681,11 @@ fn normalize_ollama_event(json_str: &str) -> Option<Result<StreamEvent, ApiError
                 input_tokens: chunk.prompt_eval_count.unwrap_or(0),
                 output_tokens: chunk.eval_count.unwrap_or(0),
             },
-        }));
+        })];
     }
 
     if let Some(ref msg) = chunk.message {
-        // Tool calls
+        // Tool calls — return ALL events (start + stop for each)
         if let Some(ref tool_calls) = msg.tool_calls {
             let mut events = Vec::new();
             for (idx, tc) in tool_calls.iter().enumerate() {
@@ -512,23 +699,23 @@ fn normalize_ollama_event(json_str: &str) -> Option<Result<StreamEvent, ApiError
                 });
                 events.push(StreamEvent::ContentBlockStop { index: idx });
             }
-            return events.into_iter().next().map(Ok);
+            return events.into_iter().map(Ok).collect();
         }
 
         // Text content
         if let Some(ref content) = msg.content {
             if !content.is_empty() {
-                return Some(Ok(StreamEvent::ContentBlockDelta {
+                return vec![Ok(StreamEvent::ContentBlockDelta {
                     index: 0,
                     delta: ContentDelta::TextDelta {
                         text: content.clone(),
                     },
-                }));
+                })];
             }
         }
     }
 
-    None
+    vec![]
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -657,22 +844,27 @@ mod tests {
 
     // -- Anthropic SSE normalization --
 
+    fn fresh_state() -> OpenaiStreamState {
+        OpenaiStreamState::new()
+    }
+
     #[test]
     fn test_anthropic_sse_passthrough() {
         let event_json = r#"{"type":"message_stop"}"#;
-        let result = normalize_sse_event(event_json, &LlmProvider::Anthropic);
-        assert!(matches!(result, Some(Ok(StreamEvent::MessageStop))));
+        let result = normalize_sse_event(event_json, &LlmProvider::Anthropic, &mut fresh_state());
+        assert!(result.len() == 1);
+        assert!(matches!(&result[0], Ok(StreamEvent::MessageStop)));
     }
 
     #[test]
     fn test_anthropic_text_delta() {
         let event_json = r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}"#;
-        let result = normalize_sse_event(event_json, &LlmProvider::Anthropic);
-        match result {
-            Some(Ok(StreamEvent::ContentBlockDelta { delta, .. })) => {
+        let result = normalize_sse_event(event_json, &LlmProvider::Anthropic, &mut fresh_state());
+        match &result[0] {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
                 assert_eq!(
                     delta,
-                    ContentDelta::TextDelta {
+                    &ContentDelta::TextDelta {
                         text: "hi".to_string()
                     }
                 );
@@ -686,12 +878,12 @@ mod tests {
     #[test]
     fn test_openai_text_delta() {
         let chunk_json = r#"{"choices":[{"delta":{"content":"hello"},"index":0}]}"#;
-        let result = normalize_sse_event(chunk_json, &LlmProvider::OpenAI);
-        match result {
-            Some(Ok(StreamEvent::ContentBlockDelta { delta, .. })) => {
+        let result = normalize_sse_event(chunk_json, &LlmProvider::OpenAI, &mut fresh_state());
+        match &result[0] {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
                 assert_eq!(
                     delta,
-                    ContentDelta::TextDelta {
+                    &ContentDelta::TextDelta {
                         text: "hello".to_string()
                     }
                 );
@@ -703,9 +895,9 @@ mod tests {
     #[test]
     fn test_openai_finish_reason() {
         let chunk_json = r#"{"choices":[{"delta":{},"finish_reason":"stop","index":0}]}"#;
-        let result = normalize_sse_event(chunk_json, &LlmProvider::OpenAI);
-        match result {
-            Some(Ok(StreamEvent::MessageDelta { delta, .. })) => {
+        let result = normalize_sse_event(chunk_json, &LlmProvider::OpenAI, &mut fresh_state());
+        match &result[0] {
+            Ok(StreamEvent::MessageDelta { delta, .. }) => {
                 assert_eq!(delta.stop_reason, Some("stop".to_string()));
             }
             other => panic!("Expected MessageDelta, got {:?}", other),
@@ -715,9 +907,9 @@ mod tests {
     #[test]
     fn test_openai_usage_event() {
         let chunk_json = r#"{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30}}"#;
-        let result = normalize_sse_event(chunk_json, &LlmProvider::OpenAI);
-        match result {
-            Some(Ok(StreamEvent::MessageDelta { usage, .. })) => {
+        let result = normalize_sse_event(chunk_json, &LlmProvider::OpenAI, &mut fresh_state());
+        match &result[0] {
+            Ok(StreamEvent::MessageDelta { usage, .. }) => {
                 assert_eq!(usage.input_tokens, 10);
                 assert_eq!(usage.output_tokens, 20);
             }
@@ -728,9 +920,9 @@ mod tests {
     #[test]
     fn test_openai_tool_call_start() {
         let chunk_json = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"bash","arguments":""}}]},"index":0}]}"#;
-        let result = normalize_sse_event(chunk_json, &LlmProvider::OpenAI);
-        match result {
-            Some(Ok(StreamEvent::ContentBlockStart { content_block, .. })) => {
+        let result = normalize_sse_event(chunk_json, &LlmProvider::OpenAI, &mut fresh_state());
+        match &result[0] {
+            Ok(StreamEvent::ContentBlockStart { content_block, .. }) => {
                 match content_block {
                     ContentBlock::ToolUse { id, name, .. } => {
                         assert_eq!(id, "call_abc");
@@ -743,17 +935,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_openai_multiple_tool_calls_in_one_chunk() {
+        let chunk_json = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"bash","arguments":""}},{"index":1,"id":"call_b","type":"function","function":{"name":"read","arguments":""}}]},"index":0}]}"#;
+        let mut state = fresh_state();
+        let result = normalize_sse_event(chunk_json, &LlmProvider::OpenAI, &mut state);
+        // Both tool calls should produce events (not just the first).
+        // Each produces ContentBlockStart + ContentBlockDelta (for the empty arguments).
+        assert!(result.len() >= 2, "Expected >= 2 events for 2 tool calls, got {}", result.len());
+        // Verify we got events for BOTH tool indices
+        let indices: Vec<usize> = result.iter().filter_map(|e| match e {
+            Ok(StreamEvent::ContentBlockStart { index, .. }) => Some(*index),
+            _ => None,
+        }).collect();
+        assert!(indices.contains(&0), "Missing ContentBlockStart for tool index 0");
+        assert!(indices.contains(&1), "Missing ContentBlockStart for tool index 1");
+    }
+
     // -- Ollama SSE normalization --
 
     #[test]
     fn test_ollama_text_delta() {
         let chunk_json = r#"{"message":{"content":"world","role":"assistant"}}"#;
-        let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama);
-        match result {
-            Some(Ok(StreamEvent::ContentBlockDelta { delta, .. })) => {
+        let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
+        match &result[0] {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
                 assert_eq!(
                     delta,
-                    ContentDelta::TextDelta {
+                    &ContentDelta::TextDelta {
                         text: "world".to_string()
                     }
                 );
@@ -765,9 +974,9 @@ mod tests {
     #[test]
     fn test_ollama_done_event() {
         let chunk_json = r#"{"done":true,"prompt_eval_count":50,"eval_count":100}"#;
-        let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama);
-        match result {
-            Some(Ok(StreamEvent::MessageDelta { usage, delta, .. })) => {
+        let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
+        match &result[0] {
+            Ok(StreamEvent::MessageDelta { usage, delta, .. }) => {
                 assert_eq!(usage.input_tokens, 50);
                 assert_eq!(usage.output_tokens, 100);
                 assert_eq!(delta.stop_reason, Some("end_turn".to_string()));
@@ -779,22 +988,86 @@ mod tests {
     #[test]
     fn test_ollama_empty_content_skipped() {
         let chunk_json = r#"{"message":{"content":"","role":"assistant"}}"#;
-        let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama);
-        assert!(result.is_none());
+        let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_ollama_multiple_tool_calls() {
+        let chunk_json = r#"{"message":{"role":"assistant","tool_calls":[{"function":{"name":"bash","arguments":{"command":"ls"}}},{"function":{"name":"read","arguments":{"path":"foo.rs"}}}]}}"#;
+        let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
+        // 2 tool calls × (start + stop) = 4 events
+        assert_eq!(result.len(), 4, "Expected 4 events for 2 Ollama tool calls, got {}", result.len());
     }
 
     // -- Round-trip: no panic on malformed JSON --
 
     #[test]
     fn test_malformed_json_returns_error() {
-        let result = normalize_sse_event("not json", &LlmProvider::OpenAI);
-        assert!(matches!(result, Some(Err(_))));
+        let result = normalize_sse_event("not json", &LlmProvider::OpenAI, &mut fresh_state());
+        assert!(matches!(&result[0], Err(_)));
 
-        let result = normalize_sse_event("not json", &LlmProvider::Ollama);
-        assert!(matches!(result, Some(Err(_))));
+        let result = normalize_sse_event("not json", &LlmProvider::Ollama, &mut fresh_state());
+        assert!(matches!(&result[0], Err(_)));
 
         // Anthropic also returns error for invalid JSON
-        let result = normalize_sse_event("not json", &LlmProvider::Anthropic);
-        assert!(matches!(result, Some(Err(_))));
+        let result = normalize_sse_event("not json", &LlmProvider::Anthropic, &mut fresh_state());
+        assert!(matches!(&result[0], Err(_)));
+    }
+
+    // -- Non-streaming response normalization --
+
+    #[test]
+    fn test_normalize_openai_response_text() {
+        let resp = r#"{"id":"chatcmpl-123","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"Hello!"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2}}"#;
+        let result = normalize_response(resp, &LlmProvider::OpenAI).unwrap();
+        assert_eq!(result.role, "assistant");
+        assert_eq!(result.content.len(), 1);
+        assert_eq!(result.stop_reason, Some("stop".to_string()));
+        assert_eq!(result.usage.input_tokens, 5);
+        assert_eq!(result.usage.output_tokens, 2);
+    }
+
+    #[test]
+    fn test_normalize_openai_response_with_tool_calls() {
+        let resp = r#"{"id":"chatcmpl-456","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_abc","type":"function","function":{"name":"bash","arguments":"{\"command\":\"ls\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}"#;
+        let result = normalize_response(resp, &LlmProvider::OpenAI).unwrap();
+        assert_eq!(result.stop_reason, Some("tool_calls".to_string()));
+        // Should have 1 tool_use block
+        let tool_blocks: Vec<_> = result.content.iter().filter_map(|b| match b {
+            ContentBlock::ToolUse { name, .. } => Some(name.clone()),
+            _ => None,
+        }).collect();
+        assert_eq!(tool_blocks, vec!["bash"]);
+    }
+
+    #[test]
+    fn test_normalize_ollama_response_text() {
+        let resp = r#"{"model":"llama3","message":{"role":"assistant","content":"Hi there"},"done":true,"prompt_eval_count":5,"eval_count":3}"#;
+        let result = normalize_response(resp, &LlmProvider::Ollama).unwrap();
+        assert_eq!(result.role, "assistant");
+        assert_eq!(result.content.len(), 1);
+        assert_eq!(result.stop_reason, Some("end_turn".to_string()));
+        assert_eq!(result.usage.input_tokens, 5);
+        assert_eq!(result.usage.output_tokens, 3);
+    }
+
+    #[test]
+    fn test_normalize_ollama_response_with_tool_calls() {
+        let resp = r#"{"model":"llama3","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"read","arguments":{"path":"foo.rs"}}}]},"done":true,"eval_count":10}"#;
+        let result = normalize_response(resp, &LlmProvider::Ollama).unwrap();
+        let tool_blocks: Vec<_> = result.content.iter().filter_map(|b| match b {
+            ContentBlock::ToolUse { name, .. } => Some(name.clone()),
+            _ => None,
+        }).collect();
+        assert_eq!(tool_blocks, vec!["read"]);
+    }
+
+    #[test]
+    fn test_normalize_anthropic_response_passthrough() {
+        let resp = r#"{"id":"msg_123","type":"message","role":"assistant","content":[{"type":"text","text":"Hello"}],"model":"claude-3","stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":1}}"#;
+        let result = normalize_response(resp, &LlmProvider::Anthropic).unwrap();
+        assert_eq!(result.id, "msg_123");
+        assert_eq!(result.content.len(), 1);
     }
 }

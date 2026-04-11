@@ -6,6 +6,7 @@
 use futures::{Stream, StreamExt, task::{Context, Poll}};
 use std::pin::Pin;
 
+use super::adapter::OpenaiStreamState;
 use super::error::ApiError;
 use super::types::{LlmProvider, StreamEvent};
 
@@ -26,6 +27,7 @@ pub struct SseStream {
     pending_events: Vec<Result<StreamEvent, ApiError>>,
     done: bool,
     provider: LlmProvider,
+    openai_state: OpenaiStreamState,
 }
 
 impl SseStream {
@@ -42,6 +44,7 @@ impl SseStream {
             pending_events: Vec::new(),
             done: false,
             provider,
+            openai_state: OpenaiStreamState::new(),
         }
     }
 
@@ -52,19 +55,21 @@ impl SseStream {
             let line = self.buffer[..newline_pos].to_string();
             self.buffer = self.buffer[newline_pos + 1..].to_string();
 
-            if let Some(event) = self.parse_sse_line(&line) {
-                self.pending_events.push(event);
-            }
+            let events = self.parse_sse_line(&line);
+            self.pending_events.extend(events);
         }
     }
 
-    /// Parse a single SSE line into an event using provider-specific normalization.
-    fn parse_sse_line(&self, line: &str) -> Option<Result<StreamEvent, ApiError>> {
+    /// Parse a single SSE line into events using provider-specific normalization.
+    ///
+    /// Returns a `Vec` because a single SSE chunk can produce multiple logical
+    /// events (e.g. multiple simultaneous tool-call starts from OpenAI/Ollama).
+    fn parse_sse_line(&mut self, line: &str) -> Vec<Result<StreamEvent, ApiError>> {
         let line = line.trim();
 
         // Skip empty lines and SSE comments
         if line.is_empty() || line.starts_with(':') {
-            return None;
+            return vec![];
         }
 
         // SSE event fields: only process "data:" lines
@@ -74,14 +79,14 @@ impl SseStream {
             s.trim()
         } else {
             // Ignore other SSE fields (event:, id:, retry:)
-            return None;
+            return vec![];
         };
 
         if json_str == "[DONE]" {
-            return Some(Ok(StreamEvent::MessageStop));
+            return vec![Ok(StreamEvent::MessageStop)];
         }
 
-        super::adapter::normalize_sse_event(json_str, &self.provider)
+        super::adapter::normalize_sse_event(json_str, &self.provider, &mut self.openai_state)
     }
 }
 
@@ -122,9 +127,11 @@ impl Stream for SseStream {
                     // Stream ended — process any remaining data in buffer
                     if !self.buffer.trim().is_empty() {
                         let remaining = std::mem::take(&mut self.buffer);
-                        if let Some(event) = self.parse_sse_line(&remaining) {
+                        let events = self.parse_sse_line(&remaining);
+                        self.pending_events.extend(events);
+                        if !self.pending_events.is_empty() {
                             self.done = true;
-                            return Poll::Ready(Some(event));
+                            return Poll::Ready(Some(self.pending_events.remove(0)));
                         }
                     }
                     self.done = true;

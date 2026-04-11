@@ -669,3 +669,265 @@ data: {"type":"message_stop"}
         mock.assert();
     }
 }
+
+/// End-to-end integration tests exercising the full LlmClient stack.
+///
+/// These tests verify:
+/// - LlmClient::send_message (non-streaming) with multi-provider normalization
+/// - LlmClient::send_message_stream (streaming) with SSE parsing
+/// - Tool call event delivery (including multiple tool calls per chunk)
+/// - Provider-specific adapter behavior
+#[cfg(test)]
+mod e2e_client_tests {
+    use mockito::{Server, ServerGuard};
+    use serde_json::json;
+    use shannon_core::api::{
+        LlmClient, LlmClientConfig, LlmProvider, Message, MessageContent,
+    };
+    use futures::StreamExt;
+
+    /// Create an LlmClient pointing at the mock server.
+    fn make_client(server: &ServerGuard, provider: LlmProvider) -> LlmClient {
+        let config = LlmClientConfig {
+            api_key: "test-key".to_string(),
+            base_url: server.url(),
+            model: "test-model".to_string(),
+            max_tokens: 1024,
+            timeout_seconds: 30,
+            api_version: "2023-06-01".to_string(),
+            provider,
+            extra_headers: Default::default(),
+        };
+        LlmClient::new(config)
+    }
+
+    fn simple_message() -> Vec<Message> {
+        vec![Message {
+            role: "user".to_string(),
+            content: MessageContent::Text("Hello".to_string()),
+        }]
+    }
+
+    // ── Anthropic non-streaming ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_anthropic_non_streaming_e2e() {
+        let mut server = Server::new_async().await;
+        let response = json!({
+            "id": "msg_e2e",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Hi from Anthropic"}],
+            "model": "claude-3",
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 5, "output_tokens": 3}
+        });
+
+        let _mock = server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(response.to_string())
+            .create();
+
+        let client = make_client(&server, LlmProvider::Anthropic);
+        let content = client.send_message(simple_message(), None, None).await.unwrap();
+        assert_eq!(content.len(), 1);
+    }
+
+    // ── OpenAI non-streaming ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_openai_non_streaming_e2e() {
+        let mut server = Server::new_async().await;
+        let response = json!({
+            "id": "chatcmpl-e2e",
+            "object": "chat.completion",
+            "model": "gpt-4o",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hi from OpenAI"},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
+        });
+
+        let _mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(response.to_string())
+            .create();
+
+        let client = make_client(&server, LlmProvider::OpenAI);
+        let content = client.send_message(simple_message(), None, None).await.unwrap();
+        assert_eq!(content.len(), 1);
+    }
+
+    // ── OpenAI non-streaming with tool calls ─────────────────────────────────
+
+    #[tokio::test]
+    async fn test_openai_non_streaming_tool_calls_e2e() {
+        let mut server = Server::new_async().await;
+        let response = json!({
+            "id": "chatcmpl-tools",
+            "object": "chat.completion",
+            "model": "gpt-4o",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": "bash", "arguments": "{\"command\":\"ls\"}"}},
+                        {"id": "call_2", "type": "function", "function": {"name": "read", "arguments": "{\"path\":\"foo.rs\"}"}}
+                    ]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        });
+
+        let _mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(response.to_string())
+            .create();
+
+        let client = make_client(&server, LlmProvider::OpenAI);
+        let content = client.send_message(simple_message(), None, None).await.unwrap();
+        assert_eq!(content.len(), 2, "Should have 2 tool_use blocks");
+    }
+
+    // ── Ollama non-streaming ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_ollama_non_streaming_e2e() {
+        let mut server = Server::new_async().await;
+        let response = json!({
+            "model": "llama3",
+            "message": {"role": "assistant", "content": "Hi from Ollama"},
+            "done": true,
+            "prompt_eval_count": 5,
+            "eval_count": 3
+        });
+
+        let _mock = server
+            .mock("POST", "/api/chat")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(response.to_string())
+            .create();
+
+        let client = make_client(&server, LlmProvider::Ollama);
+        let content = client.send_message(simple_message(), None, None).await.unwrap();
+        assert_eq!(content.len(), 1);
+    }
+
+    // ── Streaming: OpenAI text delta ──────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_openai_streaming_text_e2e() {
+        let mut server = Server::new_async().await;
+        // Two SSE chunks with text deltas
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"},\"index\":0}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"},\"index\":0}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"index\":0}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+
+        let _mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(body)
+            .create();
+
+        let client = make_client(&server, LlmProvider::OpenAI);
+        let mut stream = client.send_message_stream(simple_message(), None, None).await.unwrap();
+
+        let mut text = String::new();
+        while let Some(result) = stream.next().await {
+            let event = result.unwrap();
+            if let shannon_core::api::StreamEvent::ContentBlockDelta { delta, .. } = event {
+                if let shannon_core::api::ContentDelta::TextDelta { text: t } = delta {
+                    text.push_str(&t);
+                }
+            }
+        }
+        assert_eq!(text, "Hello");
+    }
+
+    // ── Streaming: OpenAI multiple tool calls in one chunk ────────────────────
+
+    #[tokio::test]
+    async fn test_openai_streaming_multi_tool_call_e2e() {
+        let mut server = Server::new_async().await;
+        // One chunk with two tool calls starting simultaneously
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[",
+            "{\"index\":0,\"id\":\"call_a\",\"function\":{\"name\":\"bash\",\"arguments\":\"\"}},",
+            "{\"index\":1,\"id\":\"call_b\",\"function\":{\"name\":\"read\",\"arguments\":\"\"}}",
+            "]},\"index\":0}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\",\"index\":0}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+
+        let _mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(body)
+            .create();
+
+        let client = make_client(&server, LlmProvider::OpenAI);
+        let mut stream = client.send_message_stream(simple_message(), None, None).await.unwrap();
+
+        let mut tool_starts = Vec::new();
+        while let Some(result) = stream.next().await {
+            let event = result.unwrap();
+            if let shannon_core::api::StreamEvent::ContentBlockStart { index, content_block } = event {
+                if let shannon_core::api::ContentBlock::ToolUse { name, .. } = content_block {
+                    tool_starts.push((index, name));
+                }
+            }
+        }
+        // Both tool calls must be delivered — this was the P0-2 bug
+        assert_eq!(tool_starts.len(), 2, "Both tool calls should be delivered, got {:?}", tool_starts);
+        assert_eq!(tool_starts[0], (0, "bash".to_string()));
+        assert_eq!(tool_starts[1], (1, "read".to_string()));
+    }
+
+    // ── Streaming: Anthropic passthrough ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_anthropic_streaming_e2e() {
+        let mut server = Server::new_async().await;
+        let body = concat!(
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"world\"}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        );
+
+        let _mock = server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(body)
+            .create();
+
+        let client = make_client(&server, LlmProvider::Anthropic);
+        let mut stream = client.send_message_stream(simple_message(), None, None).await.unwrap();
+
+        let mut text = String::new();
+        while let Some(result) = stream.next().await {
+            let event = result.unwrap();
+            if let shannon_core::api::StreamEvent::ContentBlockDelta { delta, .. } = event {
+                if let shannon_core::api::ContentDelta::TextDelta { text: t } = delta {
+                    text.push_str(&t);
+                }
+            }
+        }
+        assert_eq!(text, "world");
+    }
+}
