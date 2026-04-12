@@ -1,4 +1,43 @@
 //! Main QueryEngine struct and orchestration logic.
+//!
+//! # Session Persistence
+//!
+//! The QueryEngine supports automatic conversation persistence to disk:
+//!
+//! - **Auto-save**: After each successful query, the conversation is automatically
+//!   saved to `~/.shannon/sessions/{session_id}.json`
+//! - **Auto-restore**: Use `QueryEngine::with_session_id()` to create an engine
+//!   with a specific session ID, then call `restore_session()` to load previous
+//!   conversations
+//! - **Title generation**: The first user message (truncated to 50 chars) is used
+//!   as the session title
+//!
+//! ## Example: Resume a previous session
+//!
+//! ```no_run
+//! use shannon_core::query_engine::QueryEngine;
+//! use uuid::Uuid;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! // Create engine with specific session ID
+//! let mut engine = QueryEngine::with_session_id(
+//!     client,
+//!     tools,
+//!     permissions,
+//!     state,
+//!     config,
+//!     session_id, // Uuid from previous session
+//! );
+//!
+//! // Restore conversation history
+//! if engine.restore_session(session_id)? {
+//!     println!("Session restored successfully");
+//! } else {
+//!     println!("No previous session found");
+//! }
+//! # Ok(())
+//! # }
+//! ```
 
 use crate::api::{
     ContentBlock, ContentDelta, LlmClient, Message, MessageContent, StreamEvent, ToolResultContent,
@@ -29,6 +68,8 @@ pub struct QueryEngine {
     pub(crate) cost_tracker: Arc<RwLock<CostTracker>>,
     /// Optional memory store for persisting and retrieving conversation memories.
     pub(crate) memory: Option<Arc<std::sync::RwLock<MemoryStore>>>,
+    /// Session ID for conversation persistence
+    pub(crate) session_id: Uuid,
 }
 
 impl QueryEngine {
@@ -41,6 +82,7 @@ impl QueryEngine {
         config: QueryEngineConfig,
     ) -> Self {
         let model = client.model().to_string();
+        let session_id = Uuid::new_v4();
         Self {
             client,
             tools: Arc::new(tools),
@@ -50,6 +92,7 @@ impl QueryEngine {
             conversation: ConversationState::default(),
             cost_tracker: Arc::new(RwLock::new(CostTracker::new(model))),
             memory: None,
+            session_id,
         }
     }
 
@@ -61,6 +104,7 @@ impl QueryEngine {
         state: StateManager,
     ) -> Self {
         let model = client.model().to_string();
+        let session_id = Uuid::new_v4();
         Self {
             client,
             tools: Arc::new(tools),
@@ -70,6 +114,33 @@ impl QueryEngine {
             conversation: ConversationState::default(),
             cost_tracker: Arc::new(RwLock::new(CostTracker::new(model))),
             memory: None,
+            session_id,
+        }
+    }
+
+    /// Create a new query engine with a specific session ID for resuming
+    ///
+    /// This allows creating a QueryEngine that can restore a previous session.
+    /// Use `restore_session()` after creation to load the conversation history.
+    pub fn with_session_id(
+        client: LlmClient,
+        tools: ToolRegistry,
+        permissions: PermissionManager,
+        state: StateManager,
+        config: QueryEngineConfig,
+        session_id: Uuid,
+    ) -> Self {
+        let model = client.model().to_string();
+        Self {
+            client,
+            tools: Arc::new(tools),
+            permissions: Arc::new(RwLock::new(permissions)),
+            state: Arc::new(state),
+            config,
+            conversation: ConversationState::default(),
+            cost_tracker: Arc::new(RwLock::new(CostTracker::new(model))),
+            memory: None,
+            session_id,
         }
     }
 
@@ -81,6 +152,32 @@ impl QueryEngine {
     pub fn with_memory(mut self, store: MemoryStore) -> Self {
         self.memory = Some(Arc::new(std::sync::RwLock::new(store)));
         self
+    }
+
+    /// Get the current session ID
+    pub fn session_id(&self) -> Uuid {
+        self.session_id
+    }
+
+    /// Restore conversation from a previously saved session
+    ///
+    /// Attempts to load session data from disk. Returns Ok(false) if no
+    /// persisted session exists for the given session_id.
+    pub fn restore_session(&mut self, session_id: Uuid) -> Result<bool, QueryError> {
+        match self.state.load_session(&session_id) {
+            Ok(Some(session_data)) => {
+                // Restore conversation messages
+                self.conversation.messages = session_data.messages;
+                self.conversation.turn_count = session_data.metadata.turn_count;
+                self.conversation.total_tokens = session_data.metadata.total_input_tokens
+                    + session_data.metadata.total_output_tokens;
+                // Cost is not tracked in persisted metadata, so we keep current value
+                self.session_id = session_id;
+                Ok(true)
+            }
+            Ok(None) => Ok(false),
+            Err(e) => Err(QueryError::StateError(e.to_string())),
+        }
     }
 
     /// Get a reference to the tool registry
@@ -138,6 +235,8 @@ impl QueryEngine {
         let client_base_url = self.client.base_url().to_string();
         let client_max_tokens = self.client.max_tokens();
         let user_message = context.user_message.clone();
+        let state_for_save = self.state.clone();
+        let session_id_for_save = self.session_id;
 
         // Search for relevant memories to augment the system prompt
         let memory_entries = if let Some(ref mem_store) = self.memory {
@@ -204,6 +303,16 @@ impl QueryEngine {
                         output_tokens: total_output_tokens,
                     }));
                     let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
+
+                    // Auto-save conversation after completion
+                    let final_messages = conversation.messages.clone();
+                    let _ = save_conversation_to_disk(
+                        &state_for_save,
+                        session_id_for_save,
+                        &final_messages,
+                        &client_model,
+                    );
+
                     break;
                 }
 
@@ -484,6 +593,16 @@ impl QueryEngine {
                                                 }));
                                                 let _ =
                                                     tx.send(Ok(QueryEvent::Completed { query_id }));
+
+                                                // Auto-save conversation after completion
+                                                let final_messages = conversation.messages.clone();
+                                                let _ = save_conversation_to_disk(
+                                                    &state_for_save,
+                                                    session_id_for_save,
+                                                    &final_messages,
+                                                    &client_model,
+                                                );
+
                                                 return;
                                             }
                                         }
@@ -514,6 +633,16 @@ impl QueryEngine {
                                 output_tokens: total_output_tokens,
                             }));
                             let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
+
+                            // Auto-save conversation after completion
+                            let final_messages = conversation.messages.clone();
+                            let _ = save_conversation_to_disk(
+                                &state_for_save,
+                                session_id_for_save,
+                                &final_messages,
+                                &client_model,
+                            );
+
                             return;
                         }
                     }
@@ -674,5 +803,215 @@ impl QueryEngine {
             total_tokens: self.conversation.total_tokens,
             total_cost: self.conversation.total_cost,
         }
+    }
+}
+
+/// Helper function to save conversation to disk
+///
+/// This is called from the background task after a query completes successfully.
+fn save_conversation_to_disk(
+    state: &Arc<StateManager>,
+    session_id: Uuid,
+    messages: &[Message],
+    model: &str,
+) -> Result<(), String> {
+    use crate::state::SessionPersistMetadata;
+    use crate::api::{ContentBlock, MessageContent};
+
+    // Generate title from first user message
+    let title = messages
+        .iter()
+        .find(|m| m.role == "user")
+        .and_then(|m| match &m.content {
+            MessageContent::Text(text) => {
+                let preview = if text.len() > 50 {
+                    format!("{}...", &text[..47])
+                } else {
+                    text.clone()
+                };
+                Some(preview)
+            }
+            MessageContent::Blocks(blocks) => {
+                blocks.iter().find_map(|b| match b {
+                    ContentBlock::Text { text } => {
+                        let preview = if text.len() > 50 {
+                            format!("{}...", &text[..47])
+                        } else {
+                            text.clone()
+                        };
+                        Some(preview)
+                    }
+                    _ => None,
+                })
+            }
+        });
+
+    // Build metadata
+    let metadata = SessionPersistMetadata {
+        model: model.to_string(),
+        title,
+        ..Default::default()
+    };
+
+    state
+        .save_session(&session_id, messages, &metadata)
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::{LlmClient, LlmClientConfig, MessageContent};
+    use crate::permissions::PermissionManager;
+    use crate::tools::ToolRegistry;
+    use std::env;
+    use std::fs;
+    use uuid::Uuid;
+
+    fn create_test_client() -> LlmClient {
+        let config = LlmClientConfig {
+            api_key: "test-key".to_string(),
+            base_url: "http://localhost:11434".to_string(),
+            model: "test-model".to_string(),
+            ..Default::default()
+        };
+        LlmClient::new(config)
+    }
+
+    #[test]
+    fn test_query_engine_session_id() {
+        let client = create_test_client();
+        let tools = ToolRegistry::new();
+        let permissions = PermissionManager::new();
+        let state = StateManager::new();
+        let config = QueryEngineConfig::default();
+
+        let engine = QueryEngine::new(client, tools, permissions, state, config);
+        let session_id = engine.session_id();
+
+        // Should generate a valid UUID
+        assert_ne!(session_id, Uuid::nil());
+    }
+
+    #[test]
+    fn test_query_engine_with_session_id() {
+        let client = create_test_client();
+        let tools = ToolRegistry::new();
+        let permissions = PermissionManager::new();
+        let state = StateManager::new();
+        let config = QueryEngineConfig::default();
+
+        let specific_id = Uuid::new_v4();
+        let engine = QueryEngine::with_session_id(
+            client,
+            tools,
+            permissions,
+            state,
+            config,
+            specific_id,
+        );
+
+        assert_eq!(engine.session_id(), specific_id);
+    }
+
+    #[test]
+    fn test_save_and_restore_session() {
+        // Create a temp directory for this test
+        let temp_dir = env::temp_dir()
+            .join("shannon-session-test")
+            .join(Uuid::new_v4().to_string());
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let state = Arc::new(StateManager::with_sessions_dir(temp_dir.clone()).unwrap());
+        let session_id = Uuid::new_v4();
+
+        // Create some test messages
+        let messages = vec![
+            crate::api::Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("Hello, how are you?".to_string()),
+            },
+            crate::api::Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Text("I'm doing well, thanks!".to_string()),
+            },
+        ];
+
+        // Save session
+        let result = save_conversation_to_disk(
+            &state,
+            session_id,
+            &messages,
+            "test-model",
+        );
+        assert!(result.is_ok(), "Failed to save session: {:?}", result.err());
+
+        // Verify file was created
+        let session_file = temp_dir.join(format!("{}.json", session_id));
+        assert!(session_file.exists(), "Session file not created");
+
+        // Load and verify
+        let loaded = state.load_session(&session_id).unwrap();
+        assert!(loaded.is_some(), "Failed to load session");
+
+        let session_data = loaded.unwrap();
+        assert_eq!(session_data.session_id, session_id);
+        assert_eq!(session_data.messages.len(), 2);
+        assert_eq!(session_data.metadata.model, "test-model");
+
+        // Verify title was generated from first user message
+        assert_eq!(
+            session_data.metadata.title,
+            Some("Hello, how are you?".to_string())
+        );
+
+        // Cleanup
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_save_conversation_long_title_truncated() {
+        let temp_dir = env::temp_dir()
+            .join("shannon-title-test")
+            .join(Uuid::new_v4().to_string());
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let state = Arc::new(StateManager::with_sessions_dir(temp_dir.clone()).unwrap());
+        let session_id = Uuid::new_v4();
+
+        // Create a message with long text (100 chars)
+        let long_text = "A".repeat(100);
+        let messages = vec![crate::api::Message {
+            role: "user".to_string(),
+            content: MessageContent::Text(long_text),
+        }];
+
+        // Save
+        save_conversation_to_disk(&state, session_id, &messages, "test-model").unwrap();
+
+        // Load and check title is truncated to 47 chars + "..." = 50 total
+        let loaded = state.load_session(&session_id).unwrap().unwrap();
+        let expected_title = "A".repeat(47) + "...";
+        assert_eq!(loaded.metadata.title, Some(expected_title));
+
+        // Cleanup
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_restore_session_nonexistent() {
+        let client = create_test_client();
+        let tools = ToolRegistry::new();
+        let permissions = PermissionManager::new();
+        let state = StateManager::new();
+        let config = QueryEngineConfig::default();
+
+        let mut engine = QueryEngine::new(client, tools, permissions, state, config);
+        let nonexistent_id = Uuid::new_v4();
+
+        // Should return Ok(false) for nonexistent session
+        let result = engine.restore_session(nonexistent_id);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), false);
     }
 }

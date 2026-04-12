@@ -1632,10 +1632,10 @@ impl Repl {
                         }
                     }
                     Ok(QueryEvent::ToolUseResult { tool_name, result, is_error, .. }) => {
-                        let prefix = if is_error { "❌ " } else { "✅ " };
-                        let result_display = format!("\n{} {} result: {}", prefix, tool_name,
-                            result.chars().take(200).collect::<String>()
+                        let formatted = crate::tool_format::format_tool_result(
+                            &tool_name, &result, is_error,
                         );
+                        let result_display = format!("\n{}", formatted);
                         response_text.push_str(&result_display);
                         if let Ok(mut buf) = buffer_clone.lock() {
                             *buf = response_text.clone();

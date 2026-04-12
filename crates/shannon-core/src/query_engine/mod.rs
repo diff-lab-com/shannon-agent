@@ -9,7 +9,7 @@ mod types;
 // Re-export all public types to maintain the same public API as the original flat file.
 pub use engine::QueryEngine;
 pub use types::{
-    ConversationStats, CostTracker, PermissionRequest, QueryContext, QueryEngineConfig, QueryError,
+    CompressionStrategy, ConversationStats, CostTracker, PermissionRequest, QueryContext, QueryEngineConfig, QueryError,
     QueryEvent, QueryMetadata, QueryStream,
 };
 
@@ -838,6 +838,7 @@ mod tests {
             max_context_tokens: Some(50_000),
             compression_threshold: 0.6,
             keep_recent_messages: 5,
+            compression_strategy: CompressionStrategy::default(),
             system_prompt: None,
         };
         assert_eq!(config.max_turns, 5);
@@ -1087,6 +1088,7 @@ mod tests {
             max_context_tokens: Some(1000),
             compression_threshold: 0.9,
             keep_recent_messages: 1,
+            compression_strategy: CompressionStrategy::default(),
             system_prompt: None,
         };
         assert_eq!(config.max_turns, 1);

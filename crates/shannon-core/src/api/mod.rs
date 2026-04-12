@@ -14,6 +14,7 @@ pub mod error;
 pub mod types;
 pub mod streaming;
 pub mod client;
+pub mod retry;
 
 // Re-export all public types so that `crate::api::X` paths continue to work.
 pub use error::ApiError;
@@ -27,6 +28,7 @@ pub use types::{
 };
 
 pub use streaming::MessageStream;
+pub use retry::RetryConfig;
 
 pub use client::{LlmClient, ClaudeClient};
 

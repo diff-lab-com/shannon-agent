@@ -1071,4 +1071,226 @@ mod tests {
         assert_eq!(result.id, "msg_123");
         assert_eq!(result.content.len(), 1);
     }
+
+    // -- Additional edge case tests --
+
+    #[test]
+    fn test_openai_empty_delta() {
+        // OpenAI sometimes sends empty deltas
+        let chunk_json = r#"{"choices":[{"delta":{},"index":0}]}"#;
+        let result = normalize_sse_event(chunk_json, &LlmProvider::OpenAI, &mut fresh_state());
+        // Should return empty vec, not an error
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_openai_no_choices() {
+        // Handle chunks with no choices array
+        let chunk_json = r#"{"choices":[]}"#;
+        let result = normalize_sse_event(chunk_json, &LlmProvider::OpenAI, &mut fresh_state());
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_openai_tool_call_without_id() {
+        // Tool call delta with arguments but no id (continuation)
+        let chunk_json = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"command\""}}]},"index":0}]}"#;
+        let result = normalize_sse_event(chunk_json, &LlmProvider::OpenAI, &mut fresh_state());
+        assert_eq!(result.len(), 1);
+        match &result[0] {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                assert_eq!(delta, &ContentDelta::InputJsonDelta {
+                    partial_json: r#"{"command""#.to_string()
+                });
+            }
+            other => panic!("Expected ContentBlockDelta, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_openai_tool_call_name_only() {
+        // Tool call with id and name but no arguments yet
+        let chunk_json = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_123","type":"function","function":{"name":"bash"}}]},"index":0}]}"#;
+        let result = normalize_sse_event(chunk_json, &LlmProvider::OpenAI, &mut fresh_state());
+        assert_eq!(result.len(), 1);
+        match &result[0] {
+            Ok(StreamEvent::ContentBlockStart { content_block, .. }) => {
+                match content_block {
+                    ContentBlock::ToolUse { id, name, input } => {
+                        assert_eq!(id, "call_123");
+                        assert_eq!(name, "bash");
+                        assert_eq!(input, &serde_json::Value::Null);
+                    }
+                    other => panic!("Expected ToolUse block, got {:?}", other),
+                }
+            }
+            other => panic!("Expected ContentBlockStart, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_openai_finish_reason_with_usage() {
+        // When finish_reason appears, it should emit MessageDelta
+        let chunk_json = r#"{"choices":[{"delta":{},"finish_reason":"stop","index":0}]}"#;
+        let result = normalize_sse_event(chunk_json, &LlmProvider::OpenAI, &mut fresh_state());
+        assert_eq!(result.len(), 1);
+        match &result[0] {
+            Ok(StreamEvent::MessageDelta { delta, .. }) => {
+                assert_eq!(delta.stop_reason, Some("stop".to_string()));
+            }
+            other => panic!("Expected MessageDelta, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_openai_stream_state_reset_on_finish() {
+        // Verify state resets when finish_reason is received
+        let mut state = fresh_state();
+        state.tool_index = 5;
+
+        let chunk_json = r#"{"choices":[{"delta":{},"finish_reason":"stop","index":0}]}"#;
+        normalize_sse_event(chunk_json, &LlmProvider::OpenAI, &mut state);
+
+        // State should be reset
+        assert_eq!(state.tool_index, 0);
+    }
+
+    #[test]
+    fn test_openai_consecutive_text_deltas() {
+        // Multiple text chunks should all be emitted
+        let chunk1 = r#"{"choices":[{"delta":{"content":"Hello"},"index":0}]}"#;
+        let chunk2 = r#"{"choices":[{"delta":{"content":" world"},"index":0}]}"#;
+        let chunk3 = r#"{"choices":[{"delta":{"content":"!"},"index":0}]}"#;
+
+        let r1 = normalize_sse_event(chunk1, &LlmProvider::OpenAI, &mut fresh_state());
+        let r2 = normalize_sse_event(chunk2, &LlmProvider::OpenAI, &mut fresh_state());
+        let r3 = normalize_sse_event(chunk3, &LlmProvider::OpenAI, &mut fresh_state());
+
+        assert_eq!(r1.len(), 1);
+        assert_eq!(r2.len(), 1);
+        assert_eq!(r3.len(), 1);
+
+        match &r1[0] {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                assert_eq!(delta, &ContentDelta::TextDelta { text: "Hello".to_string() });
+            }
+            _ => panic!("Expected text delta"),
+        }
+    }
+
+    #[test]
+    fn test_ollama_empty_message() {
+        // Ollama chunk with no message field
+        let chunk_json = r#"{"done":false}"#;
+        let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_ollama_tool_call_with_empty_arguments() {
+        // Tool call with empty arguments object
+        let chunk_json = r#"{"message":{"tool_calls":[{"function":{"name":"bash","arguments":{}}}]}}"#;
+        let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
+        assert_eq!(result.len(), 2); // start + stop
+        match &result[0] {
+            Ok(StreamEvent::ContentBlockStart { content_block, .. }) => {
+                match content_block {
+                    ContentBlock::ToolUse { input, .. } => {
+                        assert_eq!(input, &serde_json::json!({}));
+                    }
+                    _ => panic!("Expected ToolUse"),
+                }
+            }
+            _ => panic!("Expected ContentBlockStart"),
+        }
+    }
+
+    #[test]
+    fn test_ollama_done_with_no_usage() {
+        // Ollama done event without usage counts
+        let chunk_json = r#"{"done":true}"#;
+        let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
+        assert_eq!(result.len(), 1);
+        match &result[0] {
+            Ok(StreamEvent::MessageDelta { usage, delta, .. }) => {
+                assert_eq!(usage.input_tokens, 0);
+                assert_eq!(usage.output_tokens, 0);
+                assert_eq!(delta.stop_reason, Some("end_turn".to_string()));
+            }
+            other => panic!("Expected MessageDelta, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_normalize_openai_response_empty_content() {
+        // OpenAI response with null content (tool calls only)
+        let resp = r#"{"id":"chatcmpl-789","choices":[{"message":{"role":"assistant","content":null},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":8,"completion_tokens":3}}"#;
+        let result = normalize_response(resp, &LlmProvider::OpenAI).unwrap();
+        assert_eq!(result.content.len(), 0); // No content blocks
+        assert_eq!(result.stop_reason, Some("tool_calls".to_string()));
+    }
+
+    #[test]
+    fn test_normalize_openai_response_no_usage() {
+        // OpenAI response without usage field
+        let resp = r#"{"id":"chatcmpl-999","choices":[{"message":{"role":"assistant","content":"Hi"},"finish_reason":"stop"}]}"#;
+        let result = normalize_response(resp, &LlmProvider::OpenAI).unwrap();
+        assert_eq!(result.content.len(), 1);
+        assert_eq!(result.usage.input_tokens, 0);
+        assert_eq!(result.usage.output_tokens, 0);
+    }
+
+    #[test]
+    fn test_normalize_ollama_response_no_usage() {
+        // Ollama response without usage counts
+        let resp = r#"{"model":"llama3","message":{"role":"assistant","content":"Hello"},"done":true}"#;
+        let result = normalize_response(resp, &LlmProvider::Ollama).unwrap();
+        assert_eq!(result.usage.input_tokens, 0);
+        assert_eq!(result.usage.output_tokens, 0);
+    }
+
+    #[test]
+    fn test_normalize_openai_invalid_tool_args() {
+        // Tool call with invalid JSON arguments
+        let resp = r#"{"id":"chatcmpl-111","choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call_123","function":{"name":"bash","arguments":"not json"}}]},"finish_reason":"tool_calls"}]}"#;
+        let result = normalize_response(resp, &LlmProvider::OpenAI).unwrap();
+        // Should parse but have null arguments
+        match &result.content[0] {
+            ContentBlock::ToolUse { input, .. } => {
+                assert_eq!(input, &serde_json::Value::Null);
+            }
+            _ => panic!("Expected ToolUse block"),
+        }
+    }
+
+    #[test]
+    fn test_openai_tool_index_auto_increment() {
+        // When index is missing, auto-increment from state
+        let mut state = fresh_state();
+
+        // First tool call without index
+        let chunk1 = r#"{"choices":[{"delta":{"tool_calls":[{"id":"call_a","function":{"name":"bash"}}]},"index":0}]}"#;
+        let r1 = normalize_sse_event(chunk1, &LlmProvider::OpenAI, &mut state);
+        assert_eq!(state.tool_index, 1);
+
+        // Second tool call without index
+        let chunk2 = r#"{"choices":[{"delta":{"tool_calls":[{"id":"call_b","function":{"name":"read"}}]},"index":0}]}"#;
+        let r2 = normalize_sse_event(chunk2, &LlmProvider::OpenAI, &mut state);
+        assert_eq!(state.tool_index, 2);
+
+        // Both should have been assigned different indices
+        match &r1[0] {
+            Ok(StreamEvent::ContentBlockStart { index, .. }) => {
+                assert_eq!(*index, 0);
+            }
+            _ => panic!("Expected index 0"),
+        }
+
+        match &r2[0] {
+            Ok(StreamEvent::ContentBlockStart { index, .. }) => {
+                assert_eq!(*index, 1);
+            }
+            _ => panic!("Expected index 1"),
+        }
+    }
 }

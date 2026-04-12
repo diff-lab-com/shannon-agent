@@ -153,3 +153,281 @@ pub fn sse_stream_from_response(response: reqwest::Response, provider: LlmProvid
     let sse = SseStream::new(response, provider);
     Box::pin(sse)
 }
+
+// ── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::adapter::OpenaiStreamState;
+    use crate::api::types::{ContentDelta, StreamEvent};
+
+    /// Helper to parse SSE lines into events
+    fn parse_sse_lines(lines: &[&str], provider: LlmProvider) -> Vec<Result<StreamEvent, crate::api::error::ApiError>> {
+        let mut events = Vec::new();
+        let mut state = OpenaiStreamState::new();
+
+        for line in lines {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with(':') {
+                continue;
+            }
+
+            if let Some(json_str) = line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) {
+                let json_str = json_str.trim();
+                if json_str == "[DONE]" {
+                    events.push(Ok(StreamEvent::MessageStop));
+                    continue;
+                }
+                let mut result_events = crate::api::adapter::normalize_sse_event(json_str, &provider, &mut state);
+                events.append(&mut result_events);
+            }
+        }
+        events
+    }
+
+    // -- Anthropic SSE parsing --
+
+    #[test]
+    fn test_anthropic_message_start() {
+        let lines = vec![
+            r#"data: {"type":"message_start","message":{"id":"msg_123","role":"assistant","content":[],"model":"claude-3","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":0}}}"#,
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::Anthropic);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Ok(StreamEvent::MessageStart { message }) => {
+                assert_eq!(message.id, "msg_123");
+            }
+            other => panic!("Expected MessageStart, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_anthropic_content_block_delta() {
+        let lines = vec![
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#,
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::Anthropic);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                assert_eq!(delta, &ContentDelta::TextDelta { text: "Hello".to_string() });
+            }
+            other => panic!("Expected ContentBlockDelta, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_anthropic_message_stop() {
+        let lines = vec![
+            "data: [DONE]",
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::Anthropic);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Ok(StreamEvent::MessageStop) => {},
+            other => panic!("Expected MessageStop, got {:?}", other),
+        }
+    }
+
+    // -- OpenAI SSE parsing --
+
+    #[test]
+    fn test_openai_streaming_text() {
+        let lines = vec![
+            r#"data: {"choices":[{"delta":{"content":"Hello"},"index":0}]}"#,
+            r#"data: {"choices":[{"delta":{"content":" world"},"index":0}]}"#,
+            r#"data: {"choices":[{"delta":{},"finish_reason":"stop","index":0}]}"#,
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::OpenAI);
+        assert!(events.len() >= 2);
+
+        // First event should be text delta
+        match &events[0] {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                assert_eq!(delta, &ContentDelta::TextDelta { text: "Hello".to_string() });
+            }
+            other => panic!("Expected ContentBlockDelta, got {:?}", other),
+        }
+
+        // Last event should be MessageDelta with finish_reason
+        let last = events.last().unwrap();
+        match last {
+            Ok(StreamEvent::MessageDelta { delta, .. }) => {
+                assert_eq!(delta.stop_reason, Some("stop".to_string()));
+            }
+            other => panic!("Expected MessageDelta at end, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_openai_usage_chunk() {
+        let lines = vec![
+            r#"data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30}}"#,
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::OpenAI);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Ok(StreamEvent::MessageDelta { usage, .. }) => {
+                assert_eq!(usage.input_tokens, 10);
+                assert_eq!(usage.output_tokens, 20);
+            }
+            other => panic!("Expected MessageDelta with usage, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_openai_tool_call_streaming() {
+        let lines = vec![
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"bash","arguments":""}}]},"index":0}]}"#,
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"command\\""}}]},"index":0}]}"#,
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::OpenAI);
+        assert!(events.len() >= 2);
+
+        // First event should be ContentBlockStart
+        match &events[0] {
+            Ok(StreamEvent::ContentBlockStart { .. }) => {},
+            other => panic!("Expected ContentBlockStart, got {:?}", other),
+        }
+
+        // Second event should be ContentBlockDelta with arguments
+        match &events[1] {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                match delta {
+                    ContentDelta::InputJsonDelta { .. } => {},
+                    _ => panic!("Expected InputJsonDelta, got {:?}", delta),
+                }
+            }
+            other => panic!("Expected ContentBlockDelta, got {:?}", other),
+        }
+    }
+
+    // -- Ollama SSE parsing --
+
+    #[test]
+    fn test_ollama_streaming_text() {
+        let lines = vec![
+            r#"data: {"message":{"role":"assistant","content":"Hello"}}"#,
+            r#"data: {"message":{"role":"assistant","content":" world"}}"#,
+            r#"data: {"done":true,"prompt_eval_count":5,"eval_count":10}"#,
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::Ollama);
+        assert!(events.len() >= 3);
+
+        // First two should be text deltas
+        match &events[0] {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                assert_eq!(delta, &ContentDelta::TextDelta { text: "Hello".to_string() });
+            }
+            other => panic!("Expected ContentBlockDelta, got {:?}", other),
+        }
+
+        // Last should be MessageDelta with usage
+        let last = events.last().unwrap();
+        match last {
+            Ok(StreamEvent::MessageDelta { usage, delta, .. }) => {
+                assert_eq!(usage.input_tokens, 5);
+                assert_eq!(usage.output_tokens, 10);
+                assert_eq!(delta.stop_reason, Some("end_turn".to_string()));
+            }
+            other => panic!("Expected MessageDelta, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_ollama_tool_call() {
+        let lines = vec![
+            r#"data: {"message":{"role":"assistant","tool_calls":[{"function":{"name":"bash","arguments":{"command":"ls"}}}]}}"#,
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::Ollama);
+        // Should have ContentBlockStart + ContentBlockStop
+        assert_eq!(events.len(), 2);
+
+        match &events[0] {
+            Ok(StreamEvent::ContentBlockStart { .. }) => {},
+            other => panic!("Expected ContentBlockStart, got {:?}", other),
+        }
+
+        match &events[1] {
+            Ok(StreamEvent::ContentBlockStop { .. }) => {},
+            other => panic!("Expected ContentBlockStop, got {:?}", other),
+        }
+    }
+
+    // -- SSE comment and empty line handling --
+
+    #[test]
+    fn test_sse_comments_ignored() {
+        let lines = vec![
+            ": this is a comment",
+            "",
+            "data: {\"type\":\"ping\"}",
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::Anthropic);
+        // Should only have the ping event, comments and empty lines ignored
+        assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn test_sse_multiple_events_per_line() {
+        // Test that we can handle multiple events
+        let lines = vec![
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"A"}}"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"B"}}"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"C"}}"#,
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::Anthropic);
+        assert_eq!(events.len(), 3);
+    }
+
+    // -- Provider-specific edge cases --
+
+    #[test]
+    fn test_openai_empty_choices() {
+        let lines = vec![
+            r#"data: {"choices":[]}"#,
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::OpenAI);
+        // Should return empty, not error
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_ollama_empty_content() {
+        let lines = vec![
+            r#"data: {"message":{"content":""}}"#,
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::Ollama);
+        // Empty content should be skipped
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_invalid_json_returns_error() {
+        let lines = vec![
+            "data: {invalid json}",
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::OpenAI);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], Err(_)));
+    }
+
+    #[test]
+    fn test_anthropic_passthrough_preserves_all_fields() {
+        let lines = vec![
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":100,"output_tokens":50}}"#,
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::Anthropic);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Ok(StreamEvent::MessageDelta { delta, usage, .. }) => {
+                assert_eq!(delta.stop_reason, Some("end_turn".to_string()));
+                assert_eq!(usage.input_tokens, 100);
+                assert_eq!(usage.output_tokens, 50);
+            }
+            other => panic!("Expected MessageDelta, got {:?}", other),
+        }
+    }
+}

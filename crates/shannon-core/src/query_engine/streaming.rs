@@ -92,8 +92,12 @@ impl ConversationState {
         }
     }
 
-    /// Compress the conversation by summarizing older messages
-    /// Keeps the most recent messages in full and summarizes older ones
+    /// Compress the conversation using the strategy specified in config.
+    ///
+    /// - [`CompressionStrategy::SummarizeOld`]: Keeps the most recent messages in
+    ///   full and replaces older messages with a short summary.
+    /// - [`CompressionStrategy::TruncateOldest`]: Simply drops the oldest messages,
+    ///   keeping only the most recent ones.
     pub fn compress(&mut self, config: &QueryEngineConfig) {
         if self.messages.len() <= config.keep_recent_messages + 1 {
             return; // Not enough messages to compress
@@ -102,19 +106,27 @@ impl ConversationState {
         let keep_count = config.keep_recent_messages;
         let split_point = self.messages.len().saturating_sub(keep_count);
 
-        let old_messages: Vec<Message> = self.messages.drain(..split_point).collect();
-        let summary = Self::summarize_messages(&old_messages);
+        match config.compression_strategy {
+            crate::query_engine::types::CompressionStrategy::SummarizeOld => {
+                let old_messages: Vec<Message> = self.messages.drain(..split_point).collect();
+                let summary = Self::summarize_messages(&old_messages);
 
-        // Create a summary message as a system message
-        let summary_msg = crate::api::Message {
-            role: "system".to_string(),
-            content: crate::api::MessageContent::Text(
-                format!("[Previous conversation summary]\n\n{}", summary),
-            ),
-        };
+                // Create a summary message as a system message
+                let summary_msg = crate::api::Message {
+                    role: "system".to_string(),
+                    content: crate::api::MessageContent::Text(
+                        format!("[Previous conversation summary]\n\n{}", summary),
+                    ),
+                };
 
-        // Insert summary at the beginning
-        self.messages.insert(0, summary_msg);
+                // Insert summary at the beginning
+                self.messages.insert(0, summary_msg);
+            }
+            crate::query_engine::types::CompressionStrategy::TruncateOldest => {
+                // Simply drop the oldest messages without summary
+                self.messages.drain(..split_point);
+            }
+        }
     }
 
     /// Generate a summary of messages

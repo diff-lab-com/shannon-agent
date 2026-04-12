@@ -63,6 +63,7 @@ pub mod settings_sync;
 pub mod remote_settings;
 pub mod mcp_advanced;
 pub mod api_services;
+pub mod unified_config;
 pub mod bridge_service;
 pub mod session_history;
 pub mod compact;
@@ -93,7 +94,7 @@ pub use api::{
     LlmClient, LlmClientConfig, LlmProvider, MessageStream,
     ContentBlock, ContentDelta, ImageSource, Message, MessageContent,
     MessageRequest, MessageResponse, StreamEvent, ToolDefinition, Usage,
-    ApiError,
+    ApiError, RetryConfig,
     // Backward-compatible aliases
     ClaudeClient, ClaudeClientConfig,
 };
@@ -162,6 +163,9 @@ pub use mcp_advanced::{
 pub use api_services::{
     ApiManager, UsageTracker, ApiRequest, ApiResponse,
     UsageStats, ModelUsage, RateLimitInfo, ApiServiceError,
+};
+pub use unified_config::{
+    ShannonConfig, ConfigBuilder,
 };
 pub use bridge_service::{
     BridgeService, BridgeSession, BridgeConfig, BridgeStatus,

@@ -10,6 +10,7 @@ pub mod adapter;
 pub mod vim;
 pub mod repl_enhancement;
 pub mod skill_bridge;
+pub mod tool_format;
 
 pub use repl::{Repl, ReplState};
 pub use events::{Event, EventHandler};

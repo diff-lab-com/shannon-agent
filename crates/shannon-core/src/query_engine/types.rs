@@ -130,6 +130,19 @@ pub struct QueryMetadata {
     pub top_p: Option<f32>,
 }
 
+/// Strategy for compressing conversation history when approaching token limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CompressionStrategy {
+    /// Remove oldest messages beyond `keep_recent_messages`, replacing them with
+    /// a short summary. This is the default and most conservative strategy.
+    #[default]
+    SummarizeOld,
+    /// Simply drop oldest messages beyond `keep_recent_messages` without
+    /// generating a summary. Useful when context window is very small or
+    /// when summary overhead is undesirable.
+    TruncateOldest,
+}
+
 /// Configuration for the query engine
 #[derive(Debug, Clone)]
 pub struct QueryEngineConfig {
@@ -144,6 +157,8 @@ pub struct QueryEngineConfig {
     pub compression_threshold: f32,
     /// Number of recent messages to keep in full during compression
     pub keep_recent_messages: usize,
+    /// Strategy to use when compressing conversation history
+    pub compression_strategy: CompressionStrategy,
     /// System prompt for the LLM (default: coding assistant)
     pub system_prompt: Option<String>,
 }
@@ -159,6 +174,7 @@ impl Default for QueryEngineConfig {
             max_context_tokens: Some(100_000),
             compression_threshold: 0.8,
             keep_recent_messages: 10,
+            compression_strategy: CompressionStrategy::default(),
             system_prompt: Some(
                 "You are Shannon, an expert coding assistant. You help users with software engineering tasks \
                  including writing code, debugging, refactoring, and explaining code. \

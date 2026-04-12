@@ -1,0 +1,296 @@
+//! Unified configuration system with priority-based merging.
+//!
+//! Configuration sources (highest to lowest priority):
+//! 1. CLI arguments (explicit overrides)
+//! 2. Environment variables (`SHANNON_*`)
+//! 3. Project-local config (`.shannon.toml`)
+//! 4. Global config (`~/.shannon/config.toml`)
+//! 5. Default values
+
+use serde::{Deserialize, Serialize};
+
+/// Unified Shannon configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ShannonConfig {
+    pub model: Option<String>,
+    pub provider: Option<String>,
+    pub api_key: Option<String>,
+    pub base_url: Option<String>,
+    pub max_tokens: Option<usize>,
+    pub temperature: Option<f32>,
+    pub timeout: Option<u64>,
+    #[serde(default)]
+    pub debug: bool,
+}
+
+impl ShannonConfig {
+    /// Create an empty config with all fields set to None.
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    /// Merge another config on top of this one.
+    /// Values from `other` take precedence if they are `Some`.
+    pub fn merge(&self, other: &ShannonConfig) -> ShannonConfig {
+        ShannonConfig {
+            model: other.model.clone().or_else(|| self.model.clone()),
+            provider: other.provider.clone().or_else(|| self.provider.clone()),
+            api_key: other.api_key.clone().or_else(|| self.api_key.clone()),
+            base_url: other.base_url.clone().or_else(|| self.base_url.clone()),
+            max_tokens: other.max_tokens.or(self.max_tokens),
+            temperature: other.temperature.or(self.temperature),
+            timeout: other.timeout.or(self.timeout),
+            debug: other.debug || self.debug,
+        }
+    }
+}
+
+/// Builder for constructing a merged configuration from multiple sources.
+pub struct ConfigBuilder {
+    global_toml: ShannonConfig,
+    local_toml: ShannonConfig,
+    env_vars: ShannonConfig,
+    cli_overrides: ShannonConfig,
+}
+
+impl ConfigBuilder {
+    /// Create a new config builder.
+    pub fn new() -> Self {
+        Self {
+            global_toml: ShannonConfig::empty(),
+            local_toml: ShannonConfig::empty(),
+            env_vars: ShannonConfig::empty(),
+            cli_overrides: ShannonConfig::empty(),
+        }
+    }
+
+    /// Load global TOML config from `~/.shannon/config.toml`.
+    pub fn load_global_toml(&mut self) -> &mut Self {
+        if let Some(home) = dirs::home_dir() {
+            let path = home.join(".shannon").join("config.toml");
+            self.global_toml = load_config_file(&path);
+        }
+        self
+    }
+
+    /// Load project-local TOML config from `.shannon.toml`.
+    pub fn load_local_toml(&mut self) -> &mut Self {
+        let path = std::path::Path::new(".shannon.toml");
+        let local = load_config_file(path);
+        self.local_toml = local;
+        self
+    }
+
+    /// Load configuration from environment variables (`SHANNON_*`).
+    pub fn load_env_vars(&mut self) -> &mut Self {
+        self.env_vars = ShannonConfig {
+            model: std::env::var("SHANNON_MODEL").ok(),
+            provider: std::env::var("SHANNON_PROVIDER").ok(),
+            api_key: std::env::var("SHANNON_API_KEY").ok(),
+            base_url: std::env::var("SHANNON_BASE_URL").ok(),
+            max_tokens: std::env::var("SHANNON_MAX_TOKENS")
+                .ok()
+                .and_then(|s| s.parse().ok()),
+            temperature: std::env::var("SHANNON_TEMPERATURE")
+                .ok()
+                .and_then(|s| s.parse().ok()),
+            timeout: std::env::var("SHANNON_TIMEOUT")
+                .ok()
+                .and_then(|s| s.parse().ok()),
+            debug: std::env::var("SHANNON_DEBUG")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(false),
+        };
+        self
+    }
+
+    /// Set CLI argument overrides (highest priority).
+    pub fn set_cli_overrides(&mut self, config: ShannonConfig) -> &mut Self {
+        self.cli_overrides = config;
+        self
+    }
+
+    /// Build the final merged configuration.
+    ///
+    /// Priority (highest to lowest):
+    /// CLI overrides > env vars > local TOML > global TOML
+    pub fn build(&self) -> ShannonConfig {
+        let merged = self
+            .global_toml
+            .merge(&self.local_toml)
+            .merge(&self.env_vars)
+            .merge(&self.cli_overrides);
+        merged
+    }
+}
+
+impl Default for ConfigBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Load a config file (TOML or JSON), returning an empty config if the file doesn't exist or is invalid.
+///
+/// Note: This uses serde_json for parsing. For TOML files in the CLI crate,
+/// use the dedicated TOML parser there and pass the result via `set_cli_overrides`.
+fn load_config_file(path: &std::path::Path) -> ShannonConfig {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return ShannonConfig::empty(),
+    };
+
+    // Try JSON first
+    if let Ok(config) = serde_json::from_str::<ShannonConfig>(&content) {
+        return config;
+    }
+
+    // If it's a TOML file, try simple key=value parsing for common fields
+    // (Full TOML support requires the `toml` crate, available in shannon-cli)
+    let mut config = ShannonConfig::empty();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once('=') {
+            let key = key.trim();
+            let value = value.trim().trim_matches('"');
+            match key {
+                "model" => config.model = Some(value.to_string()),
+                "provider" => config.provider = Some(value.to_string()),
+                "api_key" => config.api_key = Some(value.to_string()),
+                "base_url" => config.base_url = Some(value.to_string()),
+                "max_tokens" => config.max_tokens = value.parse().ok(),
+                "temperature" => config.temperature = value.parse().ok(),
+                "timeout" => config.timeout = value.parse().ok(),
+                "debug" => config.debug = value.parse().unwrap_or(false),
+                _ => {}
+            }
+        }
+    }
+    config
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_empty_config() {
+        let config = ShannonConfig::empty();
+        assert!(config.model.is_none());
+        assert!(config.provider.is_none());
+        assert!(config.api_key.is_none());
+        assert!(!config.debug);
+    }
+
+    #[test]
+    fn test_merge_other_overrides_self() {
+        let base = ShannonConfig {
+            model: Some("base-model".to_string()),
+            provider: Some("anthropic".to_string()),
+            api_key: Some("base-key".to_string()),
+            base_url: None,
+            max_tokens: Some(4096),
+            temperature: None,
+            timeout: None,
+            debug: false,
+        };
+        let override_config = ShannonConfig {
+            model: Some("override-model".to_string()),
+            provider: None, // Don't override
+            api_key: None,
+            base_url: Some("http://custom".to_string()),
+            max_tokens: None,
+            temperature: Some(0.5),
+            timeout: None,
+            debug: true,
+        };
+
+        let merged = base.merge(&override_config);
+        assert_eq!(merged.model, Some("override-model".to_string()));
+        assert_eq!(merged.provider, Some("anthropic".to_string())); // kept from base
+        assert_eq!(merged.api_key, Some("base-key".to_string())); // kept from base
+        assert_eq!(merged.base_url, Some("http://custom".to_string())); // from override
+        assert_eq!(merged.max_tokens, Some(4096)); // kept from base
+        assert_eq!(merged.temperature, Some(0.5)); // from override
+        assert!(merged.debug); // from override
+    }
+
+    #[test]
+    fn test_builder_priority_chain() {
+        let mut builder = ConfigBuilder::new();
+
+        // Simulate global TOML
+        builder.global_toml = ShannonConfig {
+            model: Some("global-model".to_string()),
+            provider: Some("anthropic".to_string()),
+            max_tokens: Some(2048),
+            ..Default::default()
+        };
+
+        // Simulate local TOML (overrides global)
+        builder.local_toml = ShannonConfig {
+            model: Some("local-model".to_string()),
+            temperature: Some(0.7),
+            ..Default::default()
+        };
+
+        // Simulate env vars (overrides TOML)
+        builder.env_vars = ShannonConfig {
+            api_key: Some("env-key".to_string()),
+            max_tokens: Some(8192),
+            ..Default::default()
+        };
+
+        // Simulate CLI overrides (highest priority)
+        builder.cli_overrides = ShannonConfig {
+            model: Some("cli-model".to_string()),
+            debug: true,
+            ..Default::default()
+        };
+
+        let config = builder.build();
+
+        // CLI wins for model
+        assert_eq!(config.model, Some("cli-model".to_string()));
+        // Local TOML provides provider (not overridden by env or CLI)
+        assert_eq!(config.provider, Some("anthropic".to_string()));
+        // Env provides api_key
+        assert_eq!(config.api_key, Some("env-key".to_string()));
+        // Env overrides global max_tokens
+        assert_eq!(config.max_tokens, Some(8192));
+        // Local TOML provides temperature
+        assert_eq!(config.temperature, Some(0.7));
+        // CLI sets debug
+        assert!(config.debug);
+    }
+
+    #[test]
+    fn test_builder_empty_sources() {
+        let config = ConfigBuilder::new().build();
+        assert!(config.model.is_none());
+        assert!(config.provider.is_none());
+    }
+
+    #[test]
+    fn test_merge_both_none_stays_none() {
+        let a = ShannonConfig::empty();
+        let b = ShannonConfig::empty();
+        let merged = a.merge(&b);
+        assert!(merged.model.is_none());
+        assert!(merged.max_tokens.is_none());
+    }
+
+    #[test]
+    fn test_merge_debug_or_logic() {
+        let a = ShannonConfig { debug: true, ..Default::default() };
+        let b = ShannonConfig { debug: false, ..Default::default() };
+        // a.debug || b.debug when b overrides
+        let merged = a.merge(&b);
+        // b.debug is false, but a.debug was true — since merge uses `other.debug || self.debug`
+        assert!(merged.debug);
+    }
+}
