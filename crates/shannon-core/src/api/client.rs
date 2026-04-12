@@ -27,22 +27,25 @@ impl LlmClient {
     /// Create client from environment variables.
     ///
     /// Checks `SHANNON_API_KEY` -> `ANTHROPIC_API_KEY` -> `OPENAI_API_KEY`
-    /// and auto-detects provider from base URL.
+    /// and auto-detects provider from base URL. Falls back to Ollama if no
+    /// API keys are found.
     pub fn from_env() -> Result<Self, ApiError> {
-        let api_key = std::env::var("SHANNON_API_KEY")
-            .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
-            .or_else(|_| std::env::var("OPENAI_API_KEY"))
-            .map_err(|_| ApiError::AuthenticationFailed)?;
+        let config = LlmClientConfig::default();
 
-        if api_key.is_empty() {
+        // Validate configuration (will catch missing API keys for auth-required providers)
+        if let Err(e) = config.validate() {
+            tracing::warn!("LLM config issue: {}", e);
+        }
+
+        if config.provider.requires_auth() && config.api_key.is_empty() {
             return Err(ApiError::AuthenticationFailed);
         }
 
-        let config = LlmClientConfig::default();
-        Ok(Self::new(LlmClientConfig {
-            api_key,
-            ..config
-        }))
+        Ok(if config.provider.requires_auth() {
+            Self::new(config)
+        } else {
+            Self::new_unauthenticated(config)
+        })
     }
 
     /// Create a client that requires no authentication (e.g., Ollama)

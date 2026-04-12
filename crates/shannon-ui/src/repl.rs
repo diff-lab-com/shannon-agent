@@ -28,6 +28,8 @@ use uuid::Uuid;
 use shannon_core::{
     api::LlmClientConfig,
     permissions::PermissionManager,
+    plugin_tool::register_plugin_tools,
+    plugins::PluginManager,
     query_engine::{QueryContext, QueryEngine, QueryEvent, PermissionRequest},
     state::StateManager,
     tools::ToolRegistry,
@@ -35,6 +37,7 @@ use shannon_core::{
 use shannon_commands::{CommandRegistry, CommandParser, builtin_commands, help_utils};
 // Tool registration
 use shannon_tools::register_default_tools;
+use crate::skill_bridge::register_skills_as_tools;
 
 /// Application state for the REPL
 #[derive(Debug, Clone)]
@@ -140,6 +143,8 @@ pub struct Repl {
     tools_invoked: usize,
     /// Tab completion state for cycling through matches
     tab_completion_state: TabCompletionState,
+    /// Plugin manager for discovering, loading, and managing plugins
+    plugin_manager: PluginManager,
 }
 
 /// State for tab completion cycling
@@ -162,9 +167,83 @@ impl Repl {
         let mut tool_registry = ToolRegistry::new();
         register_default_tools(&mut tool_registry).map_err(|e| anyhow::anyhow!("Failed to register tools: {}", e))?;
 
+        // Load and register skills from shannon-skills as tools
+        register_skills_as_tools(&mut tool_registry);
+
+        // Discover and load plugins, register their tools
+        let mut plugin_manager = PluginManager::new();
+        let plugin_results = runtime.block_on(plugin_manager.discover_and_load_all());
+        match &plugin_results {
+            Ok(loaded) if !loaded.is_empty() => {
+                tracing::info!("Loaded {} plugin(s): {:?}", loaded.len(), loaded);
+            }
+            Ok(_) => {
+                tracing::debug!("No plugins found");
+            }
+            Err(e) => {
+                tracing::warn!("Plugin discovery failed: {}", e);
+            }
+        }
+        register_plugin_tools(&plugin_manager, &mut tool_registry);
+
+        // Discover MCP server configurations from ~/.shannon/mcp_servers.json
+        {
+            let mut mcp_registry = shannon_core::mcp_advanced::McpServerRegistry::new();
+            let mcp_count = mcp_registry.load_from_default_paths();
+            if mcp_count > 0 {
+                tracing::info!("Discovered {} MCP server configuration(s)", mcp_count);
+                // Register discovered servers' tools as McpTool adapters
+                for config in mcp_registry.enabled_servers() {
+                    let tool_name = format!("mcp_{}", config.name);
+                    let description = format!(
+                        "Execute tool calls on MCP server '{}' ({})",
+                        config.name, config.transport_type
+                    );
+                    let input_schema = serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "tool_name": {
+                                "type": "string",
+                                "description": "Name of the tool to call on the MCP server"
+                            },
+                            "arguments": {
+                                "type": "object",
+                                "description": "Arguments to pass to the MCP tool"
+                            }
+                        },
+                        "required": ["tool_name"]
+                    });
+                    let mcp_tool = shannon_core::mcp_tool_adapter::McpToolAdapter::new(
+                        config.name.clone(),
+                        config.command.clone(),
+                        config.args.clone(),
+                        config.env.clone(),
+                        description,
+                        input_schema,
+                    );
+                    if let Err(e) = tool_registry.register(Box::new(mcp_tool)) {
+                        tracing::debug!("MCP tool registration skipped: {}", e);
+                    } else {
+                        tracing::info!("Registered MCP tool: {}", tool_name);
+                    }
+                }
+            }
+        }
+
         // Create LLM client
         let client_config = LlmClientConfig::default();
-        let client = shannon_core::api::LlmClient::new(client_config);
+
+        // Validate config and show warning if not fully configured
+        if let Err(e) = client_config.validate() {
+            eprintln!("Warning: {}", e);
+        }
+        tracing::info!("LLM config: {}", client_config.describe());
+
+        let client = if client_config.provider.requires_auth() {
+            shannon_core::api::LlmClient::new(client_config)
+        } else {
+            shannon_core::api::LlmClient::new_unauthenticated(client_config)
+        };
 
         // Create permission manager
         let permission_manager = PermissionManager::new();
@@ -172,13 +251,24 @@ impl Repl {
         // Create state manager
         let state_manager = StateManager::new();
 
-        // Create query engine
-        let query_engine = QueryEngine::with_defaults(
+        // Create query engine with optional memory store
+        let base_engine = QueryEngine::with_defaults(
             client,
             tool_registry,
             permission_manager,
             state_manager,
         );
+
+        // Initialize memory store at ~/.shannon/memories/
+        let query_engine = {
+            let memory_path = dirs::home_dir()
+                .map(|h| h.join(".shannon").join("memories"))
+                .unwrap_or_else(|| std::path::PathBuf::from(".shannon/memories"));
+            let mut mem_store = shannon_core::MemoryStore::new(memory_path);
+            // Load existing memories from disk (ignore errors on first run)
+            let _ = mem_store.load();
+            base_engine.with_memory(mem_store)
+        };
 
         // Create permission request channel
         let (permission_req_tx, permission_req_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -215,6 +305,7 @@ impl Repl {
             commands_run: 0,
             tools_invoked: 0,
             tab_completion_state: TabCompletionState::default(),
+            plugin_manager,
         })
     }
 

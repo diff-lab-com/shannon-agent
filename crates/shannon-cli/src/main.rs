@@ -219,6 +219,10 @@ enum Commands {
         /// Working directory for the session (default: current directory)
         #[arg(long)]
         cwd: Option<String>,
+
+        /// Use local Ollama for inference (shortcut for --provider ollama)
+        #[arg(short, long)]
+        local: bool,
     },
 
     /// Display version information
@@ -320,14 +324,82 @@ fn run_noninteractive_query(query: &str, stream: bool, config: &CliConfig) -> Re
         register_default_tools(&mut tools)
             .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
 
+        // Load and register skills from shannon-skills as tools
+        shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
+
+        // Discover and load plugins, register their tools
+        let mut plugin_manager = shannon_core::PluginManager::new();
+        match plugin_manager.discover_and_load_all().await {
+            Ok(loaded) if !loaded.is_empty() => {
+                eprintln!("Loaded {} plugin(s)", loaded.len());
+            }
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("Warning: plugin discovery failed: {}", e);
+            }
+        }
+        shannon_core::register_plugin_tools(&plugin_manager, &mut tools);
+
+        // Discover MCP server configurations
+        {
+            let mut mcp_registry = shannon_core::mcp_advanced::McpServerRegistry::new();
+            let mcp_count = mcp_registry.load_from_default_paths();
+            if mcp_count > 0 {
+                eprintln!("Discovered {} MCP server(s)", mcp_count);
+                for config in mcp_registry.enabled_servers() {
+                    let description = format!(
+                        "Execute tool calls on MCP server '{}' ({})",
+                        config.name, config.transport_type
+                    );
+                    let input_schema = serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "tool_name": {"type": "string", "description": "Tool to call on MCP server"},
+                            "arguments": {"type": "object", "description": "Arguments for the MCP tool"}
+                        },
+                        "required": ["tool_name"]
+                    });
+                    let mcp_tool = shannon_core::McpToolAdapter::new(
+                        config.name.clone(),
+                        config.command.clone(),
+                        config.args.clone(),
+                        config.env.clone(),
+                        description,
+                        input_schema,
+                    );
+                    let _ = tools.register(Box::new(mcp_tool));
+                }
+            }
+        }
+
         // Build LLM client with explicit config
         let client_config = LlmClientConfig::default();
-        let client = shannon_core::api::LlmClient::new(client_config);
+
+        // Validate and warn
+        if let Err(e) = client_config.validate() {
+            eprintln!("Warning: {}", e);
+        }
+
+        let client = if client_config.provider.requires_auth() {
+            shannon_core::api::LlmClient::new(client_config)
+        } else {
+            shannon_core::api::LlmClient::new_unauthenticated(client_config)
+        };
 
         let permissions = shannon_core::permissions::PermissionManager::new();
         let state = StateManager::new();
 
-        let engine = QueryEngine::with_defaults(client, tools, permissions, state);
+        let base_engine = QueryEngine::with_defaults(client, tools, permissions, state);
+
+        // Initialize memory store at ~/.shannon/memories/
+        let engine = {
+            let memory_path = dirs::home_dir()
+                .map(|h| h.join(".shannon").join("memories"))
+                .unwrap_or_else(|| std::path::PathBuf::from(".shannon/memories"));
+            let mut mem_store = shannon_core::MemoryStore::new(memory_path);
+            let _ = mem_store.load();
+            base_engine.with_memory(mem_store)
+        };
 
         let context = QueryContext {
             query_id: Uuid::new_v4(),
@@ -422,12 +494,23 @@ fn main() -> Result<()> {
             debug,
             cwd: _,
             file: _,
+            local,
         }) => {
             let env_overrides = parse_cli_env(env)
                 .map_err(|e| anyhow::anyhow!(e))?;
+            let resolved_provider = if *local {
+                Some("ollama".to_string())
+            } else {
+                provider.clone()
+            };
+            let resolved_model = if *local && model.is_none() {
+                Some("llama3".to_string())
+            } else {
+                model.clone()
+            };
             build_cli_config(
-                model.as_deref(),
-                provider.as_deref(),
+                resolved_model.as_deref(),
+                resolved_provider.as_deref(),
                 *max_tokens,
                 *temperature,
                 *timeout,
@@ -744,7 +827,7 @@ mod tests {
     fn test_cli_parse_repl_no_args() {
         let cli = Cli::try_parse_from(["shannon", "repl"]).unwrap();
         match cli.command {
-            Some(Commands::Repl { file, env, model: _, provider: _, max_tokens: _, temperature: _, timeout: _, debug: _, cwd: _ }) => {
+            Some(Commands::Repl { file, env, .. }) => {
                 assert!(file.is_none());
                 assert!(env.is_empty());
             }
@@ -756,7 +839,7 @@ mod tests {
     fn test_cli_parse_repl_with_file() {
         let cli = Cli::try_parse_from(["shannon", "repl", "--file", "project.json"]).unwrap();
         match cli.command {
-            Some(Commands::Repl { file, env: _, model: _, provider: _, max_tokens: _, temperature: _, timeout: _, debug: _, cwd: _ }) => {
+            Some(Commands::Repl { file, .. }) => {
                 assert_eq!(file.as_deref(), Some("project.json"));
             }
             _ => panic!("Expected Repl command"),
@@ -775,7 +858,7 @@ mod tests {
         ])
         .unwrap();
         match cli.command {
-            Some(Commands::Repl { env, file: _, model: _, provider: _, max_tokens: _, temperature: _, timeout: _, debug: _, cwd: _ }) => {
+            Some(Commands::Repl { env, .. }) => {
                 assert_eq!(env.len(), 2);
                 assert_eq!(env[0], "MODEL=gpt-4o");
                 assert_eq!(env[1], "TOKENS=4096");
@@ -1108,6 +1191,7 @@ mod tests {
                 cwd,
                 env,
                 file,
+                local,
             }) => {
                 assert!(model.is_none());
                 assert!(provider.is_none());
@@ -1118,9 +1202,58 @@ mod tests {
                 assert!(cwd.is_none());
                 assert!(env.is_empty());
                 assert!(file.is_none());
+                assert!(!local);
             }
             _ => panic!("Expected Repl command"),
         }
+    }
+
+    #[test]
+    fn test_cli_parse_repl_local_flag() {
+        let cli = Cli::try_parse_from(["shannon", "repl", "--local"]).unwrap();
+        match cli.command {
+            Some(Commands::Repl { local, .. }) => {
+                assert!(local);
+            }
+            _ => panic!("Expected Repl command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_repl_local_short() {
+        let cli = Cli::try_parse_from(["shannon", "repl", "-l"]).unwrap();
+        match cli.command {
+            Some(Commands::Repl { local, .. }) => {
+                assert!(local);
+            }
+            _ => panic!("Expected Repl command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_repl_local_resolves_provider_and_model() {
+        // --local should resolve to provider=ollama and model=llama3
+        let config = build_cli_config(
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            HashMap::new(),
+        );
+        // Without --local, default provider depends on env
+        let local_config = build_cli_config(
+            Some("llama3"),
+            Some("ollama"),
+            None,
+            None,
+            None,
+            false,
+            HashMap::new(),
+        );
+        assert_eq!(local_config.provider.as_deref(), Some("ollama"));
+        assert_eq!(local_config.model.as_deref(), Some("llama3"));
     }
 
     // ── Query subcommand tests ──────────────────────────────────────────

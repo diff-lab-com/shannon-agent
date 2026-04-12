@@ -721,6 +721,63 @@ impl McpServerRegistry {
         let configs: Vec<&McpServerConfig> = self.list_servers();
         serde_json::to_value(configs).unwrap_or(serde_json::Value::Array(vec![]))
     }
+
+    /// Load server configurations from default file paths.
+    ///
+    /// Searches (in order, later wins):
+    ///   1. `~/.shannon/mcp_servers.json` — global user config
+    ///   2. `.shannon/mcp_servers.json` — project-local config
+    ///
+    /// Returns the number of servers loaded. Malformed entries are logged and
+    /// skipped so the application doesn't crash.
+    pub fn load_from_default_paths(&mut self) -> usize {
+        let mut count = 0usize;
+
+        let paths: Vec<std::path::PathBuf> = {
+            let mut p = Vec::new();
+            // Global: ~/.shannon/mcp_servers.json
+            if let Some(home) = dirs::home_dir() {
+                p.push(home.join(".shannon").join("mcp_servers.json"));
+            }
+            // Project-local: .shannon/mcp_servers.json
+            p.push(std::path::PathBuf::from(".shannon/mcp_servers.json"));
+            p
+        };
+
+        for path in &paths {
+            if !path.exists() {
+                continue;
+            }
+            match std::fs::read_to_string(path) {
+                Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
+                    Ok(json) => {
+                        let before = self.count();
+                        if let Err(e) = self.load_from_json(json) {
+                            tracing::warn!("MCP config error in {:?}: {}", path, e);
+                            continue;
+                        }
+                        let loaded = self.count().saturating_sub(before);
+                        if loaded > 0 {
+                            tracing::info!(
+                                "Loaded {} MCP server(s) from {:?}",
+                                loaded,
+                                path
+                            );
+                            count += loaded;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Invalid JSON in {:?}: {}", path, e);
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!("Cannot read {:?}: {}", path, e);
+                }
+            }
+        }
+
+        count
+    }
 }
 
 // ============================================================================
@@ -1078,5 +1135,56 @@ mod tests {
         let mut registry2 = McpServerRegistry::new();
         registry2.load_from_json(json).unwrap();
         assert!(registry2.contains("exp-srv"));
+    }
+
+    #[test]
+    fn test_load_from_default_paths_no_files() {
+        // With no config files, should return 0 and not panic
+        let mut registry = McpServerRegistry::new();
+        let count = registry.load_from_default_paths();
+        assert_eq!(count, 0);
+        assert_eq!(registry.count(), 0);
+    }
+
+    #[test]
+    fn test_load_from_json_array() {
+        let mut registry = McpServerRegistry::new();
+        let json = serde_json::json!([
+            {
+                "name": "test-stdio",
+                "transport_type": "Stdio",
+                "command": "node",
+                "args": ["server.js"],
+                "enabled": true
+            },
+            {
+                "name": "test-http",
+                "transport_type": "Http",
+                "enabled": true
+            }
+        ]);
+        registry.load_from_json(json).unwrap();
+        assert_eq!(registry.count(), 2);
+        assert!(registry.contains("test-stdio"));
+        assert!(registry.contains("test-http"));
+    }
+
+    #[test]
+    fn test_load_from_json_merges_existing() {
+        let mut registry = McpServerRegistry::new();
+        registry.register(McpServerConfig::new_stdio("existing", "python")).unwrap();
+
+        let json = serde_json::json!([
+            {
+                "name": "existing",
+                "transport_type": "Stdio",
+                "command": "node",
+                "enabled": true
+            }
+        ]);
+        registry.load_from_json(json).unwrap();
+        // Should update, not duplicate
+        assert_eq!(registry.count(), 1);
+        assert_eq!(registry.get("existing").unwrap().command, Some("node".to_string()));
     }
 }

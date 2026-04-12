@@ -28,6 +28,8 @@
 
 pub mod query_engine;
 pub mod tools;
+pub mod plugin_tool;
+pub mod mcp_tool_adapter;
 pub mod permissions;
 pub mod state;
 pub mod api;
@@ -98,6 +100,8 @@ pub use api::{
 pub use settings::{Settings, SettingsManager, SettingsError};
 pub use hooks::{HookManager, HookEvent, HookResult, HookDecision, HookEventType, HookError};
 pub use plugins::{PluginManager, PluginManifest, PluginState, PluginError, Plugin, PluginStateFile};
+pub use plugin_tool::{PluginTool, register_plugin_tools};
+pub use mcp_tool_adapter::McpToolAdapter;
 pub use updater::{AutoUpdater, UpdateStatus, UpdaterConfig, ReleaseInfo, UpdateError};
 pub use memory::{
     MemoryStore, MemoryEntry, MemoryCategory, AutoDreamService, MemoryError,

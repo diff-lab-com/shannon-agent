@@ -3,6 +3,8 @@
 use crate::api::{
     ContentBlock, ContentDelta, LlmClient, Message, MessageContent, StreamEvent, ToolResultContent,
 };
+use crate::memory::AutoDreamService;
+use crate::memory::MemoryStore;
 use crate::permissions::PermissionManager;
 use crate::query_engine::streaming::ConversationState;
 use crate::query_engine::types::{
@@ -25,6 +27,8 @@ pub struct QueryEngine {
     pub(crate) config: QueryEngineConfig,
     pub(crate) conversation: ConversationState,
     pub(crate) cost_tracker: Arc<RwLock<CostTracker>>,
+    /// Optional memory store for persisting and retrieving conversation memories.
+    pub(crate) memory: Option<Arc<std::sync::RwLock<MemoryStore>>>,
 }
 
 impl QueryEngine {
@@ -45,6 +49,7 @@ impl QueryEngine {
             config,
             conversation: ConversationState::default(),
             cost_tracker: Arc::new(RwLock::new(CostTracker::new(model))),
+            memory: None,
         }
     }
 
@@ -64,7 +69,18 @@ impl QueryEngine {
             config: QueryEngineConfig::default(),
             conversation: ConversationState::default(),
             cost_tracker: Arc::new(RwLock::new(CostTracker::new(model))),
+            memory: None,
         }
+    }
+
+    /// Attach a memory store to this query engine.
+    ///
+    /// Enables memory-augmented queries (relevant memories injected into the
+    /// system prompt) and automatic memory extraction after each conversation
+    /// turn via [`AutoDreamService`].
+    pub fn with_memory(mut self, store: MemoryStore) -> Self {
+        self.memory = Some(Arc::new(std::sync::RwLock::new(store)));
+        self
     }
 
     /// Get a reference to the tool registry
@@ -122,13 +138,43 @@ impl QueryEngine {
         let client_base_url = self.client.base_url().to_string();
         let client_max_tokens = self.client.max_tokens();
         let user_message = context.user_message.clone();
-        let system_prompt = config.system_prompt.clone();
+
+        // Search for relevant memories to augment the system prompt
+        let memory_entries = if let Some(ref mem_store) = self.memory {
+            match mem_store.read() {
+                Ok(store) => {
+                    let results = store.search(&user_message, None);
+                    results.into_iter().take(5).collect::<Vec<_>>()
+                }
+                Err(_) => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
+
+        let system_prompt = if memory_entries.is_empty() {
+            config.system_prompt.clone()
+        } else {
+            let mut prompt = config.system_prompt.clone().unwrap_or_default();
+            prompt.push_str("\n\n## Relevant Memories\n");
+            for entry in &memory_entries {
+                prompt.push_str(&format!(
+                    "- [{}] (confidence: {:.2}) {}\n",
+                    entry.category, entry.confidence, entry.content
+                ));
+            }
+            Some(prompt)
+        };
+
         // Clone existing conversation to preserve multi-turn context
         let mut conversation = self.conversation.clone();
         conversation.messages.push(Message {
             role: "user".to_string(),
-            content: MessageContent::Text(user_message),
+            content: MessageContent::Text(user_message.clone()),
         });
+
+        // Clone memory store for post-query extraction (fire-and-forget)
+        let memory_for_extraction = self.memory.clone();
 
         // Spawn background task to handle query processing
         tokio::spawn(async move {
@@ -479,6 +525,19 @@ impl QueryEngine {
                         return;
                     }
                 }
+            }
+
+            // Post-query: fire-and-forget memory extraction via AutoDreamService
+            if let Some(ref mem_store) = memory_for_extraction {
+                let store_arc = mem_store.clone();
+                let msgs = conversation.messages.clone();
+                tokio::spawn(async move {
+                    let dream = AutoDreamService::new(store_arc);
+                    let project = std::env::current_dir()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|_| "default".to_string());
+                    let _ = dream.process_conversation(&msgs, &project);
+                });
             }
         });
 

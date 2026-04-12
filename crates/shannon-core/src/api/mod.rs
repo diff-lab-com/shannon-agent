@@ -151,7 +151,8 @@ mod tests {
     fn test_config_default() {
         let config = LlmClientConfig::default();
         assert_eq!(config.max_tokens, 4096);
-        assert_eq!(config.timeout_seconds, 120);
+        // Timeout depends on provider: 120 for cloud, 300 for Ollama fallback
+        assert!(config.timeout_seconds == 120 || config.timeout_seconds == 300);
         assert!(config.extra_headers.is_empty());
     }
 

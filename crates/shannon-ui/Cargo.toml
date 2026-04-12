@@ -9,6 +9,7 @@ shannon-agents = { path = "../shannon-agents" }
 shannon-commands = { path = "../shannon-commands" }
 shannon-tools = { path = "../shannon-tools" }
 shannon-mcp = { path = "../shannon-mcp" }
+shannon-skills = { path = "../shannon-skills" }
 shannon-types = { path = "../shannon-types" }
 ratatui = "0.29"
 crossterm = "0.28"
@@ -24,3 +25,5 @@ atty = "0.2"
 anyhow = "1.0"
 async-trait = "0.1"
 thiserror = "2.0"
+tracing = "0.1"
+dirs = "5.0"

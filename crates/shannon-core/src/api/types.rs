@@ -105,6 +105,22 @@ impl Default for LlmClientConfig {
 
         let provider = LlmProvider::from_base_url(&base_url);
 
+        // If no API key is configured and provider requires auth, check for Ollama
+        let (api_key, base_url, model, provider) = if api_key.is_empty()
+            && provider.requires_auth()
+            && !std::env::var("SHANNON_BASE_URL").is_ok()
+        {
+            tracing::info!("No API key configured, defaulting to Ollama (localhost:11434)");
+            (
+                String::new(),
+                "http://localhost:11434".to_string(),
+                std::env::var("SHANNON_MODEL").unwrap_or_else(|_| "llama3".to_string()),
+                LlmProvider::Ollama,
+            )
+        } else {
+            (api_key, base_url, model, provider)
+        };
+
         let api_version = match provider {
             LlmProvider::Anthropic => std::env::var("ANTHROPIC_API_VERSION")
                 .unwrap_or_else(|_| "2023-06-01".to_string()),
@@ -116,7 +132,7 @@ impl Default for LlmClientConfig {
             base_url,
             model,
             max_tokens: 4096,
-            timeout_seconds: 120,
+            timeout_seconds: if provider == LlmProvider::Ollama { 300 } else { 120 },
             api_version,
             provider,
             extra_headers: HashMap::new(),
@@ -125,6 +141,54 @@ impl Default for LlmClientConfig {
 }
 
 impl LlmClientConfig {
+    /// Validate that the configuration has the minimum required fields.
+    ///
+    /// Returns a human-readable error description if something is wrong.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.base_url.trim().is_empty() {
+            return Err("base_url is empty. Set SHANNON_BASE_URL or pass --provider ollama".to_string());
+        }
+
+        // Auth-based providers need an API key
+        if self.provider.requires_auth() && self.api_key.trim().is_empty() {
+            return Err(format!(
+                "API key required for provider '{}' but not found. \
+                 Set SHANNON_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY. \
+                 Or use --provider ollama for local inference.",
+                self.provider
+            ));
+        }
+
+        if self.model.trim().is_empty() {
+            return Err("model is empty. Set SHANNON_MODEL or pass --model <name>".to_string());
+        }
+
+        Ok(())
+    }
+
+    /// Quick check whether the config is ready to make API calls.
+    pub fn is_configured(&self) -> bool {
+        self.validate().is_ok()
+    }
+
+    /// Return a user-friendly description of the current configuration.
+    pub fn describe(&self) -> String {
+        let auth_status = if self.provider.requires_auth() {
+            if self.api_key.is_empty() {
+                "NO API KEY".to_string()
+            } else {
+                format!("key={}..{}", &self.api_key[..2.min(self.api_key.len())], &self.api_key[self.api_key.len().saturating_sub(4)..])
+            }
+        } else {
+            "no auth needed".to_string()
+        };
+
+        format!(
+            "provider={} model={} base_url={} [{}]",
+            self.provider, self.model, self.base_url, auth_status
+        )
+    }
+
     /// Create a permissive config for Ollama (no auth needed)
     pub fn ollama_default() -> Self {
         Self {

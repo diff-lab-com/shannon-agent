@@ -26,6 +26,7 @@ shannon-core = { path = "../shannon-core" }
 shannon-ui = { path = "../shannon-ui" }
 shannon-commands = { path = "../shannon-commands" }
 shannon-tools = { path = "../shannon-tools" }
+shannon-skills = { path = "../shannon-skills" }
 
 [dev-dependencies]
 tokio-test = "0.4"
