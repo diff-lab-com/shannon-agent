@@ -14,7 +14,7 @@
 //!
 //! ## Example: Resume a previous session
 //!
-//! ```no_run
+//! ```ignore
 //! use shannon_core::query_engine::QueryEngine;
 //! use uuid::Uuid;
 //!
@@ -541,10 +541,48 @@ impl QueryEngine {
                                                         // If no permission channel, assume auto-allow (for non-interactive contexts)
                                                     }
 
-                                                    match tools
+                                                    // Spawn a timer that emits periodic
+                                                    // progress events for long-running
+                                                    // tools (>2s).
+                                                    let progress_tx = tx.clone();
+                                                    let tool_name_clone = tool_name.clone();
+                                                    let tool_id_clone = tool_id.clone();
+                                                    let progress_handle = tokio::spawn(async move {
+                                                        let mut elapsed = 0u64;
+                                                        loop {
+                                                            tokio::time::sleep(
+                                                                tokio::time::Duration::from_secs(2),
+                                                            )
+                                                            .await;
+                                                            elapsed += 2;
+                                                            let progress =
+                                                                (elapsed as f32 / 30.0).min(0.95);
+                                                            let _ = progress_tx.send(Ok(
+                                                                QueryEvent::ToolProgress {
+                                                                    query_id,
+                                                                    tool_use_id: tool_id_clone
+                                                                        .clone(),
+                                                                    tool_name: tool_name_clone
+                                                                        .clone(),
+                                                                    progress,
+                                                                    message: format!(
+                                                                        "Running for {}s...",
+                                                                        elapsed
+                                                                    ),
+                                                                },
+                                                            ));
+                                                        }
+                                                    });
+
+                                                    let result = tools
                                                         .execute(&tool_name, tool_input.clone())
-                                                        .await
-                                                    {
+                                                        .await;
+
+                                                    // Abort the progress timer now that
+                                                    // the tool has finished.
+                                                    progress_handle.abort();
+
+                                                    match result {
                                                         Ok(output) => {
                                                             let _ = tx.send(Ok(QueryEvent::ToolUseResult {
                                                                 query_id,

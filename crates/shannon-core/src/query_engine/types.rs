@@ -228,6 +228,15 @@ pub enum QueryEvent {
     /// Progress update
     Progress { query_id: Uuid, message: String },
 
+    /// Tool execution progress update
+    ToolProgress {
+        query_id: Uuid,
+        tool_use_id: String,
+        tool_name: String,
+        progress: f32,
+        message: String,
+    },
+
     /// Usage statistics
     Usage {
         query_id: Uuid,

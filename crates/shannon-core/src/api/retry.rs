@@ -77,7 +77,7 @@ fn rand_jitter_factor() -> f64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .subsec_nanos();
-    (now as f64 / u32::MAX as f64)
+    now as f64 / u32::MAX as f64
 }
 
 /// Execute an async operation with retry logic.

@@ -1663,6 +1663,11 @@ impl Repl {
                         response_text.push_str(&usage);
                     }
                     Ok(QueryEvent::Cost { .. }) => {}
+                    Ok(QueryEvent::ToolProgress { progress, .. }) => {
+                        let pct = (progress * 100.0) as u32;
+                        let progress_msg = format!("\n⏳ Tool progress: {}%", pct);
+                        response_text.push_str(&progress_msg);
+                    }
                     Ok(QueryEvent::Completed { .. }) => {}
                     Ok(QueryEvent::Failed { error, .. }) => {
                         return Err(format!("Query failed: {}", error));

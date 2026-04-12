@@ -697,6 +697,9 @@ mod e2e_client_tests {
             api_version: "2023-06-01".to_string(),
             provider,
             extra_headers: Default::default(),
+            retry_config: shannon_core::api::RetryConfig::default(),
+            fallback_provider: None,
+            fallback_base_url: None,
         };
         LlmClient::new(config)
     }

@@ -1,5 +1,6 @@
 //! Message, request/response, and content types for the LLM API.
 
+use crate::api::retry::RetryConfig;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -84,6 +85,11 @@ pub struct LlmClientConfig {
     pub api_version: String,
     pub provider: LlmProvider,
     pub extra_headers: HashMap<String, String>,
+    pub retry_config: RetryConfig,
+    /// Fallback provider to try when the primary provider fails after all retries.
+    pub fallback_provider: Option<LlmProvider>,
+    /// Fallback base URL used together with `fallback_provider`.
+    pub fallback_base_url: Option<String>,
 }
 
 impl Default for LlmClientConfig {
@@ -136,6 +142,9 @@ impl Default for LlmClientConfig {
             api_version,
             provider,
             extra_headers: HashMap::new(),
+            retry_config: RetryConfig::default(),
+            fallback_provider: None,
+            fallback_base_url: None,
         }
     }
 }
@@ -200,6 +209,9 @@ impl LlmClientConfig {
             api_version: String::new(),
             provider: LlmProvider::Ollama,
             extra_headers: HashMap::new(),
+            retry_config: RetryConfig::default(),
+            fallback_provider: None,
+            fallback_base_url: None,
         }
     }
 
@@ -219,6 +231,9 @@ impl LlmClientConfig {
             api_version: String::new(),
             provider: LlmProvider::OpenAI,
             extra_headers: HashMap::new(),
+            retry_config: RetryConfig::default(),
+            fallback_provider: None,
+            fallback_base_url: None,
         }
     }
 }
