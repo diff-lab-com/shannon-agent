@@ -328,10 +328,17 @@ impl Repl {
 
         self.running = true;
 
-        // Show welcome message directly in the main UI
+        // Show welcome message rendered through the markdown renderer
+        let welcome_md = self.renderer.render_markdown(
+            "# Welcome to Shannon!\n\nType your message and press **Enter**. Type `/help` for commands."
+        );
+        let welcome_text: String = welcome_md.iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.clone()))
+            .collect::<Vec<_>>()
+            .join("");
         self.chat.add_message(
             ChatRole::System,
-            "Welcome to Shannon! Type your message and press Enter. Type /help for commands.".to_string(),
+            welcome_text,
         );
 
         // Check for updates on startup (non-blocking)
@@ -748,19 +755,32 @@ impl Repl {
 
     /// Handle a command (starts with /)
     fn handle_command(&mut self, input: &str) -> Result<()> {
-        let parts: Vec<&str> = input.splitn(2, ' ').collect();
-        let cmd = parts.first().copied().unwrap_or("");
-        let args = parts.get(1).copied().unwrap_or("");
+        // Use the structured command parser
+        let parsed = match self.command_parser.parse(input) {
+            Ok(p) => p,
+            Err(_) => {
+                // Fallback to simple split for backward compat
+                let parts: Vec<&str> = input.splitn(2, ' ').collect();
+                let name = parts.first().copied().unwrap_or("").strip_prefix('/').unwrap_or("");
+                shannon_commands::ParsedCommand::new(
+                    name.to_string(),
+                    parts.get(1).copied().unwrap_or("").to_string(),
+                    input.to_string(),
+                )
+            }
+        };
 
-        // Extract command name without leading slash
-        let cmd_name = cmd.strip_prefix('/').unwrap_or("");
+        let cmd_name = parsed.name.as_str();
+        let args = parsed.args.as_str();
 
-        // Check if command exists in the registry
+        // Check if command exists in the registry or as a plugin command
         let command_exists = self.runtime.block_on(
             self.command_registry.contains(cmd_name)
         );
+        let is_plugin_command = self.plugin_manager.get_plugin_commands()
+            .iter().any(|c| c.name == cmd_name);
 
-        if command_exists {
+        if command_exists || is_plugin_command {
             // Dispatch based on command name (REPL-local commands execute here)
             match cmd_name {
                 "help" => {
@@ -875,7 +895,7 @@ impl Repl {
             // Command not found in registry
             self.chat.add_message(
                 ChatRole::System,
-                format!("Unknown command: {}. Type /help for available commands.", cmd),
+                format!("Unknown command: /{}. Type /help for available commands.", cmd_name),
             );
             Ok(())
         }
@@ -1163,6 +1183,14 @@ impl Repl {
             self.commands_run,
             self.tools_invoked,
         );
+
+        // Add session duration
+        if let Some(started) = &self.session_started_at {
+            let elapsed = chrono::Utc::now() - *started;
+            let mins = elapsed.num_minutes();
+            let secs = elapsed.num_seconds() % 60;
+            stats.push_str(&format!("\n  Session duration: {}m {}s", mins, secs));
+        }
 
         // Add diff summary if there are tracked file changes
         if self.diff_data.total_files_modified() > 0 || self.diff_data.total_files_created() > 0 || self.diff_data.total_files_deleted() > 0 {
@@ -1790,7 +1818,9 @@ impl Repl {
                 }]);
                 self.query_engine = Some(engine);
 
-                self.chat.update_message(assistant_msg_index, response);
+                // Render assistant output through the markdown renderer
+                let rendered = self.output_renderer.render_output(&response, "assistant");
+                self.chat.update_message(assistant_msg_index, rendered);
                 self.state.tokens_used += tokens;
                 self.tools_invoked += tools;
 
@@ -1819,6 +1849,15 @@ impl Repl {
                 self.query_engine = Some(new_engine);
 
                 self.chat.update_message(assistant_msg_index, format!("❌ Error: {}", e));
+
+                // Show alert dialog for critical errors (auth, config, network)
+                let err_lower = e.to_lowercase();
+                if err_lower.contains("authentication") || err_lower.contains("api key")
+                    || err_lower.contains("unauthorized") || err_lower.contains("forbidden")
+                {
+                    self.show_alert_dialog("Query Error", &format!("{}", e), true);
+                }
+
                 self.state.status = "Ready".to_string();
             }
         }

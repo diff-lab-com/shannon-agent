@@ -240,6 +240,7 @@ impl QueryEngine {
         let client_model = self.client.model().to_string();
         let client_base_url = self.client.base_url().to_string();
         let client_max_tokens = self.client.max_tokens();
+        let client_provider = self.client.provider().clone();
         let user_message = context.user_message.clone();
         let state_for_save = self.state.clone();
         let session_id_for_save = self.session_id;
@@ -286,12 +287,13 @@ impl QueryEngine {
             // Prevent OS sleep during long-running queries (drops on exit)
             let _sleep_guard = crate::prevent_sleep::PreventSleepGuard::new();
 
-            // Create a new client for this task
+            // Create a new client for this task, preserving provider from original config
             let client_config = crate::api::LlmClientConfig {
                 api_key: client_api_key,
                 base_url: client_base_url,
                 model: client_model.clone(),
                 max_tokens: client_max_tokens,
+                provider: client_provider,
                 ..Default::default()
             };
             let client = LlmClient::new(client_config);

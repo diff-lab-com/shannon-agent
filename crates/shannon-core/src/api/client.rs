@@ -97,6 +97,13 @@ impl LlmClient {
         tools: Option<Vec<ToolDefinition>>,
         system: Option<String>,
     ) -> Result<MessageStream, ApiError> {
+        let max_reconnects = self.config.max_stream_reconnects;
+
+        // Clone upfront for potential reconnection use
+        let messages_clone = messages.clone();
+        let tools_clone = tools.clone();
+        let system_clone = system.clone();
+
         let request_body = MessageRequest {
             model: self.config.model.clone(),
             max_tokens: self.config.max_tokens,
@@ -146,7 +153,19 @@ impl LlmClient {
             ));
         }
 
-        Ok(super::streaming::sse_stream_from_response(response, self.config.provider.clone()))
+        if max_reconnects > 0 {
+            Ok(super::streaming::sse_stream_from_response_resumable(
+                response,
+                self.config.provider.clone(),
+                Self::new(self.config.clone()),
+                messages_clone,
+                tools_clone,
+                system_clone,
+                max_reconnects,
+            ))
+        } else {
+            Ok(super::streaming::sse_stream_from_response(response, self.config.provider.clone()))
+        }
     }
 
     /// Send a streaming message with optional resumption via `Last-Event-ID`.

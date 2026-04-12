@@ -302,8 +302,8 @@ impl OAuth2Provider {
         Ok(token_response.access_token)
     }
 
-    /// Check if token is expired
-    async fn is_expired(&self) -> bool {
+    /// Check if token is expired (public for external validation)
+    pub async fn is_expired(&self) -> bool {
         let tokens = self.tokens.read().await;
         if let Some(expires_at) = tokens.expires_at {
             chrono::Utc::now() >= expires_at
@@ -316,6 +316,16 @@ impl OAuth2Provider {
 #[async_trait]
 impl AuthProvider for OAuth2Provider {
     async fn get_token(&self) -> Result<String, AuthError> {
+        // Auto-refresh if expired
+        if self.is_expired().await {
+            if self.tokens.read().await.refresh_token.is_some() {
+                info!("OAuth2 token expired, refreshing...");
+                self.refresh_access_token().await?;
+            } else {
+                return Err(AuthError::TokenExpired);
+            }
+        }
+
         let tokens = self.tokens.read().await;
         tokens.access_token.clone().ok_or_else(|| AuthError::TokenExpired)
     }
@@ -469,5 +479,61 @@ mod tests {
         );
 
         assert_eq!(provider.client_id, "client_id");
+    }
+
+    #[tokio::test]
+    async fn test_api_key_provider_headers() {
+        let provider = ApiKeyProvider::new("test_key")
+            .with_header_name("X-Custom-Key")
+            .with_prefix("Bearer");
+
+        let mut headers = HashMap::new();
+        provider.add_auth_headers(&mut headers).await.unwrap();
+        assert_eq!(headers.get("X-Custom-Key").unwrap(), "Bearer test_key");
+    }
+
+    #[tokio::test]
+    async fn test_oauth_expired_token_with_no_refresh() {
+        let provider = OAuth2Provider::new(
+            "client_id",
+            "https://auth.example.com/authorize",
+            "https://auth.example.com/token",
+            "https://app.example.com/callback",
+        );
+
+        // Set expired token directly
+        {
+            let mut tokens = provider.tokens.write().await;
+            tokens.access_token = Some("expired_token".to_string());
+            tokens.expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(60));
+            // No refresh token
+        }
+
+        assert!(provider.is_expired().await);
+        // get_token should fail because there's no refresh token
+        let result = provider.get_token().await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), AuthError::TokenExpired));
+    }
+
+    #[tokio::test]
+    async fn test_oauth_valid_token() {
+        let provider = OAuth2Provider::new(
+            "client_id",
+            "https://auth.example.com/authorize",
+            "https://auth.example.com/token",
+            "https://app.example.com/callback",
+        );
+
+        {
+            let mut tokens = provider.tokens.write().await;
+            tokens.access_token = Some("valid_token".to_string());
+            tokens.expires_at = Some(chrono::Utc::now() + chrono::Duration::seconds(3600));
+        }
+
+        assert!(!provider.is_expired().await);
+        assert!(provider.is_valid().await);
+        let token = provider.get_token().await.unwrap();
+        assert_eq!(token, "valid_token");
     }
 }

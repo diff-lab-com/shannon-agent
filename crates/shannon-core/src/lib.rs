@@ -271,6 +271,7 @@ pub mod error {
     pub use crate::tool_execution::ToolExecutionError;
     pub use crate::compact::CompactError;
     pub use crate::doctor::DoctorError;
+    pub use crate::doctor::{HomeGuard, ApiKeyGuard};
     pub use crate::tool_hooks::ToolHookError;
     pub use crate::team_memory_sync::TeamMemorySyncError;
     pub use crate::permission_classifier::PermissionClassifierError;

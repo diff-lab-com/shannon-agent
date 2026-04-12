@@ -821,20 +821,51 @@ fn get_disk_space(_path: &std::path::Path) -> Option<u64> {
 }
 
 // ===========================================================================
-// Test helpers
+// Test helpers (publicly exported for integration tests)
 // ===========================================================================
 
 /// Guard to restore HOME environment variable when dropped.
 ///
 /// This ensures that even if a test panics, the original HOME value
 /// is restored, preventing test pollution.
-struct HomeGuard(Option<std::ffi::OsString>);
+///
+/// # Example
+///
+/// ```ignore
+/// let _guard = shannon_core::doctor::HomeGuard::set("/tmp/test-home");
+/// // HOME is now "/tmp/test-home"
+/// // When _guard drops, HOME is restored
+/// ```
+pub struct HomeGuard(Option<std::ffi::OsString>);
+
+impl HomeGuard {
+    /// Set HOME to the given path, returning a guard that restores the
+    /// original value on drop.
+    pub fn set(new_home: &str) -> Self {
+        let old = std::env::var_os("HOME");
+        unsafe { std::env::set_var("HOME", new_home) };
+        Self(old)
+    }
+
+    /// Save the current HOME without changing it (for restore-on-drop).
+    pub fn capture() -> Self {
+        Self(std::env::var_os("HOME"))
+    }
+}
 
 /// Guard to restore API key environment variables when dropped.
 ///
 /// This ensures that even if a test panics, the original API key values
 /// are restored, preventing test pollution.
-struct ApiKeyGuard {
+///
+/// # Example
+///
+/// ```ignore
+/// let _guard = shannon_core::doctor::ApiKeyGuard::remove();
+/// // All API key env vars are cleared
+/// // When _guard drops, they are restored
+/// ```
+pub struct ApiKeyGuard {
     anthropic: Option<std::ffi::OsString>,
     claude: Option<std::ffi::OsString>,
     shannon: Option<std::ffi::OsString>,
@@ -842,7 +873,7 @@ struct ApiKeyGuard {
 
 impl ApiKeyGuard {
     /// Create a new guard by removing API key variables and storing their original values.
-    fn remove() -> Self {
+    pub fn remove() -> Self {
         Self {
             anthropic: std::env::var_os("ANTHROPIC_API_KEY"),
             claude: std::env::var_os("CLAUDE_API_KEY"),
@@ -1133,11 +1164,7 @@ mod tests {
     fn test_check_configuration_no_file() {
         // Use a temp dir to ensure no config file exists
         let temp_dir = tempfile::tempdir().unwrap();
-        let home_backup = std::env::var_os("HOME");
-        unsafe { std::env::set_var("HOME", temp_dir.path()); }
-
-        // Restore HOME on drop (even if test panics)
-        let _guard = HomeGuard(home_backup);
+        let _guard = HomeGuard::set(temp_dir.path().to_str().unwrap());
 
         let doctor = Doctor::new();
         let check = doctor.check_configuration();
@@ -1162,10 +1189,7 @@ mod tests {
 
         fs::write(shannon_dir.join("settings.json"), valid_json).unwrap();
 
-        let home_backup = std::env::var_os("HOME");
-        unsafe { std::env::set_var("HOME", temp_dir.path()); }
-
-        let _guard = HomeGuard(home_backup);
+        let _guard = HomeGuard::set(temp_dir.path().to_str().unwrap());
 
         let doctor = Doctor::new();
         let check = doctor.check_configuration();
@@ -1180,10 +1204,7 @@ mod tests {
 
         fs::write(shannon_dir.join("settings.json"), "{invalid json}").unwrap();
 
-        let home_backup = std::env::var_os("HOME");
-        unsafe { std::env::set_var("HOME", temp_dir.path()); }
-
-        let _guard = HomeGuard(home_backup);
+        let _guard = HomeGuard::set(temp_dir.path().to_str().unwrap());
 
         let doctor = Doctor::new();
         let check = doctor.check_configuration();
@@ -1225,5 +1246,40 @@ mod tests {
     fn test_which_tool_nonexistent() {
         let result = which_tool("definitely_not_a_real_tool_xyz123");
         assert!(result.is_none());
+    }
+
+    // ---- Guard tests ---------------------------------------------------------
+
+    #[test]
+    fn test_home_guard_set_and_restore() {
+        let original = std::env::var_os("HOME").unwrap_or_default();
+        {
+            let _guard = HomeGuard::set("/tmp/shannon-test-home-guard");
+            assert_eq!(
+                std::env::var_os("HOME").unwrap_or_default(),
+                std::ffi::OsString::from("/tmp/shannon-test-home-guard")
+            );
+        }
+        // Restored after drop
+        assert_eq!(std::env::var_os("HOME").unwrap_or_default(), original);
+    }
+
+    #[test]
+    fn test_api_key_guard_remove_and_restore() {
+        // Save original values
+        let orig_anthropic = std::env::var_os("ANTHROPIC_API_KEY");
+        let orig_claude = std::env::var_os("CLAUDE_API_KEY");
+        let orig_shannon = std::env::var_os("SHANNON_API_KEY");
+
+        {
+            let _guard = ApiKeyGuard::remove();
+            assert!(std::env::var_os("ANTHROPIC_API_KEY").is_none());
+            assert!(std::env::var_os("CLAUDE_API_KEY").is_none());
+            assert!(std::env::var_os("SHANNON_API_KEY").is_none());
+        }
+        // Restored after drop
+        assert_eq!(std::env::var_os("ANTHROPIC_API_KEY"), orig_anthropic);
+        assert_eq!(std::env::var_os("CLAUDE_API_KEY"), orig_claude);
+        assert_eq!(std::env::var_os("SHANNON_API_KEY"), orig_shannon);
     }
 }

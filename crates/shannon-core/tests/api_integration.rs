@@ -684,6 +684,7 @@ mod e2e_client_tests {
     use shannon_core::api::{
         LlmClient, LlmClientConfig, LlmProvider, Message, MessageContent,
     };
+    use shannon_core::error::ApiKeyGuard;
     use futures::StreamExt;
 
     /// Create an LlmClient pointing at the mock server.
@@ -716,6 +717,7 @@ mod e2e_client_tests {
 
     #[tokio::test]
     async fn test_anthropic_non_streaming_e2e() {
+        let _api_key_guard = ApiKeyGuard::remove();
         let mut server = Server::new_async().await;
         let response = json!({
             "id": "msg_e2e",
@@ -946,6 +948,24 @@ mod retry_tests {
     };
     use futures::StreamExt;
 
+    /// Set ANTHROPIC_API_KEY for retry tests (uses Anthropic provider)
+    struct AnthropicKeyGuard(Option<std::ffi::OsString>);
+    impl AnthropicKeyGuard {
+        fn set() -> Self {
+            let old = std::env::var_os("ANTHROPIC_API_KEY");
+            unsafe { std::env::set_var("ANTHROPIC_API_KEY", "test-key"); }
+            Self(old)
+        }
+    }
+    impl Drop for AnthropicKeyGuard {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(v) => unsafe { std::env::set_var("ANTHROPIC_API_KEY", v); },
+                None => unsafe { std::env::remove_var("ANTHROPIC_API_KEY"); },
+            }
+        }
+    }
+
     fn make_client_with_retry(
         server: &ServerGuard,
         provider: LlmProvider,
@@ -999,6 +1019,7 @@ mod retry_tests {
     /// Test: send_message_with_retry succeeds on first try.
     #[tokio::test]
     async fn test_retry_succeeds_first_try() {
+        let _guard = AnthropicKeyGuard::set();
         let mut server = Server::new_async().await;
         let response = json!({
             "id": "chatcmpl-ok",
@@ -1029,6 +1050,7 @@ mod retry_tests {
     /// Test: retries on 500, succeeds on 2nd attempt.
     #[tokio::test]
     async fn test_retry_succeeds_after_server_error() {
+        let _guard = AnthropicKeyGuard::set();
         let mut server = Server::new_async().await;
 
         let error_resp = json!({"error": {"message": "Internal error", "type": "server_error"}});
@@ -1069,6 +1091,7 @@ mod retry_tests {
     /// Test: exhausts all retries, returns last error.
     #[tokio::test]
     async fn test_retry_exhausts_all_attempts() {
+        let _guard = AnthropicKeyGuard::set();
         let mut server = Server::new_async().await;
 
         let error_resp = json!({"error": {"message": "Down", "type": "server_error"}});
@@ -1089,6 +1112,7 @@ mod retry_tests {
     /// Test: fallback provider activated when primary fails completely.
     #[tokio::test]
     async fn test_fallback_provider_on_primary_failure() {
+        let _guard = AnthropicKeyGuard::set();
         let mut primary = Server::new_async().await;
         let mut fallback = Server::new_async().await;
 
@@ -1128,6 +1152,7 @@ mod retry_tests {
     /// Test: stream retry succeeds on second attempt.
     #[tokio::test]
     async fn test_stream_retry_succeeds() {
+        let _guard = AnthropicKeyGuard::set();
         let mut server = Server::new_async().await;
 
         // First attempt fails
@@ -1170,5 +1195,634 @@ mod retry_tests {
             }
         }
         assert_eq!(text, "retried");
+    }
+}
+
+// ── Query Pipeline Integration Tests ──────────────────────────────────
+
+#[cfg(test)]
+mod query_pipeline_tests {
+    use futures::StreamExt;
+    use mockito::{Server, ServerGuard};
+    use serde_json::json;
+    use shannon_core::api::{LlmClient, LlmClientConfig, LlmProvider};
+    use shannon_core::permissions::PermissionManager;
+    use shannon_core::query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata};
+    use shannon_core::state::StateManager;
+    use shannon_core::tools::ToolRegistry;
+    use uuid::Uuid;
+
+    /// Guard to set ANTHROPIC_API_KEY for pipeline tests so that the
+    /// internal LlmClientConfig default picks Anthropic as provider.
+    struct AnthropicKeyGuard(Option<std::ffi::OsString>);
+    impl AnthropicKeyGuard {
+        fn set() -> Self {
+            let old = std::env::var_os("ANTHROPIC_API_KEY");
+            unsafe { std::env::set_var("ANTHROPIC_API_KEY", "test-key"); }
+            Self(old)
+        }
+    }
+    impl Drop for AnthropicKeyGuard {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(v) => unsafe { std::env::set_var("ANTHROPIC_API_KEY", v); },
+                None => unsafe { std::env::remove_var("ANTHROPIC_API_KEY"); },
+            }
+        }
+    }
+
+    fn make_client(server: &ServerGuard) -> LlmClient {
+        let config = LlmClientConfig {
+            api_key: "test-key".to_string(),
+            base_url: server.url(),
+            model: "test-model".to_string(),
+            max_tokens: 1024,
+            timeout_seconds: 30,
+            api_version: "2023-06-01".to_string(),
+            provider: LlmProvider::Anthropic,
+            extra_headers: Default::default(),
+            retry_config: shannon_core::api::RetryConfig::default(),
+            fallback_provider: None,
+            fallback_base_url: None,
+            max_stream_reconnects: 3,
+        };
+        LlmClient::new(config)
+    }
+
+    fn make_context(message: &str) -> QueryContext {
+        QueryContext {
+            query_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            user_message: message.to_string(),
+            metadata: QueryMetadata {
+                timestamp: chrono::Utc::now(),
+                tools_allowed: false,
+                max_tokens: Some(1024),
+                model: "test-model".to_string(),
+                temperature: None,
+                top_p: None,
+            },
+        }
+    }
+
+    /// Test: user message → LLM → text response (full pipeline, no tools).
+    #[tokio::test]
+    async fn test_query_pipeline_text_response() {
+        let _guard = AnthropicKeyGuard::set();
+        let mut server = Server::new_async().await;
+
+        // process_query uses send_message_stream, so return SSE format
+        let sse_body = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_pipeline\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":15,\"output_tokens\":0}}}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello from pipeline\"}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":15,\"output_tokens\":8}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        );
+
+        server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_body)
+            .create();
+
+        let client = make_client(&server);
+        let engine = QueryEngine::with_defaults(
+            client,
+            ToolRegistry::new(),
+            PermissionManager::new(),
+            StateManager::new(),
+        );
+
+        let ctx = make_context("Hello");
+        let mut stream = engine.process_query(ctx, None).await;
+
+        let mut events = Vec::new();
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(event) => events.push(event),
+                Err(e) => panic!("Stream error: {}", e),
+            }
+        }
+
+        let has_text = events.iter().any(|e| matches!(e, QueryEvent::Text { .. }));
+        let has_completed = events.iter().any(|e| matches!(e, QueryEvent::Completed { .. }));
+
+        assert!(has_text, "Expected Text event, got: {:?}", events);
+        assert!(has_completed, "Expected Completed event, got: {:?}", events);
+
+        // Verify text content
+        let text_content: String = events
+            .iter()
+            .filter_map(|e| match e {
+                QueryEvent::Text { content, .. } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text_content, "Hello from pipeline");
+    }
+
+    /// Test: query pipeline with tool use request and result.
+    #[tokio::test]
+    async fn test_query_pipeline_with_tool_use() {
+        let _guard = AnthropicKeyGuard::set();
+        let mut server = Server::new_async().await;
+
+        // First response: assistant requests tool use (SSE format)
+        let tool_sse = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_tool\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":20,\"output_tokens\":0}}}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Let me check that.\"}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_123\",\"name\":\"bash\",\"input\":{}}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"command\\\":\\\"echo hello\\\"}\"}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":1}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"input_tokens\":20,\"output_tokens\":15}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        );
+
+        // Second response: after tool result, assistant responds (SSE format)
+        let final_sse = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_final\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":30,\"output_tokens\":0}}}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"The output is: hello\"}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":30,\"output_tokens\":10}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        );
+
+        let mock1 = server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(tool_sse)
+            .expect(1)
+            .create();
+
+        let mock2 = server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(final_sse)
+            .expect(1)
+            .create();
+
+        let client = make_client(&server);
+        let mut tool_registry = ToolRegistry::new();
+        // Register a bash tool mock
+        use async_trait::async_trait;
+        struct MockBashTool;
+        #[async_trait]
+        impl shannon_core::tools::Tool for MockBashTool {
+            async fn execute(&self, _input: serde_json::Value) -> shannon_core::tools::ToolResult<shannon_core::tools::ToolOutput> {
+                Ok(shannon_core::tools::ToolOutput {
+                    content: "hello".to_string(),
+                    is_error: false,
+                    metadata: Default::default(),
+                })
+            }
+            fn name(&self) -> &str { "bash" }
+            fn description(&self) -> &str { "Mock bash" }
+            fn input_schema(&self) -> serde_json::Value {
+                json!({"type": "object", "properties": {"command": {"type": "string"}}})
+            }
+        }
+        tool_registry.register(Box::new(MockBashTool)).unwrap();
+
+        let engine = QueryEngine::with_defaults(
+            client,
+            tool_registry,
+            PermissionManager::new(),
+            StateManager::new(),
+        );
+
+        let ctx = make_context("Run echo hello");
+        let mut stream = engine.process_query(ctx, None).await;
+
+        let mut events = Vec::new();
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(event) => events.push(event),
+                Err(e) => panic!("Stream error: {}", e),
+            }
+        }
+
+        // Should have tool use request and result events
+        let has_tool_request = events.iter().any(|e| matches!(e, QueryEvent::ToolUseRequest { .. }));
+        let has_tool_result = events.iter().any(|e| matches!(e, QueryEvent::ToolUseResult { .. }));
+        let has_completed = events.iter().any(|e| matches!(e, QueryEvent::Completed { .. }));
+
+        assert!(has_tool_request, "Expected ToolUseRequest event, got: {:?}", events);
+        assert!(has_tool_result, "Expected ToolUseResult event, got: {:?}", events);
+        assert!(has_completed, "Expected Completed event, got: {:?}", events);
+
+        mock1.assert();
+        mock2.assert();
+    }
+
+    /// Test: query pipeline failure returns Failed event.
+    #[tokio::test]
+    async fn test_query_pipeline_failure() {
+        let _guard = AnthropicKeyGuard::set();
+        let mut server = Server::new_async().await;
+
+        server
+            .mock("POST", "/v1/messages")
+            .with_status(401)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"type": "error", "error": {"type": "authentication_error", "message": "Invalid API key"}}"#)
+            .create();
+
+        let client = make_client(&server);
+        let engine = QueryEngine::with_defaults(
+            client,
+            ToolRegistry::new(),
+            PermissionManager::new(),
+            StateManager::new(),
+        );
+
+        let ctx = make_context("Hello");
+        let mut stream = engine.process_query(ctx, None).await;
+
+        let mut has_failed = false;
+        while let Some(result) = stream.next().await {
+            if let Ok(QueryEvent::Failed { error, .. }) = result {
+                // ApiError::AuthenticationFailed maps to "Authentication failed"
+                assert!(
+                    error.to_lowercase().contains("authentication")
+                        || error.contains("401")
+                        || error.to_lowercase().contains("unauthorized"),
+                    "Error should mention auth issue: {}", error
+                );
+                has_failed = true;
+            }
+        }
+        assert!(has_failed, "Expected Failed event for auth error");
+    }
+
+    /// Test: multi-turn conversation with context preservation.
+    #[tokio::test]
+    async fn test_query_pipeline_multi_turn() {
+        let _guard = AnthropicKeyGuard::set();
+        let mut server = Server::new_async().await;
+
+        // First turn - SSE format
+        let turn1_sse = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_turn1\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Turn 1 response\"}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        );
+
+        // Second turn - SSE format
+        let turn2_sse = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_turn2\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":25,\"output_tokens\":0}}}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Turn 2 response\"}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":25,\"output_tokens\":5}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        );
+
+        server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(turn1_sse)
+            .expect(1)
+            .create();
+
+        server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(turn2_sse)
+            .expect(1)
+            .create();
+
+        let client = make_client(&server);
+        let mut engine = QueryEngine::with_defaults(
+            client,
+            ToolRegistry::new(),
+            PermissionManager::new(),
+            StateManager::new(),
+        );
+
+        // Turn 1
+        let ctx1 = make_context("First message");
+        let mut stream1 = engine.process_query(ctx1, None).await;
+        let mut text1 = String::new();
+        while let Some(result) = stream1.next().await {
+            if let Ok(QueryEvent::Text { content, .. }) = result {
+                text1.push_str(&content);
+            }
+        }
+        assert_eq!(text1, "Turn 1 response");
+
+        // Add messages to conversation history
+        engine.add_user_message("First message".to_string());
+        engine.add_assistant_message(vec![shannon_core::api::ContentBlock::Text {
+            text: "Turn 1 response".to_string(),
+        }]);
+
+        // Verify conversation history has 2 messages
+        let history = engine.conversation_history();
+        assert_eq!(history.len(), 2);
+
+        // Turn 2
+        let ctx2 = make_context("Second message");
+        let mut stream2 = engine.process_query(ctx2, None).await;
+        let mut text2 = String::new();
+        while let Some(result) = stream2.next().await {
+            if let Ok(QueryEvent::Text { content, .. }) = result {
+                text2.push_str(&content);
+            }
+        }
+        assert_eq!(text2, "Turn 2 response");
+    }
+
+    /// Test: session save and restore round-trip.
+    #[tokio::test]
+    async fn test_query_pipeline_session_save_restore() {
+        let _guard = AnthropicKeyGuard::set();
+        let mut server = Server::new_async().await;
+
+        server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!({
+                "id": "msg_session",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Session test"}],
+                "model": "test-model",
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 5}
+            }).to_string())
+            .expect(1)
+            .create();
+
+        let client = make_client(&server);
+        let state_manager = StateManager::new();
+        let session_id = Uuid::new_v4();
+
+        // Create engine with specific session ID
+        let engine = QueryEngine::with_session_id(
+            client,
+            ToolRegistry::new(),
+            PermissionManager::new(),
+            state_manager,
+            shannon_core::query_engine::QueryEngineConfig::default(),
+            session_id,
+        );
+
+        // Process a query
+        let ctx = make_context("Remember this");
+        let mut stream = engine.process_query(ctx, None).await;
+        while let Some(_) = stream.next().await {}
+
+        // Verify session ID is set
+        assert_eq!(engine.session_id(), session_id);
+    }
+}
+
+// ── Conversation Export E2E Tests ─────────────────────────────────────
+
+#[cfg(test)]
+mod conversation_export_tests {
+    use shannon_core::api::{ContentBlock, Message, MessageContent};
+    use shannon_core::state::{SessionData, SessionPersistMetadata, StateManager};
+    use uuid::Uuid;
+
+    /// Helper to create SessionPersistMetadata with sensible defaults.
+    fn make_metadata(title: &str, model: &str, turn_count: usize) -> SessionPersistMetadata {
+        SessionPersistMetadata {
+            model: model.to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            total_input_tokens: 50,
+            total_output_tokens: 30,
+            turn_count,
+            title: Some(title.to_string()),
+        }
+    }
+
+    /// Test: export conversation as JSON, verify structure.
+    #[test]
+    fn test_export_conversation_json() {
+        let session_id = Uuid::new_v4();
+        let data = SessionData {
+            session_id,
+            metadata: make_metadata("Test Session", "test-model", 2),
+            messages: vec![
+                Message {
+                    role: "user".to_string(),
+                    content: MessageContent::Text("Hello".to_string()),
+                },
+                Message {
+                    role: "assistant".to_string(),
+                    content: MessageContent::Blocks(vec![
+                        ContentBlock::Text { text: "Hi there!".to_string() },
+                    ]),
+                },
+            ],
+        };
+
+        // Serialize to JSON
+        let json_str = serde_json::to_string_pretty(&data).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+        // Verify structure
+        assert_eq!(parsed["metadata"]["model"], "test-model");
+        assert_eq!(parsed["metadata"]["turn_count"], 2);
+        assert_eq!(parsed["messages"].as_array().unwrap().len(), 2);
+        assert_eq!(parsed["messages"][0]["role"], "user");
+        assert_eq!(parsed["messages"][1]["role"], "assistant");
+    }
+
+    /// Test: export conversation as markdown.
+    #[test]
+    fn test_export_conversation_markdown() {
+        let messages = vec![
+            ("user", "What is Rust?"),
+            ("assistant", "Rust is a systems programming language."),
+            ("user", "Is it memory safe?"),
+            ("assistant", "Yes, Rust guarantees memory safety."),
+        ];
+
+        let mut md = String::from("# Shannon Session Export\n\n");
+        for (role, content) in &messages {
+            let heading = match *role {
+                "user" => "## User",
+                "assistant" => "## Assistant",
+                _ => "## System",
+            };
+            md.push_str(&format!("{}\n\n{}\n\n---\n\n", heading, content));
+        }
+
+        // Verify format
+        assert!(md.contains("# Shannon Session Export"));
+        assert!(md.contains("## User\n\nWhat is Rust?"));
+        assert!(md.contains("## Assistant\n\nRust is a systems programming language."));
+        assert!(md.contains("---")); // Separators between messages
+    }
+
+    /// Test: export with metadata (model, tokens, cost).
+    #[test]
+    fn test_export_with_metadata() {
+        let metadata = SessionPersistMetadata {
+            model: "claude-3-5-sonnet".to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            total_input_tokens: 1500,
+            total_output_tokens: 800,
+            turn_count: 5,
+            title: Some("Metadata Test".to_string()),
+        };
+
+        // Build metadata summary
+        let summary = format!(
+            "Model: {}\nTurns: {}\nInput tokens: {}\nOutput tokens: {}\nTotal tokens: {}\nEstimated cost: ${:.4}",
+            metadata.model,
+            metadata.turn_count,
+            metadata.total_input_tokens,
+            metadata.total_output_tokens,
+            metadata.total_input_tokens + metadata.total_output_tokens,
+            (metadata.total_input_tokens as f64 * 0.000003) + (metadata.total_output_tokens as f64 * 0.000015),
+        );
+
+        assert!(summary.contains("Model: claude-3-5-sonnet"));
+        assert!(summary.contains("Turns: 5"));
+        assert!(summary.contains("Total tokens: 2300"));
+        assert!(summary.contains("Estimated cost: $"));
+    }
+
+    /// Test: session save/load round-trip preserves data.
+    #[test]
+    fn test_session_save_load_roundtrip() {
+        let state_manager = StateManager::new();
+        let session_id = Uuid::new_v4();
+
+        let messages = vec![
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("Hello".to_string()),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::Text { text: "World".to_string() },
+                ]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("How are you?".to_string()),
+            },
+        ];
+
+        let metadata = SessionPersistMetadata {
+            model: "test-model".to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            total_input_tokens: 100,
+            total_output_tokens: 50,
+            turn_count: 3,
+            title: Some("Round-trip test".to_string()),
+        };
+
+        // Save
+        state_manager.save_session(&session_id, &messages, &metadata).unwrap();
+
+        // Load
+        let loaded = state_manager.load_session(&session_id).unwrap();
+        assert!(loaded.is_some());
+
+        let loaded_data = loaded.unwrap();
+        assert_eq!(loaded_data.session_id, session_id);
+        assert_eq!(loaded_data.metadata.title, Some("Round-trip test".to_string()));
+        assert_eq!(loaded_data.metadata.model, "test-model");
+        assert_eq!(loaded_data.messages.len(), 3);
+        assert_eq!(loaded_data.metadata.turn_count, 2); // 2 user messages
+
+        // Verify message content preserved
+        assert_eq!(loaded_data.messages[0].role, "user");
+        assert_eq!(loaded_data.messages[1].role, "assistant");
+
+        // Clean up
+        state_manager.delete_persisted_session(&session_id).unwrap();
+    }
+
+    /// Test: list persisted sessions.
+    #[test]
+    fn test_list_persisted_sessions() {
+        let state_manager = StateManager::new();
+        let mut saved_ids = Vec::new();
+
+        // Save two sessions
+        for i in 0..2 {
+            let sid = Uuid::new_v4();
+            let metadata = SessionPersistMetadata {
+                model: "test-model".to_string(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                total_input_tokens: 10 * (i + 1) as u64,
+                total_output_tokens: 5 * (i + 1) as u64,
+                turn_count: i + 1,
+                title: Some(format!("Session {}", i)),
+            };
+            state_manager.save_session(&sid, &[], &metadata).unwrap();
+            saved_ids.push(sid);
+        }
+
+        let sessions = state_manager.list_persisted_sessions().unwrap();
+        assert!(sessions.len() >= 2, "Should have at least 2 sessions");
+
+        // Clean up
+        for sid in &saved_ids {
+            state_manager.delete_persisted_session(sid).unwrap();
+        }
+    }
+
+    /// Test: export with block content (tool use).
+    #[test]
+    fn test_export_with_tool_use_blocks() {
+        let messages = vec![
+            Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::Text { text: "Let me check that.".to_string() },
+                    ContentBlock::ToolUse {
+                        id: "toolu_123".to_string(),
+                        name: "bash".to_string(),
+                        input: serde_json::json!({"command": "ls"}),
+                    },
+                ]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::ToolResult {
+                        tool_use_id: "toolu_123".to_string(),
+                        content: Some(shannon_core::api::ToolResultContent::Single("file1.txt\nfile2.txt".to_string())),
+                        is_error: Some(false),
+                    },
+                ]),
+            },
+        ];
+
+        // Serialize
+        let json = serde_json::to_string(&messages).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.as_array().unwrap().len(), 2);
+        // First message has text + tool_use blocks
+        assert_eq!(parsed[0]["content"].as_array().unwrap().len(), 2);
+        assert_eq!(parsed[0]["content"][0]["type"], "text");
+        assert_eq!(parsed[0]["content"][1]["type"], "tool_use");
     }
 }

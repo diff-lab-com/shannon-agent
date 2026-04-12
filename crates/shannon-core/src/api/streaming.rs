@@ -2,10 +2,12 @@
 //!
 //! Handles Server-Sent Events (SSE) streaming from LLM API providers.
 //! Properly buffers partial events that span HTTP chunk boundaries.
+//! Supports automatic reconnection using `Last-Event-ID` when the
+//! connection drops mid-stream.
 
 use futures::{Stream, StreamExt, task::{Context, Poll}};
 use std::pin::Pin;
-// TODO: wire last_event_id tracking with Arc<Mutex<String>> when reconnection is implemented
+use std::sync::{Arc, Mutex};
 
 use super::adapter::OpenaiStreamState;
 use super::error::ApiError;
@@ -17,11 +19,19 @@ pub type MessageStream = Pin<Box<dyn Stream<Item = Result<StreamEvent, ApiError>
 /// Internal byte-chunk stream type from reqwest
 type ByteChunkStream = Pin<Box<dyn Stream<Item = Result<Vec<u8>, reqwest::Error>> + Send>>;
 
+/// Shared last-event-id tracker for reconnection support.
+///
+/// Wrapped in `Arc<Mutex<>>` so both the inner `SseStream` and the
+/// outer `ResumableSseStream` can read/update it.
+pub type LastEventId = Arc<Mutex<Option<String>>>;
+
 /// SSE stream that properly handles chunk boundaries.
 ///
 /// Reads chunks from reqwest's byte stream, buffers partial lines,
 /// and emits complete SSE events. Handles the common case where
 /// a single SSE `data:` line spans multiple HTTP chunks.
+///
+/// Tracks the last SSE `id:` field for reconnection support.
 pub struct SseStream {
     chunks: ByteChunkStream,
     buffer: String,
@@ -29,13 +39,17 @@ pub struct SseStream {
     done: bool,
     provider: LlmProvider,
     openai_state: OpenaiStreamState,
+    /// Tracks the last SSE event ID seen for reconnection.
+    last_event_id: LastEventId,
 }
 
 impl SseStream {
     /// Create a new SSE stream from a reqwest response.
     ///
     /// Takes ownership of the response and consumes its byte stream.
-    pub fn new(response: reqwest::Response, provider: LlmProvider) -> Self {
+    /// The `last_event_id` tracker is shared so callers can read the
+    /// latest ID for reconnection.
+    pub fn new(response: reqwest::Response, provider: LlmProvider, last_event_id: LastEventId) -> Self {
         let byte_stream = response.bytes_stream();
         // Convert Bytes to Vec<u8> to avoid direct dependency on bytes crate
         let mapped = Box::pin(byte_stream.map(|result| result.map(|b| b.to_vec())));
@@ -46,6 +60,7 @@ impl SseStream {
             done: false,
             provider,
             openai_state: OpenaiStreamState::new(),
+            last_event_id,
         }
     }
 
@@ -74,12 +89,23 @@ impl SseStream {
         }
 
         // SSE event fields: only process "data:" lines
+        // Capture SSE event ID for reconnection support
+        if let Some(id) = line.strip_prefix("id:") {
+            let id = id.trim();
+            if !id.is_empty() {
+                if let Ok(mut guard) = self.last_event_id.lock() {
+                    *guard = Some(id.to_string());
+                }
+            }
+            return vec![];
+        }
+
         let json_str = if let Some(s) = line.strip_prefix("data: ") {
             s
         } else if let Some(s) = line.strip_prefix("data:") {
             s.trim()
         } else {
-            // Ignore other SSE fields (event:, id:, retry:)
+            // Ignore other SSE fields (event:, retry:)
             return vec![];
         };
 
@@ -151,8 +177,166 @@ impl Stream for SseStream {
 /// Properly handles SSE events that span HTTP chunk boundaries
 /// by buffering partial lines until complete.
 pub fn sse_stream_from_response(response: reqwest::Response, provider: LlmProvider) -> MessageStream {
-    let sse = SseStream::new(response, provider);
+    let last_event_id = Arc::new(Mutex::new(None));
+    let sse = SseStream::new(response, provider, last_event_id);
     Box::pin(sse)
+}
+
+/// Create a resumable MessageStream that can reconnect on connection drops.
+///
+/// When the underlying SSE stream ends prematurely (not via `MessageStop`),
+/// this wrapper uses `send_message_stream_resumable` to reconnect with
+/// `Last-Event-ID`, up to `max_reconnects` times.
+pub fn sse_stream_from_response_resumable(
+    response: reqwest::Response,
+    provider: LlmProvider,
+    client: super::client::LlmClient,
+    messages: Vec<super::types::Message>,
+    tools: Option<Vec<super::types::ToolDefinition>>,
+    system: Option<String>,
+    max_reconnects: u32,
+) -> MessageStream {
+    let last_event_id = Arc::new(Mutex::new(None));
+    let sse = SseStream::new(response, provider, last_event_id.clone());
+    let resumable = ResumableSseStream {
+        inner: Box::pin(sse),
+        last_event_id,
+        client,
+        messages,
+        tools,
+        system,
+        reconnects_remaining: max_reconnects,
+        reconnecting: false,
+        saw_message_stop: false,
+        pending_reconnect: None,
+    };
+    Box::pin(resumable)
+}
+
+/// Wrapper around a `MessageStream` that handles automatic reconnection.
+///
+/// When the inner stream ends without a `MessageStop` event (indicating
+/// an unexpected connection drop), this wrapper reconnects using the
+/// tracked `Last-Event-ID` so the provider can replay missed events.
+struct ResumableSseStream {
+    inner: MessageStream,
+    last_event_id: LastEventId,
+    client: super::client::LlmClient,
+    messages: Vec<super::types::Message>,
+    tools: Option<Vec<super::types::ToolDefinition>>,
+    system: Option<String>,
+    reconnects_remaining: u32,
+    reconnecting: bool,
+    saw_message_stop: bool,
+    pending_reconnect: Option<tokio::sync::oneshot::Receiver<Result<MessageStream, ApiError>>>,
+}
+
+impl Stream for ResumableSseStream {
+    type Item = Result<StreamEvent, ApiError>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        // If we're in reconnection state, check if the reconnect completed
+        if self.reconnecting {
+            if let Some(ref mut rx) = self.pending_reconnect {
+                match Pin::new(rx).poll(cx) {
+                    Poll::Ready(Ok(Ok(new_stream))) => {
+                        self.inner = new_stream;
+                        self.reconnecting = false;
+                        self.pending_reconnect = None;
+                        // Fall through to poll the new inner stream
+                    }
+                    Poll::Ready(Ok(Err(e))) => {
+                        self.reconnecting = false;
+                        self.pending_reconnect = None;
+                        return Poll::Ready(Some(Err(e)));
+                    }
+                    Poll::Ready(Err(_)) => {
+                        self.reconnecting = false;
+                        self.pending_reconnect = None;
+                        return Poll::Ready(None);
+                    }
+                    Poll::Pending => {
+                        return Poll::Pending;
+                    }
+                }
+            }
+        }
+
+        // Poll inner stream
+        loop {
+            match self.inner.as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok(event))) => {
+                    if matches!(event, StreamEvent::MessageStop) {
+                        self.saw_message_stop = true;
+                    }
+                    return Poll::Ready(Some(Ok(event)));
+                }
+                Poll::Ready(Some(Err(e))) => {
+                    // Only reconnect on connection/transport errors, not parse errors
+                    let is_connection_error = matches!(
+                        &e,
+                        ApiError::HttpError(_)
+                    );
+                    if !is_connection_error || self.reconnects_remaining == 0 {
+                        return Poll::Ready(Some(Err(e)));
+                    }
+                    self.start_reconnect(cx);
+                    return Poll::Pending;
+                }
+                Poll::Ready(None) => {
+                    // Stream ended
+                    if self.saw_message_stop {
+                        return Poll::Ready(None);
+                    }
+                    // Premature end — reconnect
+                    if self.reconnects_remaining == 0 {
+                        return Poll::Ready(None);
+                    }
+                    self.start_reconnect(cx);
+                    return Poll::Pending;
+                }
+                Poll::Pending => {
+                    return Poll::Pending;
+                }
+            }
+        }
+    }
+}
+
+impl ResumableSseStream {
+    /// Initiate an asynchronous reconnection using the tracked last event ID.
+    fn start_reconnect(&mut self, cx: &mut Context<'_>) {
+        self.reconnects_remaining -= 1;
+        let eid = self.last_event_id.lock().ok().and_then(|g| g.clone());
+        tracing::info!(
+            "Stream dropped unexpectedly. Reconnecting ({} attempts left, last_event_id={:?})",
+            self.reconnects_remaining,
+            eid,
+        );
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let config = self.client.config().clone();
+        let messages = self.messages.clone();
+        let tools = self.tools.clone();
+        let system = self.system.clone();
+
+        tokio::spawn(async move {
+            let reconnect_client = super::client::LlmClient::new(config);
+            let result = reconnect_client
+                .send_message_stream_resumable(messages, tools, system, eid)
+                .await;
+            let _ = tx.send(result);
+        });
+
+        self.reconnecting = true;
+        self.pending_reconnect = Some(rx);
+
+        // Wake the waker when the spawned task completes
+        cx.waker().wake_by_ref();
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -429,6 +613,67 @@ mod tests {
                 assert_eq!(usage.output_tokens, 50);
             }
             other => panic!("Expected MessageDelta, got {:?}", other),
+        }
+    }
+
+    // -- Last-Event-ID tracking --
+
+    #[test]
+    fn test_sse_id_field_captured() {
+        let last_event_id = Arc::new(Mutex::new(None));
+        let mut sse = SseStream::for_test(last_event_id.clone());
+
+        // Simulate SSE lines with id: fields
+        sse.buffer = "id: evt_001\ndata: {\"type\":\"ping\"}\n\n".to_string();
+        sse.drain_buffer();
+        assert_eq!(
+            last_event_id.lock().unwrap().as_deref(),
+            Some("evt_001"),
+            "Should capture SSE id field"
+        );
+
+        // Update with a new id
+        sse.buffer = "id: evt_002\ndata: {\"type\":\"ping\"}\n\n".to_string();
+        sse.drain_buffer();
+        assert_eq!(
+            last_event_id.lock().unwrap().as_deref(),
+            Some("evt_002"),
+            "Should update to latest id"
+        );
+    }
+
+    #[test]
+    fn test_sse_id_empty_ignored() {
+        let last_event_id = Arc::new(Mutex::new(None));
+        let mut sse = SseStream::for_test(last_event_id.clone());
+
+        // Pre-set an id
+        *last_event_id.lock().unwrap() = Some("evt_100".to_string());
+
+        // Empty id line should not clear the existing value
+        sse.buffer = "id:\ndata: {\"type\":\"ping\"}\n\n".to_string();
+        sse.drain_buffer();
+        assert_eq!(
+            last_event_id.lock().unwrap().as_deref(),
+            Some("evt_100"),
+            "Empty id should not overwrite existing value"
+        );
+    }
+
+    /// Test-only constructor for SseStream that doesn't require an HTTP response.
+    impl SseStream {
+        fn for_test(last_event_id: LastEventId) -> Self {
+            // Create a no-op byte stream (immediately returns None)
+            let byte_stream = Box::pin(futures::stream::empty());
+            Self {
+                chunks: byte_stream,
+                buffer: String::new(),
+                pending_events: Vec::new(),
+                done: false,
+                provider: LlmProvider::Anthropic,
+                openai_state: OpenaiStreamState::new(),
+                last_event_id,
+            }
         }
     }
 }

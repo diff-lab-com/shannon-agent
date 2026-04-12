@@ -276,10 +276,12 @@ impl WorktreeTool {
 
         Ok(EnterWorktreeOutput {
             worktree_path: worktree_path.to_string_lossy().to_string(),
-            worktree_branch: Some(branch_name),
+            worktree_branch: Some(branch_name.clone()),
             message: format!(
-                "Created worktree at {}. The session is now working in the worktree.",
-                worktree_path.display()
+                "Created worktree '{}' at {}. Branch: {}. The session is now working in the worktree.",
+                worktree_name,
+                worktree_path.display(),
+                branch_name
             ),
         })
     }
@@ -485,7 +487,7 @@ impl Tool for WorktreeTool {
                     .map_err(|e| ToolError::InvalidInput(format!("Invalid enter worktree input: {}", e)))?;
                 let output = self.enter_worktree(enter_input).await?;
                 Ok(ToolOutput {
-                    content: format!("Entered worktree at: {}", output.worktree_path),
+                    content: output.message.clone(),
                     is_error: false,
                     metadata: {
                         let mut map = HashMap::new();
@@ -500,13 +502,14 @@ impl Tool for WorktreeTool {
                     .map_err(|e| ToolError::InvalidInput(format!("Invalid exit worktree input: {}", e)))?;
                 let output = self.exit_worktree(exit_input).await?;
                 Ok(ToolOutput {
-                    content: format!("Exited worktree, action: {:?}", output.action),
+                    content: output.message.clone(),
                     is_error: false,
                     metadata: {
                         let mut map = HashMap::new();
                         map.insert("action".to_string(), json!(format!("{:?}", output.action)));
                         map.insert("original_cwd".to_string(), json!(output.original_cwd));
                         map.insert("worktree_path".to_string(), json!(output.worktree_path));
+                        map.insert("worktree_branch".to_string(), json!(output.worktree_branch));
                         map
                     },
                 })
