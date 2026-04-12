@@ -230,6 +230,16 @@ impl OAuth2Provider {
             .await
             .map_err(|e| AuthError::OAuth(format!("Failed to parse token response: {}", e)))?;
 
+        // Validate token type (must be "Bearer" per RFC 6749)
+        if let Some(ref token_type) = token_response.token_type {
+            if token_type.to_lowercase() != "bearer" {
+                return Err(AuthError::InvalidToken(format!(
+                    "Unsupported token type: {} (expected 'Bearer')",
+                    token_type
+                )));
+            }
+        }
+
         // Calculate expiry time
         let expires_at = token_response.expires_in.map(|seconds| {
             chrono::Utc::now() + chrono::Duration::seconds(seconds as i64)
@@ -287,6 +297,16 @@ impl OAuth2Provider {
             .json()
             .await
             .map_err(|e| AuthError::OAuth(format!("Failed to parse refresh response: {}", e)))?;
+
+        // Validate token type
+        if let Some(ref token_type) = token_response.token_type {
+            if token_type.to_lowercase() != "bearer" {
+                return Err(AuthError::InvalidToken(format!(
+                    "Unsupported token type: {} (expected 'Bearer')",
+                    token_type
+                )));
+            }
+        }
 
         // Update tokens
         let mut tokens = self.tokens.write().await;

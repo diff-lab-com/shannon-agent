@@ -1726,7 +1726,14 @@ impl Repl {
                         let progress_msg = format!("\n⏳ Tool progress: {}%", pct);
                         response_text.push_str(&progress_msg);
                     }
-                    Ok(QueryEvent::Completed { .. }) => {}
+                    Ok(QueryEvent::Completed { .. }) => {
+                        if let Ok(cost) = cost_clone.lock() {
+                            if *cost > 0.0 {
+                                let cost_line = format!("\n💰 Session total: ${:.4}", *cost);
+                                response_text.push_str(&cost_line);
+                            }
+                        }
+                    }
                     Ok(QueryEvent::Failed { error, .. }) => {
                         return Err(format!("Query failed: {}", error));
                     }

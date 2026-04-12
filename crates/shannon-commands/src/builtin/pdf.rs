@@ -107,6 +107,7 @@ pub struct PdfOptions {
     pub extract_tables: bool,
 }
 
+#[allow(dead_code)]
 impl PdfOptions {
     /// Create new default options
     pub fn new() -> Self {
@@ -173,6 +174,7 @@ pub struct PdfPage {
     pub tables: Vec<PdfTable>,
 }
 
+#[allow(dead_code)]
 impl PdfPage {
     /// Create a new page with just text content
     pub fn new(number: usize, text: String) -> Self {
@@ -223,6 +225,7 @@ pub enum ImageFormat {
     Pdf,
 }
 
+#[allow(dead_code)]
 impl ImageFormat {
     /// Get the file extension for this format
     pub fn extension(&self) -> &'static str {
@@ -276,6 +279,7 @@ pub struct PdfTable {
     pub rows: Vec<Vec<String>>,
 }
 
+#[allow(dead_code)]
 impl PdfTable {
     /// Create a new table
     pub fn new(index: usize, page: usize, headers: Vec<String>, rows: Vec<Vec<String>>) -> Self {

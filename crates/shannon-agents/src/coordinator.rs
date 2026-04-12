@@ -100,6 +100,20 @@ struct AgentTeam {
     assignment_index: usize,
 }
 
+impl AgentTeam {
+    /// Return a human-readable summary of this team.
+    fn summary(&self) -> String {
+        format!(
+            "Team '{}' ({} members, {} tasks) — {} [created {}]",
+            self.name,
+            self.members.len(),
+            self.task_list.len(),
+            self.description,
+            self.created_at.format("%Y-%m-%d %H:%M UTC"),
+        )
+    }
+}
+
 impl AgentCoordinator {
     /// Create a new agent coordinator
     pub async fn new(config: CoordinatorConfig) -> Result<Self, AgentError> {
@@ -187,8 +201,7 @@ impl AgentCoordinator {
 
         teams.insert(name.clone(), team);
 
-        let team_name_for_log = name.clone();
-        tracing::info!(team = %team_name_for_log, "Team created");
+        tracing::info!(team = %name, "Team created");
 
         Ok(())
     }
@@ -513,6 +526,16 @@ impl AgentCoordinator {
     /// Get the task board
     pub fn task_board(&self) -> &TaskBoard {
         &self.task_board
+    }
+
+    /// Get a human-readable status summary for a team.
+    pub async fn team_status(&self, team_name: &str) -> Result<String, AgentError> {
+        let teams = self.teams.read().await;
+        let team = teams.get(team_name)
+            .ok_or_else(|| AgentError::Coordination(
+                CoordinationError::TeamNotFound(team_name.to_string())
+            ))?;
+        Ok(team.summary())
     }
 
     /// Get the worktree manager

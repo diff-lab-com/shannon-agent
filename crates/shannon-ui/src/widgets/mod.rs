@@ -478,7 +478,7 @@ impl MainLayoutWidget {
             .direction(Direction::Vertical)
             .margin(1)
             .constraints([
-                Constraint::Length(1),   // Header bar
+                Constraint::Length(HeaderWidget::height() as u16), // Header bar
                 Constraint::Min(0),      // Chat area (flexible)
                 Constraint::Length(3),   // Input prompt
                 Constraint::Length(3),   // Status bar

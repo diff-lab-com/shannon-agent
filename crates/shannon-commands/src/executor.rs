@@ -165,11 +165,16 @@ impl CommandExecutor {
 }
 
 /// Shared executor state for concurrent access
+///
+/// Wraps `CommandExecutor` in `Arc<RwLock<>>` for safe concurrent use
+/// from multiple tasks (e.g., REPL input + background commands).
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct SharedExecutor {
     inner: Arc<RwLock<CommandExecutor>>,
 }
 
+#[allow(dead_code)]
 impl SharedExecutor {
     /// Create a new shared executor
     pub fn new(executor: CommandExecutor) -> Self {

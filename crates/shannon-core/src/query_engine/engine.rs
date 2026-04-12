@@ -51,7 +51,7 @@ use crate::query_engine::types::{
     QueryStream,
 };
 use crate::state::StateManager;
-use crate::tools::{ToolOutput, ToolRegistry};
+use crate::tools::ToolRegistry;
 use futures::stream::{self, StreamExt};
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
@@ -244,6 +244,7 @@ impl QueryEngine {
         let user_message = context.user_message.clone();
         let state_for_save = self.state.clone();
         let session_id_for_save = self.session_id;
+        let cost_tracker = self.cost_tracker.clone();
 
         // Search for relevant memories to augment the system prompt
         let memory_entries = if let Some(ref mem_store) = self.memory {
@@ -486,6 +487,11 @@ impl QueryEngine {
 
                                             total_input_tokens += input_tokens;
                                             total_output_tokens += output_tokens;
+
+                                            // Update shared cost tracker
+                                            if let Ok(mut tracker) = cost_tracker.write() {
+                                                tracker.record_usage(&client_model, input_tokens, output_tokens);
+                                            }
 
                                             let _ = tx.send(Ok(QueryEvent::Usage {
                                                 query_id,
@@ -819,120 +825,6 @@ impl QueryEngine {
         Box::pin(stream)
     }
 
-    /// Execute a tool call
-    pub(crate) async fn execute_tool(
-        &self,
-        tool_name: &str,
-        tool_input: serde_json::Value,
-        context: &QueryContext,
-    ) -> Result<ToolOutput, QueryError> {
-        // Check permissions first (unwrap is safe - we own the lock)
-        if let Err(e) = self
-            .permissions
-            .read()
-            .unwrap()
-            .check_tool_permission(context.session_id, tool_name)
-        {
-            return Err(QueryError::PermissionDenied(e.to_string()));
-        }
-
-        // Execute the tool
-        self.tools
-            .execute(tool_name, tool_input)
-            .await
-            .map_err(|e| QueryError::ToolError(e.to_string()))
-    }
-
-    /// Process a single turn of the conversation
-    pub(crate) async fn process_turn(
-        &self,
-        query_id: Uuid,
-        _session_id: Uuid,
-        turn_number: usize,
-    ) -> Result<Vec<QueryEvent>, QueryError> {
-        let mut events = Vec::new();
-
-        // Build messages for API call
-        let messages = self.conversation.messages.clone();
-
-        // Get tools schema if enabled
-        let tools_schema = if !self.conversation.messages.is_empty() {
-            Some(self.tools.to_tool_definitions())
-        } else {
-            None
-        };
-
-        // Call the API (stub - would use actual streaming)
-        match self.client.send_message_stream(messages, tools_schema, self.config.system_prompt.clone()).await {
-            Ok(mut stream) => {
-                // Process streaming events
-                while let Some(event_result) = stream.next().await {
-                    match event_result {
-                        Ok(stream_event) => {
-                            match stream_event {
-                                StreamEvent::ContentBlockDelta { delta, .. } => {
-                                    match delta {
-                                        ContentDelta::TextDelta { text } => {
-                                            events.push(QueryEvent::Text {
-                                                query_id,
-                                                content: text,
-                                            });
-                                        }
-                                        ContentDelta::InputJsonDelta { partial_json } => {
-                                            // Handle tool input streaming - emit as text for now
-                                            events.push(QueryEvent::Text {
-                                                query_id,
-                                                content: format!("[Tool Input: {}]", partial_json),
-                                            });
-                                        }
-                                    }
-                                }
-                                StreamEvent::MessageStop => {
-                                    events.push(QueryEvent::TurnCompleted {
-                                        query_id,
-                                        turn_number,
-                                        tokens_used: 0,
-                                    });
-                                }
-                                _ => {}
-                            }
-                        }
-                        Err(e) => {
-                            events.push(QueryEvent::Failed {
-                                query_id,
-                                error: e.to_string(),
-                            });
-                            return Ok(events);
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                events.push(QueryEvent::Failed {
-                    query_id,
-                    error: e.to_string(),
-                });
-            }
-        }
-
-        Ok(events)
-    }
-
-    /// Validate a query before processing
-    pub(crate) fn validate_query(&self, context: &QueryContext) -> Result<(), QueryError> {
-        if context.user_message.trim().is_empty() {
-            return Err(QueryError::InvalidQuery("Empty message".to_string()));
-        }
-
-        if context.metadata.max_tokens == Some(0) {
-            return Err(QueryError::InvalidQuery(
-                "Invalid max_tokens value".to_string(),
-            ));
-        }
-
-        Ok(())
-    }
-
     /// Get current conversation statistics
     pub fn conversation_stats(&self) -> ConversationStats {
         ConversationStats {
@@ -941,6 +833,14 @@ impl QueryEngine {
             total_tokens: self.conversation.total_tokens,
             total_cost: self.conversation.total_cost,
         }
+    }
+
+    /// Get the current cost tracker summary string.
+    ///
+    /// Returns a formatted summary of accumulated API costs including
+    /// input/output tokens and total USD cost.
+    pub fn cost_summary(&self) -> String {
+        self.cost_tracker.read().unwrap().summary()
     }
 }
 

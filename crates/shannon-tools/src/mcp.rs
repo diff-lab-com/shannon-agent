@@ -166,15 +166,15 @@ impl McpResourceTool {
 
         if !client.connected {
             return Err(ToolError::InvalidInput(format!(
-                "Server '{}' is not connected",
-                input.server
+                "Server '{}' ({}) is not connected",
+                client.name, input.server
             )));
         }
 
         if !client.supports_resources {
             return Err(ToolError::InvalidInput(format!(
-                "Server '{}' does not support resources",
-                input.server
+                "Server '{}' ({}) does not support resources",
+                client.name, input.server
             )));
         }
 

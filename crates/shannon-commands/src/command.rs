@@ -297,6 +297,11 @@ pub struct CompactionStats {
 }
 
 /// Trait for command execution
+///
+/// This trait is reserved for plugin commands that will be loaded dynamically.
+/// Built-in commands use `CommandBase` instead, but external plugins will
+/// implement `Executable` to integrate with the command dispatch system.
+#[allow(dead_code)]
 #[async_trait]
 pub trait Executable: Send + Sync {
     /// Execute the command with given arguments and context
