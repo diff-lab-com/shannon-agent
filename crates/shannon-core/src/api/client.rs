@@ -4,6 +4,7 @@ use reqwest::Client;
 use std::time::Duration;
 
 use super::error::ApiError;
+use super::retry::{retry_request, RetryConfig};
 use super::streaming::MessageStream;
 use super::types::*;
 
@@ -261,6 +262,94 @@ impl LlmClient {
     /// Get a reference to the full config
     pub fn config(&self) -> &LlmClientConfig {
         &self.config
+    }
+
+    /// Send a message with retry logic and optional provider fallback.
+    pub async fn send_message_with_retry(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<ToolDefinition>>,
+        system: Option<String>,
+    ) -> Result<Vec<ContentBlock>, ApiError> {
+        let retry_config = &self.config.retry_config;
+        let result = retry_request(retry_config, || {
+            self.send_message(messages.clone(), tools.clone(), system.clone())
+        })
+        .await;
+
+        match result {
+            Ok(blocks) => Ok(blocks),
+            Err(primary_err) => {
+                // Try fallback provider if configured
+                if let (Some(fallback_provider), Some(fallback_base_url)) =
+                    (&self.config.fallback_provider, &self.config.fallback_base_url)
+                {
+                    tracing::warn!(
+                        "Primary provider {} failed: {}. Falling back to {} at {}",
+                        self.config.provider,
+                        primary_err,
+                        fallback_provider,
+                        fallback_base_url,
+                    );
+                    let mut fallback_config = self.config.clone();
+                    fallback_config.provider = fallback_provider.clone();
+                    fallback_config.base_url = fallback_base_url.clone();
+                    // Inherit retry config
+                    let fallback_retry = fallback_config.retry_config.clone();
+                    let fallback_client = Self::new(fallback_config);
+                    retry_request(&fallback_retry, || {
+                        fallback_client
+                            .send_message(messages.clone(), tools.clone(), system.clone())
+                    })
+                    .await
+                } else {
+                    Err(primary_err)
+                }
+            }
+        }
+    }
+
+    /// Send a streaming message with retry logic and optional provider fallback.
+    pub async fn send_message_stream_with_retry(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<ToolDefinition>>,
+        system: Option<String>,
+    ) -> Result<MessageStream, ApiError> {
+        let retry_config = &self.config.retry_config;
+        let result = retry_request(retry_config, || {
+            self.send_message_stream(messages.clone(), tools.clone(), system.clone())
+        })
+        .await;
+
+        match result {
+            Ok(stream) => Ok(stream),
+            Err(primary_err) => {
+                if let (Some(fallback_provider), Some(fallback_base_url)) =
+                    (&self.config.fallback_provider, &self.config.fallback_base_url)
+                {
+                    tracing::warn!(
+                        "Primary provider {} stream failed: {}. Falling back to {} at {}",
+                        self.config.provider,
+                        primary_err,
+                        fallback_provider,
+                        fallback_base_url,
+                    );
+                    let mut fallback_config = self.config.clone();
+                    fallback_config.provider = fallback_provider.clone();
+                    fallback_config.base_url = fallback_base_url.clone();
+                    let fallback_retry = fallback_config.retry_config.clone();
+                    let fallback_client = Self::new(fallback_config);
+                    retry_request(&fallback_retry, || {
+                        fallback_client
+                            .send_message_stream(messages.clone(), tools.clone(), system.clone())
+                    })
+                    .await
+                } else {
+                    Err(primary_err)
+                }
+            }
+        }
     }
 }
 

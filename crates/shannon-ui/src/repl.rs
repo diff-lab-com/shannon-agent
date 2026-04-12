@@ -1042,6 +1042,26 @@ impl Repl {
                 // Restore token count
                 self.state.tokens_used =
                     data.metadata.total_input_tokens + data.metadata.total_output_tokens;
+
+                // Restore the QueryEngine's internal conversation state so that
+                // subsequent AI queries carry the full history from this session.
+                if let Some(ref mut engine) = self.query_engine {
+                    match engine.restore_session(session_id) {
+                        Ok(true) => {
+                            tracing::info!(session_id = %session_id, "QueryEngine conversation restored");
+                        }
+                        Ok(false) => {
+                            tracing::warn!(session_id = %session_id, "No persisted session data for QueryEngine restore");
+                        }
+                        Err(e) => {
+                            tracing::warn!(session_id = %session_id, error = %e, "Failed to restore QueryEngine session");
+                            self.chat.add_message(
+                                ChatRole::System,
+                                format!("Warning: could not restore AI context (messages will lack prior history): {}", e),
+                            );
+                        }
+                    }
+                }
             }
             Ok(None) => {
                 self.chat.add_message(

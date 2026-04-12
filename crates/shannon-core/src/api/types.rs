@@ -1,6 +1,7 @@
 //! Message, request/response, and content types for the LLM API.
 
 use crate::api::retry::RetryConfig;
+use crate::unified_config::ShannonConfig;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -139,6 +140,102 @@ impl Default for LlmClientConfig {
             model,
             max_tokens: 4096,
             timeout_seconds: if provider == LlmProvider::Ollama { 300 } else { 120 },
+            api_version,
+            provider,
+            extra_headers: HashMap::new(),
+            retry_config: RetryConfig::default(),
+            fallback_provider: None,
+            fallback_base_url: None,
+        }
+    }
+}
+
+impl From<ShannonConfig> for LlmClientConfig {
+    /// Convert a merged [`ShannonConfig`] into an [`LlmClientConfig`].
+    ///
+    /// Fields that are `Some` in `ShannonConfig` take precedence; everything
+    /// else falls back to the same env-var and default logic that
+    /// [`LlmClientConfig::default`] uses.
+    fn from(cfg: ShannonConfig) -> Self {
+        let has_explicit_base_url = cfg.base_url.is_some();
+        let has_explicit_model = cfg.model.is_some();
+
+        // --- Resolve api_key ------------------------------------------------
+        let api_key = cfg
+            .api_key
+            .or_else(|| std::env::var("SHANNON_API_KEY").ok())
+            .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
+            .or_else(|| std::env::var("OPENAI_API_KEY").ok())
+            .unwrap_or_default();
+
+        // --- Resolve base_url -----------------------------------------------
+        let base_url = cfg
+            .base_url
+            .or_else(|| std::env::var("SHANNON_BASE_URL").ok())
+            .or_else(|| std::env::var("ANTHROPIC_BASE_URL").ok())
+            .or_else(|| std::env::var("OPENAI_BASE_URL").ok())
+            .unwrap_or_else(|| "https://api.anthropic.com".to_string());
+
+        // --- Resolve model --------------------------------------------------
+        let model = cfg
+            .model
+            .or_else(|| std::env::var("SHANNON_MODEL").ok())
+            .or_else(|| std::env::var("ANTHROPIC_MODEL").ok())
+            .or_else(|| std::env::var("OPENAI_MODEL").ok())
+            .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string());
+
+        // --- Resolve provider -----------------------------------------------
+        let provider = if let Some(ref p) = cfg.provider {
+            match p.to_lowercase().as_str() {
+                "anthropic" => LlmProvider::Anthropic,
+                "openai" => LlmProvider::OpenAI,
+                "ollama" => LlmProvider::Ollama,
+                _ => LlmProvider::from_base_url(&base_url),
+            }
+        } else {
+            LlmProvider::from_base_url(&base_url)
+        };
+
+        // --- Auto-fallback to Ollama when no key & no explicit base_url ----
+        let (api_key, base_url, model, provider) = if api_key.is_empty()
+            && provider.requires_auth()
+            && !has_explicit_base_url
+            && std::env::var("SHANNON_BASE_URL").is_err()
+        {
+            tracing::info!("No API key configured, defaulting to Ollama (localhost:11434)");
+            let ollama_model = if has_explicit_model {
+                model
+            } else {
+                std::env::var("SHANNON_MODEL").unwrap_or_else(|_| "llama3".to_string())
+            };
+            (String::new(), "http://localhost:11434".to_string(), ollama_model, LlmProvider::Ollama)
+        } else {
+            (api_key, base_url, model, provider)
+        };
+
+        // --- Resolve api_version --------------------------------------------
+        let api_version = match provider {
+            LlmProvider::Anthropic => std::env::var("ANTHROPIC_API_VERSION")
+                .unwrap_or_else(|_| "2023-06-01".to_string()),
+            _ => String::new(),
+        };
+
+        // --- Resolve max_tokens / timeout -----------------------------------
+        let max_tokens = cfg.max_tokens.unwrap_or(4096) as u32;
+        let timeout_seconds = cfg
+            .timeout
+            .unwrap_or(if provider == LlmProvider::Ollama {
+                300
+            } else {
+                120
+            });
+
+        Self {
+            api_key,
+            base_url,
+            model,
+            max_tokens,
+            timeout_seconds,
             api_version,
             provider,
             extra_headers: HashMap::new(),

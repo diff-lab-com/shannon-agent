@@ -344,6 +344,65 @@ impl QueryEngine {
                 // Get tools schema
                 let tools_schema = Some(tools.to_tool_definitions());
 
+                // Auto-compress conversation if it exceeds the threshold
+                {
+                    // Rough token estimate: ~4 chars per token
+                    let total_chars: usize = messages.iter().map(|m| {
+                        match &m.content {
+                            MessageContent::Text(t) => t.len(),
+                            MessageContent::Blocks(blocks) => blocks.iter().map(|b| match b {
+                                ContentBlock::Text { text } => text.len(),
+                                ContentBlock::ToolUse { name, input, .. } => {
+                                    name.len() + input.to_string().len()
+                                }
+                                ContentBlock::ToolResult { content, .. } => {
+                                    content.as_ref().map(|c| match c {
+                                        ToolResultContent::Single(s) => s.len(),
+                                        ToolResultContent::Multiple(v) => v.iter().map(|b| match b {
+                                            ContentBlock::Text { text } => text.len(),
+                                            _ => 50,
+                                        }).sum::<usize>(),
+                                    }).unwrap_or(50)
+                                }
+                                ContentBlock::Image { source } => source.data.len(),
+                            }).sum::<usize>()
+                        }
+                    }).sum();
+                    let estimated_tokens = total_chars / 4;
+                    let max_context = config.max_context_tokens.unwrap_or(200_000);
+                    if estimated_tokens as f32 / max_context as f32 > 0.8 {
+                        match crate::compact::CompactEngine::with_defaults() {
+                            Ok(mut compact_engine) => {
+                                match compact_engine.compact(&mut messages) {
+                                    Ok(result) => {
+                                        let _ = tx.send(Ok(QueryEvent::Progress {
+                                            query_id,
+                                            message: format!(
+                                                "Context compressed: {} -> {} tokens",
+                                                result.original_tokens, result.compacted_tokens
+                                            ),
+                                        }));
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("Compression failed: {}, truncating instead", e);
+                                        let keep = 20;
+                                        if messages.len() > keep {
+                                            messages = messages.split_off(messages.len() - keep);
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("CompactEngine init failed ({}), truncating old messages", e);
+                                let keep = 20;
+                                if messages.len() > keep {
+                                    messages = messages.split_off(messages.len() - keep);
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Call the API
                 match client.send_message_stream(messages, tools_schema, system_prompt.clone()).await {
                     Ok(mut stream) => {

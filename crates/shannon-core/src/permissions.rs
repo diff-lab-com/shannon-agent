@@ -612,6 +612,110 @@ impl PermissionManager {
         self.session_permissions.remove(&session_id);
         self.memory.clear_session(session_id);
     }
+
+    /// Classify a tool operation using the PermissionClassifier and check permission.
+    ///
+    /// - Returns `Ok(None)` if the operation is auto-allowed
+    /// - Returns `Ok(Some(prompt))` if user confirmation is needed
+    /// - Returns `Err` if the operation is denied
+    pub fn classify_and_check(
+        &self,
+        session_id: uuid::Uuid,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+    ) -> Result<Option<PermissionPrompt>, PermissionError> {
+        // First, run the classifier
+        let classifier = crate::permission_classifier::PermissionClassifier::new();
+        let result = classifier.classify(tool_name, tool_input);
+
+        match result.decision {
+            crate::permission_classifier::RuleDecision::Deny => {
+                Err(PermissionError::Denied(format!(
+                    "Operation denied by classifier: {} (risk: {})",
+                    result.reason, result.risk_level
+                )))
+            }
+            crate::permission_classifier::RuleDecision::Allow => {
+                // Auto-allow for low-risk operations
+                if matches!(
+                    result.risk_level,
+                    crate::permission_classifier::RiskLevel::None
+                        | crate::permission_classifier::RiskLevel::Low
+                ) {
+                    // Check if already always-allowed
+                    if self.memory.is_always_allowed(session_id, tool_name) {
+                        return Ok(None);
+                    }
+                    Ok(None) // Low-risk, auto-allow
+                } else {
+                    // Higher risk but classifier said allow — still prompt
+                    self.create_permission_prompt_with_risk(
+                        tool_name,
+                        tool_input,
+                        session_id,
+                        convert_classifier_risk(result.risk_level),
+                    )
+                }
+            }
+            crate::permission_classifier::RuleDecision::Ask => {
+                // Always prompt the user
+                self.create_permission_prompt_with_risk(
+                    tool_name,
+                    tool_input,
+                    session_id,
+                    convert_classifier_risk(result.risk_level),
+                )
+            }
+        }
+    }
+
+    /// Create a permission prompt with an explicit risk level from classifier.
+    fn create_permission_prompt_with_risk(
+        &self,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+        session_id: uuid::Uuid,
+        risk_level: RiskLevel,
+    ) -> Result<Option<PermissionPrompt>, PermissionError> {
+        if self.memory.is_always_allowed(session_id, tool_name) {
+            return Ok(None);
+        }
+        if self.memory.is_always_denied(tool_name) {
+            return Err(PermissionError::Denied(format!(
+                "Tool '{}' is always denied",
+                tool_name
+            )));
+        }
+
+        let policy = self.tool_policies.get(tool_name);
+        let description = if let Some(p) = policy {
+            format!("{}: {}", p.description, Self::format_input_summary(tool_input))
+        } else {
+            format!("Execute tool '{}': {}", tool_name, Self::format_input_summary(tool_input))
+        };
+
+        Ok(Some(PermissionPrompt {
+            id: uuid::Uuid::new_v4(),
+            tool_name: tool_name.to_string(),
+            tool_input: tool_input.clone(),
+            risk_level,
+            description,
+            is_confirmation: false,
+        }))
+    }
+}
+
+/// Convert classifier RiskLevel to permissions RiskLevel.
+fn convert_classifier_risk(
+    risk: crate::permission_classifier::RiskLevel,
+) -> RiskLevel {
+    match risk {
+        crate::permission_classifier::RiskLevel::None => RiskLevel::Safe,
+        crate::permission_classifier::RiskLevel::Low => RiskLevel::Low,
+        crate::permission_classifier::RiskLevel::Medium => RiskLevel::Medium,
+        crate::permission_classifier::RiskLevel::High => RiskLevel::High,
+        crate::permission_classifier::RiskLevel::Critical => RiskLevel::Critical,
+    }
 }
 
 // NOTE: PermissionManager is auto-Send + Sync because all fields (HashMap, HashSet)

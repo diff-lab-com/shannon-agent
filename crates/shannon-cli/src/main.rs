@@ -7,6 +7,7 @@ use shannon_core::{
     query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata},
     state::StateManager,
     tools::ToolRegistry,
+    unified_config::{ConfigBuilder, ShannonConfig},
 };
 use shannon_tools::register_default_tools;
 use shannon_ui::Repl;
@@ -312,6 +313,37 @@ fn build_cli_config(
     }
 }
 
+/// Build an [`LlmClientConfig`] by wiring the [`ConfigBuilder`] with the
+/// user's TOML config files, environment variables, and CLI overrides.
+///
+/// Priority (highest → lowest):
+///   CLI overrides > env vars (`SHANNON_*`) > local `.shannon.toml` > global `~/.shannon/config.toml`
+fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {
+    // 1. Convert the already-parsed CLI options into a ShannonConfig for the
+    //    highest-priority layer.
+    let cli_overrides = ShannonConfig {
+        model: cli_config.model.clone(),
+        provider: cli_config.provider.clone(),
+        api_key: None, // API key is not a CLI flag; comes from env/TOML.
+        base_url: None, // base_url is not a CLI flag either.
+        max_tokens: cli_config.max_tokens,
+        temperature: cli_config.temperature,
+        timeout: cli_config.timeout,
+        debug: cli_config.debug(),
+    };
+
+    // 2. Build the merged ShannonConfig via ConfigBuilder.
+    let merged = ConfigBuilder::new()
+        .load_global_toml()
+        .load_local_toml()
+        .load_env_vars()
+        .set_cli_overrides(cli_overrides)
+        .build();
+
+    // 3. Convert to LlmClientConfig (uses the `From<ShannonConfig>` impl).
+    LlmClientConfig::from(merged)
+}
+
 /// Run a non-interactive query, outputting results to stdout.
 /// `stream` controls whether text is streamed character-by-character.
 /// `config` holds explicit CLI configuration.
@@ -372,8 +404,8 @@ fn run_noninteractive_query(query: &str, stream: bool, config: &CliConfig) -> Re
             }
         }
 
-        // Build LLM client with explicit config
-        let client_config = LlmClientConfig::default();
+        // Build LLM client from the merged ConfigBuilder pipeline
+        let client_config = build_llm_config_from_builder(config);
 
         // Validate and warn
         if let Err(e) = client_config.validate() {
