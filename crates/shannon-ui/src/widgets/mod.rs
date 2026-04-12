@@ -51,13 +51,10 @@ impl HeaderWidget {
         let left_area = chunks[0];
         let right_area = chunks[1];
 
-        // Left side: Welcome + Tips
-        let left_spans: Vec<Span<'static>> = vec![
-            Span::styled("Welcome to ", Style::default().fg(Color::Green)),
-            Span::styled("Shannon", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-            Span::styled("Tip: /help for commands", Style::default().fg(Color::Yellow)),
-        ];
+        // Left side: Welcome + Tips (using helper methods)
+        let mut left_spans: Vec<Span<'static>> = Self::welcome_message();
+        left_spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
+        left_spans.extend(Self::tip_message());
 
         let left_paragraph = Paragraph::new(Line::from(left_spans))
             .block(

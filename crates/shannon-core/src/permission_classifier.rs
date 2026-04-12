@@ -647,6 +647,7 @@ impl PermissionRuleParser {
 /// 1. Checks user-defined rules (highest priority first).
 /// 2. If no rule matches, falls back to the default classification logic which
 ///    considers dangerous patterns for bash commands.
+#[derive(Clone)]
 pub struct PermissionClassifier {
     /// User / hook / settings rules.
     rules: Vec<PermissionRule>,
@@ -895,6 +896,53 @@ impl PermissionClassifier {
                 reason: format!("tool '{tool_name}' is read-only by default"),
                 matched_rule: None,
                 risk_level: RiskLevel::Low,
+            };
+        }
+
+        // Search/retrieval tools are low risk
+        let search_tools = ["WebSearch", "WebFetch", "Context7", "Search"];
+        if search_tools.contains(&tool_name) {
+            return ClassificationResult {
+                decision: RuleDecision::Allow,
+                confidence: 0.8,
+                reason: format!("tool '{tool_name}' is search/retrieval, low risk"),
+                matched_rule: None,
+                risk_level: RiskLevel::Low,
+            };
+        }
+
+        // Skill tools are generally safe (prompt templates)
+        if tool_name.starts_with("skill_") {
+            return ClassificationResult {
+                decision: RuleDecision::Allow,
+                confidence: 0.85,
+                reason: "skill tools are prompt templates, low risk".into(),
+                matched_rule: None,
+                risk_level: RiskLevel::Low,
+            };
+        }
+
+        // Memory write tools require confirmation
+        let memory_write_tools = ["MemoryWrite", "MemoryStore", "mcp__memory__create_entities"];
+        if memory_write_tools.contains(&tool_name) {
+            return ClassificationResult {
+                decision: RuleDecision::Ask,
+                confidence: 0.8,
+                reason: format!("tool '{tool_name}' modifies memory store"),
+                matched_rule: None,
+                risk_level: RiskLevel::Medium,
+            };
+        }
+
+        // Config/settings editing tools require confirmation
+        let config_tools = ["ConfigEdit", "SettingsWrite"];
+        if config_tools.contains(&tool_name) {
+            return ClassificationResult {
+                decision: RuleDecision::Ask,
+                confidence: 0.85,
+                reason: format!("tool '{tool_name}' modifies configuration"),
+                matched_rule: None,
+                risk_level: RiskLevel::Medium,
             };
         }
 

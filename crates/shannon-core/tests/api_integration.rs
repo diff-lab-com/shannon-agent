@@ -700,6 +700,7 @@ mod e2e_client_tests {
             retry_config: shannon_core::api::RetryConfig::default(),
             fallback_provider: None,
             fallback_base_url: None,
+            max_stream_reconnects: 3,
         };
         LlmClient::new(config)
     }
@@ -932,5 +933,242 @@ mod e2e_client_tests {
             }
         }
         assert_eq!(text, "world");
+    }
+}
+
+/// Tests for LlmClient::send_message_with_retry and fallback provider behavior.
+#[cfg(test)]
+mod retry_tests {
+    use mockito::{Server, ServerGuard};
+    use serde_json::json;
+    use shannon_core::api::{
+        LlmClient, LlmClientConfig, LlmProvider, Message, MessageContent, RetryConfig,
+    };
+    use futures::StreamExt;
+
+    fn make_client_with_retry(
+        server: &ServerGuard,
+        provider: LlmProvider,
+        max_retries: u32,
+    ) -> LlmClient {
+        let config = LlmClientConfig {
+            api_key: "test-key".to_string(),
+            base_url: server.url(),
+            model: "test-model".to_string(),
+            max_tokens: 1024,
+            timeout_seconds: 30,
+            api_version: "2023-06-01".to_string(),
+            provider,
+            extra_headers: Default::default(),
+            retry_config: RetryConfig::new(max_retries, 10, 50),
+            fallback_provider: None,
+            fallback_base_url: None,
+            max_stream_reconnects: 3,
+        };
+        LlmClient::new(config)
+    }
+
+    fn make_client_with_fallback(
+        primary: &ServerGuard,
+        fallback: &ServerGuard,
+    ) -> LlmClient {
+        let config = LlmClientConfig {
+            api_key: "test-key".to_string(),
+            base_url: primary.url(),
+            model: "test-model".to_string(),
+            max_tokens: 1024,
+            timeout_seconds: 30,
+            api_version: "2023-06-01".to_string(),
+            provider: LlmProvider::OpenAI,
+            extra_headers: Default::default(),
+            retry_config: RetryConfig::new(1, 10, 50),
+            fallback_provider: Some(LlmProvider::Anthropic),
+            fallback_base_url: Some(fallback.url()),
+            max_stream_reconnects: 3,
+        };
+        LlmClient::new(config)
+    }
+
+    fn simple_message() -> Vec<Message> {
+        vec![Message {
+            role: "user".to_string(),
+            content: MessageContent::Text("Hello".to_string()),
+        }]
+    }
+
+    /// Test: send_message_with_retry succeeds on first try.
+    #[tokio::test]
+    async fn test_retry_succeeds_first_try() {
+        let mut server = Server::new_async().await;
+        let response = json!({
+            "id": "chatcmpl-ok",
+            "object": "chat.completion",
+            "model": "gpt-4o",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "First try success"},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
+        });
+
+        let mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(response.to_string())
+            .expect(1)
+            .create();
+
+        let client = make_client_with_retry(&server, LlmProvider::OpenAI, 3);
+        let content = client.send_message_with_retry(simple_message(), None, None).await.unwrap();
+        assert_eq!(content.len(), 1);
+        mock.assert();
+    }
+
+    /// Test: retries on 500, succeeds on 2nd attempt.
+    #[tokio::test]
+    async fn test_retry_succeeds_after_server_error() {
+        let mut server = Server::new_async().await;
+
+        let error_resp = json!({"error": {"message": "Internal error", "type": "server_error"}});
+
+        let success_resp = json!({
+            "id": "chatcmpl-retry-ok",
+            "object": "chat.completion",
+            "model": "gpt-4o",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "Success after retry"},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
+        });
+
+        let _error_mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(500)
+            .with_header("content-type", "application/json")
+            .with_body(error_resp.to_string())
+            .expect(1)
+            .create();
+
+        let _success_mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(success_resp.to_string())
+            .expect(1)
+            .create();
+
+        let client = make_client_with_retry(&server, LlmProvider::OpenAI, 3);
+        let content = client.send_message_with_retry(simple_message(), None, None).await.unwrap();
+        assert_eq!(content.len(), 1);
+    }
+
+    /// Test: exhausts all retries, returns last error.
+    #[tokio::test]
+    async fn test_retry_exhausts_all_attempts() {
+        let mut server = Server::new_async().await;
+
+        let error_resp = json!({"error": {"message": "Down", "type": "server_error"}});
+
+        let _mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(503)
+            .with_header("content-type", "application/json")
+            .with_body(error_resp.to_string())
+            .expect(2) // initial + 1 retry
+            .create();
+
+        let client = make_client_with_retry(&server, LlmProvider::OpenAI, 1);
+        let result = client.send_message_with_retry(simple_message(), None, None).await;
+        assert!(result.is_err());
+    }
+
+    /// Test: fallback provider activated when primary fails completely.
+    #[tokio::test]
+    async fn test_fallback_provider_on_primary_failure() {
+        let mut primary = Server::new_async().await;
+        let mut fallback = Server::new_async().await;
+
+        // Primary always fails
+        let _primary_mock = primary
+            .mock("POST", "/v1/chat/completions")
+            .with_status(500)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"error": {"message": "Primary down", "type": "server_error"}}"#)
+            .expect(2) // initial + 1 retry
+            .create();
+
+        // Fallback succeeds
+        let fallback_resp = json!({
+            "id": "msg_fallback",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Fallback response"}],
+            "model": "claude-3",
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 5, "output_tokens": 3}
+        });
+
+        let fallback_mock = fallback
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(fallback_resp.to_string())
+            .expect(1)
+            .create();
+
+        let client = make_client_with_fallback(&primary, &fallback);
+        let content = client.send_message_with_retry(simple_message(), None, None).await.unwrap();
+        assert_eq!(content.len(), 1);
+        fallback_mock.assert();
+    }
+
+    /// Test: stream retry succeeds on second attempt.
+    #[tokio::test]
+    async fn test_stream_retry_succeeds() {
+        let mut server = Server::new_async().await;
+
+        // First attempt fails
+        let _error_mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(500)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"error": {"message": "Transient", "type": "server_error"}}"#)
+            .expect(1)
+            .create();
+
+        // Second attempt succeeds with stream
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"retried\"},\"index\":0}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"index\":0}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+
+        let _success_mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(body)
+            .expect(1)
+            .create();
+
+        let client = make_client_with_retry(&server, LlmProvider::OpenAI, 3);
+        let mut stream = client
+            .send_message_stream_with_retry(simple_message(), None, None)
+            .await
+            .unwrap();
+
+        let mut text = String::new();
+        while let Some(result) = stream.next().await {
+            let event = result.unwrap();
+            if let shannon_core::api::StreamEvent::ContentBlockDelta { delta, .. } = event {
+                if let shannon_core::api::ContentDelta::TextDelta { text: t } = delta {
+                    text.push_str(&t);
+                }
+            }
+        }
+        assert_eq!(text, "retried");
     }
 }

@@ -320,15 +320,18 @@ fn build_cli_config(
 ///   CLI overrides > env vars (`SHANNON_*`) > local `.shannon.toml` > global `~/.shannon/config.toml`
 fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {
     // 1. Convert the already-parsed CLI options into a ShannonConfig for the
-    //    highest-priority layer.
+    //    highest-priority layer. Use the accessor methods which include env var
+    //    fallback (e.g. cli_config.provider() checks SHANNON_PROVIDER).
     let cli_overrides = ShannonConfig {
-        model: cli_config.model.clone(),
-        provider: cli_config.provider.clone(),
-        api_key: None, // API key is not a CLI flag; comes from env/TOML.
-        base_url: None, // base_url is not a CLI flag either.
-        max_tokens: cli_config.max_tokens,
-        temperature: cli_config.temperature,
-        timeout: cli_config.timeout,
+        model: cli_config.model(),
+        provider: cli_config.provider(),
+        api_key: cli_config.get_env("SHANNON_API_KEY")
+            .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
+            .or_else(|| std::env::var("OPENAI_API_KEY").ok()),
+        base_url: cli_config.get_env("SHANNON_BASE_URL"),
+        max_tokens: cli_config.max_tokens(),
+        temperature: cli_config.temperature(),
+        timeout: cli_config.timeout(),
         debug: cli_config.debug(),
     };
 

@@ -106,6 +106,32 @@ fn spawn_caffeinate() {}
 #[cfg(not(target_os = "macos"))]
 fn kill_caffeinate() {}
 
+/// RAII guard that prevents sleep while alive.
+///
+/// Call [`PreventSleepGuard::new()`] at the start of a long-running operation.
+/// Sleep prevention stops automatically when the guard is dropped.
+pub struct PreventSleepGuard;
+
+impl PreventSleepGuard {
+    /// Create a new guard that prevents sleep until dropped.
+    pub fn new() -> Self {
+        start_prevent_sleep();
+        PreventSleepGuard
+    }
+}
+
+impl Drop for PreventSleepGuard {
+    fn drop(&mut self) {
+        stop_prevent_sleep();
+    }
+}
+
+impl Default for PreventSleepGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;

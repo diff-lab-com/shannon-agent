@@ -54,7 +54,8 @@ impl RetryConfig {
             | ApiError::StreamEndedUnexpectedly
             | ApiError::ToolUseError(_)
             | ApiError::Io(_)
-            | ApiError::JsonError(_) => false,
+            | ApiError::JsonError(_)
+            | ApiError::ProviderError { .. } => false,
         }
     }
 

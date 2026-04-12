@@ -7,7 +7,7 @@
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use shannon_core::tools::{Tool, ToolError, ToolOutput, ToolRegistry, ToolResult};
+use shannon_core::tools::{Tool, ToolOutput, ToolRegistry, ToolResult};
 use shannon_skills::{
     Skill, SkillContext, SkillExecutor, SkillPermissions,
     SkillRegistry,

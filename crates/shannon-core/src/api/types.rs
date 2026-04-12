@@ -91,6 +91,8 @@ pub struct LlmClientConfig {
     pub fallback_provider: Option<LlmProvider>,
     /// Fallback base URL used together with `fallback_provider`.
     pub fallback_base_url: Option<String>,
+    /// Maximum number of automatic stream reconnection attempts (default: 3).
+    pub max_stream_reconnects: u32,
 }
 
 impl Default for LlmClientConfig {
@@ -146,6 +148,7 @@ impl Default for LlmClientConfig {
             retry_config: RetryConfig::default(),
             fallback_provider: None,
             fallback_base_url: None,
+            max_stream_reconnects: 3,
         }
     }
 }
@@ -242,6 +245,7 @@ impl From<ShannonConfig> for LlmClientConfig {
             retry_config: RetryConfig::default(),
             fallback_provider: None,
             fallback_base_url: None,
+            max_stream_reconnects: 3,
         }
     }
 }
@@ -309,6 +313,7 @@ impl LlmClientConfig {
             retry_config: RetryConfig::default(),
             fallback_provider: None,
             fallback_base_url: None,
+            max_stream_reconnects: 3,
         }
     }
 
@@ -331,6 +336,7 @@ impl LlmClientConfig {
             retry_config: RetryConfig::default(),
             fallback_provider: None,
             fallback_base_url: None,
+            max_stream_reconnects: 3,
         }
     }
 }

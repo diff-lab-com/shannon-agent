@@ -48,6 +48,8 @@ pub struct ReplState {
     pub model: Option<String>,
     /// Total tokens used
     pub tokens_used: u64,
+    /// Total cost in USD accumulated across all queries
+    pub total_cost_usd: f64,
     /// Working directory for the session
     pub working_directory: String,
     /// Welcome screen active
@@ -81,6 +83,7 @@ impl Default for ReplState {
             status: "Ready".to_string(),
             model: Some("claude-3-5-sonnet".to_string()),
             tokens_used: 0,
+            total_cost_usd: 0.0,
             working_directory: cwd,
             welcome_active: false,
             permission_dialog: None,
@@ -1597,10 +1600,12 @@ impl Repl {
         let streaming_buffer: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
         let streaming_status: Arc<Mutex<String>> = Arc::new(Mutex::new("Processing...".to_string()));
         let streaming_done: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+        let streaming_cost: Arc<Mutex<f64>> = Arc::new(Mutex::new(0.0));
 
         let buffer_clone = streaming_buffer.clone();
         let status_clone = streaming_status.clone();
         let done_clone = streaming_done.clone();
+        let cost_clone = streaming_cost.clone();
         let permission_tx = self.permission_req_tx.clone();
 
         // Spawn the query processing in a separate thread so the UI can render
@@ -1682,7 +1687,12 @@ impl Repl {
                             input_tokens, output_tokens, cost_usd);
                         response_text.push_str(&usage);
                     }
-                    Ok(QueryEvent::Cost { .. }) => {}
+                    Ok(QueryEvent::Cost { total_cost_usd, input_tokens, output_tokens, .. }) => {
+                        tokens_in_turn = input_tokens + output_tokens;
+                        if let Ok(mut c) = cost_clone.lock() {
+                            *c = total_cost_usd;
+                        }
+                    }
                     Ok(QueryEvent::ToolProgress { progress, .. }) => {
                         let pct = (progress * 100.0) as u32;
                         let progress_msg = format!("\n⏳ Tool progress: {}%", pct);
@@ -1728,6 +1738,13 @@ impl Repl {
 
                 // Update status display
                 self.state.status = current_status;
+
+                // Update cost from streaming data
+                if let Ok(cost) = streaming_cost.lock().map(|g| *g) {
+                    if cost > 0.0 {
+                        self.state.total_cost_usd = cost;
+                    }
+                }
 
                 // Render the UI
                 let chat = &self.chat;

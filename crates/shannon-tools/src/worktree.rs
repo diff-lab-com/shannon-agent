@@ -13,7 +13,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 use uuid::Uuid;
 
 /// Worktree session state

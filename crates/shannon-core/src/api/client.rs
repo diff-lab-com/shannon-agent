@@ -4,7 +4,7 @@ use reqwest::Client;
 use std::time::Duration;
 
 use super::error::ApiError;
-use super::retry::{retry_request, RetryConfig};
+use super::retry::retry_request;
 use super::streaming::MessageStream;
 use super::types::*;
 
@@ -139,10 +139,79 @@ impl LlmClient {
         if !response.status().is_success() {
             let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
-            return Err(ApiError::ApiError {
+            return Err(ApiError::from_provider_response(
+                &self.config.provider,
                 status,
-                message: error_text,
-            });
+                &error_text,
+            ));
+        }
+
+        Ok(super::streaming::sse_stream_from_response(response, self.config.provider.clone()))
+    }
+
+    /// Send a streaming message with optional resumption via `Last-Event-ID`.
+    ///
+    /// If `last_event_id` is `Some`, the `Last-Event-ID` header is added to
+    /// the request so that providers that support SSE resumption can replay
+    /// events after the given ID.
+    pub async fn send_message_stream_resumable(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<ToolDefinition>>,
+        system: Option<String>,
+        last_event_id: Option<String>,
+    ) -> Result<MessageStream, ApiError> {
+        let request_body = MessageRequest {
+            model: self.config.model.clone(),
+            max_tokens: self.config.max_tokens,
+            system,
+            messages,
+            tools,
+            stream: Some(true),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+        };
+
+        let url = self.endpoint_url();
+        let headers = self.auth_headers();
+
+        let mut request = self
+            .client
+            .post(&url)
+            .header("content-type", "application/json")
+            .json(&super::adapter::serialize_request(&request_body, &self.config.provider));
+
+        for (key, value) in headers {
+            request = request.header(&key, &value);
+        }
+
+        if let Some(ref eid) = last_event_id {
+            request = request.header("Last-Event-ID", eid.as_str());
+        }
+
+        let response = request
+            .send()
+            .await
+            .map_err(|e| match e.status() {
+                Some(reqwest::StatusCode::UNAUTHORIZED) => ApiError::AuthenticationFailed,
+                Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded,
+                Some(status) => ApiError::ApiError {
+                    status: status.as_u16(),
+                    message: format!("HTTP error: {}", e),
+                },
+                None => ApiError::HttpError(e),
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(ApiError::from_provider_response(
+                &self.config.provider,
+                status,
+                &error_text,
+            ));
         }
 
         Ok(super::streaming::sse_stream_from_response(response, self.config.provider.clone()))
@@ -197,10 +266,11 @@ impl LlmClient {
         if !response.status().is_success() {
             let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
-            return Err(ApiError::ApiError {
+            return Err(ApiError::from_provider_response(
+                &self.config.provider,
                 status,
-                message: error_text,
-            });
+                &error_text,
+            ));
         }
 
         // Read the raw text first so we can apply provider-specific normalization

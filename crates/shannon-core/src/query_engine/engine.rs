@@ -70,6 +70,8 @@ pub struct QueryEngine {
     pub(crate) memory: Option<Arc<std::sync::RwLock<MemoryStore>>>,
     /// Session ID for conversation persistence
     pub(crate) session_id: Uuid,
+    /// Rule-based permission classifier for pre-checking tool invocations.
+    pub(crate) permission_classifier: crate::permission_classifier::PermissionClassifier,
 }
 
 impl QueryEngine {
@@ -93,6 +95,7 @@ impl QueryEngine {
             cost_tracker: Arc::new(RwLock::new(CostTracker::new(model))),
             memory: None,
             session_id,
+            permission_classifier: crate::permission_classifier::PermissionClassifier::new(),
         }
     }
 
@@ -115,6 +118,7 @@ impl QueryEngine {
             cost_tracker: Arc::new(RwLock::new(CostTracker::new(model))),
             memory: None,
             session_id,
+            permission_classifier: crate::permission_classifier::PermissionClassifier::new(),
         }
     }
 
@@ -141,6 +145,7 @@ impl QueryEngine {
             cost_tracker: Arc::new(RwLock::new(CostTracker::new(model))),
             memory: None,
             session_id,
+            permission_classifier: crate::permission_classifier::PermissionClassifier::new(),
         }
     }
 
@@ -230,6 +235,7 @@ impl QueryEngine {
         // Get necessary state for the spawned task
         let tools = self.tools.clone();
         let permissions = self.permissions.clone();
+        let permission_classifier = self.permission_classifier.clone();
         let client_api_key = self.client.api_key().to_string();
         let client_model = self.client.model().to_string();
         let client_base_url = self.client.base_url().to_string();
@@ -277,6 +283,9 @@ impl QueryEngine {
 
         // Spawn background task to handle query processing
         tokio::spawn(async move {
+            // Prevent OS sleep during long-running queries (drops on exit)
+            let _sleep_guard = crate::prevent_sleep::PreventSleepGuard::new();
+
             // Create a new client for this task
             let client_config = crate::api::LlmClientConfig {
                 api_key: client_api_key,
@@ -496,9 +505,39 @@ impl QueryEngine {
                                                         ),
                                                     }));
 
+                                                    // Pre-check with rule-based classifier
+                                                    let classification = permission_classifier.classify(
+                                                        &tool_name,
+                                                        &tool_input,
+                                                    );
+
+                                                    if classification.is_denied() {
+                                                        let error_msg = format!(
+                                                            "Tool denied by classifier: {}",
+                                                            classification.reason
+                                                        );
+                                                        let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                            query_id,
+                                                            tool_use_id: tool_id.clone(),
+                                                            tool_name,
+                                                            result: error_msg.clone(),
+                                                            is_error: true,
+                                                        }));
+                                                        tool_results.push((tool_id, error_msg));
+                                                        continue;
+                                                    }
+
+                                                    // If classifier explicitly allows with high confidence,
+                                                    // skip the permission prompt
+                                                    let skip_prompt = classification.is_allowed()
+                                                        && classification.confidence >= 0.9;
+
                                                     // Check if permission is needed
                                                     // Create a scope to ensure the RwLockReadGuard is dropped before await
-                                                    let permission_needed = {
+                                                    let permission_needed = if skip_prompt {
+                                                        // Classifier explicitly allowed — skip prompt
+                                                        None
+                                                    } else {
                                                         let guard = permissions.read().unwrap();
                                                         guard.create_permission_prompt(
                                                             &tool_name,

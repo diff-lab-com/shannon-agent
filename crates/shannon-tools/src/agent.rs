@@ -162,7 +162,7 @@ impl AgentTool {
         })
     }
 
-    async fn send_message(&self, input: SendMessageInput) -> Result<SendMessageOutput, ToolError> {
+    async fn send_message(&self, _input: SendMessageInput) -> Result<SendMessageOutput, ToolError> {
         let message_id = format!("msg_{}", uuid::Uuid::new_v4());
 
         Ok(SendMessageOutput {

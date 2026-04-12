@@ -166,7 +166,7 @@ impl SendMessageTool {
         recipient: &str,
         content: &MessageContent,
         summary: Option<&str>,
-        team_context: &TeamContext,
+        _team_context: &TeamContext,
     ) -> Result<SendMessageOutput, ToolError> {
         let sender = "agent"; // In real implementation, would get actual agent name
 
@@ -249,7 +249,7 @@ impl SendMessageTool {
         &self,
         target: &str,
         reason: Option<&str>,
-        team_context: &TeamContext,
+        _team_context: &TeamContext,
     ) -> Result<SendMessageOutput, ToolError> {
         let request_id = Uuid::new_v4().to_string();
 
@@ -286,7 +286,7 @@ impl SendMessageTool {
         let team_context = get_team_context();
 
         match &input.message {
-            MessageContent::Text(content) => {
+            MessageContent::Text(_content) => {
                 if input.to == "*" {
                     self.broadcast_message(
                         &input.message,
@@ -330,7 +330,7 @@ impl SendMessageTool {
                 StructuredMessage::ShutdownResponse {
                     request_id,
                     approve,
-                    reason,
+                    reason: _,
                 } => {
                     let message = InboxMessage {
                         from: "agent".to_string(),

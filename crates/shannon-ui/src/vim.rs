@@ -147,6 +147,16 @@ impl VimHandler {
         self.mode
     }
 
+    /// Store text into the yank buffer (called by the REPL when handling YankLine/YankWord).
+    pub fn set_yank_buffer(&mut self, text: String) {
+        self.yank_buffer = text;
+    }
+
+    /// Retrieve text from the yank buffer (called by the REPL when handling PasteAfter).
+    pub fn yank_buffer(&self) -> &str {
+        &self.yank_buffer
+    }
+
     /// Get the current command buffer contents (for display in status bar)
     pub fn command_buffer(&self) -> &str {
         &self.command_buffer

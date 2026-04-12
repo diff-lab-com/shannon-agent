@@ -5,6 +5,7 @@
 
 use futures::{Stream, StreamExt, task::{Context, Poll}};
 use std::pin::Pin;
+// TODO: wire last_event_id tracking with Arc<Mutex<String>> when reconnection is implemented
 
 use super::adapter::OpenaiStreamState;
 use super::error::ApiError;
