@@ -72,10 +72,19 @@ pub mod help_utils {
 }
 
 /// Re-export PDF types for external consumers
-#[allow(unused_imports)]
 pub mod pdf_types {
     pub use super::pdf::{
         PdfContent, PdfPage, PdfTable, PdfImage, PdfMetadata, PdfOptions, ImageFormat,
+        get_pdf_prompt,
+    };
+}
+
+/// Re-export export utilities for REPL integration
+pub mod export_utils {
+    pub use super::export::{
+        ExportFormat, ExportMessage, ExportSession, SessionMetadata,
+        ExportOptions, parse_export_args, generate_filename,
+        export_to_markdown, export_to_json, write_export,
     };
 }
 
@@ -94,5 +103,52 @@ pub mod status_utils {
     pub use super::status::{
         GitStatusInfo, StatusFile, AheadBehind,
         parse_git_status, format_status,
+    };
+}
+
+/// Re-export diff analysis utilities for REPL integration
+pub mod diff_utils {
+    pub use super::diff::{
+        DiffScope, DiffOptions, build_diff_command,
+        DiffStats, FileStats, parse_diff_stat,
+        ChangeCategory, CategorizedChange,
+        DiffAnalysis, DiffAnalyzer,
+    };
+}
+
+/// Re-export search utilities for REPL integration
+pub mod search_utils {
+    pub use super::search::{
+        SearchOptions, HistoryMatch,
+        parse_search_args, search_history, format_results,
+    };
+}
+
+/// Re-export debug utilities for REPL integration
+pub mod debug_utils {
+    pub use super::debug::{
+        DebugSubcommand, LogLevel,
+        parse_debug_subcommand, parse_log_level,
+        format_debug_help, format_log_response,
+        format_profile_response, format_trace_response,
+        format_system_info,
+    };
+}
+
+/// Re-export config utilities for REPL integration
+pub mod config_utils {
+    pub use super::config::{
+        ConfigAction, ConfigKey,
+        parse_config_action, known_config_keys,
+        format_config_list, format_config_get,
+        format_config_set, format_config_reset,
+    };
+}
+
+/// Re-export PR review utilities for prompt generation and output formatting
+pub mod review_utils {
+    pub use super::review_pr::{
+        get_review_prompt, ReviewCategory, ReviewIssue, IssueSeverity,
+        ReviewResult, Assessment,
     };
 }

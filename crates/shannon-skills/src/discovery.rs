@@ -42,7 +42,17 @@ impl SkillDiscovery {
 
             debug!("Discovering skills from: {:?}", skill_dir);
 
-            match load_skills_from_directory(skill_dir, SkillSource::Project) {
+            // Use CommandsDeprecated source for legacy "commands" directories
+            let source = if skill_dir
+                .file_name()
+                .is_some_and(|name| name == "commands")
+            {
+                SkillSource::CommandsDeprecated
+            } else {
+                SkillSource::Project
+            };
+
+            match load_skills_from_directory(skill_dir, source) {
                 Ok(skills) => {
                     if !skills.is_empty() {
                         info!(

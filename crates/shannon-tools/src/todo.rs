@@ -765,7 +765,6 @@ impl Tool for TaskGetTool {
 mod tests {
     use super::*;
 
-    #[allow(dead_code)]
     fn create_test_todo_item(content: &str, status: TodoStatus) -> TodoItem {
         TodoItem {
             task_id: Uuid::new_v4().to_string(),
@@ -778,6 +777,17 @@ mod tests {
             created_at: chrono::Utc::now().to_rfc3339(),
             blocked_by: Vec::new(),
         }
+    }
+
+    #[test]
+    fn test_create_test_todo_item_helper() {
+        let item = create_test_todo_item("Review code", TodoStatus::Pending);
+        assert_eq!(item.subject, "Review code");
+        assert_eq!(item.status, TodoStatus::Pending);
+        assert!(Uuid::parse_str(&item.task_id).is_ok());
+
+        let in_progress = create_test_todo_item("Fix bug", TodoStatus::InProgress);
+        assert_eq!(in_progress.status, TodoStatus::InProgress);
     }
 
     #[test]

@@ -36,7 +36,7 @@ use shannon_core::{
     state::StateManager,
     tools::ToolRegistry,
 };
-use shannon_commands::{CommandRegistry, CommandParser, builtin_commands, help_utils, SharedExecutor};
+use shannon_commands::{CommandRegistry, CommandParser, builtin_commands, help_utils, SharedExecutor, export_utils, search_utils, config_utils, diff_utils};
 // Tool registration
 use shannon_tools::register_default_tools;
 use crate::skill_bridge::register_skills_as_tools;
@@ -1391,8 +1391,10 @@ impl Repl {
                 "status" | "st" | "git-status" => self.handle_status_command(args)?,
                 "export" | "save" => self.handle_export_command(args)?,
                 "diff" => self.handle_diff_command(args)?,
+                "search" | "?" | "hist" | "history-search" => self.handle_search_command(args)?,
                 "browse" | "files" => self.handle_browse_command(args)?,
                 "select-tools" | "tools" => self.handle_select_tools_command()?,
+                "debug" | "dbg" | "dev" => self.handle_debug_command(args)?,
                 _ => {
                     // Check plugin commands first (via PluginExecutable bridge)
                     let plugin_cmd = self.plugin_manager.get_plugin_commands()
@@ -1872,36 +1874,37 @@ impl Repl {
         }
 
         let parts: Vec<&str> = args.splitn(3, ' ').collect();
-        let action = parts.first().copied().unwrap_or("");
+        let action_str = parts.first().copied().unwrap_or("");
+        let action = config_utils::parse_config_action(action_str);
 
         let output = match action {
-            "" | "list" | "ls" => {
-                let prefix = if action.is_empty() { None } else { parts.get(1).copied() };
+            config_utils::ConfigAction::List => {
+                let prefix = if action_str.is_empty() { None } else { parts.get(1).copied() };
                 let keys = manager.list(prefix);
                 if keys.is_empty() {
-                    format!("No configuration keys found.\nConfig file: {}", manager.config_path().display())
+                    config_utils::format_config_list()
                 } else {
-                    let mut out = format!("Configuration ({} key(s)):\n", keys.len());
+                    let mut out = config_utils::format_config_list();
+                    out.push_str(&format!("\nConfig file: {}\n", manager.config_path().display()));
                     for key in &keys {
                         let val = manager.get(key).unwrap_or(serde_json::Value::Null);
                         out.push_str(&format!("  {key} = {val}\n"));
                     }
-                    out.push_str(&format!("\nConfig file: {}", manager.config_path().display()));
                     out
                 }
             }
-            "get" => {
+            config_utils::ConfigAction::Get => {
                 let key = parts.get(1).copied().unwrap_or("");
                 if key.is_empty() {
                     "Usage: /config get <key>".to_string()
                 } else {
                     match manager.get(key) {
-                        Some(val) => format!("{key} = {val}"),
+                        Some(_val) => config_utils::format_config_get(key),
                         None => format!("Config key not found: {key}"),
                     }
                 }
             }
-            "set" => {
+            config_utils::ConfigAction::Set => {
                 let key = parts.get(1).copied().unwrap_or("");
                 let value_str = parts.get(2).copied().unwrap_or("");
                 if key.is_empty() || value_str.is_empty() {
@@ -1920,54 +1923,30 @@ impl Repl {
                     };
                     manager.set(key.to_string(), value.clone());
                     match manager.save() {
-                        Ok(_) => format!("Set {key} = {value}"),
+                        Ok(_) => config_utils::format_config_set(key, &value.to_string()),
                         Err(e) => format!("Error saving config: {e}"),
                     }
                 }
             }
-            "delete" | "remove" | "rm" => {
-                let key = parts.get(1).copied().unwrap_or("");
-                if key.is_empty() {
-                    "Usage: /config delete <key>".to_string()
-                } else {
-                    let existed = manager.delete(key);
-                    if existed {
-                        match manager.save() {
-                            Ok(_) => format!("Deleted config key: {key}"),
-                            Err(e) => format!("Error saving config: {e}"),
-                        }
-                    } else {
-                        format!("Config key not found: {key}")
-                    }
-                }
-            }
-            "reset" => {
+            config_utils::ConfigAction::Reset => {
                 let key = parts.get(1).copied().unwrap_or("");
                 if key.is_empty() {
                     "Usage: /config reset <key>".to_string()
                 } else {
                     let existed = manager.reset(key);
                     if existed {
-                        let val = manager.get(key).unwrap_or(serde_json::Value::Null);
+                        let _val = manager.get(key).unwrap_or(serde_json::Value::Null);
                         match manager.save() {
-                            Ok(_) => format!("Reset {key} to default: {val}"),
+                            Ok(_) => config_utils::format_config_reset(key),
                             Err(e) => format!("Error saving config: {e}"),
                         }
                     } else {
-                        format!("No default found for key: {key}")
+                        config_utils::format_config_reset(key)
                     }
                 }
             }
-            "help" | "?" => {
-                "Configuration Management:\n\n\
-                 /config list [prefix]        - Show config keys\n\
-                 /config get <key>            - Get a config value\n\
-                 /config set <key> <value>    - Set a config value\n\
-                 /config delete <key>         - Delete a config key\n\
-                 /config reset <key>          - Reset to default\n".to_string()
-            }
-            _ => {
-                format!("Unknown config action: {action}. Use /config help for usage.")
+            config_utils::ConfigAction::Help => {
+                config_utils::format_config_list()
             }
         };
 
@@ -2088,54 +2067,77 @@ impl Repl {
 
     /// Handle /export command — export session to file
     fn handle_export_command(&mut self, args: &str) -> Result<()> {
-        // Parse export arguments
-        // Determine format: default markdown, or json if specified
-        let format = if args.contains("json") { "json" } else { "md" };
+        // Parse export arguments using structured parser
+        let options = match export_utils::parse_export_args(args) {
+            Ok(opts) => opts,
+            Err(e) => {
+                self.chat.add_message(ChatRole::System, format!("Export error: {e}"));
+                return Ok(());
+            }
+        };
 
-        // Find filename: last non-flag argument
-        let filename = args.split_whitespace()
-            .find(|t| !["md", "markdown", "json", "--no-metadata", "--no-timestamps"].contains(t))
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| {
-                let ext = if format == "json" { "json" } else { "md" };
-                let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
-                format!("shannon_session_{ts}.{ext}")
-            });
+        // Determine filename
+        let filename = options.filename.clone().unwrap_or_else(|| {
+            export_utils::generate_filename(options.format)
+        });
 
-        // Collect messages from chat
-        let mut md = String::from("# Shannon Session Export\n\n");
-        md.push_str(&format!("**Model:** {}\n", self.state.model.as_deref().unwrap_or("default")));
-        md.push_str(&format!("**Working Directory:** {}\n", self.state.working_directory));
-        md.push_str(&format!("**Tokens Used:** {}\n", self.state.tokens_used));
-        md.push_str(&format!("**Commands Run:** {}\n", self.commands_run));
-        md.push_str(&format!("**Tools Invoked:** {}\n", self.tools_invoked));
-
-        if let Some(started) = &self.session_started_at {
-            let elapsed = chrono::Utc::now() - *started;
-            let mins = elapsed.num_minutes();
-            let secs = elapsed.num_seconds() % 60;
-            md.push_str(&format!("**Duration:** {mins}m {secs}s\n"));
-        }
-        md.push_str("\n---\n\n");
-
+        // Collect messages from chat into ExportMessages
+        let mut messages = Vec::new();
         for i in 0..self.chat.len() {
             if let Some(msg) = self.chat.get_message(i) {
                 let role = match msg.role {
-                    ChatRole::User => "## User",
-                    ChatRole::Assistant => "## Assistant",
-                    ChatRole::System => "## System",
-                    ChatRole::Tool => "## Tool",
+                    ChatRole::User => "user",
+                    ChatRole::Assistant => "assistant",
+                    ChatRole::System => "system",
+                    ChatRole::Tool => "tool",
                 };
-                let ts = msg.timestamp.format("%H:%M:%S");
-                md.push_str(&format!("{role} ({ts})\n\n{}\n\n---\n\n", msg.content));
+                messages.push(export_utils::ExportMessage {
+                    role: role.to_string(),
+                    content: msg.content.clone(),
+                    timestamp: Some(msg.timestamp.timestamp() as u64),
+                });
             }
         }
 
-        match std::fs::write(&filename, &md) {
+        // Build session start timestamp
+        let started_at = self.session_started_at
+            .map(|t| t.timestamp() as u64)
+            .unwrap_or(0);
+
+        // Build structured session
+        let session = export_utils::ExportSession {
+            title: "Shannon Session".to_string(),
+            started_at,
+            messages,
+            metadata: export_utils::SessionMetadata {
+                model: self.state.model.clone().unwrap_or_else(|| "default".to_string()),
+                tokens_used: self.state.tokens_used as usize,
+                working_dir: self.state.working_directory.clone(),
+                commands_run: self.commands_run,
+                tools_invoked: self.tools_invoked,
+            },
+        };
+
+        // Generate content in the requested format
+        let content = match options.format {
+            export_utils::ExportFormat::Markdown => {
+                export_utils::export_to_markdown(&session, &options)
+            }
+            export_utils::ExportFormat::Json => {
+                export_utils::export_to_json(&session, &options)
+            }
+        };
+
+        // Write to file
+        match export_utils::write_export(&content, &filename) {
             Ok(_) => {
+                let format_name = match options.format {
+                    export_utils::ExportFormat::Markdown => "markdown",
+                    export_utils::ExportFormat::Json => "JSON",
+                };
                 self.chat.add_message(
                     ChatRole::System,
-                    format!("Session exported to: {filename} ({} messages, markdown format)", self.chat.len()),
+                    format!("Session exported to: {filename} ({} messages, {format_name} format)", self.chat.len()),
                 );
             }
             Err(e) => {
@@ -2148,11 +2150,24 @@ impl Repl {
         Ok(())
     }
 
-    /// Handle /diff command — show git diff analysis
+    /// Handle /diff command -- show git diff analysis using structured pipeline
     fn handle_diff_command(&mut self, args: &str) -> Result<()> {
-        let diff_args = if args.trim().is_empty() { "HEAD" } else { args.trim() };
-        let output = std::process::Command::new("git")
-            .args(["diff", diff_args])
+        // Parse arguments using the structured diff pipeline
+        let options = diff_utils::DiffOptions::from_args(args);
+        let cmd_str = diff_utils::build_diff_command(&options);
+
+        // Split the command string into args for std::process::Command
+        let cmd_parts: Vec<&str> = cmd_str.split_whitespace().collect();
+        if cmd_parts.is_empty() {
+            self.chat.add_message(
+                ChatRole::System,
+                "Failed to build git diff command.".to_string(),
+            );
+            return Ok(());
+        }
+
+        let output = std::process::Command::new(cmd_parts[0])
+            .args(&cmd_parts[1..])
             .current_dir(&self.state.working_directory)
             .output();
 
@@ -2172,18 +2187,31 @@ impl Repl {
                         "No changes found.".to_string(),
                     );
                 } else {
-                    // Summarize diff stats from the output
-                    let lines = stdout.lines().count();
+                    // Run structured analysis on the diff output
+                    let analyzer = diff_utils::DiffAnalyzer::new();
+                    let analysis = analyzer.analyze(&stdout);
+
+                    // Build a formatted summary
                     let files: Vec<&str> = stdout.lines()
                         .filter(|l| l.starts_with("diff --git"))
                         .collect();
+                    let total_lines = stdout.lines().count();
+                    let category_summary = analysis.summary();
+                    let test_flag = if analysis.has_test_changes() { " [has test changes]" } else { "" };
+
+                    // Truncate raw diff if large
+                    let raw_diff = if stdout.len() > 4000 {
+                        format!("{}\n... (truncated)", &stdout[..4000])
+                    } else {
+                        stdout.to_string()
+                    };
+
                     self.chat.add_message(
                         ChatRole::System,
                         format!(
-                            "Git diff ({} files, {} lines):\n{}",
+                            "Git diff ({} files, {} lines){test_flag}\nCategories: {category_summary}\n\n{raw_diff}",
                             files.len(),
-                            lines,
-                            if stdout.len() > 4000 { format!("{}\n... (truncated)", &stdout[..4000]) } else { stdout.to_string() }
+                            total_lines,
                         ),
                     );
                 }
@@ -2195,6 +2223,109 @@ impl Repl {
                 );
             }
         }
+        Ok(())
+    }
+
+    /// Handle /search command -- search command history locally
+    fn handle_search_command(&mut self, args: &str) -> Result<()> {
+        // Parse search arguments
+        let options = match search_utils::parse_search_args(args) {
+            Ok(opts) => opts,
+            Err(e) => {
+                self.chat.add_message(
+                    ChatRole::System,
+                    format!("Search error: {e}\nUsage: /search <pattern> [--count N] [--regex] [--case-sensitive] [--no-timestamps]"),
+                );
+                return Ok(());
+            }
+        };
+
+        // Collect history entries as owned Strings for search_history()
+        let entries: Vec<String> = self.command_history.entries()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        // Search through history
+        let matches = search_utils::search_history(&entries, &options);
+
+        // Format and display results
+        let output = search_utils::format_results(&matches, &options);
+        self.chat.add_message(ChatRole::System, output);
+
+        Ok(())
+    }
+
+    /// Handle /debug command — developer tools for debugging, logging, and profiling
+    fn handle_debug_command(&mut self, args: &str) -> Result<()> {
+        use shannon_commands::debug_utils::{
+            parse_debug_subcommand, parse_log_level,
+            format_debug_help, format_log_response,
+            format_profile_response, format_trace_response,
+            format_system_info, DebugSubcommand,
+        };
+
+        let parts: Vec<&str> = args.splitn(3, ' ').collect();
+        let subcommand_str = parts.first().copied().unwrap_or("");
+        let subcommand = parse_debug_subcommand(subcommand_str);
+
+        let output = match subcommand {
+            DebugSubcommand::Help => format_debug_help(),
+            DebugSubcommand::Info => {
+                let mut info = format_system_info();
+
+                // Append cargo/rust version if available
+                if let Ok(rust_output) = std::process::Command::new("rustc")
+                    .arg("--version")
+                    .output()
+                {
+                    let version = String::from_utf8_lossy(&rust_output.stdout);
+                    if !version.trim().is_empty() {
+                        info.push_str(&format!("  Rust: {}\n", version.trim()));
+                    }
+                }
+
+                if let Ok(cargo_output) = std::process::Command::new("cargo")
+                    .arg("--version")
+                    .output()
+                {
+                    let version = String::from_utf8_lossy(&cargo_output.stdout);
+                    if !version.trim().is_empty() {
+                        info.push_str(&format!("  Cargo: {}\n", version.trim()));
+                    }
+                }
+
+                info
+            }
+            DebugSubcommand::Log => {
+                let level_str = parts.get(1).copied().unwrap_or("info");
+                let level = parse_log_level(level_str);
+                if let Some(lvl) = level {
+                    // Set RUST_LOG environment variable for the current process
+                    // Safety: This is single-threaded during REPL command handling
+                    unsafe { std::env::set_var("RUST_LOG", lvl.to_string()); }
+                }
+                format_log_response(level)
+            }
+            DebugSubcommand::Profile => {
+                let action = parts.get(1).copied().unwrap_or("start");
+                format_profile_response(action)
+            }
+            DebugSubcommand::Trace => {
+                let toggle = parts.get(1).copied().unwrap_or("on");
+                let enabled = matches!(toggle.to_lowercase().as_str(), "on" | "true" | "1" | "yes");
+                if enabled {
+                    // Safety: This is single-threaded during REPL command handling
+                    unsafe { std::env::set_var("SHANNON_TRACE", "1"); }
+                } else {
+                    // Safety: This is single-threaded during REPL command handling
+                    unsafe { std::env::remove_var("SHANNON_TRACE"); }
+                }
+                format_trace_response(enabled)
+            }
+        };
+
+        self.chat.add_message(ChatRole::System, output);
         Ok(())
     }
 

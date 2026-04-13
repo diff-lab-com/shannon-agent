@@ -21,7 +21,6 @@ pub enum SkillSource {
     /// From an MCP server
     Mcp,
     /// Legacy commands directory
-    #[allow(dead_code)]
     CommandsDeprecated,
     /// Plugin provided
     Plugin,

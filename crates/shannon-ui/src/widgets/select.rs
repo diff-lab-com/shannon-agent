@@ -11,7 +11,6 @@ use ratatui::{
 };
 
 /// Selection item for lists
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct SelectItem<T> {
     pub label: String,
@@ -19,7 +18,6 @@ pub struct SelectItem<T> {
     pub description: Option<String>,
 }
 
-#[allow(dead_code)]
 impl<T> SelectItem<T> {
     pub fn new(label: impl Into<String>, value: T) -> Self {
         Self {

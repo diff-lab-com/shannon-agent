@@ -310,7 +310,6 @@ pub struct OAuthService {
 }
 
 /// Internal state for a pending authorization request.
-#[allow(dead_code)]
 struct PendingAuth {
     client_id: String,
     scope: String,

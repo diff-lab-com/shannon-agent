@@ -99,7 +99,6 @@ pub fn command() -> Command {
 }
 
 /// Get the review prompt with PR number
-#[allow(dead_code)]
 pub fn get_review_prompt(pr_number: Option<&str>) -> String {
     let pr_info = if let Some(number) = pr_number {
         format!("PR number: {number}")
@@ -111,7 +110,6 @@ pub fn get_review_prompt(pr_number: Option<&str>) -> String {
 }
 
 /// Review category
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReviewCategory {
     Correctness,
@@ -122,7 +120,6 @@ pub enum ReviewCategory {
     Documentation,
 }
 
-#[allow(dead_code)]
 impl ReviewCategory {
     pub fn all() -> &'static [ReviewCategory] {
         &[
@@ -160,7 +157,6 @@ impl ReviewCategory {
 }
 
 /// Review issue with severity
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ReviewIssue {
     pub category: ReviewCategory,
@@ -170,7 +166,6 @@ pub struct ReviewIssue {
     pub suggestion: Option<String>,
 }
 
-#[allow(dead_code)]
 impl ReviewIssue {
     /// Create a new review issue
     pub fn new(category: ReviewCategory, severity: IssueSeverity, description: String) -> Self {
@@ -210,7 +205,6 @@ impl ReviewIssue {
 }
 
 /// Issue severity levels
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum IssueSeverity {
     Critical,
@@ -220,7 +214,6 @@ pub enum IssueSeverity {
     Info,
 }
 
-#[allow(dead_code)]
 impl IssueSeverity {
     /// Human-readable label
     pub fn display_name(&self) -> &'static str {
@@ -246,7 +239,6 @@ impl IssueSeverity {
 }
 
 /// Structured review result
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ReviewResult {
     pub pr_number: Option<String>,
@@ -256,7 +248,6 @@ pub struct ReviewResult {
     pub overall_assessment: Assessment,
 }
 
-#[allow(dead_code)]
 impl ReviewResult {
     /// Create a new review result
     pub fn new(overview: String, assessment: Assessment) -> Self {
@@ -363,7 +354,6 @@ impl ReviewResult {
 }
 
 /// Overall assessment rating
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Assessment {
     Approve,
@@ -372,7 +362,6 @@ pub enum Assessment {
     NeedsWork,
 }
 
-#[allow(dead_code)]
 impl Assessment {
     /// Human-readable label
     pub fn display_name(&self) -> &'static str {

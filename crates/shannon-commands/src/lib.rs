@@ -54,9 +54,44 @@ pub mod credential_utils {
     pub use crate::builtin::credential_utils::*;
 }
 
+/// Re-export export utilities for REPL integration
+pub mod export_utils {
+    pub use crate::builtin::export_utils::*;
+}
+
 /// Re-export git status utilities for REPL integration
 pub mod status_utils {
     pub use crate::builtin::status_utils::*;
+}
+
+/// Re-export diff analysis utilities for REPL integration
+pub mod diff_utils {
+    pub use crate::builtin::diff_utils::*;
+}
+
+/// Re-export search utilities for REPL integration
+pub mod search_utils {
+    pub use crate::builtin::search_utils::*;
+}
+
+/// Re-export PDF types and utilities for external consumers
+pub mod pdf_utils {
+    pub use crate::builtin::pdf_types::*;
+}
+
+/// Re-export debug utilities for REPL integration
+pub mod debug_utils {
+    pub use crate::builtin::debug_utils::*;
+}
+
+/// Re-export config utilities for REPL integration
+pub mod config_utils {
+    pub use crate::builtin::config_utils::*;
+}
+
+/// Re-export PR review utilities for prompt generation and output formatting
+pub mod review_utils {
+    pub use crate::builtin::review_utils::*;
 }
 
 /// Create a new command registry with all built-in commands registered

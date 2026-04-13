@@ -100,7 +100,6 @@ pub fn command() -> Command {
 }
 
 /// PDF processing options
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct PdfOptions {
     /// Specific page numbers to extract (1-indexed)
@@ -122,7 +121,6 @@ pub struct PdfOptions {
     pub extract_tables: bool,
 }
 
-#[allow(dead_code)]
 impl PdfOptions {
     /// Create new default options
     pub fn new() -> Self {
@@ -156,7 +154,6 @@ impl PdfOptions {
 }
 
 /// Extracted PDF content
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct PdfContent {
     /// File path
@@ -172,7 +169,6 @@ pub struct PdfContent {
     pub metadata: PdfMetadata,
 }
 
-#[allow(dead_code)]
 impl PdfContent {
     /// Parse AI-generated markdown output into structured PDF content.
     ///
@@ -261,7 +257,6 @@ impl PdfContent {
 }
 
 /// Single page from PDF
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct PdfPage {
     /// Page number (1-indexed)
@@ -277,7 +272,6 @@ pub struct PdfPage {
     pub tables: Vec<PdfTable>,
 }
 
-#[allow(dead_code)]
 impl PdfPage {
     /// Create a new page with just text content
     pub fn new(number: usize, text: String) -> Self {
@@ -301,7 +295,6 @@ impl PdfPage {
 }
 
 /// Image extracted from PDF
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct PdfImage {
     /// Image index
@@ -318,7 +311,6 @@ pub struct PdfImage {
 }
 
 /// Image format
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageFormat {
     Jpeg,
@@ -328,7 +320,6 @@ pub enum ImageFormat {
     Pdf,
 }
 
-#[allow(dead_code)]
 impl ImageFormat {
     /// Get the file extension for this format
     pub fn extension(&self) -> &'static str {
@@ -366,7 +357,6 @@ impl ImageFormat {
 }
 
 /// Table extracted from PDF
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct PdfTable {
     /// Table index
@@ -382,7 +372,6 @@ pub struct PdfTable {
     pub rows: Vec<Vec<String>>,
 }
 
-#[allow(dead_code)]
 impl PdfTable {
     /// Create a new table
     pub fn new(index: usize, page: usize, headers: Vec<String>, rows: Vec<Vec<String>>) -> Self {
@@ -437,7 +426,6 @@ impl PdfTable {
 }
 
 /// PDF metadata
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct PdfMetadata {
     /// Title
@@ -472,7 +460,6 @@ pub struct PdfMetadata {
 }
 
 /// Get PDF analysis prompt with file path and options context
-#[allow(dead_code)]
 pub fn get_pdf_prompt(file_path: &str, options: &PdfOptions) -> String {
     let mut args = file_path.to_string();
 

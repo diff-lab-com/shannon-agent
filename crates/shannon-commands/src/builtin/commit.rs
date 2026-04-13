@@ -57,12 +57,12 @@ pub fn command() -> Command {
         context: ExecutionContext::Inline,
         agent: None,
         paths: vec![],
-        prompt_template: Some(get_prompt_template("main", true)),
+        prompt_template: Some(get_prompt_template(&get_default_branch(), true)),
     })
 }
 
 /// Get the prompt template for the commit command
-pub fn get_prompt_template(_default_branch: &str, attribution: bool) -> String {
+pub fn get_prompt_template(default_branch: &str, attribution: bool) -> String {
     let attribution_text = if attribution { COMMIT_ATTRIBUTION } else { "" };
 
     format!(
@@ -71,6 +71,7 @@ pub fn get_prompt_template(_default_branch: &str, attribution: bool) -> String {
 - Current git status: !`git status`
 - Current git diff (staged and unstaged changes): !`git diff HEAD`
 - Current branch: !`git branch --show-current`
+- Default branch: {default_branch}
 - Recent commits: !`git log --oneline -10`
 {GIT_SAFETY}
 ## Your task
@@ -95,10 +96,59 @@ You have the capability to call multiple tools in a single response. Stage and c
     )
 }
 
-/// Get default git branch
-#[allow(dead_code)]
-pub fn get_default_branch() -> &'static str {
-    "main"
+/// Get default git branch by detecting from remote HEAD or falling back to common defaults
+pub fn get_default_branch() -> String {
+    // Try to detect from remote HEAD symbolic ref
+    if let Ok(output) = std::process::Command::new("git")
+        .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
+        .output()
+    {
+        if output.status.success() {
+            let ref_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            // refs/remotes/origin/HEAD -> refs/remotes/origin/main
+            if let Some(branch) = ref_str.strip_prefix("refs/remotes/origin/") {
+                return branch.to_string();
+            }
+        }
+    }
+
+    // Try to detect from remote show
+    if let Ok(output) = std::process::Command::new("git")
+        .args(["remote", "show", "origin"])
+        .output()
+    {
+        if output.status.success() {
+            let show_str = String::from_utf8_lossy(&output.stdout);
+            for line in show_str.lines() {
+                if let Some(branch) = line.strip_prefix("  HEAD branch: ") {
+                    return branch.trim().to_string();
+                }
+            }
+        }
+    }
+
+    // Check if 'main' branch exists locally
+    if let Ok(output) = std::process::Command::new("git")
+        .args(["branch", "--list", "main"])
+        .output()
+    {
+        if output.status.success() && !String::from_utf8_lossy(&output.stdout).trim().is_empty() {
+            return "main".to_string();
+        }
+    }
+
+    // Check if 'master' branch exists locally
+    if let Ok(output) = std::process::Command::new("git")
+        .args(["branch", "--list", "master"])
+        .output()
+    {
+        if output.status.success() && !String::from_utf8_lossy(&output.stdout).trim().is_empty() {
+            return "master".to_string();
+        }
+    }
+
+    // Default fallback
+    "main".to_string()
 }
 
 #[cfg(test)]

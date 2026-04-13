@@ -58,7 +58,6 @@ pub fn command() -> Command {
 }
 
 /// Configuration actions
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConfigAction {
     /// Get a config value
@@ -74,7 +73,6 @@ pub enum ConfigAction {
 }
 
 /// Parse config action from argument string
-#[allow(dead_code)]
 pub fn parse_config_action(arg: &str) -> ConfigAction {
     match arg.to_lowercase().as_str() {
         "get" => ConfigAction::Get,
@@ -87,7 +85,6 @@ pub fn parse_config_action(arg: &str) -> ConfigAction {
 }
 
 /// Known configuration keys with their descriptions and default values
-#[allow(dead_code)]
 pub struct ConfigKey {
     pub key: &'static str,
     pub description: &'static str,
@@ -96,7 +93,6 @@ pub struct ConfigKey {
 }
 
 /// Returns all known configuration keys
-#[allow(dead_code)]
 pub fn known_config_keys() -> Vec<ConfigKey> {
     vec![
         ConfigKey {
@@ -139,7 +135,6 @@ pub fn known_config_keys() -> Vec<ConfigKey> {
 }
 
 /// Format config list output
-#[allow(dead_code)]
 pub fn format_config_list() -> String {
     let keys = known_config_keys();
     let mut output = String::from("Configuration Settings:\n\n");
@@ -161,7 +156,6 @@ pub fn format_config_list() -> String {
 }
 
 /// Format a config get response
-#[allow(dead_code)]
 pub fn format_config_get(key: &str) -> String {
     let keys = known_config_keys();
     match keys.iter().find(|k| k.key == key) {
@@ -175,7 +169,6 @@ pub fn format_config_get(key: &str) -> String {
 }
 
 /// Format a config set response
-#[allow(dead_code)]
 pub fn format_config_set(key: &str, value: &str) -> String {
     let keys = known_config_keys();
     match keys.iter().find(|k| k.key == key) {
@@ -198,7 +191,6 @@ pub fn format_config_set(key: &str, value: &str) -> String {
 }
 
 /// Format a config reset response
-#[allow(dead_code)]
 pub fn format_config_reset(key: &str) -> String {
     let keys = known_config_keys();
     match keys.iter().find(|k| k.key == key) {
