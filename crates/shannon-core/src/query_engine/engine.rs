@@ -235,7 +235,6 @@ impl QueryEngine {
         // Get necessary state for the spawned task
         let tools = self.tools.clone();
         let permissions = self.permissions.clone();
-        let permission_classifier = self.permission_classifier.clone();
         let client_api_key = self.client.api_key().to_string();
         let client_model = self.client.model().to_string();
         let client_base_url = self.client.base_url().to_string();
@@ -509,56 +508,21 @@ impl QueryEngine {
                                                         ),
                                                     }));
 
-                                                    // Pre-check with rule-based classifier
-                                                    let classification = permission_classifier.classify(
-                                                        &tool_name,
-                                                        &tool_input,
-                                                    );
-
-                                                    if classification.is_denied() {
-                                                        let error_msg = format!(
-                                                            "Tool denied by classifier: {}",
-                                                            classification.reason
-                                                        );
-                                                        let _ = tx.send(Ok(QueryEvent::ToolUseResult {
-                                                            query_id,
-                                                            tool_use_id: tool_id.clone(),
-                                                            tool_name,
-                                                            result: error_msg.clone(),
-                                                            is_error: true,
-                                                        }));
-                                                        tool_results.push((tool_id, error_msg));
-                                                        continue;
-                                                    }
-
-                                                    // If classifier explicitly allows with high confidence,
-                                                    // skip the permission prompt
-                                                    let skip_prompt = classification.is_allowed()
-                                                        && classification.confidence >= 0.9;
-
-                                                    // Check if permission is needed
-                                                    // Create a scope to ensure the RwLockReadGuard is dropped before await
-                                                    let permission_needed = if skip_prompt {
-                                                        // Classifier explicitly allowed — skip prompt
-                                                        None
-                                                    } else {
+                                                    // Pre-check with classifier and permission system
+                                                    let permission_result = {
                                                         let guard = permissions.read().expect("permissions rwlock poisoned");
-                                                        guard.create_permission_prompt(
+                                                        guard.classify_and_check(
+                                                            session_id_for_permissions,
                                                             &tool_name,
                                                             &tool_input,
-                                                            session_id_for_permissions,
                                                         )
                                                     };
 
-                                                    if let Some(prompt) = permission_needed {
-                                                        // Check if already denied
-                                                        if prompt.risk_level
-                                                            == crate::permissions::RiskLevel::Critical
-                                                        {
-                                                            // Already denied - skip execution
+                                                    match permission_result {
+                                                        Err(_) => {
+                                                            // Denied by classifier
                                                             let error_msg = format!(
-                                                                "Tool denied: {}",
-                                                                prompt.description
+                                                                "Tool denied by classifier: {tool_name}"
                                                             );
                                                             let _ = tx.send(Ok(QueryEvent::ToolUseResult {
                                                                 query_id,
@@ -570,77 +534,101 @@ impl QueryEngine {
                                                             tool_results.push((tool_id, error_msg));
                                                             continue;
                                                         }
+                                                        Ok(None) => {
+                                                            // Auto-allowed (low risk or always-allowed)
+                                                            // Fall through to execute
+                                                        }
+                                                        Ok(Some(prompt)) => {
+                                                            // Check if already denied
+                                                            if prompt.risk_level
+                                                                == crate::permissions::RiskLevel::Critical
+                                                            {
+                                                                let error_msg = format!(
+                                                                    "Tool denied: {}",
+                                                                    prompt.description
+                                                                );
+                                                                let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                    query_id,
+                                                                    tool_use_id: tool_id.clone(),
+                                                                    tool_name,
+                                                                    result: error_msg.clone(),
+                                                                    is_error: true,
+                                                                }));
+                                                                tool_results.push((tool_id, error_msg));
+                                                                continue;
+                                                            }
 
-                                                        // Send permission request if a channel is provided
-                                                        if let Some(ref req_tx) =
-                                                            permission_request_tx
-                                                        {
-                                                            let (response_tx, mut response_rx) =
-                                                                mpsc::unbounded_channel();
-                                                            let _ = req_tx.send(
-                                                                super::types::PermissionRequest {
-                                                                    prompt: prompt.clone(),
-                                                                    response_tx,
-                                                                },
-                                                            );
+                                                            // Send permission request if a channel is provided
+                                                            if let Some(ref req_tx) =
+                                                                permission_request_tx
+                                                            {
+                                                                let (response_tx, mut response_rx) =
+                                                                    mpsc::unbounded_channel();
+                                                                let _ = req_tx.send(
+                                                                    super::types::PermissionRequest {
+                                                                        prompt: prompt.clone(),
+                                                                        response_tx,
+                                                                    },
+                                                                );
 
-                                                            // Wait for user response (guard is now dropped, safe to await)
-                                                            match response_rx.recv().await {
-                                                                Some(
-                                                                    crate::permissions::PermissionChoice::Deny,
-                                                                ) => {
-                                                                    let denied_msg = format!(
-                                                                        "Permission denied: {}",
-                                                                        prompt.description
-                                                                    );
-                                                                    let _ = tx.send(Ok(QueryEvent::ToolUseResult {
-                                                                        query_id,
-                                                                        tool_use_id: tool_id
-                                                                            .clone(),
-                                                                        tool_name,
-                                                                        result: denied_msg
-                                                                            .clone(),
-                                                                        is_error: true,
-                                                                    }));
-                                                                    tool_results
-                                                                        .push((tool_id, denied_msg));
-                                                                    continue;
-                                                                }
-                                                                Some(
-                                                                    crate::permissions::PermissionChoice::AllowOnce,
-                                                                ) => {}
-                                                                Some(
-                                                                    crate::permissions::PermissionChoice::AlwaysAllow,
-                                                                ) => {
-                                                                    let _ = permissions
-                                                                        .write()
-                                                                        .expect("permissions rwlock poisoned")
-                                                                        .process_permission_choice(
-                                                                            session_id_for_permissions,
-                                                                            &prompt,
-                                                                            crate::permissions::PermissionChoice::AlwaysAllow,
+                                                                // Wait for user response
+                                                                match response_rx.recv().await {
+                                                                    Some(
+                                                                        crate::permissions::PermissionChoice::Deny,
+                                                                    ) => {
+                                                                        let denied_msg = format!(
+                                                                            "Permission denied: {}",
+                                                                            prompt.description
                                                                         );
-                                                                }
-                                                                None => {
-                                                                    let error_msg =
-                                                                        "Permission channel closed"
-                                                                            .to_string();
-                                                                    let _ = tx.send(Ok(QueryEvent::ToolUseResult {
-                                                                        query_id,
-                                                                        tool_use_id: tool_id
-                                                                            .clone(),
-                                                                        tool_name,
-                                                                        result: error_msg
-                                                                            .clone(),
-                                                                        is_error: true,
-                                                                    }));
-                                                                    tool_results
-                                                                        .push((tool_id, error_msg));
-                                                                    continue;
+                                                                        let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                            query_id,
+                                                                            tool_use_id: tool_id
+                                                                                .clone(),
+                                                                            tool_name,
+                                                                            result: denied_msg
+                                                                                .clone(),
+                                                                            is_error: true,
+                                                                        }));
+                                                                        tool_results
+                                                                            .push((tool_id, denied_msg));
+                                                                        continue;
+                                                                    }
+                                                                    Some(
+                                                                        crate::permissions::PermissionChoice::AllowOnce,
+                                                                    ) => {}
+                                                                    Some(
+                                                                        crate::permissions::PermissionChoice::AlwaysAllow,
+                                                                    ) => {
+                                                                        let _ = permissions
+                                                                            .write()
+                                                                            .expect("permissions rwlock poisoned")
+                                                                            .process_permission_choice(
+                                                                                session_id_for_permissions,
+                                                                                &prompt,
+                                                                                crate::permissions::PermissionChoice::AlwaysAllow,
+                                                                            );
+                                                                    }
+                                                                    None => {
+                                                                        let error_msg =
+                                                                            "Permission channel closed"
+                                                                                .to_string();
+                                                                        let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                            query_id,
+                                                                            tool_use_id: tool_id
+                                                                                .clone(),
+                                                                            tool_name,
+                                                                            result: error_msg
+                                                                                .clone(),
+                                                                            is_error: true,
+                                                                        }));
+                                                                        tool_results
+                                                                            .push((tool_id, error_msg));
+                                                                        continue;
+                                                                    }
                                                                 }
                                                             }
+                                                            // If no permission channel, assume auto-allow
                                                         }
-                                                        // If no permission channel, assume auto-allow (for non-interactive contexts)
                                                     }
 
                                                     // Spawn a timer that emits periodic
