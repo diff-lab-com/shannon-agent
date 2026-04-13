@@ -28,11 +28,13 @@ mod builtin;
 pub use command::{
     Command, CommandBase, PromptCommand, LocalCommand, LocalJSXCommand,
     CommandResult, CommandAvailability, CommandSource,
+    Executable, PluginExecutable,
 };
 pub use registry::CommandRegistry;
 pub use parser::{CommandParser, ParsedCommand};
 pub use command::ExecutionResult;
 pub use executor::CommandExecutor;
+pub use executor::SharedExecutor;
 pub use context::{CommandContext, ToolUseContext};
 pub use repl_command::{ReplCommand, CommandAdapter};
 
@@ -45,6 +47,16 @@ pub mod builtin_commands {
 /// Re-export help utilities for REPL integration
 pub mod help_utils {
     pub use crate::builtin::help_utils::*;
+}
+
+/// Re-export credential utilities for REPL integration
+pub mod credential_utils {
+    pub use crate::builtin::credential_utils::*;
+}
+
+/// Re-export git status utilities for REPL integration
+pub mod status_utils {
+    pub use crate::builtin::status_utils::*;
 }
 
 /// Create a new command registry with all built-in commands registered

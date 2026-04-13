@@ -7,8 +7,9 @@ use crate::{
     vim::{VimAction, VimHandler},
     widgets::{
         ChatWidget, ChatRole, PromptWidget, MainLayoutWidget,
-        dialog::DialogWidget,
-        progress::SpinnerWidget,
+        dialog::{DialogWidget, InputDialog},
+        progress::{ProgressBarWidget, SpinnerWidget, MultiProgressWidget},
+        select::{FuzzyPickerWidget, FileSelectorWidget, SelectItem},
     },
     Result,
 };
@@ -35,7 +36,7 @@ use shannon_core::{
     state::StateManager,
     tools::ToolRegistry,
 };
-use shannon_commands::{CommandRegistry, CommandParser, builtin_commands, help_utils};
+use shannon_commands::{CommandRegistry, CommandParser, builtin_commands, help_utils, SharedExecutor};
 // Tool registration
 use shannon_tools::register_default_tools;
 use crate::skill_bridge::register_skills_as_tools;
@@ -67,10 +68,26 @@ pub struct ReplState {
     pub active_tool: Option<String>,
     /// Spinner widget for progress indication
     pub spinner: SpinnerWidget,
+    /// Progress bar widget for tool execution progress
+    pub progress_bar: ProgressBarWidget,
+    /// Whether the progress bar is currently visible (tool is executing)
+    pub progress_bar_visible: bool,
     /// Number of steps completed in current query
     pub query_steps_done: usize,
     /// Total steps estimated for current query (0 = indeterminate)
     pub query_steps_total: usize,
+    /// Active input dialog (if any)
+    pub input_dialog: Option<Box<InputDialog>>,
+    /// Callback action when input dialog is submitted
+    pub input_dialog_action: Option<String>,
+    /// Active fuzzy picker for command palette (Ctrl+P)
+    pub fuzzy_picker: Option<FuzzyPickerWidget>,
+    /// Active file selector for /browse command
+    pub file_selector: Option<FileSelectorWidget>,
+    /// Multi-progress widget for tracking parallel tool execution
+    pub multi_progress: MultiProgressWidget,
+    /// Whether multi-progress is visible (tools running in parallel)
+    pub multi_progress_visible: bool,
 }
 
 impl Default for ReplState {
@@ -93,8 +110,16 @@ impl Default for ReplState {
             pending_dialog_action: None,
             active_tool: None,
             spinner: SpinnerWidget::new(),
+            progress_bar: ProgressBarWidget::new(),
+            progress_bar_visible: false,
             query_steps_done: 0,
             query_steps_total: 0,
+            input_dialog: None,
+            input_dialog_action: None,
+            fuzzy_picker: None,
+            file_selector: None,
+            multi_progress: MultiProgressWidget::new(),
+            multi_progress_visible: false,
         }
     }
 }
@@ -121,6 +146,8 @@ pub struct Repl {
     command_registry: CommandRegistry,
     /// Command parser for parsing /commands
     command_parser: CommandParser,
+    /// Shared command executor for concurrent command dispatch
+    shared_executor: SharedExecutor,
     /// Tokio runtime for async operations
     runtime: Runtime,
     /// Permission request receiver (from QueryEngine to REPL UI)
@@ -287,6 +314,12 @@ impl Repl {
             registry
         });
 
+        // Wrap the executor in SharedExecutor for concurrent command dispatch
+        let shared_executor = {
+            use shannon_commands::CommandExecutor;
+            SharedExecutor::new(CommandExecutor::new(command_registry.clone()))
+        };
+
         Ok(Self {
             events: EventHandler::new(50)?,
             renderer: Renderer::new(),
@@ -298,6 +331,7 @@ impl Repl {
             state_manager: StateManager::new(),
             command_registry,
             command_parser: CommandParser::new(),
+            shared_executor,
             runtime,
             permission_req_rx,
             permission_req_tx,
@@ -368,6 +402,11 @@ impl Repl {
             let spinner = &self.state.spinner;
 
             terminal.draw(|f| {
+                let pb = if state.progress_bar_visible {
+                    Some(&state.progress_bar)
+                } else {
+                    None
+                };
                 if let Some(ref dialog) = state.permission_dialog {
                     // Render permission dialog overlay
                     self.render_permission_dialog(f, f.area(), dialog);
@@ -382,8 +421,51 @@ impl Repl {
                         Some(state.tokens_used),
                         &state.working_directory,
                         Some(spinner),
+                        pb,
                     );
                     dialog.render(f, f.area());
+                } else if let Some(ref input_dlg) = state.input_dialog {
+                    // Render main layout first, then overlay the input dialog
+                    MainLayoutWidget::render_complete_with_spinner(
+                        f,
+                        chat,
+                        prompt,
+                        &state.status,
+                        state.model.as_deref(),
+                        Some(state.tokens_used),
+                        &state.working_directory,
+                        Some(spinner),
+                        pb,
+                    );
+                    input_dlg.render(f, f.area());
+                } else if let Some(ref picker) = state.fuzzy_picker {
+                    // Render main layout first, then overlay the fuzzy picker
+                    MainLayoutWidget::render_complete_with_spinner(
+                        f,
+                        chat,
+                        prompt,
+                        &state.status,
+                        state.model.as_deref(),
+                        Some(state.tokens_used),
+                        &state.working_directory,
+                        Some(spinner),
+                        pb,
+                    );
+                    picker.render(f, f.area());
+                } else if let Some(ref selector) = state.file_selector {
+                    // Render main layout first, then overlay the file selector
+                    MainLayoutWidget::render_complete_with_spinner(
+                        f,
+                        chat,
+                        prompt,
+                        &state.status,
+                        state.model.as_deref(),
+                        Some(state.tokens_used),
+                        &state.working_directory,
+                        Some(spinner),
+                        pb,
+                    );
+                    selector.render(f, f.area());
                 } else {
                     MainLayoutWidget::render_complete_with_spinner(
                         f,
@@ -394,6 +476,7 @@ impl Repl {
                         Some(state.tokens_used),
                         &state.working_directory,
                         Some(spinner),
+                        pb,
                     );
                 }
             })?;
@@ -448,7 +531,30 @@ impl Repl {
             return self.handle_active_dialog_input(key);
         }
 
+        // If an input dialog is active, handle text input
+        if self.state.input_dialog.is_some() {
+            return self.handle_input_dialog_input(key);
+        }
+
+        // If fuzzy picker is active, handle picker input
+        if self.state.fuzzy_picker.is_some() {
+            return self.handle_fuzzy_picker_input(key);
+        }
+
+        // If file selector is active, handle file selector input
+        if self.state.file_selector.is_some() {
+            return self.handle_file_selector_input(key);
+        }
+
         match key.code {
+            crossterm::event::KeyCode::Char('p') => {
+                if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
+                    self.open_command_palette();
+                    return Ok(());
+                } else {
+                    self.prompt.add_char('p');
+                }
+            }
             crossterm::event::KeyCode::Char('q') => {
                 if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
                     self.running = false;
@@ -800,6 +906,219 @@ impl Repl {
         self.state.pending_dialog_action = None;
     }
 
+    /// Show an input dialog for text entry
+    fn show_input_dialog(&mut self, title: &str, placeholder: &str, action: &str) {
+        use crate::widgets::dialog::InputDialog;
+        let dialog = InputDialog::new(title.to_string())
+            .with_placeholder(placeholder.to_string());
+        self.state.input_dialog = Some(Box::new(dialog));
+        self.state.input_dialog_action = Some(action.to_string());
+    }
+
+    /// Handle input dialog keyboard input
+    fn handle_input_dialog_input(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
+        match key.code {
+            crossterm::event::KeyCode::Char(c) => {
+                if let Some(ref mut dlg) = self.state.input_dialog {
+                    dlg.add_char(c);
+                }
+            }
+            crossterm::event::KeyCode::Backspace => {
+                if let Some(ref mut dlg) = self.state.input_dialog {
+                    dlg.backspace();
+                }
+            }
+            crossterm::event::KeyCode::Enter => {
+                // Submit the input
+                let value = self.state.input_dialog.as_ref()
+                    .map(|d| d.value().to_string())
+                    .unwrap_or_default();
+                let action = self.state.input_dialog_action.take();
+                self.state.input_dialog = None;
+
+                if let Some(ref act) = action {
+                    match act.as_str() {
+                        "set_api_key" => {
+                            if !value.is_empty() {
+                                // Set the API key in environment for current session
+                                unsafe { std::env::set_var("SHANNON_API_KEY", &value); }
+                                self.chat.add_message(
+                                    ChatRole::System,
+                                    "API key set for this session.".to_string(),
+                                );
+                            }
+                        }
+                        "set_model" => {
+                            if !value.is_empty() {
+                                self.state.model = Some(value.clone());
+                                self.chat.add_message(
+                                    ChatRole::System,
+                                    format!("Model set to: {value}"),
+                                );
+                            }
+                        }
+                        _ => {
+                            self.chat.add_message(
+                                ChatRole::System,
+                                format!("Input received: {value}"),
+                            );
+                        }
+                    }
+                }
+            }
+            crossterm::event::KeyCode::Esc => {
+                self.state.input_dialog = None;
+                self.state.input_dialog_action = None;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Open the command palette (Ctrl+P) with all available commands
+    fn open_command_palette(&mut self) {
+        let command_names = self.runtime.block_on(self.command_registry.list_names());
+        let items: Vec<SelectItem<String>> = command_names.into_iter().map(|name| {
+            let display = format!("/{name}");
+            SelectItem::new(display.clone(), display)
+        }).collect();
+
+        let picker = FuzzyPickerWidget::new("Command Palette".to_string())
+            .with_items(items);
+        self.state.fuzzy_picker = Some(picker);
+    }
+
+    /// Handle fuzzy picker keyboard input
+    fn handle_fuzzy_picker_input(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
+        match key.code {
+            crossterm::event::KeyCode::Up => {
+                if let Some(ref mut picker) = self.state.fuzzy_picker {
+                    picker.move_up();
+                }
+            }
+            crossterm::event::KeyCode::Down => {
+                if let Some(ref mut picker) = self.state.fuzzy_picker {
+                    picker.move_down();
+                }
+            }
+            crossterm::event::KeyCode::Char(c) => {
+                if let Some(ref mut picker) = self.state.fuzzy_picker {
+                    picker.add_search_char(c);
+                }
+            }
+            crossterm::event::KeyCode::Backspace => {
+                if let Some(ref mut picker) = self.state.fuzzy_picker {
+                    picker.remove_search_char();
+                }
+            }
+            crossterm::event::KeyCode::Enter => {
+                // Get selected command and execute it
+                let selected = self.state.fuzzy_picker.as_ref()
+                    .and_then(|p| p.selected_value().map(|v| v.to_string()));
+                self.state.fuzzy_picker = None;
+
+                if let Some(cmd) = selected {
+                    self.prompt.set_input(cmd);
+                    self.submit_input()?;
+                }
+            }
+            crossterm::event::KeyCode::Esc => {
+                self.state.fuzzy_picker = None;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Handle /browse command — open file browser
+    fn handle_browse_command(&mut self, args: &str) -> Result<()> {
+        let path = if args.trim().is_empty() {
+            self.state.working_directory.clone()
+        } else {
+            args.trim().to_string()
+        };
+
+        let mut selector = FileSelectorWidget::new("File Browser".to_string())
+            .with_path(&path);
+        if let Err(e) = selector.refresh() {
+            self.chat.add_message(
+                ChatRole::System,
+                format!("Failed to browse {}: {e}", path),
+            );
+            return Ok(());
+        }
+        self.state.file_selector = Some(selector);
+        Ok(())
+    }
+
+    /// Handle file selector keyboard input
+    fn handle_file_selector_input(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
+        match key.code {
+            crossterm::event::KeyCode::Up => {
+                if let Some(ref mut sel) = self.state.file_selector {
+                    sel.move_up();
+                }
+            }
+            crossterm::event::KeyCode::Down => {
+                if let Some(ref mut sel) = self.state.file_selector {
+                    sel.move_down();
+                }
+            }
+            crossterm::event::KeyCode::Enter => {
+                // Navigate into directory or select file
+                if let Some(ref mut sel) = self.state.file_selector {
+                    if let Some(selection) = sel.current_selection() {
+                        let full_path = std::path::Path::new(sel.current_path()).join(&selection);
+                        if full_path.is_dir() {
+                            let dir_name = selection.clone();
+                            if let Err(e) = sel.navigate_into(&dir_name) {
+                                self.chat.add_message(
+                                    ChatRole::System,
+                                    format!("Failed to navigate into {dir_name}: {e}"),
+                                );
+                            }
+                            return Ok(());
+                        }
+                    }
+                }
+
+                // File selected — close browser and put path in prompt
+                let selected_path = self.state.file_selector.as_ref()
+                    .and_then(|s| s.current_selection())
+                    .map(|name| {
+                        let base = self.state.file_selector.as_ref()
+                            .map(|s| s.current_path().to_string())
+                            .unwrap_or_else(|| ".".to_string());
+                        format!("{base}/{name}")
+                    });
+                self.state.file_selector = None;
+
+                if let Some(path) = selected_path {
+                    self.chat.add_message(
+                        ChatRole::System,
+                        format!("Selected file: {path}"),
+                    );
+                }
+            }
+            crossterm::event::KeyCode::Backspace => {
+                // Navigate up
+                if let Some(ref mut sel) = self.state.file_selector {
+                    if let Err(e) = sel.navigate_up() {
+                        self.chat.add_message(
+                            ChatRole::System,
+                            format!("Failed to navigate up: {e}"),
+                        );
+                    }
+                }
+            }
+            crossterm::event::KeyCode::Esc => {
+                self.state.file_selector = None;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     /// Submit the current input
     fn submit_input(&mut self) -> Result<()> {
         let input = self.prompt.input().to_string();
@@ -952,12 +1271,27 @@ impl Repl {
                 "history" => self.handle_history_command(args)?,
                 "worktree" => self.handle_worktree_command(args)?,
                 "credentials" | "creds" | "cred" => self.handle_credentials_command(args)?,
+                "status" | "st" | "git-status" => self.handle_status_command(args)?,
                 "export" | "save" => self.handle_export_command(args)?,
                 "diff" => self.handle_diff_command(args)?,
+                "browse" | "files" => self.handle_browse_command(args)?,
                 _ => {
-                    // Handle prompt-based commands (export, diff, commit, review_pr, pdf, debug, etc.)
-                    // These have prompt templates that should be sent to the AI for execution.
-                    if let Ok(command) = self.runtime.block_on(self.command_registry.get(cmd_name)) {
+                    // Check plugin commands first (via PluginExecutable bridge)
+                    let plugin_cmd = self.plugin_manager.get_plugin_commands()
+                        .iter()
+                        .find(|c| c.name == cmd_name)
+                        .cloned();
+
+                    if let Some(plugin) = plugin_cmd {
+                        let prompt = plugin.prompt_template.replace("{args}", if args.is_empty() { "" } else { args });
+                        self.chat.add_message(
+                            ChatRole::System,
+                            format!("Running /{cmd_name} (plugin)..."),
+                        );
+                        self.handle_query(&prompt)?;
+                    } else if let Ok(command) = self.runtime.block_on(self.command_registry.get(cmd_name)) {
+                        // Handle prompt-based commands (export, diff, commit, review_pr, pdf, debug, etc.)
+                        // These have prompt templates that should be sent to the AI for execution.
                         match &*command {
                             shannon_commands::Command::Prompt(prompt_cmd) => {
                                 if let Some(ref template) = prompt_cmd.prompt_template {
@@ -1522,132 +1856,113 @@ impl Repl {
 
     /// Handle /credentials command — manage stored credentials
     fn handle_credentials_command(&mut self, args: &str) -> Result<()> {
-        // The module is private to shannon-commands, but we access through the crate's re-exports.
+        use shannon_commands::credential_utils::{
+            parse_credential_action, CredentialAction,
+            format_credentials_list, format_credential_store,
+            format_credential_get, format_credential_delete,
+            format_credential_count,
+        };
+
         let parts: Vec<&str> = args.splitn(3, ' ').collect();
         let action_str = parts.first().copied().unwrap_or("");
+        let action = parse_credential_action(action_str);
 
-        let output = match action_str.to_lowercase().as_str() {
-            "list" | "ls" | "" => self.credentials_list(),
-            "store" | "add" | "set" => {
+        let output = match action {
+            CredentialAction::List => format_credentials_list(),
+            CredentialAction::Store => {
                 let service = parts.get(1).copied().unwrap_or("");
                 let value = parts.get(2).copied().unwrap_or("");
                 if service.is_empty() || value.is_empty() {
                     "Usage: /credentials store <service> <value>".to_string()
                 } else {
-                    self.credentials_store(service, value)
+                    format_credential_store(service, value)
                 }
             }
-            "get" => {
+            CredentialAction::Get => {
                 let service = parts.get(1).copied().unwrap_or("");
                 if service.is_empty() {
                     "Usage: /credentials get <service>".to_string()
                 } else {
-                    self.credentials_get(service)
+                    format_credential_get(service)
                 }
             }
-            "delete" | "remove" | "rm" => {
+            CredentialAction::Delete => {
                 let service = parts.get(1).copied().unwrap_or("");
                 if service.is_empty() {
                     "Usage: /credentials delete <service>".to_string()
                 } else {
-                    self.credentials_delete(service)
+                    format_credential_delete(service)
                 }
             }
-            "count" => self.credentials_count(),
-            "help" | "?" => self.credentials_help(),
-            _ => self.credentials_list(),
+            CredentialAction::Count => format_credential_count(),
+            CredentialAction::Help => {
+                "Credential Management:\n\n\
+                 /credentials list              - Show stored credentials\n\
+                 /credentials store <svc> <val> - Store a credential\n\
+                 /credentials get <service>     - Retrieve a credential (masked)\n\
+                 /credentials delete <service>  - Delete a credential\n\
+                 /credentials count             - Show stored credential count\n".to_string()
+            }
         };
 
         self.chat.add_message(ChatRole::System, output);
         Ok(())
     }
 
-    /// List stored credentials
-    fn credentials_list(&self) -> String {
-        use shannon_core::credential_manager::CredentialManager;
-        let mut output = String::from("Stored Credentials:\n\n");
-        match CredentialManager::new().and_then(|mut m| { m.load()?; Ok(m) }) {
-            Ok(manager) => {
-                let creds = manager.list();
-                if creds.is_empty() {
-                    output.push_str("  No credentials stored.\n");
-                } else {
-                    for c in &creds {
-                        output.push_str(&format!("  {} — {} (created: {})\n",
-                            c.service, c.name, c.created_at.format("%Y-%m-%d %H:%M")));
-                    }
+    /// Handle /status command — show git repository status using rich types
+    fn handle_status_command(&mut self, args: &str) -> Result<()> {
+        use shannon_commands::status_utils::{parse_git_status, format_status};
+
+        let short = args.contains("--short");
+
+        // Run git status --short --branch to get parseable output
+        let output = std::process::Command::new("git")
+            .args(["status", "--short", "--branch"])
+            .current_dir(&self.state.working_directory)
+            .output();
+
+        let status_output = match output {
+            Ok(result) => {
+                let stdout = String::from_utf8_lossy(&result.stdout);
+                let stderr = String::from_utf8_lossy(&result.stderr);
+                if !stderr.is_empty() && stdout.is_empty() {
+                    self.chat.add_message(ChatRole::System, format!("Git error: {stderr}"));
+                    return Ok(());
+                }
+                stdout.to_string()
+            }
+            Err(e) => {
+                self.chat.add_message(ChatRole::System, format!("Failed to run git status: {e}"));
+                return Ok(());
+            }
+        };
+
+        if let Some(info) = parse_git_status(&status_output) {
+            let formatted = format_status(&info, short);
+
+            // Also get recent commits
+            let log_output = std::process::Command::new("git")
+                .args(["log", "--oneline", "-5"])
+                .current_dir(&self.state.working_directory)
+                .output();
+
+            let mut full_output = formatted;
+
+            if let Ok(log_result) = log_output {
+                let log_stdout = String::from_utf8_lossy(&log_result.stdout);
+                if !log_stdout.is_empty() {
+                    full_output.push_str("\nRecent commits:\n");
+                    full_output.push_str(&log_stdout);
                 }
             }
-            Err(e) => output.push_str(&format!("  Error: {e}\n")),
-        }
-        output.push_str("\nUse /credentials help for usage information.");
-        output
-    }
 
-    /// Store a credential
-    fn credentials_store(&self, service: &str, value: &str) -> String {
-        use shannon_core::credential_manager::{CredentialManager, Credential};
-        match CredentialManager::new().and_then(|mut m| { m.load()?; Ok(m) }) {
-            Ok(mut manager) => {
-                let cred = Credential::new(service, service, value);
-                match manager.store_or_update(cred) {
-                    Ok(_) => format!("Credential stored for service: {service}"),
-                    Err(e) => format!("Failed to store credential: {e}"),
-                }
-            }
-            Err(e) => format!("Error: {e}"),
+            self.chat.add_message(ChatRole::System, full_output);
+        } else {
+            // Fallback: just show the raw output
+            self.chat.add_message(ChatRole::System, status_output);
         }
-    }
 
-    /// Get a credential (masked)
-    fn credentials_get(&self, service: &str) -> String {
-        use shannon_core::credential_manager::CredentialManager;
-        match CredentialManager::new().and_then(|mut m| { m.load()?; Ok(m) }) {
-            Ok(manager) => match manager.retrieve(service) {
-                Ok(cred) => {
-                    let val = &cred.value;
-                    let masked = if val.len() <= 8 {
-                        "*".repeat(val.len())
-                    } else {
-                        format!("{}****{}", &val[..4], &val[val.len()-4..])
-                    };
-                    format!("Credential for '{service}': {masked}")
-                }
-                Err(e) => format!("Not found for '{service}': {e}"),
-            },
-            Err(e) => format!("Error: {e}"),
-        }
-    }
-
-    /// Delete a credential
-    fn credentials_delete(&self, service: &str) -> String {
-        use shannon_core::credential_manager::CredentialManager;
-        match CredentialManager::new().and_then(|mut m| { m.load()?; Ok(m) }) {
-            Ok(mut manager) => match manager.delete(service) {
-                Ok(_) => format!("Credential deleted for service: {service}"),
-                Err(e) => format!("Failed to delete for '{service}': {e}"),
-            },
-            Err(e) => format!("Error: {e}"),
-        }
-    }
-
-    /// Count stored credentials
-    fn credentials_count(&self) -> String {
-        use shannon_core::credential_manager::CredentialManager;
-        match CredentialManager::new().and_then(|mut m| { m.load()?; Ok(m) }) {
-            Ok(manager) => format!("Stored credentials: {}", manager.count()),
-            Err(e) => format!("Error: {e}"),
-        }
-    }
-
-    /// Show credentials help
-    fn credentials_help(&self) -> String {
-        "Credential Management:\n\n\
-         /credentials list              - Show stored credentials\n\
-         /credentials store <svc> <val> - Store a credential\n\
-         /credentials get <service>     - Retrieve a credential (masked)\n\
-         /credentials delete <service>  - Delete a credential\n\
-         /credentials count             - Show stored credential count\n".to_string()
+        Ok(())
     }
 
     /// Handle /export command — export session to file
@@ -1797,6 +2112,8 @@ impl Repl {
         self.state.active_tool = None;
         self.state.query_steps_done = 0;
         self.state.query_steps_total = 0;
+        self.state.progress_bar_visible = false;
+        self.state.progress_bar.set_progress(0.0);
 
         // Start a new turn diff for tracking file changes
         let _turn_diff = TurnDiff::new(self.current_turn);
@@ -1839,11 +2156,15 @@ impl Repl {
         let streaming_status: Arc<Mutex<String>> = Arc::new(Mutex::new("Processing...".to_string()));
         let streaming_done: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
         let streaming_cost: Arc<Mutex<f64>> = Arc::new(Mutex::new(0.0));
+        let streaming_progress: Arc<Mutex<f64>> = Arc::new(Mutex::new(0.0));
+        let streaming_multi_progress: Arc<Mutex<Vec<(String, f64, ratatui::style::Color)>>> = Arc::new(Mutex::new(Vec::new()));
 
         let buffer_clone = streaming_buffer.clone();
         let status_clone = streaming_status.clone();
         let done_clone = streaming_done.clone();
         let cost_clone = streaming_cost.clone();
+        let progress_clone = streaming_progress.clone();
+        let multi_progress_clone = streaming_multi_progress.clone();
         let permission_tx = self.permission_req_tx.clone();
 
         // Spawn the query processing in a separate thread so the UI can render
@@ -1880,6 +2201,21 @@ impl Repl {
                         tool_calls.push(tool_name.clone());
                         tools_in_session += 1;
 
+                        // Track tool in multi-progress display
+                        {
+                            let colors = [
+                                ratatui::style::Color::Cyan,
+                                ratatui::style::Color::Green,
+                                ratatui::style::Color::Yellow,
+                                ratatui::style::Color::Magenta,
+                                ratatui::style::Color::Blue,
+                            ];
+                            let color = colors[tool_calls.len() % colors.len()];
+                            if let Ok(mut mp) = multi_progress_clone.lock() {
+                                mp.push((tool_name.clone(), 0.0, color));
+                            }
+                        }
+
                         if let Ok(mut s) = status_clone.lock() {
                             *s = progress_status.clone();
                         }
@@ -1902,6 +2238,12 @@ impl Repl {
                         response_text.push_str(&result_display);
                         if let Ok(mut buf) = buffer_clone.lock() {
                             *buf = response_text.clone();
+                        }
+                        // Mark tool as complete in multi-progress
+                        if let Ok(mut mp) = multi_progress_clone.lock() {
+                            if let Some(bar) = mp.iter_mut().find(|(l, _, _)| l == &tool_name) {
+                                bar.1 = 1.0;
+                            }
                         }
                     }
                     Ok(QueryEvent::TurnCompleted { turn_number, tokens_used, .. }) => {
@@ -1930,10 +2272,21 @@ impl Repl {
                             *c = total_cost_usd;
                         }
                     }
-                    Ok(QueryEvent::ToolProgress { progress, .. }) => {
+                    Ok(QueryEvent::ToolProgress { progress, tool_name, .. }) => {
                         let pct = (progress * 100.0) as u32;
                         let progress_msg = format!("\n⏳ Tool progress: {pct}%");
                         response_text.push_str(&progress_msg);
+                        // Update shared progress for status bar rendering
+                        if let Ok(mut p) = progress_clone.lock() {
+                            *p = progress as f64;
+                        }
+                        if let Ok(mut buf) = buffer_clone.lock() {
+                            *buf = response_text.clone();
+                        }
+                        progress_status = format!("{tool_name}: {pct}%");
+                        if let Ok(mut s) = status_clone.lock() {
+                            *s = progress_status.clone();
+                        }
                     }
                     Ok(QueryEvent::Completed { .. }) => {
                         if let Ok(cost) = cost_clone.lock() {
@@ -1990,6 +2343,32 @@ impl Repl {
                     }
                 }
 
+                // Update progress bar from streaming data
+                if let Ok(progress_val) = streaming_progress.lock().map(|g| *g) {
+                    if progress_val > 0.0 {
+                        self.state.progress_bar_visible = true;
+                        self.state.progress_bar.set_progress(progress_val);
+                        if let Some(ref tool) = self.state.active_tool {
+                            self.state.progress_bar.set_title(tool.clone());
+                        }
+                    } else {
+                        self.state.progress_bar_visible = false;
+                    }
+                }
+
+                // Sync multi-progress from streaming data
+                if let Ok(mp_data) = streaming_multi_progress.lock().map(|g| g.clone()) {
+                    if !mp_data.is_empty() {
+                        self.state.multi_progress_visible = true;
+                        self.state.multi_progress.clear();
+                        for (label, progress, color) in mp_data {
+                            self.state.multi_progress = self.state.multi_progress.clone().add_bar(label, progress, color);
+                        }
+                    } else {
+                        self.state.multi_progress_visible = false;
+                    }
+                }
+
                 // Render the UI
                 let chat = &self.chat;
                 let prompt = &self.prompt;
@@ -1997,6 +2376,11 @@ impl Repl {
                 // Tick spinner during streaming, before borrowing for render
                 self.state.spinner.tick();
                 let spinner = &self.state.spinner;
+                let pb = if self.state.progress_bar_visible {
+                    Some(&self.state.progress_bar)
+                } else {
+                    None
+                };
                 polling_terminal.draw(|f| {
                     MainLayoutWidget::render_complete_with_spinner(
                         f,
@@ -2007,6 +2391,7 @@ impl Repl {
                         Some(state.tokens_used),
                         &state.working_directory,
                         Some(spinner),
+                        pb,
                     );
                 })?;
 
@@ -2051,6 +2436,8 @@ impl Repl {
 
                 self.state.query_steps_done = steps;
                 self.state.query_steps_total = steps;
+                self.state.progress_bar_visible = false;
+                self.state.progress_bar.set_progress(0.0);
                 if steps > 0 {
                     self.state.status = format!("Ready ({steps} steps completed)");
                 } else {
@@ -2070,19 +2457,31 @@ impl Repl {
 
                 self.chat.update_message(assistant_msg_index, format!("❌ Error: {e}"));
 
-                // Show alert dialog for critical errors (auth, config, network)
+                // Show dialog for critical errors (auth, config, network)
                 let err_lower = e.to_lowercase();
-                if err_lower.contains("authentication") || err_lower.contains("api key")
-                    || err_lower.contains("unauthorized") || err_lower.contains("forbidden")
+                if err_lower.contains("api key") || err_lower.contains("api_key") {
+                    // Offer to enter API key via input dialog
+                    self.show_input_dialog(
+                        "API Key Required",
+                        "Enter your API key...",
+                        "set_api_key",
+                    );
+                } else if err_lower.contains("authentication") || err_lower.contains("unauthorized")
+                    || err_lower.contains("forbidden")
                 {
                     self.show_alert_dialog("Query Error", &e.to_string(), true);
                 }
 
                 self.state.status = "Ready".to_string();
+                self.state.progress_bar_visible = false;
+                self.state.progress_bar.set_progress(0.0);
             }
         }
 
         self.state.active_tool = None;
+        self.state.progress_bar_visible = false;
+        self.state.multi_progress_visible = false;
+        self.state.multi_progress.clear();
 
         Ok(())
     }

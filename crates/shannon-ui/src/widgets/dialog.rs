@@ -378,14 +378,13 @@ impl AlertDialog {
 }
 
 /// Input dialog for text input
-#[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub struct InputDialog {
     dialog: DialogWidget,
     value: String,
     placeholder: String,
 }
 
-#[allow(dead_code)]
 impl InputDialog {
     /// Create a new input dialog
     pub fn new(title: String) -> Self {

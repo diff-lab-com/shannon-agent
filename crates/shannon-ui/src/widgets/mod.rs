@@ -169,18 +169,7 @@ impl StatusBarWidget {
         frame.render_widget(paragraph, area);
     }
 
-    /// Render enhanced status bar with more information
-    pub fn render_enhanced(
-        frame: &mut Frame,
-        area: Rect,
-        status: &str,
-        model: Option<&str>,
-        tokens_used: Option<u64>,
-    ) {
-        Self::render_with_spinner(frame, area, status, model, tokens_used, None);
-    }
-
-    /// Render enhanced status bar with spinner animation
+    /// Render enhanced status bar with spinner animation and optional progress bar
     pub fn render_with_spinner(
         frame: &mut Frame,
         area: Rect,
@@ -188,6 +177,7 @@ impl StatusBarWidget {
         model: Option<&str>,
         tokens_used: Option<u64>,
         spinner: Option<&crate::widgets::progress::SpinnerWidget>,
+        progress_bar: Option<&crate::widgets::progress::ProgressBarWidget>,
     ) {
         // Build span with owned strings for proper lifetime
         let mut span_vec: Vec<Span<'static>> = Vec::new();
@@ -212,6 +202,31 @@ impl StatusBarWidget {
         if let Some(t) = tokens_used {
             span_vec.push(Span::styled(" | Tokens: ", Style::default().fg(Color::Gray)));
             span_vec.push(Span::styled(t.to_string(), Style::default().fg(Color::Yellow)));
+        }
+
+        // If a progress bar is provided with active progress, show inline progress
+        if let Some(pb) = progress_bar {
+            let pct = pb.percentage();
+            if pct > 0.0 {
+                span_vec.push(Span::styled("  ", Style::default()));
+                // Inline progress bar: [████████░░░░] 45.2%
+                let bar_width = 12usize;
+                let filled = (pb.progress() * bar_width as f64) as usize;
+                let mut bar_str = String::from("[");
+                for i in 0..bar_width {
+                    if i < filled {
+                        bar_str.push('█');
+                    } else {
+                        bar_str.push('░');
+                    }
+                }
+                bar_str.push(']');
+                span_vec.push(Span::styled(bar_str, Style::default().fg(Color::Cyan)));
+                span_vec.push(Span::styled(
+                    format!(" {:.0}%", pct),
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                ));
+            }
         }
 
         let paragraph = Paragraph::new(Line::from(span_vec))
@@ -539,7 +554,7 @@ impl MainLayoutWidget {
         tokens_used: Option<u64>,
         working_dir: &str,
     ) {
-        Self::render_complete_with_spinner(frame, chat, prompt, status, model, tokens_used, working_dir, None);
+        Self::render_complete_with_spinner(frame, chat, prompt, status, model, tokens_used, working_dir, None, None);
     }
 
     /// Render the complete UI with spinner animation support
@@ -552,6 +567,7 @@ impl MainLayoutWidget {
         tokens_used: Option<u64>,
         working_dir: &str,
         spinner: Option<&crate::widgets::progress::SpinnerWidget>,
+        progress_bar: Option<&crate::widgets::progress::ProgressBarWidget>,
     ) {
         let area = frame.area();
 
@@ -561,7 +577,7 @@ impl MainLayoutWidget {
         HeaderWidget::render(frame, header_area, model, tokens_used, working_dir);
         chat.render(frame, chat_area);
         prompt.render(frame, prompt_area);
-        StatusBarWidget::render_with_spinner(frame, status_area, status, model, tokens_used, spinner);
+        StatusBarWidget::render_with_spinner(frame, status_area, status, model, tokens_used, spinner, progress_bar);
     }
 }
 

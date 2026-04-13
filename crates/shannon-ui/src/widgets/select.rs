@@ -204,7 +204,7 @@ impl MultiSelectWidget {
 }
 
 /// File selector widget
-#[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub struct FileSelectorWidget {
     current_path: String,
     files: Vec<String>,
@@ -216,7 +216,6 @@ pub struct FileSelectorWidget {
     filter: Option<String>,
 }
 
-#[allow(dead_code)]
 impl FileSelectorWidget {
     /// Create a new file selector
     pub fn new(title: String) -> Self {
@@ -308,6 +307,11 @@ impl FileSelectorWidget {
             self.refresh()?;
         }
         Ok(())
+    }
+
+    /// Get the current directory path
+    pub fn current_path(&self) -> &str {
+        &self.current_path
     }
 
     /// Get currently selected item
@@ -440,7 +444,7 @@ impl FileSelectorWidget {
 }
 
 /// Fuzzy picker widget with search functionality
-#[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub struct FuzzyPickerWidget {
     items: Vec<SelectItem<String>>,
     filtered_items: Vec<usize>,
@@ -450,14 +454,12 @@ pub struct FuzzyPickerWidget {
     state: PickerState,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickerState {
     Browsing,
     Searching,
 }
 
-#[allow(dead_code)]
 impl FuzzyPickerWidget {
     /// Create a new fuzzy picker
     pub fn new(title: String) -> Self {

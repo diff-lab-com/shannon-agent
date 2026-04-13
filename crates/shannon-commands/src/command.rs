@@ -302,7 +302,6 @@ pub struct CompactionStats {
 /// This trait is reserved for plugin commands that will be loaded dynamically.
 /// Built-in commands use `CommandBase` instead, but external plugins will
 /// implement `Executable` to integrate with the command dispatch system.
-#[allow(dead_code)]
 #[async_trait]
 pub trait Executable: Send + Sync {
     /// Execute the command with given arguments and context
@@ -322,6 +321,36 @@ pub trait Executable: Send + Sync {
         Err(CommandError::ExecutionError(
             "get_prompt not implemented for this command".to_string(),
         ))
+    }
+}
+
+/// Adapter that wraps a plugin's prompt template as an `Executable`.
+///
+/// Plugins define commands via `CommandDefinition` (name + prompt_template).
+/// This adapter implements `Executable` so those commands can participate
+/// in the generic command dispatch path.
+pub struct PluginExecutable {
+    /// Prompt template with `{args}` placeholder
+    pub prompt_template: String,
+}
+
+#[async_trait]
+impl Executable for PluginExecutable {
+    async fn execute(
+        &self,
+        args: &str,
+        _context: &CommandContext,
+    ) -> CommandResult<ExecutionResult> {
+        let prompt = self.prompt_template.replace("{args}", args);
+        Ok(ExecutionResult::Text { value: prompt })
+    }
+
+    async fn get_prompt(
+        &self,
+        args: &str,
+        _context: &CommandContext,
+    ) -> CommandResult<String> {
+        Ok(self.prompt_template.replace("{args}", args))
     }
 }
 

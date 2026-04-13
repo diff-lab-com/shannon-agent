@@ -14,6 +14,7 @@ use ratatui::{
 const BLOCKS: [&str; 9] = [" ", "▏", "▎", "█", "▌", "▋", "▊", "▉", "█"];
 
 /// Progress bar widget
+#[derive(Debug, Clone)]
 pub struct ProgressBarWidget {
     title: Option<String>,
     progress: f64,
@@ -92,6 +93,21 @@ impl ProgressBarWidget {
     /// Get progress as percentage
     pub fn percentage(&self) -> f64 {
         self.progress * 100.0
+    }
+
+    /// Get current progress value (0.0 to 1.0)
+    pub fn progress(&self) -> f64 {
+        self.progress
+    }
+
+    /// Set progress value (0.0 to 1.0)
+    pub fn set_progress(&mut self, progress: f64) {
+        self.progress = progress.clamp(0.0, 1.0);
+    }
+
+    /// Set the title
+    pub fn set_title(&mut self, title: String) {
+        self.title = Some(title);
     }
 
     /// Render the progress bar
@@ -266,14 +282,25 @@ impl Default for SpinnerWidget {
     }
 }
 
-/// Multi-progress widget for showing multiple progress bars
-#[allow(dead_code)]
+/// Multi-progress widget for showing multiple progress bars simultaneously.
+///
+/// Designed for future parallel tool execution where multiple tools may run
+/// concurrently. Each bar has a label, progress value, and color.
+///
+/// # Example
+/// ```ignore
+/// let mut widget = MultiProgressWidget::new()
+///     .add_bar("Build".to_string(), 0.3, Color::Green)
+///     .add_bar("Test".to_string(), 0.7, Color::Cyan);
+/// widget.update("Build", 0.9);
+/// widget.render(frame, area);
+/// ```
+#[derive(Debug, Clone)]
 pub struct MultiProgressWidget {
     bars: Vec<(String, f64, Color)>,
     show_labels: bool,
 }
 
-#[allow(dead_code)]
 impl MultiProgressWidget {
     /// Create a new multi-progress widget
     pub fn new() -> Self {

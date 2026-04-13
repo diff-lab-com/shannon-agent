@@ -66,7 +66,6 @@ pub fn command() -> Command {
 }
 
 /// Git status information
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct GitStatusInfo {
     /// Current branch
@@ -95,7 +94,6 @@ pub struct GitStatusInfo {
 }
 
 /// File status information
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct StatusFile {
     /// File path
@@ -112,7 +110,6 @@ pub struct StatusFile {
 }
 
 /// Ahead/behind information
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct AheadBehind {
     /// Commits ahead of upstream
@@ -126,7 +123,6 @@ pub struct AheadBehind {
 }
 
 /// Parse git status output
-#[allow(dead_code)]
 pub fn parse_git_status(output: &str) -> Option<GitStatusInfo> {
     let mut branch = String::new();
     let mut staged = Vec::new();
@@ -193,7 +189,6 @@ pub fn parse_git_status(output: &str) -> Option<GitStatusInfo> {
 }
 
 /// Format status for display
-#[allow(dead_code)]
 pub fn format_status(info: &GitStatusInfo, short: bool) -> String {
     if short {
         format_branch_short(info)

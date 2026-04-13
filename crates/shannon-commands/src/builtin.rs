@@ -78,3 +78,21 @@ pub mod pdf_types {
         PdfContent, PdfPage, PdfTable, PdfImage, PdfMetadata, PdfOptions, ImageFormat,
     };
 }
+
+/// Re-export credential utilities for REPL integration
+pub mod credential_utils {
+    pub use super::credentials::{
+        CredentialAction, parse_credential_action,
+        format_credentials_list, format_credential_store,
+        format_credential_get, format_credential_delete,
+        format_credential_count,
+    };
+}
+
+/// Re-export git status utilities for REPL integration
+pub mod status_utils {
+    pub use super::status::{
+        GitStatusInfo, StatusFile, AheadBehind,
+        parse_git_status, format_status,
+    };
+}
