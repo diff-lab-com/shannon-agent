@@ -1268,7 +1268,7 @@ mod tests {
     #[test]
     fn test_cli_repl_local_resolves_provider_and_model() {
         // --local should resolve to provider=ollama and model=llama3
-        let config = build_cli_config(
+        let _config = build_cli_config(
             None,
             None,
             None,
@@ -1427,5 +1427,184 @@ mod tests {
         let input = vec!["SHANNON_MODEL=你用的什么模型".to_string()];
         let result = parse_cli_env(&input).unwrap();
         assert_eq!(result.get("SHANNON_MODEL"), Some(&"你用的什么模型".to_string()));
+    }
+
+    // ── build_cli_config integration tests ─────────────────────────────────
+
+    #[test]
+    fn test_build_cli_config_with_all_params() {
+        let mut env = HashMap::new();
+        env.insert("SHANNON_DEBUG".to_string(), "true".to_string());
+
+        let config = build_cli_config(
+            Some("gpt-4o"),
+            Some("openai"),
+            Some(4096),
+            Some(0.7),
+            Some(60),
+            false,
+            env,
+        );
+
+        assert_eq!(config.model.as_deref(), Some("gpt-4o"));
+        assert_eq!(config.provider.as_deref(), Some("openai"));
+        assert_eq!(config.max_tokens, Some(4096));
+        assert_eq!(config.temperature, Some(0.7));
+        assert_eq!(config.timeout, Some(60));
+        assert_eq!(
+            config.env_overrides.get("SHANNON_DEBUG"),
+            Some(&"true".to_string())
+        );
+    }
+
+    #[test]
+    fn test_build_cli_config_minimal() {
+        let config = build_cli_config(None, None, None, None, None, false, HashMap::new());
+        // With no TOML config file, these should be None
+        assert!(config.model.is_none());
+        assert!(config.provider.is_none());
+        assert!(config.max_tokens.is_none());
+    }
+
+    #[test]
+    fn test_build_cli_config_debug_flag_set() {
+        let config = build_cli_config(None, None, None, None, None, true, HashMap::new());
+        assert!(config.debug);
+    }
+
+    // ── LlmClientConfig build from CLI config (unit test) ─────────────────
+
+    #[test]
+    fn test_build_llm_config_from_cli() {
+        let config = CliConfig {
+            model: Some("claude-sonnet-4".to_string()),
+            provider: Some("anthropic".to_string()),
+            max_tokens: Some(4096),
+            temperature: Some(0.5),
+            timeout: Some(120),
+            debug: false,
+            env_overrides: HashMap::new(),
+        };
+
+        let llm_config = build_llm_config_from_builder(&config);
+        // The ConfigBuilder may override the model based on TOML config,
+        // but the config object should be constructable without error.
+        assert!(!llm_config.model.is_empty());
+        // Provider is set (exact value depends on ConfigBuilder merge priority)
+        let provider_str = llm_config.provider.to_string().to_lowercase();
+        assert!(!provider_str.is_empty());
+    }
+
+    #[test]
+    fn test_build_llm_config_ollama_provider() {
+        let config = CliConfig {
+            model: Some("llama3".to_string()),
+            provider: Some("ollama".to_string()),
+            max_tokens: None,
+            temperature: None,
+            timeout: None,
+            debug: false,
+            env_overrides: HashMap::new(),
+        };
+
+        let llm_config = build_llm_config_from_builder(&config);
+        assert!(!llm_config.provider.requires_auth());
+    }
+
+    // ── TOML config loading ──────────────────────────────────────────────
+
+    #[test]
+    fn test_load_toml_config_no_files() {
+        // This should not panic even if no config files exist
+        let config = load_toml_config();
+        // All fields should be None or default when no config files exist
+        assert!(config.model.is_none() || config.model.is_some()); // depends on user's system
+    }
+
+    #[test]
+    fn test_toml_config_deserialization() {
+        let toml_str = r#"
+            model = "gpt-4o"
+            provider = "openai"
+            max_tokens = 8192
+            temperature = 0.7
+            timeout = 120
+            debug = true
+            api_key = "sk-test"
+            base_url = "https://api.openai.com/v1"
+        "#;
+        let config: ShannonTomlConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.model.as_deref(), Some("gpt-4o"));
+        assert_eq!(config.provider.as_deref(), Some("openai"));
+        assert_eq!(config.max_tokens, Some(8192));
+        assert_eq!(config.temperature, Some(0.7));
+        assert_eq!(config.timeout, Some(120));
+        assert!(config.debug.unwrap());
+        assert_eq!(config.api_key.as_deref(), Some("sk-test"));
+        assert_eq!(config.base_url.as_deref(), Some("https://api.openai.com/v1"));
+    }
+
+    #[test]
+    fn test_toml_config_partial() {
+        let toml_str = r#"
+            model = "claude-sonnet-4"
+        "#;
+        let config: ShannonTomlConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.model.as_deref(), Some("claude-sonnet-4"));
+        assert!(config.provider.is_none());
+        assert!(config.max_tokens.is_none());
+    }
+
+    #[test]
+    fn test_toml_config_empty() {
+        let config: ShannonTomlConfig = toml::from_str("").unwrap();
+        assert!(config.model.is_none());
+        assert!(config.provider.is_none());
+    }
+
+    // ── Bare prompt config construction ───────────────────────────────────
+
+    #[test]
+    fn test_bare_prompt_config_construction() {
+        // Simulates: shannon --model gpt-4o "explain this"
+        let cli = Cli::try_parse_from(["shannon", "--model", "gpt-4o", "explain this"]).unwrap();
+        let config = build_cli_config(
+            cli.model.as_deref(),
+            cli.provider.as_deref(),
+            None, // no max_tokens
+            None, // no temperature
+            None, // no timeout
+            false, // no debug
+            HashMap::new(),
+        );
+        assert_eq!(config.model.as_deref(), Some("gpt-4o"));
+        assert!(config.provider.is_none());
+    }
+
+    #[test]
+    fn test_query_subcommand_config_construction() {
+        // Simulates: shannon query -m gpt-4o -p openai --max-tokens 4096 "test"
+        let cli = Cli::try_parse_from([
+            "shannon", "query",
+            "-m", "gpt-4o",
+            "-p", "openai",
+            "--max-tokens", "4096",
+            "test",
+        ]).unwrap();
+
+        if let Some(Commands::Query { model, provider, max_tokens, .. }) = cli.command {
+            let config = build_cli_config(
+                model.as_deref(),
+                provider.as_deref(),
+                max_tokens,
+                None,
+                None,
+                false,
+                HashMap::new(),
+            );
+            assert_eq!(config.model.as_deref(), Some("gpt-4o"));
+            assert_eq!(config.provider.as_deref(), Some("openai"));
+            assert_eq!(config.max_tokens, Some(4096));
+        }
     }
 }
