@@ -117,7 +117,7 @@ impl Default for LlmClientConfig {
         // If no API key is configured and provider requires auth, check for Ollama
         let (api_key, base_url, model, provider) = if api_key.is_empty()
             && provider.requires_auth()
-            && !std::env::var("SHANNON_BASE_URL").is_ok()
+            && std::env::var("SHANNON_BASE_URL").is_err()
         {
             tracing::info!("No API key configured, defaulting to Ollama (localhost:11434)");
             (

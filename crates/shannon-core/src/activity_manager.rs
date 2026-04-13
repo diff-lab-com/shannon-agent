@@ -231,7 +231,7 @@ impl ActivityManager {
             };
             // Use ANSI escape sequence to set terminal title.
             let _ = std::process::Command::new("printf")
-                .args([format!("\\033]0;{}\\007", title)])
+                .args([format!("\\033]0;{title}\\007")])
                 .output();
         }
     }
@@ -395,7 +395,7 @@ impl ActivityManager {
                 to: ActivityStatus::Completed, // representative error
             });
         }
-        let activity = self.activities.remove(id).unwrap();
+        let activity = self.activities.remove(id).expect("activity existence verified above");
         self.update_terminal_title();
         Ok(activity)
     }

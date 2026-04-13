@@ -136,7 +136,7 @@ impl TurnDiff {
             parts.push(format!("{} file{} deleted", d, plural_s(d)));
         }
         if a > 0 || del > 0 {
-            parts.push(format!("+{}/-{} lines", a, del));
+            parts.push(format!("+{a}/-{del} lines"));
         }
 
         if parts.is_empty() {
@@ -458,7 +458,7 @@ impl InputBuffer {
         };
 
         self.cursor_row += 1;
-        self.lines.insert(self.cursor_row, format!("{}{}", after, indent));
+        self.lines.insert(self.cursor_row, format!("{after}{indent}"));
         self.cursor_col = after.chars().count() + indent.chars().count();
     }
 
@@ -540,19 +540,19 @@ impl ReplRenderer {
 
         match role {
             "user" => {
-                output.push_str(&format!("\x1b[1;36m> {}\x1b[0m\n", content));
+                output.push_str(&format!("\x1b[1;36m> {content}\x1b[0m\n"));
             }
             "assistant" => {
                 output.push_str(&self.render_markdown(content));
             }
             "system" => {
-                output.push_str(&format!("\x1b[2m[system] {}\x1b[0m\n", content));
+                output.push_str(&format!("\x1b[2m[system] {content}\x1b[0m\n"));
             }
             "tool" => {
-                output.push_str(&format!("\x1b[33m[tool] {}\x1b[0m\n", content));
+                output.push_str(&format!("\x1b[33m[tool] {content}\x1b[0m\n"));
             }
             "error" => {
-                output.push_str(&format!("\x1b[31m[error] {}\x1b[0m\n", content));
+                output.push_str(&format!("\x1b[31m[error] {content}\x1b[0m\n"));
             }
             _ => {
                 output.push_str(content);
@@ -579,7 +579,7 @@ impl ReplRenderer {
                     // Extract language hint if present
                     let lang = line.trim_start().trim_start_matches('`').trim();
                     if !lang.is_empty() {
-                        result.push_str(&format!("\x1b[2m[{}]\x1b[0m\n", lang));
+                        result.push_str(&format!("\x1b[2m[{lang}]\x1b[0m\n"));
                     }
                     result.push_str("\x1b[32m");
                 }
@@ -627,8 +627,7 @@ impl ReplRenderer {
     /// Render a code block with syntax highlighting placeholder.
     pub fn render_code_block(&self, code: &str, language: &str) -> String {
         format!(
-            "\x1b[2m[{}]\x1b[0m\n\x1b[32m{}\x1b[0m\n",
-            language, code
+            "\x1b[2m[{language}]\x1b[0m\n\x1b[32m{code}\x1b[0m\n"
         )
     }
 
@@ -636,7 +635,7 @@ impl ReplRenderer {
     pub fn render_spinner(&self, message: &str, frame: usize) -> String {
         let frames = ['/', '-', '\\', '|'];
         let ch = frames[frame % frames.len()];
-        format!("\r\x1b[33m{} {}\x1b[0m", ch, message)
+        format!("\r\x1b[33m{ch} {message}\x1b[0m")
     }
 
     /// Render a progress bar.
@@ -648,7 +647,7 @@ impl ReplRenderer {
         };
         let filled = pct / 5;
         let bar: String = "#".repeat(filled) + &"-".repeat(20 - filled);
-        format!("\r\x1b[36m[{}] {:>3}% {}\x1b[0m", bar, pct, label)
+        format!("\r\x1b[36m[{bar}] {pct:>3}% {label}\x1b[0m")
     }
 }
 

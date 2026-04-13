@@ -166,7 +166,7 @@ impl ConfigManager {
     pub fn save(&self) -> Result<(), String> {
         if let Some(parent) = self.config_path.parent() {
             std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create config directory: {}", e))?;
+                .map_err(|e| format!("Failed to create config directory: {e}"))?;
         }
 
         let data = json!({
@@ -175,10 +175,10 @@ impl ConfigManager {
         });
 
         let serialized = serde_json::to_string_pretty(&data)
-            .map_err(|e| format!("Failed to serialize config: {}", e))?;
+            .map_err(|e| format!("Failed to serialize config: {e}"))?;
 
         std::fs::write(&self.config_path, serialized)
-            .map_err(|e| format!("Failed to write config file: {}", e))?;
+            .map_err(|e| format!("Failed to write config file: {e}"))?;
 
         Ok(())
     }
@@ -190,10 +190,10 @@ impl ConfigManager {
         }
 
         let content = std::fs::read_to_string(&self.config_path)
-            .map_err(|e| format!("Failed to read config file: {}", e))?;
+            .map_err(|e| format!("Failed to read config file: {e}"))?;
 
         let data: Value = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse config file: {}", e))?;
+            .map_err(|e| format!("Failed to parse config file: {e}"))?;
 
         if let Some(values) = data.get("values").and_then(|v| v.as_object()) {
             self.values = values
@@ -260,13 +260,13 @@ impl ConfigTool {
     /// Execute a config action.
     fn execute_action(&self, action: ConfigAction) -> Result<(String, HashMap<String, Value>), ToolError> {
         let mut manager = self.manager.lock().map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to acquire config lock: {}", e))
+            ToolError::ExecutionFailed(format!("Failed to acquire config lock: {e}"))
         })?;
 
         match action {
             ConfigAction::Get { key } => {
                 let value = manager.get(&key).ok_or_else(|| {
-                    ToolError::InvalidInput(format!("Config key not found: {}", key))
+                    ToolError::InvalidInput(format!("Config key not found: {key}"))
                 })?;
 
                 let mut metadata = HashMap::new();
@@ -308,10 +308,10 @@ impl ConfigTool {
                 metadata.insert("values".to_string(), json!(key_values));
 
                 let prefix_info = prefix
-                    .map(|p| format!(" with prefix '{}'", p))
+                    .map(|p| format!(" with prefix '{p}'"))
                     .unwrap_or_default();
                 let content = if keys.is_empty() {
-                    format!("No config keys found{}", prefix_info)
+                    format!("No config keys found{prefix_info}")
                 } else {
                     format!(
                         "Found {} config key(s){}: {}",
@@ -331,9 +331,9 @@ impl ConfigTool {
                 metadata.insert("deleted".to_string(), json!(existed));
 
                 let content = if existed {
-                    format!("Deleted config key: {}", key)
+                    format!("Deleted config key: {key}")
                 } else {
-                    format!("Config key not found: {}", key)
+                    format!("Config key not found: {key}")
                 };
                 Ok((content, metadata))
             }
@@ -351,7 +351,7 @@ impl ConfigTool {
                     let content = format!("Reset {} to default: {}", key, format_value(&value));
                     Ok((content, metadata))
                 } else {
-                    let content = format!("No default found for key: {}", key);
+                    let content = format!("No default found for key: {key}");
                     Ok((content, metadata))
                 }
             }
@@ -392,7 +392,7 @@ fn format_value(value: &Value) -> String {
         Value::String(s) => s.clone(),
         Value::Array(arr) => {
             if arr.len() <= 3 {
-                format!("[{}]", arr.iter().map(|v| format_value(v)).collect::<Vec<_>>().join(", "))
+                format!("[{}]", arr.iter().map(format_value).collect::<Vec<_>>().join(", "))
             } else {
                 format!("[{} items]", arr.len())
             }
@@ -473,7 +473,7 @@ impl Tool for ConfigTool {
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
         let config_input: ConfigInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid config input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid config input: {e}")))?;
 
         let (content, metadata) = self.execute_action(config_input.action)?;
 

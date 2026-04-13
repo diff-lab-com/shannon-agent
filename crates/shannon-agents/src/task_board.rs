@@ -118,7 +118,7 @@ impl TaskBoard {
 
         tasks.get(&task_id)
             .cloned()
-            .ok_or_else(|| AgentError::Task(TaskError::TaskNotFound(task_id)))
+            .ok_or(AgentError::Task(TaskError::TaskNotFound(task_id)))
     }
 
     /// List all pending tasks that are ready to be started
@@ -206,7 +206,7 @@ impl TaskBoard {
         let mut tasks = self.tasks.write().await;
 
         let task = tasks.get_mut(&task_id)
-            .ok_or_else(|| AgentError::Task(TaskError::TaskNotFound(task_id)))?;
+            .ok_or(AgentError::Task(TaskError::TaskNotFound(task_id)))?;
 
         if !task.is_ready() {
             return Err(AgentError::Task(TaskError::TaskBlocked(task_id)));
@@ -234,12 +234,12 @@ impl TaskBoard {
 
     /// Update task status
     pub async fn update_task_status(&self, task_id: Uuid, status: TaskStatus) -> Result<(), AgentError> {
-        let status_display = format!("{:?}", status);
+        let status_display = format!("{status:?}");
 
         let mut tasks = self.tasks.write().await;
 
         let task = tasks.get_mut(&task_id)
-            .ok_or_else(|| AgentError::Task(TaskError::TaskNotFound(task_id)))?;
+            .ok_or(AgentError::Task(TaskError::TaskNotFound(task_id)))?;
 
         task.status = status.clone();
         task.updated_at = chrono::Utc::now();
@@ -277,7 +277,7 @@ impl TaskBoard {
         let mut tasks = self.tasks.write().await;
 
         let task = tasks.get_mut(&task_id)
-            .ok_or_else(|| AgentError::Task(TaskError::TaskNotFound(task_id)))?;
+            .ok_or(AgentError::Task(TaskError::TaskNotFound(task_id)))?;
 
         task.mark_failed(reason.clone());
 
@@ -313,12 +313,12 @@ impl TaskBoard {
         let mut tasks = self.tasks.write().await;
 
         let task = tasks.get_mut(&task_id)
-            .ok_or_else(|| AgentError::Task(TaskError::TaskNotFound(task_id)))?;
+            .ok_or(AgentError::Task(TaskError::TaskNotFound(task_id)))?;
 
         task.add_dependency(depends_on);
 
         let dep_task = tasks.get_mut(&depends_on)
-            .ok_or_else(|| AgentError::Task(TaskError::TaskNotFound(depends_on)))?;
+            .ok_or(AgentError::Task(TaskError::TaskNotFound(depends_on)))?;
 
         if !dep_task.blocks.contains(&task_id) {
             dep_task.blocks.push(task_id);
@@ -357,12 +357,12 @@ impl TaskBoard {
         let mut tasks = self.tasks.write().await;
 
         let task = tasks.get_mut(&task_id)
-            .ok_or_else(|| AgentError::Task(TaskError::TaskNotFound(task_id)))?;
+            .ok_or(AgentError::Task(TaskError::TaskNotFound(task_id)))?;
 
         task.blocked_by.retain(|id| *id != depends_on);
 
         let dep_task = tasks.get_mut(&depends_on)
-            .ok_or_else(|| AgentError::Task(TaskError::TaskNotFound(depends_on)))?;
+            .ok_or(AgentError::Task(TaskError::TaskNotFound(depends_on)))?;
 
         dep_task.blocks.retain(|id| *id != task_id);
 
@@ -376,6 +376,7 @@ impl TaskBoard {
     }
 
     /// Check for circular dependencies
+    #[allow(clippy::only_used_in_recursion)]
     fn has_circular_dependency(
         &self,
         tasks: &HashMap<Uuid, AgentTask>,
@@ -456,7 +457,7 @@ impl TaskBoard {
         let mut assignments = self.assignments.write().await;
 
         tasks.remove(&task_id)
-            .ok_or_else(|| AgentError::Task(TaskError::TaskNotFound(task_id)))?;
+            .ok_or(AgentError::Task(TaskError::TaskNotFound(task_id)))?;
 
         assignments.remove(&task_id);
 

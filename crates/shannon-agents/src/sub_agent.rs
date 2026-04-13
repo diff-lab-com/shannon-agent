@@ -80,7 +80,7 @@ impl std::fmt::Display for AgentStatus {
             AgentStatus::Idle => write!(f, "idle"),
             AgentStatus::Running => write!(f, "running"),
             AgentStatus::Completed => write!(f, "completed"),
-            AgentStatus::Failed(reason) => write!(f, "failed: {}", reason),
+            AgentStatus::Failed(reason) => write!(f, "failed: {reason}"),
         }
     }
 }
@@ -193,7 +193,7 @@ impl SubAgentRegistry {
             if agents.contains_key(&name) {
                 return Err(AgentError::Coordination(
                     CoordinationError::InvalidConfiguration(format!(
-                        "agent '{}' already exists", name
+                        "agent '{name}' already exists"
                     )),
                 ));
             }
@@ -273,7 +273,7 @@ impl SubAgentRegistry {
                 let msg = AgentMessage::new_text(
                     from.to_string(),
                     agent_name.clone(),
-                    format!("{:?}", message_content),
+                    format!("{message_content:?}"),
                 );
                 self.coordinator.send_message(msg).await?;
 
@@ -281,7 +281,7 @@ impl SubAgentRegistry {
                 responses.push(AgentMessage::new_text(
                     agent_name.clone(),
                     from.to_string(),
-                    format!("Broadcast received by {}", agent_name),
+                    format!("Broadcast received by {agent_name}"),
                 ));
             }
 
@@ -310,7 +310,7 @@ impl SubAgentRegistry {
             let response = AgentMessage::new_text(
                 to.to_string(),
                 from.to_string(),
-                format!("Message received by {}", to),
+                format!("Message received by {to}"),
             );
 
             Ok(vec![response])
@@ -324,7 +324,7 @@ impl SubAgentRegistry {
             if teams.contains_key(&team_name) {
                 return Err(AgentError::Coordination(
                     CoordinationError::InvalidConfiguration(format!(
-                        "team '{}' already exists", team_name
+                        "team '{team_name}' already exists"
                     )),
                 ));
             }
@@ -449,7 +449,7 @@ impl Tool for AgentSpawnTool {
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
         let parsed: AgentSpawnInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid agent_spawn input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid agent_spawn input: {e}")))?;
 
         if parsed.name.is_empty() {
             return Err(ToolError::InvalidInput("Agent name must not be empty".into()));
@@ -471,7 +471,7 @@ impl Tool for AgentSpawnTool {
         };
 
         let agent = self.registry.spawn(config).await.map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to spawn agent: {}", e))
+            ToolError::ExecutionFailed(format!("Failed to spawn agent: {e}"))
         })?;
 
         let content = json!({
@@ -552,7 +552,7 @@ impl Tool for SendMessageTool {
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
         let parsed: SendMessageInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid send_message input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid send_message input: {e}")))?;
 
         if parsed.to.is_empty() {
             return Err(ToolError::InvalidInput("Recipient 'to' must not be empty".into()));
@@ -562,7 +562,7 @@ impl Tool for SendMessageTool {
             .send_message(&self.sender_name, &parsed.to, parsed.message)
             .await
             .map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to send message: {}", e))
+                ToolError::ExecutionFailed(format!("Failed to send message: {e}"))
             })?;
 
         let content = json!({
@@ -574,7 +574,7 @@ impl Tool for SendMessageTool {
                     "content": match &r.content {
                         MessageContent::Text(t) => t.clone(),
                         MessageContent::Structured(v) => v.to_string(),
-                        MessageContent::Protocol(p) => format!("{:?}", p),
+                        MessageContent::Protocol(p) => format!("{p:?}"),
                     }
                 })
             }).collect::<Vec<_>>(),
@@ -647,7 +647,7 @@ impl Tool for TeamCreateTool {
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
         let parsed: TeamCreateInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid team_create input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid team_create input: {e}")))?;
 
         if parsed.team_name.is_empty() {
             return Err(ToolError::InvalidInput("Team name must not be empty".into()));
@@ -659,7 +659,7 @@ impl Tool for TeamCreateTool {
         }
 
         let team_name = self.registry.create_team(parsed.team_name, parsed.description).await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to create team: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to create team: {e}")))?;
 
         let content = json!({
             "team_name": team_name,
@@ -674,6 +674,21 @@ impl Tool for TeamCreateTool {
             is_error: false,
             metadata,
         })
+    }
+}
+
+// Allow Default for AgentConfig (used in tests)
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            model: default_model(),
+            system_prompt: String::new(),
+            tools: Vec::new(),
+            working_directory: PathBuf::from("."),
+            max_turns: default_max_turns(),
+            team: None,
+        }
     }
 }
 
@@ -1301,20 +1316,5 @@ mod tests {
         let summary = board.summary().await;
         assert_eq!(summary.total_tasks, 3);
         assert_eq!(summary.pending_tasks, 3);
-    }
-}
-
-// Allow Default for AgentConfig (used in tests)
-impl Default for AgentConfig {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            model: default_model(),
-            system_prompt: String::new(),
-            tools: Vec::new(),
-            working_directory: PathBuf::from("."),
-            max_turns: default_max_turns(),
-            team: None,
-        }
     }
 }

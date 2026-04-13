@@ -319,7 +319,7 @@ impl MultiProgressWidget {
 
             if self.show_labels {
                 line.push(Span::styled(
-                    format!("{:20} ", label),
+                    format!("{label:20} "),
                     Style::default().fg(Color::White),
                 ));
             }

@@ -211,7 +211,7 @@ impl CommandHelpEntry {
         }
 
         if let Some(hint) = &self.arg_hint {
-            md.push_str(&format!(" `{}`", hint));
+            md.push_str(&format!(" `{hint}`"));
         }
 
         md.push_str(&format!("\n\n{}\n", self.description));
@@ -219,12 +219,12 @@ impl CommandHelpEntry {
         if !self.examples.is_empty() {
             md.push_str("\n### Examples\n\n");
             for example in &self.examples {
-                md.push_str(&format!("```\n{}\n```\n", example));
+                md.push_str(&format!("```\n{example}\n```\n"));
             }
         }
 
         if let Some(when) = &self.when_to_use {
-            md.push_str(&format!("\n**When to use:** {}\n", when));
+            md.push_str(&format!("\n**When to use:** {when}\n"));
         }
 
         if !self.related.is_empty() {
@@ -232,7 +232,7 @@ impl CommandHelpEntry {
                 "\n**Related:** {}\n",
                 self.related
                     .iter()
-                    .map(|c| format!("/{}", c))
+                    .map(|c| format!("/{c}"))
                     .collect::<Vec<_>>()
                     .join(", ")
             ));
@@ -512,7 +512,7 @@ pub fn generate_help(command_filter: Option<&str>) -> String {
         if let Some(entry) = get_command_help(cmd) {
             entry.to_markdown()
         } else {
-            format!("No help found for command: {}", cmd)
+            format!("No help found for command: {cmd}")
         }
     } else {
         // Generate categorized help
@@ -538,7 +538,7 @@ pub fn generate_help(command_filter: Option<&str>) -> String {
                     let arg_hint = entry
                         .arg_hint
                         .as_ref()
-                        .map(|h| format!(" {}", h))
+                        .map(|h| format!(" {h}"))
                         .unwrap_or_default();
                     output.push_str(&format!(
                         "- **/{}{}**{} - {}\n",

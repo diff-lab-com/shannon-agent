@@ -201,7 +201,7 @@ impl SummaryGenerator {
         lines.push(format!("**Status**: {}", summary.status));
         if summary.duration_ms > 0 {
             let secs = summary.duration_ms as f64 / 1000.0;
-            lines.push(format!("**Duration**: {:.2}s", secs));
+            lines.push(format!("**Duration**: {secs:.2}s"));
         }
         lines.push(String::new());
 
@@ -211,7 +211,7 @@ impl SummaryGenerator {
             lines.push("*(none)*".to_string());
         } else {
             for tool in &summary.tools_used {
-                lines.push(format!("- {}", tool));
+                lines.push(format!("- {tool}"));
             }
         }
         lines.push(String::new());
@@ -222,13 +222,13 @@ impl SummaryGenerator {
             if !summary.files_created.is_empty() {
                 lines.push("### Created".to_string());
                 for f in &summary.files_created {
-                    lines.push(format!("- `{}`", f));
+                    lines.push(format!("- `{f}`"));
                 }
             }
             if !summary.files_modified.is_empty() {
                 lines.push("### Modified".to_string());
                 for f in &summary.files_modified {
-                    lines.push(format!("- `{}`", f));
+                    lines.push(format!("- `{f}`"));
                 }
             }
             lines.push(String::new());
@@ -247,7 +247,7 @@ impl SummaryGenerator {
         if !summary.key_findings.is_empty() {
             lines.push("## Key Findings".to_string());
             for finding in &summary.key_findings {
-                lines.push(format!("- {}", finding));
+                lines.push(format!("- {finding}"));
             }
             lines.push(String::new());
         }
@@ -256,7 +256,7 @@ impl SummaryGenerator {
         if !summary.recommendations.is_empty() {
             lines.push("## Recommendations".to_string());
             for rec in &summary.recommendations {
-                lines.push(format!("- {}", rec));
+                lines.push(format!("- {rec}"));
             }
             lines.push(String::new());
         }
@@ -467,13 +467,13 @@ impl SummaryGenerator {
         // Strip leading whitespace and punctuation (colons, dashes, etc.)
         let trimmed = fragment
             .trim_start()
-            .trim_start_matches(|c: char| c == ':' || c == '-' || c == '=' || c == '>')
+            .trim_start_matches([':', '-', '=', '>'])
             .trim_start();
 
         // Backtick-quoted path: `src/main.rs`
-        if trimmed.starts_with('`') {
-            if let Some(end) = trimmed[1..].find('`') {
-                let candidate = &trimmed[1..=end];
+        if let Some(rest) = trimmed.strip_prefix('`') {
+            if let Some(end) = rest.find('`') {
+                let candidate = &rest[..end];
                 if Self::looks_like_path(candidate) {
                     return Some(candidate.to_string());
                 }
@@ -481,9 +481,9 @@ impl SummaryGenerator {
         }
 
         // Quoted path: "src/main.rs" or 'src/main.rs'
-        if trimmed.starts_with('"') {
-            if let Some(end) = trimmed[1..].find('"') {
-                let candidate = &trimmed[1..=end];
+        if let Some(rest) = trimmed.strip_prefix('"') {
+            if let Some(end) = rest.find('"') {
+                let candidate = &rest[..end];
                 if Self::looks_like_path(candidate) {
                     return Some(candidate.to_string());
                 }
@@ -492,7 +492,7 @@ impl SummaryGenerator {
 
         // Absolute or relative path
         let path_end = trimmed
-            .find(|c: char| c == '\n' || c == ',' || c == ')' || c == '}' || c == ';');
+            .find(['\n', ',', ')', '}', ';']);
         let candidate = match path_end {
             Some(end) => trimmed[..end].trim(),
             None => trimmed.trim(),
@@ -1251,7 +1251,7 @@ mod tests {
             files_created: vec![],
             tools_used: vec![],
             errors: (0..error_count)
-                .map(|i| format!("error {}", i))
+                .map(|i| format!("error {i}"))
                 .collect(),
             key_findings: vec![],
             recommendations: vec![],
@@ -1275,14 +1275,14 @@ mod tests {
             },
             duration_ms: 0,
             files_modified: (0..modified)
-                .map(|i| format!("modified_{}.rs", i))
+                .map(|i| format!("modified_{i}.rs"))
                 .collect(),
             files_created: (0..created)
-                .map(|i| format!("created_{}.rs", i))
+                .map(|i| format!("created_{i}.rs"))
                 .collect(),
             tools_used: vec![],
             errors: (0..errors)
-                .map(|i| format!("error {}", i))
+                .map(|i| format!("error {i}"))
                 .collect(),
             key_findings: vec![],
             recommendations: vec![],

@@ -64,21 +64,13 @@ pub struct OAuth2Provider {
 
 /// Internal token storage with expiry
 #[derive(Debug, Clone)]
+#[derive(Default)]
 struct OAuth2Tokens {
     access_token: Option<String>,
     refresh_token: Option<String>,
     expires_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-impl Default for OAuth2Tokens {
-    fn default() -> Self {
-        Self {
-            access_token: None,
-            refresh_token: None,
-            expires_at: None,
-        }
-    }
-}
 
 /// OAuth 2.0 token response from server
 #[derive(Debug, Deserialize)]
@@ -214,28 +206,26 @@ impl OAuth2Provider {
             .form(&params)
             .send()
             .await
-            .map_err(|e| AuthError::OAuth(format!("Token request failed: {}", e)))?;
+            .map_err(|e| AuthError::OAuth(format!("Token request failed: {e}")))?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             return Err(AuthError::OAuth(format!(
-                "Token exchange failed: {} - {}",
-                status, body
+                "Token exchange failed: {status} - {body}"
             )));
         }
 
         let token_response: OAuth2TokenResponse = response
             .json()
             .await
-            .map_err(|e| AuthError::OAuth(format!("Failed to parse token response: {}", e)))?;
+            .map_err(|e| AuthError::OAuth(format!("Failed to parse token response: {e}")))?;
 
         // Validate token type (must be "Bearer" per RFC 6749)
         if let Some(ref token_type) = token_response.token_type {
             if token_type.to_lowercase() != "bearer" {
                 return Err(AuthError::InvalidToken(format!(
-                    "Unsupported token type: {} (expected 'Bearer')",
-                    token_type
+                    "Unsupported token type: {token_type} (expected 'Bearer')"
                 )));
             }
         }
@@ -282,28 +272,26 @@ impl OAuth2Provider {
             .form(&params)
             .send()
             .await
-            .map_err(|e| AuthError::OAuth(format!("Refresh request failed: {}", e)))?;
+            .map_err(|e| AuthError::OAuth(format!("Refresh request failed: {e}")))?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             return Err(AuthError::OAuth(format!(
-                "Token refresh failed: {} - {}",
-                status, body
+                "Token refresh failed: {status} - {body}"
             )));
         }
 
         let token_response: OAuth2TokenResponse = response
             .json()
             .await
-            .map_err(|e| AuthError::OAuth(format!("Failed to parse refresh response: {}", e)))?;
+            .map_err(|e| AuthError::OAuth(format!("Failed to parse refresh response: {e}")))?;
 
         // Validate token type
         if let Some(ref token_type) = token_response.token_type {
             if token_type.to_lowercase() != "bearer" {
                 return Err(AuthError::InvalidToken(format!(
-                    "Unsupported token type: {} (expected 'Bearer')",
-                    token_type
+                    "Unsupported token type: {token_type} (expected 'Bearer')"
                 )));
             }
         }
@@ -347,7 +335,7 @@ impl AuthProvider for OAuth2Provider {
         }
 
         let tokens = self.tokens.read().await;
-        tokens.access_token.clone().ok_or_else(|| AuthError::TokenExpired)
+        tokens.access_token.clone().ok_or(AuthError::TokenExpired)
     }
 
     async fn refresh_token(&self) -> Result<(), AuthError> {
@@ -369,7 +357,7 @@ impl AuthProvider for OAuth2Provider {
 
     async fn add_auth_headers(&self, headers: &mut HashMap<String, String>) -> Result<(), AuthError> {
         let token = self.get_token().await?;
-        headers.insert("Authorization".to_string(), format!("Bearer {}", token));
+        headers.insert("Authorization".to_string(), format!("Bearer {token}"));
         Ok(())
     }
 }
@@ -446,6 +434,12 @@ pub trait TokenStorage: Send + Sync {
 /// In-memory token storage (for testing)
 pub struct MemoryTokenStorage {
     tokens: std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>,
+}
+
+impl Default for MemoryTokenStorage {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MemoryTokenStorage {

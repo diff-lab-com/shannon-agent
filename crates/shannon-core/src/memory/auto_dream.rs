@@ -418,7 +418,7 @@ impl AutoDreamService {
         let mut store = self
             .store
             .write()
-            .map_err(|e| MemoryError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+            .map_err(|e| MemoryError::Io(std::io::Error::other(e.to_string())))?;
 
         for entry in &deduped {
             store.add(entry.clone())?;

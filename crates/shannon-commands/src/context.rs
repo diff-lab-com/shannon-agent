@@ -47,6 +47,7 @@ pub struct GitInfo {
 
 /// Application state snapshot
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct AppStateSnapshot {
     /// Tool permission context
     pub tool_permissions: ToolPermissionContext,
@@ -147,6 +148,7 @@ pub enum MessageContent {
 
 /// Options for command execution
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct ExecutionOptions {
     /// Model to use
     pub model: Option<String>,
@@ -161,16 +163,6 @@ pub struct ExecutionOptions {
     pub stream: bool,
 }
 
-impl Default for ExecutionOptions {
-    fn default() -> Self {
-        Self {
-            model: None,
-            max_tokens: None,
-            temperature: None,
-            stream: false,
-        }
-    }
-}
 
 impl Default for ToolPermissionContext {
     fn default() -> Self {
@@ -182,15 +174,6 @@ impl Default for ToolPermissionContext {
     }
 }
 
-impl Default for AppStateSnapshot {
-    fn default() -> Self {
-        Self {
-            tool_permissions: Default::default(),
-            feature_flags: HashMap::new(),
-            settings: HashMap::new(),
-        }
-    }
-}
 
 impl Default for ToolUseContext {
     fn default() -> Self {

@@ -249,7 +249,7 @@ impl ChatWidget {
         self.messages.push_back(message);
 
         // Auto-scroll to bottom
-        if self.messages.len() > 0 {
+        if !self.messages.is_empty() {
             self.scroll_offset = self.messages.len() - 1;
         }
 
@@ -295,7 +295,7 @@ impl ChatWidget {
     pub fn render(&self, frame: &mut Frame, area: Rect) {
         let mut list_items = Vec::new();
 
-        for (_i, msg) in self.messages.iter().enumerate() {
+        for msg in self.messages.iter() {
             let (role_name, role_color) = match msg.role {
                 ChatRole::User => ("User", Color::Green),
                 ChatRole::Assistant => ("Assistant", Color::Cyan),
@@ -308,7 +308,7 @@ impl ChatWidget {
             // Format message (use char-aware truncation for UTF-8 safety)
             let formatted_content = if msg.content.chars().count() > 80 {
                 let truncated: String = msg.content.chars().take(77).collect();
-                format!("{}...", truncated)
+                format!("{truncated}...")
             } else {
                 msg.content.clone()
             };
@@ -809,7 +809,7 @@ mod tests {
 
         // Simulate streaming updates
         for i in 1..=5 {
-            chat.update_message(idx, format!("Step {} complete", i));
+            chat.update_message(idx, format!("Step {i} complete"));
         }
 
         assert_eq!(chat.messages[idx].content, "Step 5 complete");

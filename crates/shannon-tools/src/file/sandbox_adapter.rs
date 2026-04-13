@@ -235,8 +235,7 @@ impl PathSandboxAdapter {
             let denied_base = denied.split_whitespace().next().unwrap_or(denied);
             if base_command == denied_base || command.contains(denied) {
                 return SandboxResult::denied(&format!(
-                    "Command '{}' is in the denied list",
-                    base_command
+                    "Command '{base_command}' is in the denied list"
                 ));
             }
         }
@@ -250,13 +249,12 @@ impl PathSandboxAdapter {
                 .any(|allowed| base_command == allowed);
             if !found {
                 return SandboxResult::denied(&format!(
-                    "Command '{}' is not in the allowed list",
-                    base_command
+                    "Command '{base_command}' is not in the allowed list"
                 ));
             }
         }
 
-        SandboxResult::allowed(&format!("Command '{}' is safe to execute", base_command))
+        SandboxResult::allowed(&format!("Command '{base_command}' is safe to execute"))
     }
 
     /// Check if a file size is within limits.
@@ -264,12 +262,11 @@ impl PathSandboxAdapter {
         if let Some(max) = self.config.max_file_size {
             if size > max {
                 return SandboxResult::denied(&format!(
-                    "File size {} bytes exceeds maximum {} bytes",
-                    size, max
+                    "File size {size} bytes exceeds maximum {max} bytes"
                 ));
             }
         }
-        SandboxResult::allowed(&format!("File size {} bytes is within limits", size))
+        SandboxResult::allowed(&format!("File size {size} bytes is within limits"))
     }
 
     /// Add a new allowed path rule.

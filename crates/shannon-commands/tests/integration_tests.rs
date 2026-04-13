@@ -32,7 +32,7 @@ fn make_prompt_command(name: &str, desc: &str) -> Command {
             is_sensitive: false,
             user_facing_name: None,
         },
-        progress_message: format!("{} in progress...", name),
+        progress_message: format!("{name} in progress..."),
         content_length: 0,
         arg_names: vec![],
         allowed_tools: vec![],
@@ -91,7 +91,7 @@ fn make_jsx_command(name: &str, desc: &str) -> Command {
             is_sensitive: false,
             user_facing_name: None,
         },
-        progress_message: format!("{} running...", name),
+        progress_message: format!("{name} running..."),
     })
 }
 

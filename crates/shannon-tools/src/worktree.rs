@@ -125,8 +125,7 @@ fn validate_worktree_name(name: &str) -> Result<(), ToolError> {
             .all(|c| c.is_alphanumeric() || c == '.' || c == '_' || c == '-')
         {
             return Err(ToolError::ExecutionFailed(format!(
-                "Worktree name segment '{}' contains invalid characters. Only letters, digits, dots, underscores, and dashes are allowed",
-                segment
+                "Worktree name segment '{segment}' contains invalid characters. Only letters, digits, dots, underscores, and dashes are allowed"
             )));
         }
     }
@@ -139,7 +138,7 @@ fn get_current_head_commit(repo_path: &Path) -> Result<Option<String>, ToolError
     let output = Command::new("git")
         .args(["-C", repo_path.to_str().unwrap(), "rev-parse", "HEAD"])
         .output()
-        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to get HEAD commit: {}", e)))?;
+        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to get HEAD commit: {e}")))?;
 
     if output.status.success() {
         let commit = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -174,18 +173,24 @@ fn generate_worktree_name() -> String {
 fn get_current_dir() -> Result<String, ToolError> {
     std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
-        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to get current directory: {}", e)))
+        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to get current directory: {e}")))
 }
 
 /// Change working directory
 fn change_directory(path: &str) -> Result<(), ToolError> {
     std::env::set_current_dir(path)
-        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to change directory: {}", e)))
+        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to change directory: {e}")))
 }
 
 /// Worktree management tool
 pub struct WorktreeTool {
     description: String,
+}
+
+impl Default for WorktreeTool {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WorktreeTool {
@@ -201,7 +206,7 @@ impl WorktreeTool {
         {
             let session = CURRENT_WORKTREE_SESSION
                 .read()
-                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to acquire lock: {}", e)))?;
+                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to acquire lock: {e}")))?;
             if session.is_some() {
                 return Err(ToolError::ExecutionFailed(
                     "Already in a worktree session".to_string(),
@@ -233,7 +238,7 @@ impl WorktreeTool {
         let worktree_path = git_root.join(".claude").join("worktrees").join(&worktree_name);
 
         // Create worktree using git
-        let branch_name = format!("worktree/{}", worktree_name);
+        let branch_name = format!("worktree/{worktree_name}");
 
         let output = Command::new("git")
             .args([
@@ -244,7 +249,7 @@ impl WorktreeTool {
                 worktree_path.to_str().unwrap(),
             ])
             .output()
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to create worktree: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to create worktree: {e}")))?;
 
         if !output.status.success() {
             return Err(ToolError::ExecutionFailed(format!(
@@ -267,7 +272,7 @@ impl WorktreeTool {
         {
             let mut guard = CURRENT_WORKTREE_SESSION
                 .write()
-                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to acquire lock: {}", e)))?;
+                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to acquire lock: {e}")))?;
             *guard = Some(session);
         }
 
@@ -292,7 +297,7 @@ impl WorktreeTool {
         let status_output = Command::new("git")
             .args(["-C", worktree_path.to_str().unwrap(), "status", "--porcelain"])
             .output()
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to get git status: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to get git status: {e}")))?;
 
         let changed_files = if status_output.status.success() {
             String::from_utf8_lossy(&status_output.stdout)
@@ -311,10 +316,10 @@ impl WorktreeTool {
                     worktree_path.to_str().unwrap(),
                     "rev-list",
                     "--count",
-                    &format!("{}..HEAD", original_commit),
+                    &format!("{original_commit}..HEAD"),
                 ])
                 .output()
-                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to count commits: {}", e)))?;
+                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to count commits: {e}")))?;
 
             if revlist_output.status.success() {
                 String::from_utf8_lossy(&revlist_output.stdout)
@@ -337,7 +342,7 @@ impl WorktreeTool {
         let session = {
             let guard = CURRENT_WORKTREE_SESSION
                 .read()
-                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to acquire lock: {}", e)))?;
+                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to acquire lock: {e}")))?;
             guard.as_ref().cloned().ok_or_else(|| {
                 ToolError::ExecutionFailed(
                     "No active worktree session to exit".to_string(),
@@ -351,8 +356,8 @@ impl WorktreeTool {
         )?;
 
         // Check for uncommitted changes when removing
-        if input.action == ExitAction::Remove && !input.discard_changes.unwrap_or(false) {
-            if changed_files > 0 || commits > 0 {
+        if input.action == ExitAction::Remove && !input.discard_changes.unwrap_or(false)
+            && (changed_files > 0 || commits > 0) {
                 let mut parts = Vec::new();
                 if changed_files > 0 {
                     parts.push(format!(
@@ -373,7 +378,6 @@ impl WorktreeTool {
                     parts.join(" and ")
                 )));
             }
-        }
 
         match input.action {
             ExitAction::Keep => {
@@ -389,7 +393,7 @@ impl WorktreeTool {
                         &session.worktree_path,
                     ])
                     .output()
-                    .map_err(|e| ToolError::ExecutionFailed(format!("Failed to remove worktree: {}", e)))?;
+                    .map_err(|e| ToolError::ExecutionFailed(format!("Failed to remove worktree: {e}")))?;
 
                 if !output.status.success() {
                     return Err(ToolError::ExecutionFailed(format!(
@@ -407,12 +411,12 @@ impl WorktreeTool {
         {
             let mut guard = CURRENT_WORKTREE_SESSION
                 .write()
-                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to acquire lock: {}", e)))?;
+                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to acquire lock: {e}")))?;
             *guard = None;
         }
 
         let tmux_note = if let Some(ref tmux_name) = session.tmux_session_name {
-            format!(" Tmux session {} is still running; reattach with: tmux attach -t {}", tmux_name, tmux_name)
+            format!(" Tmux session {tmux_name} is still running; reattach with: tmux attach -t {tmux_name}")
         } else {
             String::new()
         };
@@ -422,7 +426,7 @@ impl WorktreeTool {
                 "Exited worktree. Your work is preserved at {}{}.",
                 session.worktree_path,
                 if let Some(ref branch) = session.worktree_branch {
-                    format!(" on branch {}", branch)
+                    format!(" on branch {branch}")
                 } else {
                     String::new()
                 }
@@ -484,7 +488,7 @@ impl Tool for WorktreeTool {
         match operation {
             "Enter" => {
                 let enter_input: EnterWorktreeInput = serde_json::from_value(input)
-                    .map_err(|e| ToolError::InvalidInput(format!("Invalid enter worktree input: {}", e)))?;
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid enter worktree input: {e}")))?;
                 let output = self.enter_worktree(enter_input).await?;
                 Ok(ToolOutput {
                     content: output.message.clone(),
@@ -499,7 +503,7 @@ impl Tool for WorktreeTool {
             }
             "Exit" => {
                 let exit_input: ExitWorktreeInput = serde_json::from_value(input)
-                    .map_err(|e| ToolError::InvalidInput(format!("Invalid exit worktree input: {}", e)))?;
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid exit worktree input: {e}")))?;
                 let output = self.exit_worktree(exit_input).await?;
                 Ok(ToolOutput {
                     content: output.message.clone(),
@@ -515,8 +519,7 @@ impl Tool for WorktreeTool {
                 })
             }
             _ => Err(ToolError::InvalidInput(format!(
-                "Unknown operation: {}",
-                operation
+                "Unknown operation: {operation}"
             ))),
         }
     }

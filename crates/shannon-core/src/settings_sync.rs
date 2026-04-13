@@ -176,7 +176,7 @@ impl DeviceRegistry {
 
         let info = DeviceInfo::new(device_id, device_name);
         self.devices.insert(device_id.to_string(), info);
-        Ok(self.devices.get(device_id).unwrap())
+        Ok(self.devices.get(device_id).expect("just inserted device should exist"))
     }
 
     /// Unregister a device.
@@ -269,7 +269,7 @@ impl SettingsSyncService {
         // Register the local device
         service
             .device_registry
-            .register(device_id, &format!("Device {}", device_id))
+            .register(device_id, &format!("Device {device_id}"))
             .ok(); // Ignore error if already registered (shouldn't happen for new service)
 
         service

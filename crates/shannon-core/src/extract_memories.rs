@@ -475,13 +475,13 @@ impl MemoryExtractor {
         prompt.push_str("You are a memory extraction assistant. Analyze the recent conversation ");
         prompt.push_str("and extract important information that should be remembered for future sessions.\n\n");
 
-        prompt.push_str(&format!("## Messages to analyze: {}\n\n", message_count));
+        prompt.push_str(&format!("## Messages to analyze: {message_count}\n\n"));
 
         prompt.push_str("## Memory Categories\n\n");
         for cat in &categories {
             prompt.push_str(&format!("### {}\n{}\nExamples:\n", cat.name, cat.description));
             for ex in &cat.examples {
-                prompt.push_str(&format!("- \"{}\"\n", ex));
+                prompt.push_str(&format!("- \"{ex}\"\n"));
             }
             prompt.push('\n');
         }
@@ -1099,7 +1099,7 @@ mod tests {
 
         // Verify files exist on disk
         for path in &result.memories_saved {
-            assert!(path.exists(), "memory file should exist: {:?}", path);
+            assert!(path.exists(), "memory file should exist: {path:?}");
         }
     }
 

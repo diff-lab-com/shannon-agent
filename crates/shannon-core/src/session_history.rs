@@ -181,7 +181,7 @@ impl SessionHistoryManager {
 
     /// Build the file path for a session UUID.
     fn session_file_path(&self, session_id: &Uuid) -> PathBuf {
-        self.sessions_dir.join(format!("{}.json", session_id))
+        self.sessions_dir.join(format!("{session_id}.json"))
     }
 
     /// Read and parse a single session JSON file.
@@ -447,7 +447,7 @@ impl SessionHistoryManager {
         let archive_dir = self.sessions_dir.join("archived");
         fs::create_dir_all(&archive_dir)?;
 
-        let dst = archive_dir.join(format!("{}.json", session_id));
+        let dst = archive_dir.join(format!("{session_id}.json"));
         fs::rename(&src, &dst)?;
         info!(session_id = %session_id, "Archived session");
         Ok(())
@@ -469,11 +469,10 @@ impl SessionHistoryManager {
         let mut removed = 0usize;
 
         for entry in &all {
-            if entry.updated_at < cutoff {
-                if self.archive_session(&entry.session_id).is_ok() {
+            if entry.updated_at < cutoff
+                && self.archive_session(&entry.session_id).is_ok() {
                     removed += 1;
                 }
-            }
         }
 
         // Enforce max_sessions by archiving the oldest beyond the limit.
@@ -916,7 +915,7 @@ mod tests {
         assert!(!mgr.session_file_path(&id).exists());
 
         // File should exist under archived/.
-        let archived = mgr.sessions_dir.join("archived").join(format!("{}.json", id));
+        let archived = mgr.sessions_dir.join("archived").join(format!("{id}.json"));
         assert!(archived.exists());
 
         // Should not appear in normal listing.

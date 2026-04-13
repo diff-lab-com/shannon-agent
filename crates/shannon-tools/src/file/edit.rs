@@ -115,7 +115,7 @@ pub fn perform_edit(content: &str, old_string: &str, new_string: &str, replace_a
 
     if !content.contains(old_string) {
         // Build a helpful error message with context snippets
-        let mut msg = format!("old_string not found in file content.");
+        let mut msg = "old_string not found in file content.".to_string();
         // Show first few lines of file for context
         let preview_lines: Vec<&str> = content.lines().take(3).collect();
         if !preview_lines.is_empty() {
@@ -208,8 +208,7 @@ pub async fn execute(input: EditInput) -> Result<ToolOutput, ToolError> {
                 ))
             } else {
                 ToolError::ExecutionFailed(format!(
-                    "Failed to access file: {}",
-                    e
+                    "Failed to access file: {e}"
                 ))
             }
         })?;

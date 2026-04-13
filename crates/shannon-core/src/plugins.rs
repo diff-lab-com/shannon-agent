@@ -290,7 +290,7 @@ impl std::fmt::Display for PluginState {
             Self::Loaded => write!(f, "Loaded"),
             Self::Active => write!(f, "Active"),
             Self::Disabled => write!(f, "Disabled"),
-            Self::Failed(reason) => write!(f, "Failed({})", reason),
+            Self::Failed(reason) => write!(f, "Failed({reason})"),
         }
     }
 }
@@ -869,7 +869,7 @@ mod tests {
         PluginManifest {
             name: name.to_string(),
             version: version.to_string(),
-            description: Some(format!("Test plugin {}", name)),
+            description: Some(format!("Test plugin {name}")),
             author: Some("Test Author".to_string()),
             min_version: None,
             tools: vec![],
@@ -883,11 +883,11 @@ mod tests {
         PluginManifest {
             name: name.to_string(),
             version: "1.0.0".to_string(),
-            description: Some(format!("Full test plugin {}", name)),
+            description: Some(format!("Full test plugin {name}")),
             author: Some("Test Author".to_string()),
             min_version: Some("0.1.0".to_string()),
             tools: vec![ToolDefinition {
-                name: format!("{}_tool", name),
+                name: format!("{name}_tool"),
                 description: "A test tool".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
@@ -906,7 +906,7 @@ mod tests {
                 blocking: true,
             }],
             commands: vec![CommandDefinition {
-                name: format!("{}_cmd", name),
+                name: format!("{name}_cmd"),
                 description: "A test command".to_string(),
                 prompt_template: "Do something".to_string(),
             }],
@@ -1682,7 +1682,7 @@ mod tests {
         let state_path = manager.state_file_path();
         assert!(state_path.exists());
 
-        let content = fs::read_to_string(&state_path).unwrap();
+        let content = fs::read_to_string(state_path).unwrap();
         let state: PluginStateFile = serde_json::from_str(&content).unwrap();
         assert!(state.is_disabled("persist-test"));
     }
@@ -1809,7 +1809,7 @@ mod tests {
         let json_err = serde_json::from_str::<Value>("invalid").unwrap_err();
         let err = PluginError::from(json_err);
         // Should contain JSON error message
-        assert!(err.to_string().len() > 0);
+        assert!(!err.to_string().is_empty());
     }
 
     // ── HookDefinition defaults tests ─────────────────────────────────

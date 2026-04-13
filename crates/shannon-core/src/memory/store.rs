@@ -93,13 +93,13 @@ impl MemoryStore {
             .entries
             .values()
             .filter(|e| {
-                let project_match = project.map_or(true, |p| e.project == p);
+                let project_match = project.is_none_or(|p| e.project == p);
                 project_match && e.matches_query(query)
             })
             .cloned()
             .collect();
 
-        results.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
+        results.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).expect("confidence values should be comparable"));
         results
     }
 
@@ -143,7 +143,7 @@ impl MemoryStore {
 
         for (project, entries) in &by_project {
             let hash = project_hash(project);
-            let path = self.storage_path.join(format!("{}.json", hash));
+            let path = self.storage_path.join(format!("{hash}.json"));
             let json = serde_json::to_string_pretty(entries)?;
             fs::write(&path, json)?;
         }

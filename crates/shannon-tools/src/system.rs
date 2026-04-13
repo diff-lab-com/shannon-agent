@@ -147,7 +147,7 @@ pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
         if lower_command.contains(pattern) {
             risk_level = SecurityLevel::Critical;
             is_destructive = true;
-            warnings.push(format!("Destructive pattern detected: {}", pattern));
+            warnings.push(format!("Destructive pattern detected: {pattern}"));
             break;
         }
     }
@@ -160,7 +160,7 @@ pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
             }
             is_destructive = true;
             requires_confirmation = true;
-            warnings.push(format!("Confirmation required: {}", pattern));
+            warnings.push(format!("Confirmation required: {pattern}"));
         }
     }
 
@@ -171,7 +171,7 @@ pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
             if risk_level < SecurityLevel::Medium {
                 risk_level = SecurityLevel::Medium;
             }
-            warnings.push(format!("Path traversal pattern detected: {}", pattern));
+            warnings.push(format!("Path traversal pattern detected: {pattern}"));
             // Don't break, collect all warnings
         }
     }
@@ -180,14 +180,14 @@ pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
     for pattern in SED_INJECTION_PATTERNS {
         if lower_command.contains(pattern) {
             risk_level = SecurityLevel::Critical;
-            warnings.push(format!("Sed injection pattern detected: {}", pattern));
+            warnings.push(format!("Sed injection pattern detected: {pattern}"));
             break;
         }
     }
 
     // Check if read-only
     for pattern in READ_ONLY_PATTERNS {
-        if lower_command.starts_with(pattern) || lower_command.contains(&format!(" {}", pattern)) {
+        if lower_command.starts_with(pattern) || lower_command.contains(&format!(" {pattern}")) {
             is_read_only = true;
             // Read-only commands are safe unless already marked risky
             if risk_level == SecurityLevel::Safe {
@@ -206,18 +206,16 @@ pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
     }
 
     // Pipe chains are medium risk
-    if command.contains('|') && !is_read_only {
-        if risk_level < SecurityLevel::Medium {
+    if command.contains('|') && !is_read_only
+        && risk_level < SecurityLevel::Medium {
             risk_level = SecurityLevel::Medium;
         }
-    }
 
     // Redirects that overwrite files are medium risk
-    if command.contains(">") && !is_read_only {
-        if risk_level < SecurityLevel::Medium {
+    if command.contains(">") && !is_read_only
+        && risk_level < SecurityLevel::Medium {
             risk_level = SecurityLevel::Medium;
         }
-    }
 
     SecurityAnalysis {
         risk_level,
@@ -253,7 +251,7 @@ pub fn validate_path(path: &str, allowed_paths: &[String]) -> Result<(), String>
     // Check for path traversal in normalized path
     for pattern in PATH_TRAVERSAL_PATTERNS {
         if normalized.contains(pattern) {
-            return Err(format!("Path traversal detected in: {}", path));
+            return Err(format!("Path traversal detected in: {path}"));
         }
     }
 
@@ -264,7 +262,7 @@ pub fn validate_path(path: &str, allowed_paths: &[String]) -> Result<(), String>
         });
 
         if !is_allowed {
-            return Err(format!("Path not in allowed list: {}", path));
+            return Err(format!("Path not in allowed list: {path}"));
         }
     }
 
@@ -278,7 +276,7 @@ pub fn validate_path(path: &str, allowed_paths: &[String]) -> Result<(), String>
     for prefix in dangerous_prefixes {
         if normalized.starts_with(prefix) {
             // Only allow read operations on system paths
-            return Err(format!("System path modification blocked: {}", path));
+            return Err(format!("System path modification blocked: {path}"));
         }
     }
 
@@ -357,6 +355,12 @@ pub struct BashTool {
     description: String,
 }
 
+impl Default for BashTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BashTool {
     pub fn new() -> Self {
         Self {
@@ -391,12 +395,12 @@ impl BashTool {
             let duration = std::time::Duration::from_millis(timeout);
             tokio::time::timeout(duration, cmd.output())
                 .await
-                .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, format!("Command timed out after {}ms", timeout)))?
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to execute command: {}", e)))?
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, format!("Command timed out after {timeout}ms")))?
+                .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
         } else {
             cmd.output()
                 .await
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to execute command: {}", e)))?
+                .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
         };
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -452,7 +456,7 @@ impl Tool for BashTool {
         let bash_input: BashInput = match serde_json::from_value(input) {
             Ok(input) => input,
             Err(e) => return Ok(ToolOutput {
-                content: format!("Invalid bash input: {}", e),
+                content: format!("Invalid bash input: {e}"),
                 is_error: true,
                 metadata: HashMap::new(),
             })
@@ -507,7 +511,7 @@ impl Tool for BashTool {
             Ok(output) => output,
             Err(e) => {
                 return Ok(ToolOutput {
-                    content: format!("Command execution failed: {}", e),
+                    content: format!("Command execution failed: {e}"),
                     is_error: true,
                     metadata: HashMap::new(),
                 });
@@ -550,6 +554,12 @@ pub struct PowerShellTool {
     description: String,
 }
 
+impl Default for PowerShellTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PowerShellTool {
     pub fn new() -> Self {
         Self {
@@ -584,12 +594,12 @@ impl PowerShellTool {
             let duration = std::time::Duration::from_millis(timeout);
             tokio::time::timeout(duration, cmd.output())
                 .await
-                .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, format!("Command timed out after {}ms", timeout)))?
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to execute command: {}", e)))?
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, format!("Command timed out after {timeout}ms")))?
+                .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
         } else {
             cmd.output()
                 .await
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to execute command: {}", e)))?
+                .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
         };
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -643,7 +653,7 @@ impl Tool for PowerShellTool {
 
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let ps_input: PowerShellInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid PowerShell input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid PowerShell input: {e}")))?;
 
         // PowerShell security analysis
         let lower_cmd = ps_input.command.to_lowercase();
@@ -693,7 +703,7 @@ impl Tool for PowerShellTool {
             ps_input.timeout,
         )
         .await
-        .map_err(|e| ToolError::ExecutionFailed(format!("Command failed: {}", e)))?;
+        .map_err(|e| ToolError::ExecutionFailed(format!("Command failed: {e}")))?;
 
         let content = if output.success {
             output.stdout
@@ -750,6 +760,12 @@ pub struct SleepTool {
     description: String,
 }
 
+impl Default for SleepTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SleepTool {
     pub fn new() -> Self {
         Self {
@@ -761,7 +777,7 @@ impl SleepTool {
         tokio::time::sleep(tokio::time::Duration::from_millis(duration_ms)).await;
 
         Ok(CommandOutput {
-            stdout: format!("Slept for {}ms", duration_ms),
+            stdout: format!("Slept for {duration_ms}ms"),
             stderr: String::new(),
             exit_code: 0,
             success: true,
@@ -794,7 +810,7 @@ impl Tool for SleepTool {
 
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let sleep_input: SleepInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid sleep input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid sleep input: {e}")))?;
 
         // Validate duration is reasonable
         if sleep_input.duration_ms > 3600000 {
@@ -804,7 +820,7 @@ impl Tool for SleepTool {
         }
 
         let output = self.execute_sleep(sleep_input.duration_ms).await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Sleep failed: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Sleep failed: {e}")))?;
 
         Ok(ToolOutput {
             content: output.stdout,

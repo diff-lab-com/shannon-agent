@@ -281,9 +281,9 @@ async fn handle_connection(
     let content_length: usize = header_section
         .lines()
         .find_map(|line| {
-            let line = line.to_lowercase();
-            if line.starts_with("content-length:") {
-                line[15..].trim().parse().ok()
+            let line_lower = line.to_lowercase();
+            if let Some(rest) = line_lower.strip_prefix("content-length:") {
+                rest.trim().parse().ok()
             } else {
                 None
             }
@@ -318,7 +318,7 @@ async fn handle_connection(
         }
         ("POST", "/api/trigger") => {
             let resp = handle_trigger(&body, &prompt_handler, &tool_handler);
-            write_response(&mut stream, resp.status, &resp.status_text, &resp.body).await;
+            write_response(&mut stream, resp.status, resp.status_text, &resp.body).await;
         }
         _ => {
             write_response(&mut stream, 404, "Not Found", "").await;
@@ -482,13 +482,13 @@ impl Tool for RemoteTriggerTool {
         let mut server = self
             .server
             .lock()
-            .map_err(|e| ToolError::ExecutionFailed(format!("Lock error: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Lock error: {e}")))?;
 
         let mut metadata = HashMap::new();
 
         match action {
             "start" => {
-                server.start().map_err(|e| ToolError::ExecutionFailed(e))?;
+                server.start().map_err(ToolError::ExecutionFailed)?;
                 metadata.insert("address".to_string(), json!(server.address()));
                 Ok(ToolOutput {
                     content: format!("Remote trigger server started on {}", server.address()),
@@ -497,7 +497,7 @@ impl Tool for RemoteTriggerTool {
                 })
             }
             "stop" => {
-                server.stop().map_err(|e| ToolError::ExecutionFailed(e))?;
+                server.stop().map_err(ToolError::ExecutionFailed)?;
                 Ok(ToolOutput {
                     content: "Remote trigger server stopped".to_string(),
                     is_error: false,
@@ -519,8 +519,7 @@ impl Tool for RemoteTriggerTool {
                 })
             }
             other => Err(ToolError::InvalidInput(format!(
-                "Unknown action '{}'. Expected 'start', 'stop', or 'status'.",
-                other
+                "Unknown action '{other}'. Expected 'start', 'stop', or 'status'."
             ))),
         }
     }
@@ -559,12 +558,11 @@ mod tests {
             format!("127.0.0.1:{}", free_port()),
             Arc::new(move |prompt, project| {
                 plog.lock().unwrap().push(format!(
-                    "prompt:{}|project:{:?}",
-                    prompt, project
+                    "prompt:{prompt}|project:{project:?}"
                 ));
             }),
             Arc::new(move |tool, input| {
-                tlog.lock().unwrap().push(format!("tool:{}|input:{}", tool, input));
+                tlog.lock().unwrap().push(format!("tool:{tool}|input:{input}"));
             }),
         );
 
@@ -590,8 +588,7 @@ mod tests {
             )
         } else {
             format!(
-                "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-                method, path, addr
+                "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
             )
         };
 
@@ -636,7 +633,7 @@ mod tests {
                 assert_eq!(prompt, "List all files");
                 assert_eq!(project, Some("my-project".to_string()));
             }
-            other => panic!("Expected ExecutePrompt, got {:?}", other),
+            other => panic!("Expected ExecutePrompt, got {other:?}"),
         }
     }
 
@@ -654,7 +651,7 @@ mod tests {
                 assert_eq!(prompt, "Hello");
                 assert_eq!(project, None);
             }
-            other => panic!("Expected ExecutePrompt, got {:?}", other),
+            other => panic!("Expected ExecutePrompt, got {other:?}"),
         }
     }
 
@@ -672,7 +669,7 @@ mod tests {
                 assert_eq!(tool, "Read");
                 assert_eq!(input["path"], "/tmp/test.txt");
             }
-            other => panic!("Expected RunTool, got {:?}", other),
+            other => panic!("Expected RunTool, got {other:?}"),
         }
     }
 
@@ -696,7 +693,7 @@ mod tests {
                 assert_eq!(payload["event"], "deploy");
                 assert_eq!(method, Some("POST".to_string()));
             }
-            other => panic!("Expected Webhook, got {:?}", other),
+            other => panic!("Expected Webhook, got {other:?}"),
         }
     }
 
@@ -714,7 +711,7 @@ mod tests {
             TriggerAction::Webhook { method, .. } => {
                 assert_eq!(method, None);
             }
-            other => panic!("Expected Webhook, got {:?}", other),
+            other => panic!("Expected Webhook, got {other:?}"),
         }
     }
 
@@ -733,7 +730,7 @@ mod tests {
             TriggerAction::ExecutePrompt { prompt, .. } => {
                 assert_eq!(prompt, "Run tests");
             }
-            other => panic!("Expected ExecutePrompt, got {:?}", other),
+            other => panic!("Expected ExecutePrompt, got {other:?}"),
         }
     }
 
@@ -814,7 +811,7 @@ mod tests {
     #[test]
     fn test_server_debug_format() {
         let (server, _, _) = make_server();
-        let debug_str = format!("{:?}", server);
+        let debug_str = format!("{server:?}");
         assert!(debug_str.contains("RemoteTriggerServer"));
         assert!(debug_str.contains("127.0.0.1:"));
     }

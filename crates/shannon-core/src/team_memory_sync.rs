@@ -97,7 +97,7 @@ impl SecretRule {
         let compiled = if is_case_sensitive {
             Regex::new(&pattern)
         } else {
-            Regex::new(&format!("(?i){}", pattern))
+            Regex::new(&format!("(?i){pattern}"))
         }
         .map_err(|err| TeamMemorySyncError::RegexCompile {
             id: id.clone(),
@@ -142,7 +142,7 @@ impl SecretRule {
             })?;
             self.compiled = Some(re);
         }
-        Ok(self.compiled.as_ref().unwrap())
+        Ok(self.compiled.as_ref().expect("compiled must be set after successful compilation above"))
     }
 }
 
@@ -485,7 +485,7 @@ impl TeamMemorySync {
         }
 
         let relative = path.strip_prefix(&self.local_dir).map_err(|_| {
-            TeamMemorySyncError::InvalidPath(format!("Cannot strip prefix from {:?}", path))
+            TeamMemorySyncError::InvalidPath(format!("Cannot strip prefix from {path:?}"))
         })?;
         let dest = self.team_dir.join(relative);
 
@@ -511,7 +511,7 @@ impl TeamMemorySync {
         }
 
         let relative = path.strip_prefix(&self.team_dir).map_err(|_| {
-            TeamMemorySyncError::InvalidPath(format!("Cannot strip prefix from {:?}", path))
+            TeamMemorySyncError::InvalidPath(format!("Cannot strip prefix from {path:?}"))
         })?;
         let dest = self.local_dir.join(relative);
 
@@ -585,7 +585,7 @@ impl TeamMemorySync {
         let src_files = match self.collect_memory_files(src_dir) {
             Ok(f) => f,
             Err(e) => {
-                errors.push(format!("Failed to list source files: {}", e));
+                errors.push(format!("Failed to list source files: {e}"));
                 return;
             }
         };
@@ -619,8 +619,7 @@ impl TeamMemorySync {
                     }
                     Err(e) => {
                         errors.push(format!(
-                            "Failed to scan {:?} for secrets: {}",
-                            src_path, e
+                            "Failed to scan {src_path:?} for secrets: {e}"
                         ));
                         continue;
                     }
@@ -630,14 +629,14 @@ impl TeamMemorySync {
             // Copy
             if let Some(parent) = dst_path.parent() {
                 if let Err(e) = fs::create_dir_all(parent) {
-                    errors.push(format!("Failed to create directory: {}", e));
+                    errors.push(format!("Failed to create directory: {e}"));
                     continue;
                 }
             }
             match fs::copy(src_path, &dst_path) {
                 Ok(_) => uploaded.push(relative.to_path_buf()),
                 Err(e) => {
-                    errors.push(format!("Failed to copy {:?}: {}", src_path, e));
+                    errors.push(format!("Failed to copy {src_path:?}: {e}"));
                 }
             }
         }
@@ -655,7 +654,7 @@ impl TeamMemorySync {
         let src_files = match self.collect_memory_files(src_dir) {
             Ok(f) => f,
             Err(e) => {
-                errors.push(format!("Failed to list source files: {}", e));
+                errors.push(format!("Failed to list source files: {e}"));
                 return;
             }
         };
@@ -681,14 +680,14 @@ impl TeamMemorySync {
 
             if let Some(parent) = dst_path.parent() {
                 if let Err(e) = fs::create_dir_all(parent) {
-                    errors.push(format!("Failed to create directory: {}", e));
+                    errors.push(format!("Failed to create directory: {e}"));
                     continue;
                 }
             }
             match fs::copy(src_path, &dst_path) {
                 Ok(_) => downloaded.push(relative.to_path_buf()),
                 Err(e) => {
-                    errors.push(format!("Failed to copy {:?}: {}", src_path, e));
+                    errors.push(format!("Failed to copy {src_path:?}: {e}"));
                 }
             }
         }
@@ -697,12 +696,12 @@ impl TeamMemorySync {
     /// Collect all regular files recursively under `dir`.
     fn collect_memory_files(&self, dir: &Path) -> Result<Vec<PathBuf>, std::io::Error> {
         let mut files = Vec::new();
-        self.walk_files_recursive(dir, &mut files)?;
+        Self::walk_files_recursive(dir, &mut files)?;
         Ok(files)
     }
 
     /// Recursively walk `dir` collecting regular files.
-    fn walk_files_recursive(&self, dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), std::io::Error> {
+    fn walk_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), std::io::Error> {
         if !dir.is_dir() {
             return Ok(());
         }
@@ -717,7 +716,7 @@ impl TeamMemorySync {
                         continue;
                     }
                 }
-                self.walk_files_recursive(&path, files)?;
+                Self::walk_files_recursive(&path, files)?;
             } else if path.is_file() {
                 files.push(path);
             }
@@ -825,7 +824,7 @@ impl TeamMemoryGuard {
                 let idx = m.line_number - 1;
                 let line = &lines[idx];
                 // Find and redact the matched portion
-                if let Some(ref compiled) = self
+                if let Some(compiled) = self
                     .scanner
                     .rules
                     .iter()
@@ -885,7 +884,7 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             TeamMemorySyncError::RegexCompile { id, .. } => assert_eq!(id, "bad"),
-            other => panic!("Expected RegexCompile error, got: {:?}", other),
+            other => panic!("Expected RegexCompile error, got: {other:?}"),
         }
     }
 
@@ -1219,7 +1218,7 @@ mod tests {
 
     #[test]
     fn test_is_team_path() {
-        let config = TeamMemoryConfig {
+        let _config = TeamMemoryConfig {
             enabled: true,
             team_memory_dir: PathBuf::from("/tmp/team"),
             ..Default::default()

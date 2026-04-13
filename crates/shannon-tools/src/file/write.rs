@@ -31,12 +31,12 @@ pub async fn execute(input: WriteInput) -> Result<ToolOutput, ToolError> {
 
     fs::write(&input.file_path, &input.content)
         .await
-        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write file: {}", e)))?;
+        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write file: {e}")))?;
 
     let bytes = input.content.len();
 
     Ok(ToolOutput {
-        content: format!("Successfully wrote {} bytes to file", bytes),
+        content: format!("Successfully wrote {bytes} bytes to file"),
         is_error: false,
         metadata: {
             let mut map = HashMap::new();

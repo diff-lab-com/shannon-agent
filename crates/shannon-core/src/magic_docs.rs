@@ -309,7 +309,7 @@ impl MagicDocsService {
                 .templates
                 .get(&template_key)
                 .cloned()
-                .unwrap_or_else(|| format!("# {}\n\nTODO: Add documentation.\n", title));
+                .unwrap_or_else(|| format!("# {title}\n\nTODO: Add documentation.\n"));
 
             let content = template.replace("{title}", &title);
 
@@ -349,7 +349,7 @@ impl MagicDocsService {
         let mut parts = Vec::new();
 
         if let Some(ref title) = output.metadata.title {
-            parts.push(format!("# {}", title));
+            parts.push(format!("# {title}"));
             parts.push(String::new());
         }
 
@@ -366,7 +366,7 @@ impl MagicDocsService {
         let mut body = String::new();
 
         if let Some(ref title) = output.metadata.title {
-            body.push_str(&format!("<h1>{}</h1>\n", title));
+            body.push_str(&format!("<h1>{title}</h1>\n"));
         }
 
         for section in &output.sections {
@@ -377,7 +377,7 @@ impl MagicDocsService {
             body.push_str(&format!("<{}>{}</{}>\n", heading, section.title, heading));
             // Convert newlines to <br> for simple rendering
             let html_content = section.content.replace('\n', "<br>\n");
-            body.push_str(&format!("<div class=\"doc-section\">{}</div>\n", html_content));
+            body.push_str(&format!("<div class=\"doc-section\">{html_content}</div>\n"));
         }
 
         format!(
@@ -392,29 +392,10 @@ impl MagicDocsService {
         match path.extension().and_then(|e| e.to_str()) {
             // Module-level files (mod.rs, lib.rs, main.rs)
             Some("rs") => {
-                let file_name = path
-                    .file_name()
-                    .and_then(|f| f.to_str())
-                    .unwrap_or("");
-                if file_name == "mod.rs"
-                    || file_name == "lib.rs"
-                    || file_name == "main.rs"
-                {
-                    DocLevel::Module
-                } else {
-                    DocLevel::Module
-                }
+                DocLevel::Module
             }
             Some("py") => {
-                let file_name = path
-                    .file_name()
-                    .and_then(|f| f.to_str())
-                    .unwrap_or("");
-                if file_name == "__init__.py" || file_name == "__main__.py" {
-                    DocLevel::Module
-                } else {
-                    DocLevel::Module
-                }
+                DocLevel::Module
             }
             _ => DocLevel::Module,
         }

@@ -265,43 +265,38 @@ impl Stream for ResumableSseStream {
             }
         }
 
-        // Poll inner stream
-        loop {
-            match self.inner.as_mut().poll_next(cx) {
-                Poll::Ready(Some(Ok(event))) => {
-                    if matches!(event, StreamEvent::MessageStop) {
-                        self.saw_message_stop = true;
-                    }
-                    return Poll::Ready(Some(Ok(event)));
+        // Poll inner stream (every branch returns, so no actual looping)
+        match self.inner.as_mut().poll_next(cx) {
+            Poll::Ready(Some(Ok(event))) => {
+                if matches!(event, StreamEvent::MessageStop) {
+                    self.saw_message_stop = true;
                 }
-                Poll::Ready(Some(Err(e))) => {
-                    // Only reconnect on connection/transport errors, not parse errors
-                    let is_connection_error = matches!(
-                        &e,
-                        ApiError::HttpError(_)
-                    );
-                    if !is_connection_error || self.reconnects_remaining == 0 {
-                        return Poll::Ready(Some(Err(e)));
-                    }
+                Poll::Ready(Some(Ok(event)))
+            }
+            Poll::Ready(Some(Err(e))) => {
+                // Only reconnect on connection/transport errors, not parse errors
+                let is_connection_error = matches!(
+                    &e,
+                    ApiError::HttpError(_)
+                );
+                if !is_connection_error || self.reconnects_remaining == 0 {
+                    Poll::Ready(Some(Err(e)))
+                } else {
                     self.start_reconnect(cx);
-                    return Poll::Pending;
-                }
-                Poll::Ready(None) => {
-                    // Stream ended
-                    if self.saw_message_stop {
-                        return Poll::Ready(None);
-                    }
-                    // Premature end — reconnect
-                    if self.reconnects_remaining == 0 {
-                        return Poll::Ready(None);
-                    }
-                    self.start_reconnect(cx);
-                    return Poll::Pending;
-                }
-                Poll::Pending => {
-                    return Poll::Pending;
+                    Poll::Pending
                 }
             }
+            Poll::Ready(None) => {
+                // Stream ended
+                if self.saw_message_stop || self.reconnects_remaining == 0 {
+                    Poll::Ready(None)
+                } else {
+                    // Premature end — reconnect
+                    self.start_reconnect(cx);
+                    Poll::Pending
+                }
+            }
+            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -384,7 +379,7 @@ mod tests {
             Ok(StreamEvent::MessageStart { message }) => {
                 assert_eq!(message.id, "msg_123");
             }
-            other => panic!("Expected MessageStart, got {:?}", other),
+            other => panic!("Expected MessageStart, got {other:?}"),
         }
     }
 
@@ -399,7 +394,7 @@ mod tests {
             Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
                 assert_eq!(delta, &ContentDelta::TextDelta { text: "Hello".to_string() });
             }
-            other => panic!("Expected ContentBlockDelta, got {:?}", other),
+            other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
     }
 
@@ -412,7 +407,7 @@ mod tests {
         assert_eq!(events.len(), 1);
         match &events[0] {
             Ok(StreamEvent::MessageStop) => {},
-            other => panic!("Expected MessageStop, got {:?}", other),
+            other => panic!("Expected MessageStop, got {other:?}"),
         }
     }
 
@@ -433,7 +428,7 @@ mod tests {
             Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
                 assert_eq!(delta, &ContentDelta::TextDelta { text: "Hello".to_string() });
             }
-            other => panic!("Expected ContentBlockDelta, got {:?}", other),
+            other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
 
         // Last event should be MessageDelta with finish_reason
@@ -442,7 +437,7 @@ mod tests {
             Ok(StreamEvent::MessageDelta { delta, .. }) => {
                 assert_eq!(delta.stop_reason, Some("stop".to_string()));
             }
-            other => panic!("Expected MessageDelta at end, got {:?}", other),
+            other => panic!("Expected MessageDelta at end, got {other:?}"),
         }
     }
 
@@ -458,7 +453,7 @@ mod tests {
                 assert_eq!(usage.input_tokens, 10);
                 assert_eq!(usage.output_tokens, 20);
             }
-            other => panic!("Expected MessageDelta with usage, got {:?}", other),
+            other => panic!("Expected MessageDelta with usage, got {other:?}"),
         }
     }
 
@@ -474,7 +469,7 @@ mod tests {
         // First event should be ContentBlockStart
         match &events[0] {
             Ok(StreamEvent::ContentBlockStart { .. }) => {},
-            other => panic!("Expected ContentBlockStart, got {:?}", other),
+            other => panic!("Expected ContentBlockStart, got {other:?}"),
         }
 
         // Second event should be ContentBlockDelta with arguments
@@ -482,10 +477,10 @@ mod tests {
             Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
                 match delta {
                     ContentDelta::InputJsonDelta { .. } => {},
-                    _ => panic!("Expected InputJsonDelta, got {:?}", delta),
+                    _ => panic!("Expected InputJsonDelta, got {delta:?}"),
                 }
             }
-            other => panic!("Expected ContentBlockDelta, got {:?}", other),
+            other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
     }
 
@@ -506,7 +501,7 @@ mod tests {
             Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
                 assert_eq!(delta, &ContentDelta::TextDelta { text: "Hello".to_string() });
             }
-            other => panic!("Expected ContentBlockDelta, got {:?}", other),
+            other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
 
         // Last should be MessageDelta with usage
@@ -517,7 +512,7 @@ mod tests {
                 assert_eq!(usage.output_tokens, 10);
                 assert_eq!(delta.stop_reason, Some("end_turn".to_string()));
             }
-            other => panic!("Expected MessageDelta, got {:?}", other),
+            other => panic!("Expected MessageDelta, got {other:?}"),
         }
     }
 
@@ -532,12 +527,12 @@ mod tests {
 
         match &events[0] {
             Ok(StreamEvent::ContentBlockStart { .. }) => {},
-            other => panic!("Expected ContentBlockStart, got {:?}", other),
+            other => panic!("Expected ContentBlockStart, got {other:?}"),
         }
 
         match &events[1] {
             Ok(StreamEvent::ContentBlockStop { .. }) => {},
-            other => panic!("Expected ContentBlockStop, got {:?}", other),
+            other => panic!("Expected ContentBlockStop, got {other:?}"),
         }
     }
 
@@ -596,7 +591,7 @@ mod tests {
         ];
         let events = parse_sse_lines(&lines, LlmProvider::OpenAI);
         assert_eq!(events.len(), 1);
-        assert!(matches!(&events[0], Err(_)));
+        assert!(events[0].is_err());
     }
 
     #[test]
@@ -612,7 +607,7 @@ mod tests {
                 assert_eq!(usage.input_tokens, 100);
                 assert_eq!(usage.output_tokens, 50);
             }
-            other => panic!("Expected MessageDelta, got {:?}", other),
+            other => panic!("Expected MessageDelta, got {other:?}"),
         }
     }
 

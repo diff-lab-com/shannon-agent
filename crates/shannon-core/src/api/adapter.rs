@@ -275,8 +275,7 @@ pub fn normalize_sse_event(
             match serde_json::from_str::<StreamEvent>(json_str) {
                 Ok(event) => vec![Ok(event)],
                 Err(e) => vec![Err(ApiError::InvalidResponse(format!(
-                    "Failed to parse Anthropic SSE event: {} (data: {})",
-                    e, json_str
+                    "Failed to parse Anthropic SSE event: {e} (data: {json_str})"
                 )))],
             }
         }
@@ -357,14 +356,13 @@ pub fn normalize_response(
         LlmProvider::Anthropic | LlmProvider::Custom => {
             serde_json::from_str(json_str).map_err(|e| {
                 ApiError::InvalidResponse(format!(
-                    "Failed to parse Anthropic response: {}",
-                    e
+                    "Failed to parse Anthropic response: {e}"
                 ))
             })
         }
         LlmProvider::OpenAI => {
             let resp: OpenAiMessageResponse = serde_json::from_str(json_str).map_err(|e| {
-                ApiError::InvalidResponse(format!("Failed to parse OpenAI response: {}", e))
+                ApiError::InvalidResponse(format!("Failed to parse OpenAI response: {e}"))
             })?;
 
             let choice = resp.choices.into_iter().next().ok_or_else(|| {
@@ -412,7 +410,7 @@ pub fn normalize_response(
         }
         LlmProvider::Ollama => {
             let resp: OllamaMessageResponse = serde_json::from_str(json_str).map_err(|e| {
-                ApiError::InvalidResponse(format!("Failed to parse Ollama response: {}", e))
+                ApiError::InvalidResponse(format!("Failed to parse Ollama response: {e}"))
             })?;
 
             let msg = resp.message.ok_or_else(|| {
@@ -430,7 +428,7 @@ pub fn normalize_response(
             if let Some(tool_calls) = msg.tool_calls {
                 for (idx, tc) in tool_calls.into_iter().enumerate() {
                     content.push(ContentBlock::ToolUse {
-                        id: format!("call_{}", idx),
+                        id: format!("call_{idx}"),
                         name: tc.function.name,
                         input: tc.function.arguments,
                     });
@@ -537,8 +535,7 @@ fn normalize_openai_event(
         Ok(c) => c,
         Err(e) => {
             return vec![Err(ApiError::InvalidResponse(format!(
-                "Failed to parse OpenAI chunk: {} (data: {})",
-                e, json_str
+                "Failed to parse OpenAI chunk: {e} (data: {json_str})"
             )))];
         }
     };
@@ -665,8 +662,7 @@ fn normalize_ollama_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> 
         Ok(c) => c,
         Err(e) => {
             return vec![Err(ApiError::InvalidResponse(format!(
-                "Failed to parse Ollama chunk: {} (data: {})",
-                e, json_str
+                "Failed to parse Ollama chunk: {e} (data: {json_str})"
             )))];
         }
     };
@@ -693,7 +689,7 @@ fn normalize_ollama_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> 
                 events.push(StreamEvent::ContentBlockStart {
                     index: idx,
                     content_block: ContentBlock::ToolUse {
-                        id: format!("call_{}", idx),
+                        id: format!("call_{idx}"),
                         name: tc.function.name.clone(),
                         input: tc.function.arguments.clone(),
                     },
@@ -870,7 +866,7 @@ mod tests {
                     }
                 );
             }
-            other => panic!("Expected ContentBlockDelta, got {:?}", other),
+            other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
     }
 
@@ -889,7 +885,7 @@ mod tests {
                     }
                 );
             }
-            other => panic!("Expected ContentBlockDelta, got {:?}", other),
+            other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
     }
 
@@ -901,7 +897,7 @@ mod tests {
             Ok(StreamEvent::MessageDelta { delta, .. }) => {
                 assert_eq!(delta.stop_reason, Some("stop".to_string()));
             }
-            other => panic!("Expected MessageDelta, got {:?}", other),
+            other => panic!("Expected MessageDelta, got {other:?}"),
         }
     }
 
@@ -914,7 +910,7 @@ mod tests {
                 assert_eq!(usage.input_tokens, 10);
                 assert_eq!(usage.output_tokens, 20);
             }
-            other => panic!("Expected MessageDelta with usage, got {:?}", other),
+            other => panic!("Expected MessageDelta with usage, got {other:?}"),
         }
     }
 
@@ -929,10 +925,10 @@ mod tests {
                         assert_eq!(id, "call_abc");
                         assert_eq!(name, "bash");
                     }
-                    other => panic!("Expected ToolUse block, got {:?}", other),
+                    other => panic!("Expected ToolUse block, got {other:?}"),
                 }
             }
-            other => panic!("Expected ContentBlockStart, got {:?}", other),
+            other => panic!("Expected ContentBlockStart, got {other:?}"),
         }
     }
 
@@ -968,7 +964,7 @@ mod tests {
                     }
                 );
             }
-            other => panic!("Expected ContentBlockDelta, got {:?}", other),
+            other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
     }
 
@@ -982,7 +978,7 @@ mod tests {
                 assert_eq!(usage.output_tokens, 100);
                 assert_eq!(delta.stop_reason, Some("end_turn".to_string()));
             }
-            other => panic!("Expected MessageDelta, got {:?}", other),
+            other => panic!("Expected MessageDelta, got {other:?}"),
         }
     }
 
@@ -1006,14 +1002,14 @@ mod tests {
     #[test]
     fn test_malformed_json_returns_error() {
         let result = normalize_sse_event("not json", &LlmProvider::OpenAI, &mut fresh_state());
-        assert!(matches!(&result[0], Err(_)));
+        assert!(result[0].is_err());
 
         let result = normalize_sse_event("not json", &LlmProvider::Ollama, &mut fresh_state());
-        assert!(matches!(&result[0], Err(_)));
+        assert!(result[0].is_err());
 
         // Anthropic also returns error for invalid JSON
         let result = normalize_sse_event("not json", &LlmProvider::Anthropic, &mut fresh_state());
-        assert!(matches!(&result[0], Err(_)));
+        assert!(result[0].is_err());
     }
 
     // -- Non-streaming response normalization --
@@ -1103,7 +1099,7 @@ mod tests {
                     partial_json: r#"{"command""#.to_string()
                 });
             }
-            other => panic!("Expected ContentBlockDelta, got {:?}", other),
+            other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
     }
 
@@ -1121,10 +1117,10 @@ mod tests {
                         assert_eq!(name, "bash");
                         assert_eq!(input, &serde_json::Value::Null);
                     }
-                    other => panic!("Expected ToolUse block, got {:?}", other),
+                    other => panic!("Expected ToolUse block, got {other:?}"),
                 }
             }
-            other => panic!("Expected ContentBlockStart, got {:?}", other),
+            other => panic!("Expected ContentBlockStart, got {other:?}"),
         }
     }
 
@@ -1138,7 +1134,7 @@ mod tests {
             Ok(StreamEvent::MessageDelta { delta, .. }) => {
                 assert_eq!(delta.stop_reason, Some("stop".to_string()));
             }
-            other => panic!("Expected MessageDelta, got {:?}", other),
+            other => panic!("Expected MessageDelta, got {other:?}"),
         }
     }
 
@@ -1217,7 +1213,7 @@ mod tests {
                 assert_eq!(usage.output_tokens, 0);
                 assert_eq!(delta.stop_reason, Some("end_turn".to_string()));
             }
-            other => panic!("Expected MessageDelta, got {:?}", other),
+            other => panic!("Expected MessageDelta, got {other:?}"),
         }
     }
 

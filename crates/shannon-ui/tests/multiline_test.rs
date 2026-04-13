@@ -124,7 +124,7 @@ fn test_multiline_basic() {
     buf5.insert_char(';');
 
     let result = buf5.text();
-    println!("  Result:\n{}", result);
+    println!("  Result:\n{result}");
     assert!(result.contains('\n'));
     assert_eq!(buf5.line_count(), 3);
     println!("  ✅ PASS\n");

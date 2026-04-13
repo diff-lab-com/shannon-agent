@@ -168,7 +168,7 @@ impl Repl {
 
         // Create tool registry and register all tools
         let mut tool_registry = ToolRegistry::new();
-        register_default_tools(&mut tool_registry).map_err(|e| anyhow::anyhow!("Failed to register tools: {}", e))?;
+        register_default_tools(&mut tool_registry).map_err(|e| anyhow::anyhow!("Failed to register tools: {e}"))?;
 
         // Load and register skills from shannon-skills as tools
         register_skills_as_tools(&mut tool_registry);
@@ -238,7 +238,7 @@ impl Repl {
 
         // Validate config and show warning if not fully configured
         if let Err(e) = client_config.validate() {
-            eprintln!("Warning: {}", e);
+            eprintln!("Warning: {e}");
         }
         tracing::info!("LLM config: {}", client_config.describe());
 
@@ -416,7 +416,7 @@ impl Repl {
                     // Display error in UI chat instead of stderr to prevent escape sequence leakage
                     self.chat.add_message(
                         crate::widgets::ChatRole::System,
-                        format!("Input error: {}", e)
+                        format!("Input error: {e}")
                     );
                 }
             }
@@ -562,15 +562,15 @@ impl Repl {
                 available_commands
                     .iter()
                     .filter(|cmd| {
-                        let with_slash = format!("/{}", cmd);
+                        let with_slash = format!("/{cmd}");
                         with_slash.starts_with(&prefix)
                     })
-                    .map(|cmd| format!("/{}", cmd))
+                    .map(|cmd| format!("/{cmd}"))
                     .collect()
             } else {
                 // For non-commands starting empty, complete to all commands with /
                 if prefix.is_empty() {
-                    available_commands.iter().map(|c| format!("/{}", c)).collect()
+                    available_commands.iter().map(|c| format!("/{c}")).collect()
                 } else {
                     Vec::new()
                 }
@@ -836,7 +836,7 @@ impl Repl {
                         self.state.model = Some(args.to_string());
                         self.chat.add_message(
                             ChatRole::System,
-                            format!("Model set to: {}", args),
+                            format!("Model set to: {args}"),
                         );
                     }
                 }
@@ -860,16 +860,16 @@ impl Repl {
                         let default_content = "# Project Instructions\n\nThis file contains project-specific instructions for Shannon.\n\n## Coding Standards\n\n- Follow existing code patterns\n- Write clear, descriptive commit messages\n- Keep functions focused and concise\n\n## Project Structure\n\n- Describe your project structure here\n";
                         match std::fs::write(&claude_md_path, default_content) {
                             Ok(_) => init_info.push_str("CLAUDE.md: created with default template\n"),
-                            Err(e) => init_info.push_str(&format!("CLAUDE.md: failed to create ({})\n", e)),
+                            Err(e) => init_info.push_str(&format!("CLAUDE.md: failed to create ({e})\n")),
                         }
                     }
 
                     // Show working directory
-                    init_info.push_str(&format!("Working directory: {}\n", cwd));
+                    init_info.push_str(&format!("Working directory: {cwd}\n"));
 
                     self.chat.add_message(
                         ChatRole::System,
-                        format!("Project initialized.\n{}", init_info),
+                        format!("Project initialized.\n{init_info}"),
                     );
                 }
                 "config" => self.handle_config_command(args)?,
@@ -885,7 +885,7 @@ impl Repl {
                         let desc = command.description();
                         self.chat.add_message(
                             ChatRole::System,
-                            format!("/{} — {}", cmd_name, desc),
+                            format!("/{cmd_name} — {desc}"),
                         );
                     }
                 }
@@ -895,7 +895,7 @@ impl Repl {
             // Command not found in registry
             self.chat.add_message(
                 ChatRole::System,
-                format!("Unknown command: /{}. Type /help for available commands.", cmd_name),
+                format!("Unknown command: /{cmd_name}. Type /help for available commands."),
             );
             Ok(())
         }
@@ -908,7 +908,7 @@ impl Repl {
             Err(e) => {
                 self.chat.add_message(
                     ChatRole::System,
-                    format!("Error listing sessions: {}", e),
+                    format!("Error listing sessions: {e}"),
                 );
                 return Ok(());
             }
@@ -1001,7 +1001,7 @@ impl Repl {
             if num == 0 || num > self.last_session_list.len() {
                 self.chat.add_message(
                     ChatRole::System,
-                    format!("Invalid session number: {}. Use /sessions to see available sessions.", num),
+                    format!("Invalid session number: {num}. Use /sessions to see available sessions."),
                 );
                 return Ok(());
             }
@@ -1009,7 +1009,7 @@ impl Repl {
         } else {
             self.chat.add_message(
                 ChatRole::System,
-                format!("Invalid session identifier: {}. Use a number from /sessions or a UUID.", arg),
+                format!("Invalid session identifier: {arg}. Use a number from /sessions or a UUID."),
             );
             return Ok(());
         };
@@ -1080,7 +1080,7 @@ impl Repl {
                             tracing::warn!(session_id = %session_id, error = %e, "Failed to restore QueryEngine session");
                             self.chat.add_message(
                                 ChatRole::System,
-                                format!("Warning: could not restore AI context (messages will lack prior history): {}", e),
+                                format!("Warning: could not restore AI context (messages will lack prior history): {e}"),
                             );
                         }
                     }
@@ -1089,13 +1089,13 @@ impl Repl {
             Ok(None) => {
                 self.chat.add_message(
                     ChatRole::System,
-                    format!("Session not found: {}", session_id),
+                    format!("Session not found: {session_id}"),
                 );
             }
             Err(e) => {
                 self.chat.add_message(
                     ChatRole::System,
-                    format!("Error loading session: {}", e),
+                    format!("Error loading session: {e}"),
                 );
             }
         }
@@ -1108,9 +1108,9 @@ impl Repl {
         let arg = args.trim();
 
         // Parse --export flag
-        if arg.starts_with("--export") {
-            let export_path = if arg.len() > "--export".len() {
-                arg["--export".len()..].trim()
+        if let Some(rest) = arg.strip_prefix("--export") {
+            let export_path = if !rest.is_empty() {
+                rest.trim()
             } else {
                 ""
             };
@@ -1141,13 +1141,13 @@ impl Repl {
                 Ok(_) => {
                     self.chat.add_message(
                         ChatRole::System,
-                        format!("Session exported to: {}", export_path),
+                        format!("Session exported to: {export_path}"),
                     );
                 }
                 Err(e) => {
                     self.chat.add_message(
                         ChatRole::System,
-                        format!("Failed to export: {}", e),
+                        format!("Failed to export: {e}"),
                     );
                 }
             }
@@ -1189,7 +1189,7 @@ impl Repl {
             let elapsed = chrono::Utc::now() - *started;
             let mins = elapsed.num_minutes();
             let secs = elapsed.num_seconds() % 60;
-            stats.push_str(&format!("\n  Session duration: {}m {}s", mins, secs));
+            stats.push_str(&format!("\n  Session duration: {mins}m {secs}s"));
         }
 
         // Add diff summary if there are tracked file changes
@@ -1234,7 +1234,7 @@ impl Repl {
                     self.chat.add_message(ChatRole::System, info);
                 }
                 None => {
-                    let info = format!("{}No active worktree. Working in main repository.", status);
+                    let info = format!("{status}No active worktree. Working in main repository.");
                     self.chat.add_message(ChatRole::System, info);
                 }
             }
@@ -1244,7 +1244,7 @@ impl Repl {
         let parts: Vec<&str> = arg.splitn(3, ' ').collect();
         match parts[0] {
             "enter" => {
-                let name = parts.get(1).map(|s| *s).unwrap_or("");
+                let name = parts.get(1).copied().unwrap_or("");
                 if name.is_empty() {
                     self.chat.add_message(
                         ChatRole::System,
@@ -1266,13 +1266,13 @@ impl Repl {
                     Err(e) => {
                         self.chat.add_message(
                             ChatRole::System,
-                            format!("Failed to enter worktree: {}", e),
+                            format!("Failed to enter worktree: {e}"),
                         );
                     }
                 }
             }
             "exit" => {
-                let action = parts.get(1).map(|s| *s).unwrap_or("keep");
+                let action = parts.get(1).copied().unwrap_or("keep");
                 let exit_action = match action {
                     "--remove" => "remove",
                     _ => "keep",
@@ -1290,7 +1290,7 @@ impl Repl {
                     Err(e) => {
                         self.chat.add_message(
                             ChatRole::System,
-                            format!("Failed to exit worktree: {}", e),
+                            format!("Failed to exit worktree: {e}"),
                         );
                     }
                 }
@@ -1314,7 +1314,7 @@ impl Repl {
         if let Err(e) = manager.load() {
             self.chat.add_message(
                 ChatRole::System,
-                format!("Warning: could not load config: {}", e),
+                format!("Warning: could not load config: {e}"),
             );
         }
 
@@ -1323,7 +1323,7 @@ impl Repl {
 
         let output = match action {
             "" | "list" | "ls" => {
-                let prefix = if action.is_empty() { None } else { parts.get(1).map(|s| *s) };
+                let prefix = if action.is_empty() { None } else { parts.get(1).copied() };
                 let keys = manager.list(prefix);
                 if keys.is_empty() {
                     format!("No configuration keys found.\nConfig file: {}", manager.config_path().display())
@@ -1331,26 +1331,26 @@ impl Repl {
                     let mut out = format!("Configuration ({} key(s)):\n", keys.len());
                     for key in &keys {
                         let val = manager.get(key).unwrap_or(serde_json::Value::Null);
-                        out.push_str(&format!("  {} = {}\n", key, val));
+                        out.push_str(&format!("  {key} = {val}\n"));
                     }
                     out.push_str(&format!("\nConfig file: {}", manager.config_path().display()));
                     out
                 }
             }
             "get" => {
-                let key = parts.get(1).map(|s| *s).unwrap_or("");
+                let key = parts.get(1).copied().unwrap_or("");
                 if key.is_empty() {
                     "Usage: /config get <key>".to_string()
                 } else {
                     match manager.get(key) {
-                        Some(val) => format!("{} = {}", key, val),
-                        None => format!("Config key not found: {}", key),
+                        Some(val) => format!("{key} = {val}"),
+                        None => format!("Config key not found: {key}"),
                     }
                 }
             }
             "set" => {
-                let key = parts.get(1).map(|s| *s).unwrap_or("");
-                let value_str = parts.get(2).map(|s| *s).unwrap_or("");
+                let key = parts.get(1).copied().unwrap_or("");
+                let value_str = parts.get(2).copied().unwrap_or("");
                 if key.is_empty() || value_str.is_empty() {
                     "Usage: /config set <key> <value>".to_string()
                 } else {
@@ -1367,29 +1367,29 @@ impl Repl {
                     };
                     manager.set(key.to_string(), value.clone());
                     match manager.save() {
-                        Ok(_) => format!("Set {} = {}", key, value),
-                        Err(e) => format!("Error saving config: {}", e),
+                        Ok(_) => format!("Set {key} = {value}"),
+                        Err(e) => format!("Error saving config: {e}"),
                     }
                 }
             }
             "delete" | "remove" | "rm" => {
-                let key = parts.get(1).map(|s| *s).unwrap_or("");
+                let key = parts.get(1).copied().unwrap_or("");
                 if key.is_empty() {
                     "Usage: /config delete <key>".to_string()
                 } else {
                     let existed = manager.delete(key);
                     if existed {
                         match manager.save() {
-                            Ok(_) => format!("Deleted config key: {}", key),
-                            Err(e) => format!("Error saving config: {}", e),
+                            Ok(_) => format!("Deleted config key: {key}"),
+                            Err(e) => format!("Error saving config: {e}"),
                         }
                     } else {
-                        format!("Config key not found: {}", key)
+                        format!("Config key not found: {key}")
                     }
                 }
             }
             "reset" => {
-                let key = parts.get(1).map(|s| *s).unwrap_or("");
+                let key = parts.get(1).copied().unwrap_or("");
                 if key.is_empty() {
                     "Usage: /config reset <key>".to_string()
                 } else {
@@ -1397,11 +1397,11 @@ impl Repl {
                     if existed {
                         let val = manager.get(key).unwrap_or(serde_json::Value::Null);
                         match manager.save() {
-                            Ok(_) => format!("Reset {} to default: {}", key, val),
-                            Err(e) => format!("Error saving config: {}", e),
+                            Ok(_) => format!("Reset {key} to default: {val}"),
+                            Err(e) => format!("Error saving config: {e}"),
                         }
                     } else {
-                        format!("No default found for key: {}", key)
+                        format!("No default found for key: {key}")
                     }
                 }
             }
@@ -1414,7 +1414,7 @@ impl Repl {
                  /config reset <key>          - Reset to default\n".to_string()
             }
             _ => {
-                format!("Unknown config action: {}. Use /config help for usage.", action)
+                format!("Unknown config action: {action}. Use /config help for usage.")
             }
         };
 
@@ -1480,7 +1480,7 @@ impl Repl {
                     }
                 }
             }
-            Err(e) => output.push_str(&format!("  Error: {}\n", e)),
+            Err(e) => output.push_str(&format!("  Error: {e}\n")),
         }
         output.push_str("\nUse /credentials help for usage information.");
         output
@@ -1493,11 +1493,11 @@ impl Repl {
             Ok(mut manager) => {
                 let cred = Credential::new(service, service, value);
                 match manager.store_or_update(cred) {
-                    Ok(_) => format!("Credential stored for service: {}", service),
-                    Err(e) => format!("Failed to store credential: {}", e),
+                    Ok(_) => format!("Credential stored for service: {service}"),
+                    Err(e) => format!("Failed to store credential: {e}"),
                 }
             }
-            Err(e) => format!("Error: {}", e),
+            Err(e) => format!("Error: {e}"),
         }
     }
 
@@ -1513,11 +1513,11 @@ impl Repl {
                     } else {
                         format!("{}****{}", &val[..4], &val[val.len()-4..])
                     };
-                    format!("Credential for '{}': {}", service, masked)
+                    format!("Credential for '{service}': {masked}")
                 }
-                Err(e) => format!("Not found for '{}': {}", service, e),
+                Err(e) => format!("Not found for '{service}': {e}"),
             },
-            Err(e) => format!("Error: {}", e),
+            Err(e) => format!("Error: {e}"),
         }
     }
 
@@ -1526,10 +1526,10 @@ impl Repl {
         use shannon_core::credential_manager::CredentialManager;
         match CredentialManager::new().and_then(|mut m| { m.load()?; Ok(m) }) {
             Ok(mut manager) => match manager.delete(service) {
-                Ok(_) => format!("Credential deleted for service: {}", service),
-                Err(e) => format!("Failed to delete for '{}': {}", service, e),
+                Ok(_) => format!("Credential deleted for service: {service}"),
+                Err(e) => format!("Failed to delete for '{service}': {e}"),
             },
-            Err(e) => format!("Error: {}", e),
+            Err(e) => format!("Error: {e}"),
         }
     }
 
@@ -1538,7 +1538,7 @@ impl Repl {
         use shannon_core::credential_manager::CredentialManager;
         match CredentialManager::new().and_then(|mut m| { m.load()?; Ok(m) }) {
             Ok(manager) => format!("Stored credentials: {}", manager.count()),
-            Err(e) => format!("Error: {}", e),
+            Err(e) => format!("Error: {e}"),
         }
     }
 
@@ -1662,7 +1662,7 @@ impl Repl {
                     }
                     Ok(QueryEvent::ToolUseRequest { tool_name, tool_input, .. }) => {
                         steps_done += 1;
-                        progress_status = format!("Running: {} (step {})", tool_name, steps_done);
+                        progress_status = format!("Running: {tool_name} (step {steps_done})");
                         let tool_display = format!("\n🔧 Using: {} with input: {}", tool_name,
                             serde_json::to_string_pretty(&tool_input).unwrap_or_else(|_| "invalid".to_string())
                         );
@@ -1688,7 +1688,7 @@ impl Repl {
                         let formatted = crate::tool_format::format_tool_result(
                             &tool_name, &result, is_error,
                         );
-                        let result_display = format!("\n{}", formatted);
+                        let result_display = format!("\n{formatted}");
                         response_text.push_str(&result_display);
                         if let Ok(mut buf) = buffer_clone.lock() {
                             *buf = response_text.clone();
@@ -1696,12 +1696,12 @@ impl Repl {
                     }
                     Ok(QueryEvent::TurnCompleted { turn_number, tokens_used, .. }) => {
                         tokens_in_turn += tokens_used;
-                        let turn_info = format!("\n\n[Turn {} completed, {} tokens]", turn_number, tokens_used);
+                        let turn_info = format!("\n\n[Turn {turn_number} completed, {tokens_used} tokens]");
                         response_text.push_str(&turn_info);
                     }
                     Ok(QueryEvent::Progress { message, .. }) => {
-                        progress_status = format!("Processing: {}", message);
-                        let progress = format!("\n⏳ {}", message);
+                        progress_status = format!("Processing: {message}");
+                        let progress = format!("\n⏳ {message}");
                         response_text.push_str(&progress);
                         if let Ok(mut s) = status_clone.lock() {
                             *s = progress_status.clone();
@@ -1711,8 +1711,7 @@ impl Repl {
                         }
                     }
                     Ok(QueryEvent::Usage { input_tokens, output_tokens, cost_usd, .. }) => {
-                        let usage = format!("\n📊 Tokens: {} in + {} out = ${:.4}",
-                            input_tokens, output_tokens, cost_usd);
+                        let usage = format!("\n📊 Tokens: {input_tokens} in + {output_tokens} out = ${cost_usd:.4}");
                         response_text.push_str(&usage);
                     }
                     Ok(QueryEvent::Cost { total_cost_usd, input_tokens, output_tokens, .. }) => {
@@ -1723,7 +1722,7 @@ impl Repl {
                     }
                     Ok(QueryEvent::ToolProgress { progress, .. }) => {
                         let pct = (progress * 100.0) as u32;
-                        let progress_msg = format!("\n⏳ Tool progress: {}%", pct);
+                        let progress_msg = format!("\n⏳ Tool progress: {pct}%");
                         response_text.push_str(&progress_msg);
                     }
                     Ok(QueryEvent::Completed { .. }) => {
@@ -1735,10 +1734,10 @@ impl Repl {
                         }
                     }
                     Ok(QueryEvent::Failed { error, .. }) => {
-                        return Err(format!("Query failed: {}", error));
+                        return Err(format!("Query failed: {error}"));
                     }
                     Err(e) => {
-                        return Err(format!("Stream error: {}", e));
+                        return Err(format!("Stream error: {e}"));
                     }
                 }
             }
@@ -1839,7 +1838,7 @@ impl Repl {
                 self.state.query_steps_done = steps;
                 self.state.query_steps_total = steps;
                 if steps > 0 {
-                    self.state.status = format!("Ready ({} steps completed)", steps);
+                    self.state.status = format!("Ready ({steps} steps completed)");
                 } else {
                     self.state.status = "Ready".to_string();
                 }
@@ -1855,14 +1854,14 @@ impl Repl {
                 new_engine.add_user_message(input.to_string());
                 self.query_engine = Some(new_engine);
 
-                self.chat.update_message(assistant_msg_index, format!("❌ Error: {}", e));
+                self.chat.update_message(assistant_msg_index, format!("❌ Error: {e}"));
 
                 // Show alert dialog for critical errors (auth, config, network)
                 let err_lower = e.to_lowercase();
                 if err_lower.contains("authentication") || err_lower.contains("api key")
                     || err_lower.contains("unauthorized") || err_lower.contains("forbidden")
                 {
-                    self.show_alert_dialog("Query Error", &format!("{}", e), true);
+                    self.show_alert_dialog("Query Error", &e.to_string(), true);
                 }
 
                 self.state.status = "Ready".to_string();
@@ -1934,7 +1933,7 @@ impl Repl {
             ]),
             Line::from(""),
             Line::from("Input:"),
-            Line::from(format!("{}", serde_json::to_string_pretty(&dialog.tool_input).unwrap_or_else(|_| "(invalid)".to_string()))),
+            Line::from(serde_json::to_string_pretty(&dialog.tool_input).unwrap_or_else(|_| "(invalid)".to_string()).to_string()),
         ];
 
         // Add options
@@ -2130,7 +2129,7 @@ mod tests {
         let mut repl = Repl::new().unwrap();
         repl.handle_command("/help").unwrap();
         // Only the help message is present (welcome is added in run(), not new())
-        assert!(repl.chat.len() >= 1);
+        assert!(!repl.chat.is_empty());
         // Last message should contain the help header
         let last_msg = &repl.chat.last_message().unwrap().content;
         // Help output now uses markdown format from command registry

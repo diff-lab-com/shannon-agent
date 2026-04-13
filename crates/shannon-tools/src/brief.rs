@@ -14,16 +14,13 @@ use std::collections::HashMap;
 /// Format for the brief output
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum BriefFormat {
     Plain,
+    #[default]
     Markdown,
 }
 
-impl Default for BriefFormat {
-    fn default() -> Self {
-        BriefFormat::Markdown
-    }
-}
 
 /// A single message in a conversation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,7 +106,7 @@ impl BriefTool {
             && summary.next_steps.is_empty()
         {
             let sentences: Vec<&str> = content
-                .split(|c: char| c == '.' || c == '!' || c == '?')
+                .split(['.', '!', '?'])
                 .filter(|s| !s.trim().is_empty())
                 .collect();
 
@@ -147,7 +144,7 @@ impl BriefTool {
                 // From user messages, extract key requests as actions
                 let trimmed = msg.content.trim();
                 if trimmed.len() > 10 && trimmed.len() < 200 {
-                    summary.actions.push(format!("Requested: {}", trimmed));
+                    summary.actions.push(format!("Requested: {trimmed}"));
                 }
             }
         }
@@ -169,7 +166,7 @@ impl BriefTool {
             let items: Vec<String> = summary
                 .actions
                 .iter()
-                .map(|a| format!("  - {}", a))
+                .map(|a| format!("  - {a}"))
                 .collect();
             sections.push(("Actions", items.join("\n")));
         }
@@ -178,7 +175,7 @@ impl BriefTool {
             let items: Vec<String> = summary
                 .results
                 .iter()
-                .map(|r| format!("  - {}", r))
+                .map(|r| format!("  - {r}"))
                 .collect();
             sections.push(("Results", items.join("\n")));
         }
@@ -187,7 +184,7 @@ impl BriefTool {
             let items: Vec<String> = summary
                 .issues
                 .iter()
-                .map(|i| format!("  - {}", i))
+                .map(|i| format!("  - {i}"))
                 .collect();
             sections.push(("Issues", items.join("\n")));
         }
@@ -196,7 +193,7 @@ impl BriefTool {
             let items: Vec<String> = summary
                 .next_steps
                 .iter()
-                .map(|n| format!("  - {}", n))
+                .map(|n| format!("  - {n}"))
                 .collect();
             sections.push(("Next Steps", items.join("\n")));
         }
@@ -205,14 +202,14 @@ impl BriefTool {
             BriefFormat::Markdown => {
                 let mut parts = Vec::new();
                 for (title, body) in &sections {
-                    parts.push(format!("### {}\n{}", title, body));
+                    parts.push(format!("### {title}\n{body}"));
                 }
                 parts.join("\n\n")
             }
             BriefFormat::Plain => {
                 let mut parts = Vec::new();
                 for (title, body) in &sections {
-                    parts.push(format!("{}:\n{}", title, body));
+                    parts.push(format!("{title}:\n{body}"));
                 }
                 parts.join("\n\n")
             }
@@ -234,7 +231,7 @@ impl BriefTool {
 
         for (i, c) in text.char_indices() {
             length += 1;
-            if c == '\n' && text.chars().nth(i + 1).map_or(false, |n| n == '\n') {
+            if c == '\n' && (text.chars().nth(i + 1) == Some('\n')) {
                 last_boundary = i;
                 in_section = true;
             }
@@ -426,7 +423,7 @@ impl Tool for BriefTool {
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
         let brief_input: BriefInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid brief input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid brief input: {e}")))?;
 
         let summary = self.generate_brief(brief_input)?;
 
@@ -587,7 +584,7 @@ mod tests {
         let tool = make_tool();
         let mut lines = Vec::new();
         for i in 0..100 {
-            lines.push(format!("Created module number {} with extensive functionality and many features", i));
+            lines.push(format!("Created module number {i} with extensive functionality and many features"));
         }
         let long_content = lines.join(". ");
 

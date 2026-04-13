@@ -631,10 +631,10 @@ impl VimHandler {
                     "w" | "write" => VimAction::Noop, // save not applicable in REPL
                     "wq" | "x" => VimAction::Quit,
                     _ => {
-                        if trimmed.starts_with('!') {
+                        if let Some(rest) = trimmed.strip_prefix('!') {
                             // Shell command execution
                             VimAction::ExecuteCommand {
-                                command: trimmed[1..].to_string(),
+                                command: rest.to_string(),
                             }
                         } else {
                             VimAction::ExecuteCommand { command: cmd }
@@ -726,7 +726,7 @@ mod tests {
     }
 
     #[test]
-    fn test_O_enters_insert_mode_above() {
+    fn test_o_enters_insert_mode_above() {
         let mut handler = VimHandler::new();
         let action = handler.process_key(char_key('O'));
         assert_eq!(handler.mode(), VimMode::Insert);
@@ -764,7 +764,7 @@ mod tests {
     }
 
     #[test]
-    fn test_V_enters_visual_line_mode() {
+    fn test_v_enters_visual_line_mode() {
         let mut handler = VimHandler::new();
         let action = handler.process_key(char_key('V'));
         assert_eq!(handler.mode(), VimMode::Visual);
@@ -929,7 +929,7 @@ mod tests {
     }
 
     #[test]
-    fn test_G_moves_file_end() {
+    fn test_g_moves_file_end() {
         let mut handler = VimHandler::new();
         let action = handler.process_key(char_key('G'));
         assert_eq!(

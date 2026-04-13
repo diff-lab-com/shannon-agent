@@ -473,7 +473,7 @@ impl StateManager {
 
     /// Build the file path for a given session UUID.
     fn session_file_path(&self, session_id: &Uuid) -> PathBuf {
-        self.sessions_dir.join(format!("{}.json", session_id))
+        self.sessions_dir.join(format!("{session_id}.json"))
     }
 }
 
@@ -768,7 +768,7 @@ mod tests {
         let session_id = Uuid::new_v4();
         let messages = make_messages();
 
-        let mut metadata = make_metadata("model");
+        let metadata = make_metadata("model");
         let before = metadata.updated_at;
 
         // Small sleep to ensure a different timestamp
@@ -862,7 +862,7 @@ mod tests {
             let handle = tokio::spawn(async move {
                 for i in 0..inserts_per_thread {
                     let _ = manager_clone.create_session(
-                        Some(format!("user_{}", i)),
+                        Some(format!("user_{i}")),
                         "test-model".to_string(),
                     );
                 }
@@ -892,7 +892,7 @@ mod tests {
             let manager_ref = manager.clone();
             let handle = tokio::spawn(async move {
                 for j in 0..operations_per_thread {
-                    let key = format!("key_{}_{}", i, j);
+                    let key = format!("key_{i}_{j}");
                     let value = serde_json::json!(j);
 
                     // Set
@@ -987,7 +987,7 @@ mod tests {
             let registry_ref = tool_registry.clone();
             let handle = tokio::spawn(async move {
                 for j in 0..tools_per_thread {
-                    let tool_name = format!("tool_{}_{}", i, j);
+                    let tool_name = format!("tool_{i}_{j}");
                     let tool_def = serde_json::json!({
                         "name": tool_name,
                         "description": "Test tool"

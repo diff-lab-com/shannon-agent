@@ -344,11 +344,10 @@ impl CompactPrompt {
             5. Tool calls that were made and their results (abbreviated)\n\
             6. Any errors encountered and their resolutions\n\
             7. Pending tasks or next steps\n\n\
-            The summary must be under {} tokens. Focus on information that would be \
+            The summary must be under {max_tokens} tokens. Focus on information that would be \
             needed to continue the conversation productively. Omit redundant explanations, \
             failed attempts that were abandoned, and verbose tool output.\n\n\
-            Format the summary as a structured but readable text. Use headings if helpful.",
-            max_tokens
+            Format the summary as a structured but readable text. Use headings if helpful."
         )
     }
 
@@ -363,7 +362,7 @@ impl CompactPrompt {
             } else {
                 content_text
             };
-            parts.push(format!("[{}]: {}", role, preview));
+            parts.push(format!("[{role}]: {preview}"));
         }
         parts.join("\n\n")
     }
@@ -432,7 +431,7 @@ impl Summarizer for RuleBasedSummarizer {
                         "System"
                     };
                     let preview = truncate_text(text, 150);
-                    summary_parts.push(format!("{}: {}", role_label, preview));
+                    summary_parts.push(format!("{role_label}: {preview}"));
 
                     // Extract file path patterns
                     for word in text.split_whitespace() {
@@ -521,7 +520,7 @@ impl Summarizer for RuleBasedSummarizer {
         if !errors_encountered.is_empty() {
             summary.push_str("\nErrors encountered:");
             for err in &errors_encountered {
-                summary.push_str(&format!("\n  - {}", err));
+                summary.push_str(&format!("\n  - {err}"));
             }
         }
 
@@ -702,8 +701,7 @@ impl CompactEngine {
         let summary_message = Message {
             role: "system".to_string(),
             content: MessageContent::Text(format!(
-                "[Previous conversation summary - {} messages compacted]\n\n{}",
-                messages_removed, summary_text
+                "[Previous conversation summary - {messages_removed} messages compacted]\n\n{summary_text}"
             )),
         };
 
@@ -734,7 +732,7 @@ impl CompactEngine {
     // ========================================================================
 
     /// Compress individual large messages/tool results in-place
-    pub fn micro_compact(&self, messages: &mut Vec<Message>) -> Result<CompactResult, CompactError> {
+    pub fn micro_compact(&self, messages: &mut [Message]) -> Result<CompactResult, CompactError> {
         let original_tokens = estimate_tokens(messages);
         if !self.config.enable_micro_compact {
             return Ok(CompactResult::no_change(
@@ -817,8 +815,7 @@ impl CompactEngine {
         let compacted_tokens = estimate_message_tokens(&Message {
             role: "system".to_string(),
             content: MessageContent::Text(format!(
-                "[Session memory summary]\n\n{}",
-                summary
+                "[Session memory summary]\n\n{summary}"
             )),
         });
 
@@ -991,19 +988,16 @@ impl CompactEngine {
         let mut consecutive_system_count = 0;
 
         for msg in messages.drain(..) {
-            match &msg.content {
-                MessageContent::Text(text) => {
-                    if text.starts_with("[Previous conversation summary") {
-                        // Deduplicate consecutive summaries
-                        let key = text.to_string();
-                        if seen_summaries.contains(&key) {
-                            tracing::debug!("Removing duplicate summary message");
-                            continue;
-                        }
-                        seen_summaries.insert(key);
+            if let MessageContent::Text(text) = &msg.content {
+                if text.starts_with("[Previous conversation summary") {
+                    // Deduplicate consecutive summaries
+                    let key = text.to_string();
+                    if seen_summaries.contains(&key) {
+                        tracing::debug!("Removing duplicate summary message");
+                        continue;
                     }
+                    seen_summaries.insert(key);
                 }
-                _ => {}
             }
 
             // Track consecutive system messages and collapse them
@@ -1078,10 +1072,7 @@ impl CompactEngine {
         let summary_message = Message {
             role: "system".to_string(),
             content: MessageContent::Text(format!(
-                "[Group-compacted summary - {} messages in {} groups]\n\n{}",
-                messages_removed,
-                affected_groups,
-                summary
+                "[Group-compacted summary - {messages_removed} messages in {affected_groups} groups]\n\n{summary}"
             )),
         };
 
@@ -1172,7 +1163,7 @@ fn truncate_text(text: &str, max_chars: usize) -> String {
     if let Some(space_pos) = truncated.rfind(' ') {
         format!("{}...", &text[..space_pos])
     } else {
-        format!("{}...", truncated)
+        format!("{truncated}...")
     }
 }
 
@@ -1451,8 +1442,7 @@ mod tests {
         let mut messages = Vec::new();
         for i in 0..50 {
             messages.push(user_msg(&format!(
-                "This is message number {} with enough text to accumulate tokens",
-                i
+                "This is message number {i} with enough text to accumulate tokens"
             )));
         }
 
@@ -1529,8 +1519,8 @@ mod tests {
         let mut engine = CompactEngine::with_defaults().unwrap();
         let mut messages = Vec::new();
         for i in 0..20 {
-            messages.push(user_msg(&format!("User message {}", i)));
-            messages.push(assistant_msg(&format!("Assistant response {}", i)));
+            messages.push(user_msg(&format!("User message {i}")));
+            messages.push(assistant_msg(&format!("Assistant response {i}")));
         }
 
         let original_count = messages.len();
@@ -1557,8 +1547,8 @@ mod tests {
 
         let mut messages = Vec::new();
         for i in 0..10 {
-            messages.push(user_msg(&format!("User msg {}", i)));
-            messages.push(assistant_msg(&format!("Asst msg {}", i)));
+            messages.push(user_msg(&format!("User msg {i}")));
+            messages.push(assistant_msg(&format!("Asst msg {i}")));
         }
 
         engine.compact(&mut messages).unwrap();
@@ -1579,8 +1569,8 @@ mod tests {
         let mut engine = CompactEngine::with_defaults().unwrap();
         let mut messages = Vec::new();
         for i in 0..20 {
-            messages.push(user_msg(&format!("Message {}", i)));
-            messages.push(assistant_msg(&format!("Response {}", i)));
+            messages.push(user_msg(&format!("Message {i}")));
+            messages.push(assistant_msg(&format!("Response {i}")));
         }
 
         let result = engine.compact(&mut messages).unwrap();
@@ -1648,11 +1638,11 @@ mod tests {
         // Use longer memory entries so the summarizer can actually compress them
         let long_memory = "X".repeat(500);
         let memory_entries = vec![
-            system_msg(&format!("Memory 1: {}", long_memory)),
-            system_msg(&format!("Memory 2: {}", long_memory)),
-            system_msg(&format!("Memory 3: {}", long_memory)),
-            system_msg(&format!("Memory 4: {}", long_memory)),
-            system_msg(&format!("Memory 5: {}", long_memory)),
+            system_msg(&format!("Memory 1: {long_memory}")),
+            system_msg(&format!("Memory 2: {long_memory}")),
+            system_msg(&format!("Memory 3: {long_memory}")),
+            system_msg(&format!("Memory 4: {long_memory}")),
+            system_msg(&format!("Memory 5: {long_memory}")),
         ];
 
         let result = engine.compact_session_memory(&memory_entries).unwrap();
@@ -1816,7 +1806,7 @@ mod tests {
             strategy: CompactStrategy::SummarizeOld,
         };
 
-        let display = format!("{}", result);
+        let display = format!("{result}");
         assert!(display.contains("10000"));
         assert!(display.contains("3000"));
         assert!(display.contains("70.0%"));
@@ -1913,7 +1903,7 @@ mod tests {
         let msg = user_msg("Hello world"); // 11 chars
         let tokens = estimate_message_tokens(&msg);
         // 11 / 4 = 2 (rounded down), but max(1)
-        assert!(tokens >= 1 && tokens <= 5);
+        assert!((1..=5).contains(&tokens));
     }
 
     #[test]
@@ -2032,8 +2022,8 @@ mod tests {
         let mut engine = CompactEngine::with_defaults().unwrap();
         let mut messages = Vec::new();
         for i in 0..20 {
-            messages.push(user_msg(&format!("User message {}", i)));
-            messages.push(assistant_msg(&format!("Response {}", i)));
+            messages.push(user_msg(&format!("User message {i}")));
+            messages.push(assistant_msg(&format!("Response {i}")));
         }
 
         let original_count = messages.len();
@@ -2072,12 +2062,10 @@ mod tests {
         for i in 0..25 {
             // Use longer messages to exceed the small max_context_tokens threshold
             messages.push(user_msg(&format!(
-                "User message {} with extra padding text to ensure we exceed token budget",
-                i
+                "User message {i} with extra padding text to ensure we exceed token budget"
             )));
             messages.push(assistant_msg(&format!(
-                "Response {} with extra padding text to ensure we exceed token budget significantly",
-                i
+                "Response {i} with extra padding text to ensure we exceed token budget significantly"
             )));
         }
 

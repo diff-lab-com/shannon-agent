@@ -75,6 +75,7 @@ pub fn command() -> Command {
 /// Diff scope
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum DiffScope {
     /// Unstaged changes (default)
     Unstaged,
@@ -83,6 +84,7 @@ pub enum DiffScope {
     Staged,
 
     /// Working tree (unstaged + staged)
+    #[default]
     Working,
 
     /// HEAD vs working tree
@@ -92,11 +94,6 @@ pub enum DiffScope {
     Commits,
 }
 
-impl Default for DiffScope {
-    fn default() -> Self {
-        DiffScope::Working
-    }
-}
 
 /// Diff options
 #[allow(dead_code)]
@@ -200,14 +197,14 @@ pub fn build_diff_command(options: &DiffOptions) -> String {
         DiffScope::Working => cmd.push_str(" HEAD"),
         DiffScope::Commits => {
             if let Some(range) = &options.revision_range {
-                cmd.push_str(&format!(" {}", range));
+                cmd.push_str(&format!(" {range}"));
             }
         }
         _ => {}
     }
 
     if let Some(lines) = options.context_lines {
-        cmd.push_str(&format!(" -U{}", lines));
+        cmd.push_str(&format!(" -U{lines}"));
     }
 
     if options.word_diff {
@@ -223,7 +220,7 @@ pub fn build_diff_command(options: &DiffOptions) -> String {
     }
 
     if let Some(path) = &options.path_filter {
-        cmd.push_str(&format!(" -- {}", path));
+        cmd.push_str(&format!(" -- {path}"));
     }
 
     cmd

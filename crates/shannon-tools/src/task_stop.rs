@@ -32,6 +32,12 @@ pub struct TaskStopTool {
     task_store: TaskStore,
 }
 
+impl Default for TaskStopTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TaskStopTool {
     pub fn new() -> Self {
         Self {
@@ -49,7 +55,7 @@ impl TaskStopTool {
 
     async fn stop_task(&self, input: TaskStopInput) -> Result<TaskStopOutput, ToolError> {
         let mut store = self.task_store.write().map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to acquire task store lock: {}", e))
+            ToolError::ExecutionFailed(format!("Failed to acquire task store lock: {e}"))
         })?;
 
         let task = store
@@ -84,7 +90,7 @@ impl TaskStopTool {
 impl Tool for TaskStopTool {
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let stop_input: TaskStopInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid task stop input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid task stop input: {e}")))?;
         let task_id = stop_input.task_id.clone();
         let output = self.stop_task(stop_input).await?;
 

@@ -62,7 +62,7 @@ impl Tool for PluginTool {
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
         let input_json = serde_json::to_string(&input)
-            .map_err(|e| ToolError::InvalidInput(format!("Failed to serialize input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Failed to serialize input: {e}")))?;
 
         // Split command string into program + args.
         // Use basic shell splitting: split by whitespace, respecting no quoting for simplicity.
@@ -171,9 +171,9 @@ fn shell_words_split(s: &str) -> Vec<String> {
     let mut words = Vec::new();
     let mut current = String::new();
     let mut in_quotes = false;
-    let mut chars = s.chars().peekable();
+    let chars = s.chars().peekable();
 
-    while let Some(c) = chars.next() {
+    for c in chars {
         match c {
             '"' => {
                 in_quotes = !in_quotes;
@@ -249,7 +249,7 @@ mod tests {
     fn make_tool_def(name: &str, command: &str, is_read_only: bool) -> ToolDefinition {
         ToolDefinition {
             name: name.to_string(),
-            description: format!("Test tool {}", name),
+            description: format!("Test tool {name}"),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -354,7 +354,7 @@ mod tests {
     fn test_plugin_tool_debug() {
         let def = make_tool_def("debug_tool", "echo test", true);
         let tool = PluginTool::new(def);
-        let debug_str = format!("{:?}", tool);
+        let debug_str = format!("{tool:?}");
         assert!(debug_str.contains("debug_tool"));
         assert!(debug_str.contains("echo test"));
     }

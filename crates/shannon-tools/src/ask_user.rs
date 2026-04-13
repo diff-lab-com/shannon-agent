@@ -115,7 +115,7 @@ impl QuestionHandler for TerminalQuestionHandler {
             } else {
                 &question.header
             };
-            println!("[{}]", display_header);
+            println!("[{display_header}]");
         }
 
         // Print question
@@ -151,7 +151,7 @@ impl QuestionHandler for TerminalQuestionHandler {
         } else {
             ""
         };
-        print!("Your choice{}: ", prompt_suffix);
+        print!("Your choice{prompt_suffix}: ");
         io::stdout().flush().map_err(|e| e.to_string())?;
 
         let stdin = io::stdin();
@@ -327,7 +327,7 @@ impl Tool for AskUserQuestionTool {
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         // Parse input
         let ask_input: AskUserInput = serde_json::from_value(input.clone()).map_err(|e| {
-            ToolError::InvalidInput(format!("Failed to parse ask_user_question input: {}", e))
+            ToolError::InvalidInput(format!("Failed to parse ask_user_question input: {e}"))
         })?;
 
         // Validate: at least one question is required

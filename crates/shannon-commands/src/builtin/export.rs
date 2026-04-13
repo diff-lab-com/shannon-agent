@@ -212,7 +212,7 @@ pub fn parse_export_args(args: &str) -> Result<ExportOptions, String> {
                 options.include_timestamps = false;
             }
             t if t.starts_with('-') => {
-                return Err(format!("Unknown option: {}", t));
+                return Err(format!("Unknown option: {t}"));
             }
             t => {
                 // Assume it's a filename
@@ -358,7 +358,7 @@ fn format_timestamp(secs: u64) -> String {
 #[allow(dead_code)]
 pub fn write_export(content: &str, filename: &str) -> Result<(), String> {
     std::fs::write(filename, content)
-        .map_err(|e| format!("Failed to write export to '{}': {}", filename, e))
+        .map_err(|e| format!("Failed to write export to '{filename}': {e}"))
 }
 
 #[cfg(test)]

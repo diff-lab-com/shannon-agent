@@ -156,7 +156,7 @@ impl PathSandbox {
         let canonical = tokio::fs::canonicalize(path)
             .await
             .map_err(|e| SandboxError::ResolutionFailed(format!(
-                "Cannot resolve path '{}': {}", path_str, e
+                "Cannot resolve path '{path_str}': {e}"
             )))?;
 
         let canonical_str = canonical.to_string_lossy().to_string();
@@ -190,7 +190,7 @@ impl PathSandbox {
 
         let canonical = std::fs::canonicalize(path)
             .map_err(|e| SandboxError::ResolutionFailed(format!(
-                "Cannot resolve path '{}': {}", path_str, e
+                "Cannot resolve path '{path_str}': {e}"
             )))?;
 
         let canonical_str = canonical.to_string_lossy().to_string();
@@ -220,7 +220,7 @@ impl PathSandbox {
                 depth -= 1;
                 if depth < 0 {
                     return Err(SandboxError::PathTraversal(format!(
-                        "Path '{}' contains '..' that escapes the root directory", path_str
+                        "Path '{path_str}' contains '..' that escapes the root directory"
                     )));
                 }
             } else if *comp != "." && !comp.is_empty() {
@@ -236,7 +236,7 @@ impl PathSandbox {
             // Match as prefix. Both "/etc/passwd" and "/etc/" itself should match "/etc/"
             if canonical_str.starts_with(pattern) || canonical_str == pattern.trim_end_matches('/') {
                 return Err(SandboxError::Denied(format!(
-                    "Path '{}' is in a restricted area (matches '{}')", canonical_str, pattern
+                    "Path '{canonical_str}' is in a restricted area (matches '{pattern}')"
                 )));
             }
         }
@@ -264,7 +264,7 @@ impl PathSandbox {
                             let root_with_sep = if root_str.ends_with('/') {
                                 root_str
                             } else {
-                                format!("{}/", root_str)
+                                format!("{root_str}/")
                             };
                             if canonical_str.starts_with(&root_with_sep) {
                                 return Ok(());
@@ -283,9 +283,9 @@ impl PathSandbox {
             let resolved_root_str = resolved_root.to_string_lossy().to_string();
             // Check if canonical is the root itself or a child of it
             if canonical == resolved_root
-                || canonical_str.starts_with(&format!("{}/", resolved_root_str))
+                || canonical_str.starts_with(&format!("{resolved_root_str}/"))
                 // Handle Windows paths with backslash
-                || canonical_str.starts_with(&format!("{}\\", resolved_root_str))
+                || canonical_str.starts_with(&format!("{resolved_root_str}\\"))
             {
                 return Ok(());
             }
@@ -316,12 +316,12 @@ impl PathSandbox {
                 let my_home_with_sep = if my_home_str.ends_with('/') {
                     my_home_str.clone()
                 } else {
-                    format!("{}/", my_home_str)
+                    format!("{my_home_str}/")
                 };
 
                 if !canonical_str.starts_with(&my_home_with_sep) {
                     return Err(SandboxError::Denied(format!(
-                        "Path '{}' is in another user's home directory", canonical_str
+                        "Path '{canonical_str}' is in another user's home directory"
                     )));
                 }
             }
@@ -467,8 +467,7 @@ mod tests {
         let err_lower = err.to_lowercase();
         assert!(
             err_lower.contains("traversal") || err_lower.contains("outside allowed roots") || err_lower.contains("cannot resolve"),
-            "Expected traversal or outside-roots error, got: {}",
-            err
+            "Expected traversal or outside-roots error, got: {err}"
         );
     }
 
@@ -487,7 +486,7 @@ mod tests {
         let path = td.file("subdir/../subdir/file.txt");
         let result = sandbox.validate(&path).await;
         // This should succeed because after resolution it stays within the root
-        assert!(result.is_ok(), "Expected OK, got: {:?}", result);
+        assert!(result.is_ok(), "Expected OK, got: {result:?}");
     }
 
     // --- Denied path tests ---
@@ -646,7 +645,7 @@ mod tests {
 
         // Symlink that stays within allowed root should be fine
         let result = sandbox.validate(&link).await;
-        assert!(result.is_ok(), "Symlink inside root should be allowed, got: {:?}", result);
+        assert!(result.is_ok(), "Symlink inside root should be allowed, got: {result:?}");
     }
 
     #[tokio::test]
@@ -761,7 +760,7 @@ mod tests {
         fs::write(&tmp_file, "test").ok(); // May already exist, ignore error
 
         let result = sandbox.validate(&tmp_file).await;
-        assert!(result.is_ok(), "Non-strict mode should allow non-root paths: {:?}", result);
+        assert!(result.is_ok(), "Non-strict mode should allow non-root paths: {result:?}");
 
         let _ = fs::remove_file(&tmp_file);
     }
@@ -807,9 +806,7 @@ mod tests {
             let result = sandbox.validate(Path::new(path_str)).await;
             assert!(
                 result.is_err(),
-                "Default config should deny '{}', got: {:?}",
-                path_str,
-                result
+                "Default config should deny '{path_str}', got: {result:?}"
             );
         }
     }
@@ -821,7 +818,7 @@ mod tests {
         // The current working directory itself should be accessible
         let cwd = std::env::current_dir().expect("Failed to get cwd");
         let result = sandbox.validate(&cwd).await;
-        assert!(result.is_ok(), "Default config should allow CWD: {:?}", result);
+        assert!(result.is_ok(), "Default config should allow CWD: {result:?}");
     }
 
     // --- Home directory boundary tests ---
@@ -844,8 +841,7 @@ mod tests {
                 let err_str = e.to_string();
                 assert!(
                     err_str.contains("another user") || err_str.contains("Cannot resolve"),
-                    "Expected home boundary or resolution error, got: {}",
-                    err_str
+                    "Expected home boundary or resolution error, got: {err_str}"
                 );
             }
         }
@@ -865,7 +861,7 @@ mod tests {
         let sandbox = PathSandbox::new();
         let cwd = std::env::current_dir().expect("Failed to get cwd");
         let result = sandbox.validate_sync(&cwd);
-        assert!(result.is_ok(), "Sync validate should allow CWD: {:?}", result);
+        assert!(result.is_ok(), "Sync validate should allow CWD: {result:?}");
     }
 
     // --- Builder-style API tests ---

@@ -15,6 +15,7 @@ pub struct SkillRegistry {
 }
 
 #[derive(Debug)]
+#[derive(Default)]
 struct RegistryInner {
     /// All registered skills by ID
     skills: HashMap<SkillId, Skill>,
@@ -30,18 +31,6 @@ struct RegistryInner {
     dynamic_skills: HashMap<SkillId, Skill>,
 }
 
-impl Default for RegistryInner {
-    fn default() -> Self {
-        Self {
-            skills: HashMap::new(),
-            by_name: HashMap::new(),
-            by_alias: HashMap::new(),
-            conditional_skills: HashMap::new(),
-            activated_skills: HashSet::new(),
-            dynamic_skills: HashMap::new(),
-        }
-    }
-}
 
 impl Default for SkillRegistry {
     fn default() -> Self {
@@ -62,7 +51,7 @@ impl SkillRegistry {
         let mut inner = self.inner.write()
             .map_err(|e| SkillError::ExecutionFailed {
                 name: skill.name.clone(),
-                message: format!("Failed to acquire write lock: {}", e),
+                message: format!("Failed to acquire write lock: {e}"),
             })?;
 
         // Check for duplicates
@@ -107,7 +96,7 @@ impl SkillRegistry {
         let inner = self.inner.read()
             .map_err(|e| SkillError::ExecutionFailed {
                 name: "registry".to_string(),
-                message: format!("Failed to acquire read lock: {}", e),
+                message: format!("Failed to acquire read lock: {e}"),
             })?;
 
         inner.skills.get(id)
@@ -120,7 +109,7 @@ impl SkillRegistry {
         let inner = self.inner.read()
             .map_err(|e| SkillError::ExecutionFailed {
                 name: "registry".to_string(),
-                message: format!("Failed to acquire read lock: {}", e),
+                message: format!("Failed to acquire read lock: {e}"),
             })?;
 
         // Try direct name first
@@ -186,7 +175,7 @@ impl SkillRegistry {
         let mut inner = self.inner.write()
             .map_err(|e| SkillError::ExecutionFailed {
                 name: "registry".to_string(),
-                message: format!("Failed to acquire write lock: {}", e),
+                message: format!("Failed to acquire write lock: {e}"),
             })?;
 
         if let Some(skill) = inner.skills.remove(id) {
@@ -207,7 +196,7 @@ impl SkillRegistry {
         let mut inner = self.inner.write()
             .map_err(|e| SkillError::ExecutionFailed {
                 name: "registry".to_string(),
-                message: format!("Failed to acquire write lock: {}", e),
+                message: format!("Failed to acquire write lock: {e}"),
             })?;
 
         let count = inner.skills.len();
@@ -279,7 +268,7 @@ impl SkillRegistry {
         let inner = self.inner.read()
             .map_err(|e| SkillError::ExecutionFailed {
                 name: "registry".to_string(),
-                message: format!("Failed to acquire read lock: {}", e),
+                message: format!("Failed to acquire read lock: {e}"),
             })?;
 
         inner.by_name.get(name)
@@ -377,10 +366,10 @@ mod tests {
             let registry_clone = registry.clone();
             let handle = thread::spawn(move || {
                 let skill = Skill::new(
-                    format!("skill_{}", i),
-                    format!("Skill{}", i),
-                    format!("Description {}", i),
-                    format!("Content {}", i),
+                    format!("skill_{i}"),
+                    format!("Skill{i}"),
+                    format!("Description {i}"),
+                    format!("Content {i}"),
                 );
                 registry_clone.lock().unwrap().register(skill)
             });
@@ -512,7 +501,7 @@ mod tests {
                 id.to_string(),
                 name.to_string(),
                 desc.to_string(),
-                format!("Content for {}", name),
+                format!("Content for {name}"),
             );
             registry.register(skill).unwrap();
         }
@@ -721,9 +710,9 @@ mod tests {
         // Register multiple skills
         for i in 0..5 {
             let skill = Skill::new(
-                format!("skill_{}", i),
-                format!("Skill{}", i),
-                format!("Description {}", i),
+                format!("skill_{i}"),
+                format!("Skill{i}"),
+                format!("Description {i}"),
                 "Content".to_string(),
             );
             registry.register(skill).unwrap();

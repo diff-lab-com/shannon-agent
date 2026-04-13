@@ -208,8 +208,7 @@ impl CommandRegistry {
         // For now, return a simple success message
         // In a full implementation, this would execute the command
         Ok(format!(
-            "Command '{}' dispatched with args: '{}'",
-            name, args
+            "Command '{name}' dispatched with args: '{args}'"
         ))
     }
 
@@ -225,7 +224,7 @@ impl CommandRegistry {
                     let mut help = format!("## /{}", command.name());
 
                     if let Some(hint) = command.argument_hint() {
-                        help.push_str(&format!(" `{}`", hint));
+                        help.push_str(&format!(" `{hint}`"));
                     }
 
                     help.push_str(&format!("\n\n{}\n", command.description()));
@@ -238,12 +237,12 @@ impl CommandRegistry {
                     }
 
                     if let Some(when) = command.base().when_to_use.as_ref() {
-                        help.push_str(&format!("\n**When to use:** {}\n", when));
+                        help.push_str(&format!("\n**When to use:** {when}\n"));
                     }
 
                     help
                 }
-                Err(_) => format!("No help found for command: {}", name),
+                Err(_) => format!("No help found for command: {name}"),
             }
         } else {
             // Generate summary help for all commands
@@ -261,7 +260,7 @@ impl CommandRegistry {
                 };
                 let hint = command
                     .argument_hint()
-                    .map(|h| format!(" {}", h))
+                    .map(|h| format!(" {h}"))
                     .unwrap_or_default();
 
                 output.push_str(&format!(

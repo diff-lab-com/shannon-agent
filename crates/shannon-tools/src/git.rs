@@ -27,7 +27,7 @@ fn run_git(args: &[&str], cwd: Option<&str>) -> Result<(String, String, bool), T
     }
     let output = cmd
         .output()
-        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to execute git: {}", e)))?;
+        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to execute git: {e}")))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -39,7 +39,7 @@ fn find_git_root(start: Option<&str>) -> Result<String, ToolError> {
     let start_path = match start {
         Some(s) => std::path::PathBuf::from(s),
         None => std::env::current_dir()
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to determine cwd: {}", e)))?,
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to determine cwd: {e}")))?,
     };
 
     let mut current = Some(start_path.as_path());
@@ -111,6 +111,12 @@ pub struct GitBranchTool {
     description: String,
 }
 
+impl Default for GitBranchTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GitBranchTool {
     pub fn new() -> Self {
         Self {
@@ -125,7 +131,7 @@ impl GitBranchTool {
         )?;
         if !success {
             return Ok(ToolOutput {
-                content: format!("Failed to list branches: {}", stderr),
+                content: format!("Failed to list branches: {stderr}"),
                 is_error: true,
                 metadata: HashMap::new(),
             });
@@ -166,16 +172,16 @@ impl GitBranchTool {
         let (stdout, stderr, success) = run_git(&args, cwd)?;
         if !success {
             return Ok(ToolOutput {
-                content: format!("Failed to create branch '{}': {}", name, stderr),
+                content: format!("Failed to create branch '{name}': {stderr}"),
                 is_error: true,
                 metadata: HashMap::new(),
             });
         }
 
         let msg = if checkout {
-            format!("Created and switched to branch '{}'.", name)
+            format!("Created and switched to branch '{name}'.")
         } else {
-            format!("Created branch '{}'.", name)
+            format!("Created branch '{name}'.")
         };
 
         Ok(ToolOutput {
@@ -249,8 +255,7 @@ impl GitBranchTool {
         let current = current_branch(cwd)?;
         if current == name {
             return Err(ToolError::ExecutionFailed(format!(
-                "Cannot delete the current branch '{}'. Switch to another branch first.",
-                name
+                "Cannot delete the current branch '{name}'. Switch to another branch first."
             )));
         }
 
@@ -260,9 +265,8 @@ impl GitBranchTool {
         if force {
             return Ok(ToolOutput {
                 content: format!(
-                    "[SAFETY WARNING] Force-deleting branch '{}' will discard all unmerged commits. \
-                     This cannot be undone. If you are sure, use the Bash tool with: git branch -D {}\n",
-                    name, name
+                    "[SAFETY WARNING] Force-deleting branch '{name}' will discard all unmerged commits. \
+                     This cannot be undone. If you are sure, use the Bash tool with: git branch -D {name}\n"
                 ),
                 is_error: false,
                 metadata: {
@@ -339,7 +343,7 @@ impl Tool for GitBranchTool {
 
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let branch_input: GitBranchInput = serde_json::from_value(input.clone())
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid git branch input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid git branch input: {e}")))?;
 
         // We must be in a git repo for any action
         if let Err(e) = find_git_root(None) {
@@ -390,6 +394,12 @@ pub struct GitDiffTool {
     description: String,
 }
 
+impl Default for GitDiffTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GitDiffTool {
     pub fn new() -> Self {
         Self {
@@ -414,7 +424,7 @@ impl GitDiffTool {
         }
 
         if let Some(context) = input.context_lines {
-            args.push(format!("-U{}", context));
+            args.push(format!("-U{context}"));
         }
 
         if input.ignore_whitespace.unwrap_or(false) {
@@ -475,7 +485,7 @@ impl Tool for GitDiffTool {
 
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let diff_input: GitDiffInput = serde_json::from_value(input.clone())
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid git diff input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid git diff input: {e}")))?;
 
         // Verify we are in a git repo
         if let Err(e) = find_git_root(None) {
@@ -511,7 +521,7 @@ impl Tool for GitDiffTool {
             content: if has_changes {
                 stdout
             } else {
-                format!("No {} found.", description)
+                format!("No {description} found.")
             },
             is_error: false,
             metadata: {
@@ -568,6 +578,12 @@ pub struct GitLogTool {
     description: String,
 }
 
+impl Default for GitLogTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GitLogTool {
     pub fn new() -> Self {
         Self {
@@ -579,7 +595,7 @@ impl GitLogTool {
         let mut args = Vec::new();
 
         let count = input.count.unwrap_or(10).min(100);
-        args.push(format!("-{}", count));
+        args.push(format!("-{count}"));
 
         if input.oneline.unwrap_or(false) {
             args.push("--oneline".to_string());
@@ -590,11 +606,11 @@ impl GitLogTool {
         }
 
         if let Some(ref author) = input.author {
-            args.push(format!("--author={}", author));
+            args.push(format!("--author={author}"));
         }
 
         if let Some(ref since) = input.since {
-            args.push(format!("--since={}", since));
+            args.push(format!("--since={since}"));
         }
 
         if input.patch.unwrap_or(false) {
@@ -662,7 +678,7 @@ impl Tool for GitLogTool {
 
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let log_input: GitLogInput = serde_json::from_value(input.clone())
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid git log input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid git log input: {e}")))?;
 
         // Verify we are in a git repo
         if let Err(e) = find_git_root(None) {
@@ -748,6 +764,12 @@ pub struct GitStashInput {
 /// Git stash management tool.
 pub struct GitStashTool {
     description: String,
+}
+
+impl Default for GitStashTool {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GitStashTool {
@@ -837,7 +859,7 @@ impl GitStashTool {
     }
 
     fn pop_stash(&self, index: usize) -> Result<ToolOutput, ToolError> {
-        let index_str = format!("stash@{{{}}}", index);
+        let index_str = format!("stash@{{{index}}}");
         let args = &["stash", "pop", &index_str];
 
         let (stdout, stderr, success) = run_git(args, None)?;
@@ -870,7 +892,7 @@ impl GitStashTool {
     }
 
     fn drop_stash(&self, index: usize) -> Result<ToolOutput, ToolError> {
-        let index_str = format!("stash@{{{}}}", index);
+        let index_str = format!("stash@{{{index}}}");
         let args = &["stash", "drop", &index_str];
 
         let (stdout, stderr, success) = run_git(args, None)?;
@@ -900,7 +922,7 @@ impl GitStashTool {
     }
 
     fn apply_stash(&self, index: usize) -> Result<ToolOutput, ToolError> {
-        let index_str = format!("stash@{{{}}}", index);
+        let index_str = format!("stash@{{{index}}}");
         let args = &["stash", "apply", &index_str];
 
         let (stdout, stderr, success) = run_git(args, None)?;
@@ -970,7 +992,7 @@ impl Tool for GitStashTool {
 
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let stash_input: GitStashInput = serde_json::from_value(input.clone())
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid git stash input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid git stash input: {e}")))?;
 
         // Verify we are in a git repo
         if let Err(e) = find_git_root(None) {
@@ -1020,6 +1042,12 @@ pub struct SafetyCheckResult {
 /// Git safety check tool.
 pub struct GitSafetyTool {
     description: String,
+}
+
+impl Default for GitSafetyTool {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GitSafetyTool {
@@ -1184,7 +1212,7 @@ impl Tool for GitSafetyTool {
 
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let safety_input: GitSafetyInput = serde_json::from_value(input.clone())
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid git safety input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid git safety input: {e}")))?;
 
         if safety_input.command.trim().is_empty() {
             return Err(ToolError::InvalidInput("Command must not be empty".to_string()));
@@ -1314,7 +1342,7 @@ mod tests {
         assert!(props.contains_key("ignore_whitespace"));
         assert!(props.contains_key("stat"));
         // No required fields for diff
-        assert!(!schema.get("required").is_some());
+        assert!(schema.get("required").is_none());
     }
 
     #[test]

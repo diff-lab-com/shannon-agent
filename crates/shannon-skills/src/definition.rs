@@ -122,7 +122,7 @@ impl Skill {
 
     /// Check if this skill should be invoked for the given path
     pub fn matches_path(&self, path: &str) -> bool {
-        self.paths.as_ref().map_or(false, |patterns| {
+        self.paths.as_ref().is_some_and(|patterns| {
             patterns.iter().any(|pattern| {
                 // Simple glob matching - ignore library would handle this properly
                 if pattern == "**" {
@@ -132,7 +132,7 @@ impl Skill {
                     let prefix = &pattern[..pattern.len() - 3];
                     return path.starts_with(prefix);
                 }
-                path == pattern || path.starts_with(&format!("{}/", pattern))
+                path == pattern || path.starts_with(&format!("{pattern}/"))
             })
         })
     }
@@ -144,7 +144,7 @@ impl Skill {
 
     /// Check if this skill is conditional (requires path match)
     pub fn is_conditional(&self) -> bool {
-        self.paths.as_ref().map_or(false, |p| !p.is_empty())
+        self.paths.as_ref().is_some_and(|p| !p.is_empty())
     }
 }
 

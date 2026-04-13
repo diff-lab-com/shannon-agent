@@ -138,7 +138,7 @@ impl LlmClient {
                 Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded,
                 Some(status) => ApiError::ApiError {
                     status: status.as_u16(),
-                    message: format!("HTTP error: {}", e),
+                    message: format!("HTTP error: {e}"),
                 },
                 None => ApiError::HttpError(e),
             })?;
@@ -218,7 +218,7 @@ impl LlmClient {
                 Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded,
                 Some(status) => ApiError::ApiError {
                     status: status.as_u16(),
-                    message: format!("HTTP error: {}", e),
+                    message: format!("HTTP error: {e}"),
                 },
                 None => ApiError::HttpError(e),
             })?;
@@ -277,7 +277,7 @@ impl LlmClient {
                 Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded,
                 Some(status) => ApiError::ApiError {
                     status: status.as_u16(),
-                    message: format!("HTTP error: {}", e),
+                    message: format!("HTTP error: {e}"),
                 },
                 None => ApiError::HttpError(e),
             })?;
@@ -294,7 +294,7 @@ impl LlmClient {
 
         // Read the raw text first so we can apply provider-specific normalization
         let body = response.text().await.map_err(|e| {
-            ApiError::InvalidResponse(format!("Failed to read response body: {}", e))
+            ApiError::InvalidResponse(format!("Failed to read response body: {e}"))
         })?;
 
         let api_response = super::adapter::normalize_response(&body, &self.config.provider)?;

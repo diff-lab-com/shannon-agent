@@ -92,8 +92,8 @@ pub fn parse_credential_action(arg: &str) -> CredentialAction {
 #[allow(dead_code)]
 fn get_manager() -> Result<shannon_core::credential_manager::CredentialManager, String> {
     let mut manager = shannon_core::credential_manager::CredentialManager::new()
-        .map_err(|e| format!("{}", e))?;
-    manager.load().map_err(|e| format!("{}", e))?;
+        .map_err(|e| format!("{e}"))?;
+    manager.load().map_err(|e| format!("{e}"))?;
     Ok(manager)
 }
 
@@ -119,7 +119,7 @@ pub fn format_credentials_list() -> String {
             }
         }
         Err(e) => {
-            output.push_str(&format!("  Error accessing credentials: {}\n", e));
+            output.push_str(&format!("  Error accessing credentials: {e}\n"));
         }
     }
 
@@ -140,11 +140,11 @@ pub fn format_credential_store(service: &str, value: &str) -> String {
         Ok(mut manager) => {
             let credential = shannon_core::credential_manager::Credential::new(service, service, value);
             match manager.store_or_update(credential) {
-                Ok(_) => format!("Credential stored for service: {}", service),
-                Err(e) => format!("Failed to store credential: {}", e),
+                Ok(_) => format!("Credential stored for service: {service}"),
+                Err(e) => format!("Failed to store credential: {e}"),
             }
         }
-        Err(e) => format!("Error accessing credential manager: {}", e),
+        Err(e) => format!("Error accessing credential manager: {e}"),
     }
 }
 
@@ -162,12 +162,12 @@ pub fn format_credential_get(service: &str) -> String {
                     } else {
                         format!("{}****{}", &val[..4], &val[val.len()-4..])
                     };
-                    format!("Credential for '{}': {}", service, masked)
+                    format!("Credential for '{service}': {masked}")
                 }
-                Err(e) => format!("Credential not found for '{}': {}", service, e),
+                Err(e) => format!("Credential not found for '{service}': {e}"),
             }
         }
-        Err(e) => format!("Error accessing credential manager: {}", e),
+        Err(e) => format!("Error accessing credential manager: {e}"),
     }
 }
 
@@ -177,11 +177,11 @@ pub fn format_credential_delete(service: &str) -> String {
     match get_manager() {
         Ok(mut manager) => {
             match manager.delete(service) {
-                Ok(_) => format!("Credential deleted for service: {}", service),
-                Err(e) => format!("Failed to delete credential for '{}': {}", service, e),
+                Ok(_) => format!("Credential deleted for service: {service}"),
+                Err(e) => format!("Failed to delete credential for '{service}': {e}"),
             }
         }
-        Err(e) => format!("Error accessing credential manager: {}", e),
+        Err(e) => format!("Error accessing credential manager: {e}"),
     }
 }
 
@@ -192,7 +192,7 @@ pub fn format_credential_count() -> String {
         Ok(manager) => {
             format!("Stored credentials: {}", manager.count())
         }
-        Err(e) => format!("Error accessing credential manager: {}", e),
+        Err(e) => format!("Error accessing credential manager: {e}"),
     }
 }
 

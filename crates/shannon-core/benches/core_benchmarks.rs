@@ -205,8 +205,7 @@ This is a Rust project using the workspace pattern.
     });
 
     // Large content parsing (simulating a large project instruction file)
-    let large_content: String = std::iter::repeat("# Section\nSome instruction text here.\n")
-        .take(500)
+    let large_content: String = std::iter::repeat_n("# Section\nSome instruction text here.\n", 500)
         .collect();
 
     group.bench_function("parse_large_memory_file", |b| {

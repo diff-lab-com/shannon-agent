@@ -240,7 +240,7 @@ impl CredentialManager {
             .credentials
             .get(service)
             .cloned()
-            .ok_or_else(|| CredentialError::NotFound(format!("Credential for service '{}'", service)))
+            .ok_or_else(|| CredentialError::NotFound(format!("Credential for service '{service}'")))
     }
 
     /// Delete a credential by service name.
@@ -249,7 +249,7 @@ impl CredentialManager {
             .store
             .credentials
             .remove(service)
-            .ok_or_else(|| CredentialError::NotFound(format!("Credential for service '{}'", service)))?;
+            .ok_or_else(|| CredentialError::NotFound(format!("Credential for service '{service}'")))?;
 
         // Remove the credential file from disk
         let file_path = self.credential_file_path(service);
@@ -459,7 +459,7 @@ impl CredentialManager {
     // --- Private helpers ---
 
     fn credential_file_path(&self, service: &str) -> PathBuf {
-        self.credentials_dir.join(format!("{}.json", service))
+        self.credentials_dir.join(format!("{service}.json"))
     }
 
     fn persist(&self) -> Result<(), CredentialError> {

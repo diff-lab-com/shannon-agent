@@ -118,7 +118,7 @@ mod tests {
 
         let tokens = conv.estimate_tokens();
         // "Hello world" (11) + "Hi there!" (10) = 21 chars / 4 ≈ 5 tokens
-        assert!(tokens >= 4 && tokens <= 7);
+        assert!((4..=7).contains(&tokens));
     }
 
     #[test]
@@ -165,7 +165,7 @@ mod tests {
         for i in 0..5 {
             conv.messages.push(crate::api::Message {
                 role: "user".to_string(),
-                content: crate::api::MessageContent::Text(format!("Message {}", i)),
+                content: crate::api::MessageContent::Text(format!("Message {i}")),
             });
         }
 
@@ -618,7 +618,7 @@ mod tests {
         };
         let json = serde_json::to_string(&metadata).unwrap();
         let deserialized: QueryMetadata = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.tools_allowed, true);
+        assert!(deserialized.tools_allowed);
         assert_eq!(deserialized.max_tokens, Some(8192));
         assert_eq!(deserialized.model, "claude-sonnet-4-20250514");
         assert_eq!(deserialized.temperature, Some(0.7));
@@ -662,7 +662,7 @@ mod tests {
 
     #[test]
     fn test_conversation_estimate_tokens_blocks_content() {
-        use crate::api::{ContentBlock, MessageContent, ToolResultContent};
+        use crate::api::{ContentBlock, MessageContent};
         let mut conv = ConversationState::default();
 
         conv.messages.push(crate::api::Message {
@@ -673,7 +673,7 @@ mod tests {
         });
 
         let tokens = conv.estimate_tokens();
-        assert!(tokens >= 3 && tokens <= 6);
+        assert!((3..=6).contains(&tokens));
     }
 
     #[test]
@@ -712,7 +712,7 @@ mod tests {
         for i in 0..4 {
             conv.messages.push(crate::api::Message {
                 role: "user".to_string(),
-                content: crate::api::MessageContent::Text(format!("Msg {}", i)),
+                content: crate::api::MessageContent::Text(format!("Msg {i}")),
             });
         }
         conv.compress(&config);
@@ -729,7 +729,7 @@ mod tests {
         for i in 0..4 {
             conv.messages.push(crate::api::Message {
                 role: "user".to_string(),
-                content: crate::api::MessageContent::Text(format!("Message {}", i)),
+                content: crate::api::MessageContent::Text(format!("Message {i}")),
             });
         }
         conv.compress(&config);
@@ -860,7 +860,7 @@ mod tests {
             total_tokens: 5000,
             total_cost: 0.25,
         };
-        let debug_str = format!("{:?}", stats);
+        let debug_str = format!("{stats:?}");
         assert!(debug_str.contains("message_count"));
         assert!(debug_str.contains("turn_count"));
     }
@@ -896,7 +896,7 @@ mod tests {
                 top_p: None,
             },
         };
-        let debug_str = format!("{:?}", ctx);
+        let debug_str = format!("{ctx:?}");
         assert!(debug_str.contains("test query"));
     }
 
@@ -922,7 +922,7 @@ mod tests {
             state.messages.push(crate::api::Message {
                 role: "user".to_string(),
                 content: crate::api::MessageContent::Blocks(vec![crate::api::ContentBlock::Text {
-                    text: format!("Message number {}", i),
+                    text: format!("Message number {i}"),
                 }]),
             });
         }
@@ -944,7 +944,7 @@ mod tests {
             state.messages.push(crate::api::Message {
                 role: "user".to_string(),
                 content: crate::api::MessageContent::Blocks(vec![crate::api::ContentBlock::Text {
-                    text: format!("Msg {}", i),
+                    text: format!("Msg {i}"),
                 }]),
             });
         }
@@ -998,7 +998,7 @@ mod tests {
         };
         let json = serde_json::to_string(&metadata).unwrap();
         let deserialized: QueryMetadata = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.tools_allowed, false);
+        assert!(!deserialized.tools_allowed);
         assert!(deserialized.max_tokens.is_none());
         assert!(deserialized.temperature.is_none());
         assert!(deserialized.top_p.is_none());

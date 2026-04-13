@@ -186,7 +186,7 @@ impl AgentCoordinator {
 
         if teams.contains_key(&name) {
             return Err(AgentError::Coordination(
-                CoordinationError::InvalidConfiguration(format!("team '{}' already exists", name))
+                CoordinationError::InvalidConfiguration(format!("team '{name}' already exists"))
             ));
         }
 
@@ -261,7 +261,7 @@ impl AgentCoordinator {
     /// Send a message to an agent or broadcast to all
     pub async fn send_message(&self, message: AgentMessage) -> Result<(), AgentError> {
         self.message_sender.send(message).await
-            .map_err(|e| AgentError::Communication(format!("Failed to send message: {}", e)))?;
+            .map_err(|e| AgentError::Communication(format!("Failed to send message: {e}")))?;
 
         Ok(())
     }

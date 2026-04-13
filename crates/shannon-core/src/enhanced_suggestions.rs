@@ -208,8 +208,7 @@ impl ContextSuggestionEngine {
                     suggested_tool: Some("test".to_string()),
                     suggested_files: vec![edited_file.to_string()],
                     reason: format!(
-                        "Source file .{} was edited; running tests is recommended.",
-                        ext
+                        "Source file .{ext} was edited; running tests is recommended."
                     ),
                     priority: 80,
                     confidence: 0.85,
@@ -224,7 +223,7 @@ impl ContextSuggestionEngine {
                         trigger: SuggestionTrigger::FileEdit,
                         suggested_tool: Some(tool.to_string()),
                         suggested_files: vec![edited_file.to_string()],
-                        reason: format!("Run {} for .{} files.", tool, ext),
+                        reason: format!("Run {tool} for .{ext} files."),
                         priority: 60,
                         confidence: 0.70,
                     });
@@ -262,7 +261,7 @@ impl ContextSuggestionEngine {
                 trigger: SuggestionTrigger::FileEdit,
                 suggested_tool: Some("read".to_string()),
                 suggested_files: vec![test_file.clone()],
-                reason: format!("Companion test file: {}", test_file),
+                reason: format!("Companion test file: {test_file}"),
                 priority: 65,
                 confidence: 0.80,
             });
@@ -285,14 +284,14 @@ impl ContextSuggestionEngine {
 
         // 1. Suggest creating a companion test file
         if let Some(test_path) = companion_test_file(created_file) {
-            let already_exists = recently_created.iter().any(|f| *f == test_path);
+            let already_exists = recently_created.contains(&test_path);
             if !already_exists {
                 suggestions.push(ContextualSuggestion {
                     id: uid(),
                     trigger: SuggestionTrigger::FileCreate,
                     suggested_tool: Some("write".to_string()),
                     suggested_files: vec![test_path.clone()],
-                    reason: format!("Create tests for the new file: {}", test_path),
+                    reason: format!("Create tests for the new file: {test_path}"),
                     priority: 85,
                     confidence: 0.90,
                 });
@@ -319,7 +318,7 @@ impl ContextSuggestionEngine {
                 trigger: SuggestionTrigger::FileCreate,
                 suggested_tool: Some("write".to_string()),
                 suggested_files: vec![types_path.clone()],
-                reason: format!("Consider creating a types file: {}", types_path),
+                reason: format!("Consider creating a types file: {types_path}"),
                 priority: 50,
                 confidence: 0.55,
             });
@@ -334,7 +333,7 @@ impl ContextSuggestionEngine {
                     trigger: SuggestionTrigger::FileCreate,
                     suggested_tool: Some(tool.to_string()),
                     suggested_files: vec![created_file.to_string()],
-                    reason: format!("Lint the new .{} file with {}.", ext, tool),
+                    reason: format!("Lint the new .{ext} file with {tool}."),
                     priority: 55,
                     confidence: 0.60,
                 });
@@ -643,7 +642,7 @@ fn companion_test_file(path: &str) -> Option<String> {
     };
 
     // Common patterns: src/foo.rs -> tests/foo.rs or src/foo_test.rs
-    let stem = path.strip_suffix(&format!(".{}", ext)).unwrap_or(path);
+    let stem = path.strip_suffix(&format!(".{ext}")).unwrap_or(path);
     let name = stem.rsplit('/').next().unwrap_or(stem);
 
     let candidates = match ext {
@@ -677,7 +676,7 @@ fn companion_test_file(path: &str) -> Option<String> {
 fn companion_types_file(path: &str) -> Option<String> {
     let dir = path.rfind('/')?;
     let dir = &path[..dir];
-    Some(format!("{}/types{}", dir, if file_extension(path).is_some() { "" } else { "" }))
+    Some(format!("{dir}/types"))
 }
 
 // ---------------------------------------------------------------------------

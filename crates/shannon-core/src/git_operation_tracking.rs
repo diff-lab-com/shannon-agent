@@ -89,7 +89,7 @@ impl GitOperationTracker {
             .lock()
             .map(|h| {
                 let len = h.len();
-                let start = if count >= len { 0 } else { len - count };
+                let start = len.saturating_sub(count);
                 h[start..].to_vec()
             })
             .unwrap_or_default()

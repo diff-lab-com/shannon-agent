@@ -286,7 +286,7 @@ impl Notifier {
 
         for handler in &self.handlers {
             if let Err(e) = handler.send(notification) {
-                errors.push(format!("{}", e));
+                errors.push(format!("{e}"));
             }
         }
 
@@ -431,8 +431,8 @@ mod tests {
         let notifier = FileNotifier::new(&path);
 
         let make_notification = |id: &str| Notification {
-            title: format!("title-{}", id),
-            body: format!("body-{}", id),
+            title: format!("title-{id}"),
+            body: format!("body-{id}"),
             level: NotificationLevel::Info,
             id: id.into(),
             timestamp: Utc::now(),
@@ -498,8 +498,7 @@ mod tests {
     #[test]
     fn test_callback_notifier_propagates_error() {
         let cb = CallbackNotifier::new(|_n: &Notification| -> Result<(), NotifierError> {
-            Err(NotifierError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            Err(NotifierError::Io(std::io::Error::other(
                 "boom",
             )))
         });
@@ -648,8 +647,7 @@ mod tests {
         let mut n = Notifier::new();
         // First handler always fails.
         n.add_handler(Box::new(CallbackNotifier::new(|_n| -> Result<(), NotifierError> {
-            Err(NotifierError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            Err(NotifierError::Io(std::io::Error::other(
                 "fail",
             )))
         })));

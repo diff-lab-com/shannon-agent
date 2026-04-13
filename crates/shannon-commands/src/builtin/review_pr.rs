@@ -102,12 +102,12 @@ pub fn command() -> Command {
 #[allow(dead_code)]
 pub fn get_review_prompt(pr_number: Option<&str>) -> String {
     let pr_info = if let Some(number) = pr_number {
-        format!("PR number: {}", number)
+        format!("PR number: {number}")
     } else {
         "No PR number provided - will list open PRs".to_string()
     };
 
-    format!("{}\n\n{}", REVIEW_PROMPT, pr_info)
+    format!("{REVIEW_PROMPT}\n\n{pr_info}")
 }
 
 /// Review category
@@ -309,7 +309,7 @@ impl ReviewResult {
         ));
 
         if let Some(pr) = &self.pr_number {
-            md.push_str(&format!("**PR #{}**\n\n", pr));
+            md.push_str(&format!("**PR #{pr}**\n\n"));
         }
 
         // Overview
@@ -332,7 +332,7 @@ impl ReviewResult {
                     issue.description,
                 ));
                 if let Some(suggestion) = &issue.suggestion {
-                    md.push_str(&format!("\n  - Suggestion: {}", suggestion));
+                    md.push_str(&format!("\n  - Suggestion: {suggestion}"));
                 }
                 md.push('\n');
             }
@@ -343,7 +343,7 @@ impl ReviewResult {
         if !self.positives.is_empty() {
             md.push_str("## Positives\n\n");
             for positive in &self.positives {
-                md.push_str(&format!("- {}\n", positive));
+                md.push_str(&format!("- {positive}\n"));
             }
             md.push('\n');
         }

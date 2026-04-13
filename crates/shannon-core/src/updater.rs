@@ -159,7 +159,7 @@ impl AutoUpdater {
     /// Create a new updater with the given configuration.
     pub fn new(config: UpdaterConfig) -> Self {
         let client = reqwest::Client::builder()
-            .user_agent(format!("shannon-code/{}", CURRENT_VERSION))
+            .user_agent(format!("shannon-code/{CURRENT_VERSION}"))
             .timeout(Duration::from_secs(10))
             .build()
             .expect("failed to build HTTP client");
@@ -203,7 +203,7 @@ impl AutoUpdater {
                 let latest_tag = release.tag_name.clone();
                 let latest_clean = Self::strip_version_prefix(&latest_tag);
 
-                match Self::compare_versions(CURRENT_VERSION, &latest_clean) {
+                match Self::compare_versions(CURRENT_VERSION, latest_clean) {
                     Ordering::Less => {
                         info!(
                             "update available: {} -> {}",
@@ -269,7 +269,7 @@ impl AutoUpdater {
         }
 
         let release: ReleaseInfo = serde_json::from_str(&body).map_err(|e| {
-            UpdateError::InvalidVersion(format!("failed to parse release JSON: {}", e))
+            UpdateError::InvalidVersion(format!("failed to parse release JSON: {e}"))
         })?;
 
         // Skip pre-releases when not requested
@@ -299,7 +299,7 @@ impl AutoUpdater {
         }
 
         let releases: Vec<ReleaseInfo> = serde_json::from_str(&body).map_err(|e| {
-            UpdateError::InvalidVersion(format!("failed to parse releases JSON: {}", e))
+            UpdateError::InvalidVersion(format!("failed to parse releases JSON: {e}"))
         })?;
 
         releases
@@ -369,11 +369,10 @@ impl AutoUpdater {
                 release,
             } => {
                 let mut msg = format!(
-                    "A new version of Shannon Code is available: {} -> {}\n",
-                    current, latest
+                    "A new version of Shannon Code is available: {current} -> {latest}\n"
                 );
                 if let Some(ref name) = release.name {
-                    msg.push_str(&format!("  Release: {}\n", name));
+                    msg.push_str(&format!("  Release: {name}\n"));
                 }
                 msg.push_str(&format!("  {}\n", release.html_url));
                 Some(msg)

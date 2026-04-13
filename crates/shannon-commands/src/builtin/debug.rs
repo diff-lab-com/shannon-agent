@@ -156,7 +156,7 @@ pub fn format_debug_help() -> String {
 #[allow(dead_code)]
 pub fn format_log_response(level: Option<LogLevel>) -> String {
     match level {
-        Some(lvl) => format!("Log level set to: {}", lvl),
+        Some(lvl) => format!("Log level set to: {lvl}"),
         None => "Invalid log level. Use: trace, debug, info, warn, error".to_string(),
     }
 }
@@ -174,7 +174,7 @@ pub fn format_profile_response(action: &str) -> String {
             output.push_str("\nNote: Full profiling requires runtime instrumentation.");
             output
         }
-        _ => format!("Unknown profile action: '{}'. Use 'start' or 'stop'.", action),
+        _ => format!("Unknown profile action: '{action}'. Use 'start' or 'stop'."),
     }
 }
 
@@ -195,7 +195,7 @@ pub fn format_system_info() -> String {
 
     output.push_str(&format!("  OS: {}\n", std::env::consts::OS));
     output.push_str(&format!("  Arch: {}\n", std::env::consts::ARCH));
-    output.push_str(&format!("  Rust edition: 2024\n"));
+    output.push_str("  Rust edition: 2024\n");
 
     // Current directory
     if let Ok(cwd) = std::env::current_dir() {

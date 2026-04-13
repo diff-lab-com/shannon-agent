@@ -103,7 +103,7 @@ pub async fn execute(input: ReadInput) -> Result<ToolOutput, ToolError> {
         // Read as binary
         let bytes = fs::read(&input.file_path)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read image file: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read image file: {e}")))?;
 
         // Verify using magic bytes as fallback
         if !is_image_by_magic_bytes(&bytes) {
@@ -126,7 +126,7 @@ pub async fn execute(input: ReadInput) -> Result<ToolOutput, ToolError> {
             };
 
             let json_output = serde_json::to_string_pretty(&image_output)
-                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to serialize image data: {}", e)))?;
+                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to serialize image data: {e}")))?;
 
             return Ok(ToolOutput {
                 content: json_output,
@@ -146,7 +146,7 @@ pub async fn execute(input: ReadInput) -> Result<ToolOutput, ToolError> {
     // Original text file handling
     let content = fs::read_to_string(&input.file_path)
         .await
-        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {}", e)))?;
+        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {e}")))?;
 
     let lines: Vec<&str> = content.lines().collect();
 

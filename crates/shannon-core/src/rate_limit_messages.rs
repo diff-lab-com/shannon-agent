@@ -37,8 +37,7 @@ impl RateLimitMessageBuilder {
         reset_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> String {
         let mut msg = format!(
-            "Rate limit reached for {}. Remaining: {}.",
-            limit_type, remaining
+            "Rate limit reached for {limit_type}. Remaining: {remaining}."
         );
 
         if let Some(reset) = reset_at {
@@ -82,14 +81,12 @@ impl RateLimitMessageBuilder {
         window: &str,
     ) -> String {
         let mut msg = format!(
-            "Tool '{}' has reached its rate limit of {} calls per {}.",
-            tool_name, limit, window
+            "Tool '{tool_name}' has reached its rate limit of {limit} calls per {window}."
         );
 
         if self.include_tips {
             msg.push_str(&format!(
-                " Tip: you can continue using other tools, or wait for the {} window to reset.",
-                window
+                " Tip: you can continue using other tools, or wait for the {window} window to reset."
             ));
         }
 
@@ -106,11 +103,10 @@ impl RateLimitMessageBuilder {
             100
         };
 
-        let remaining = if used >= limit { 0 } else { limit - used };
+        let remaining = limit.saturating_sub(used);
 
         let mut msg = format!(
-            "Token usage limit: {}/{} tokens used ({}%). Remaining: {} tokens.",
-            used, limit, percentage, remaining
+            "Token usage limit: {used}/{limit} tokens used ({percentage}%). Remaining: {remaining} tokens."
         );
 
         if self.include_tips {

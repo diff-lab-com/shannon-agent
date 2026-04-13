@@ -73,7 +73,7 @@ impl Tool for StructuredOutputTool {
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
         let parsed: StructuredOutputInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid structured output input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid structured output input: {e}")))?;
 
         let field_count = parsed.data.len();
 
@@ -89,8 +89,7 @@ impl Tool for StructuredOutputTool {
 
         Ok(ToolOutput {
             content: format!(
-                "Structured output provided successfully ({} fields)",
-                field_count
+                "Structured output provided successfully ({field_count} fields)"
             ),
             is_error: false,
             metadata,
@@ -139,7 +138,7 @@ mod tests {
             ToolError::InvalidInput(msg) => {
                 assert!(msg.contains("Invalid structured output input"));
             }
-            other => panic!("Expected InvalidInput, got: {:?}", other),
+            other => panic!("Expected InvalidInput, got: {other:?}"),
         }
     }
 

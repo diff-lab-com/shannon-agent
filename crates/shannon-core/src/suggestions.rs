@@ -105,19 +105,19 @@ impl SuggestionContext {
     fn match_text(&self) -> String {
         match self {
             Self::AfterFileRead { file_path } => {
-                format!("after_file_read:{}", file_path)
+                format!("after_file_read:{file_path}")
             }
             Self::AfterFileEdit { file_path } => {
-                format!("after_file_edit:{}", file_path)
+                format!("after_file_edit:{file_path}")
             }
             Self::AfterError { error_message } => {
-                format!("after_error:{}", error_message)
+                format!("after_error:{error_message}")
             }
             Self::AfterTest { test_results } => {
-                format!("after_test:{}", test_results)
+                format!("after_test:{test_results}")
             }
             Self::ProjectStart { project_path } => {
-                format!("project_start:{}", project_path)
+                format!("project_start:{project_path}")
             }
             Self::Idle => "idle".to_string(),
         }
@@ -324,7 +324,7 @@ fn expand_template(template: &str, caps: &regex::Captures) -> String {
         if i == 0 {
             continue; // skip the full match
         }
-        let placeholder = format!("{{{}}}", i);
+        let placeholder = format!("{{{i}}}");
         if let Some(m) = caps.get(i) {
             result = result.replace(&placeholder, m.as_str());
         } else {

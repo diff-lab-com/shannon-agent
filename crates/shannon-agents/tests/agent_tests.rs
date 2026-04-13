@@ -615,7 +615,7 @@ mod task_board_tests {
 
         // Assign 3 tasks to alice (the capacity limit in get_next_task)
         for i in 0..3 {
-            let task = AgentTask::new(format!("Task {}", i), "Description".to_string(), TaskPriority::Medium);
+            let task = AgentTask::new(format!("Task {i}"), "Description".to_string(), TaskPriority::Medium);
             let id = task.id;
             board.add_task(task).await.unwrap();
             board.assign_task(id, "alice".to_string()).await.unwrap();
@@ -655,7 +655,7 @@ mod task_board_tests {
         let board = TaskBoard::new();
 
         for i in 0..3 {
-            let task = AgentTask::new(format!("Task {}", i), "Description".to_string(), TaskPriority::Medium);
+            let task = AgentTask::new(format!("Task {i}"), "Description".to_string(), TaskPriority::Medium);
             let id = task.id;
             board.add_task(task).await.unwrap();
             board.assign_task(id, "alice".to_string()).await.unwrap();

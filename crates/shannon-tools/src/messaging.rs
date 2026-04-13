@@ -152,6 +152,12 @@ pub struct SendMessageTool {
     inbox: InboxRegistry,
 }
 
+impl Default for SendMessageTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SendMessageTool {
     pub fn new() -> Self {
         Self {
@@ -181,14 +187,14 @@ impl SendMessageTool {
         // Store in inbox
         {
             let mut inbox = self.inbox.write().map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to acquire inbox lock: {}", e))
+                ToolError::ExecutionFailed(format!("Failed to acquire inbox lock: {e}"))
             })?;
             inbox.entry(recipient.to_string()).or_insert_with(Vec::new).push(inbox_message);
         }
 
         Ok(SendMessageOutput {
             success: true,
-            message: format!("Message sent to @{}", recipient),
+            message: format!("Message sent to @{recipient}"),
             request_id: None,
             target: Some(recipient.to_string()),
         })
@@ -265,7 +271,7 @@ impl SendMessageTool {
 
         {
             let mut inbox = self.inbox.write().map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to acquire inbox lock: {}", e))
+                ToolError::ExecutionFailed(format!("Failed to acquire inbox lock: {e}"))
             })?;
             inbox.entry(target.to_string()).or_insert_with(Vec::new).push(message);
         }
@@ -273,8 +279,7 @@ impl SendMessageTool {
         Ok(SendMessageOutput {
             success: true,
             message: format!(
-                "Shutdown request sent to {}. Request ID: {}",
-                target, request_id
+                "Shutdown request sent to {target}. Request ID: {request_id}"
             ),
             request_id: Some(request_id),
             target: Some(target.to_string()),
@@ -346,7 +351,7 @@ impl SendMessageTool {
 
                     {
                         let mut inbox = self.inbox.write().map_err(|e| {
-                            ToolError::ExecutionFailed(format!("Failed to acquire inbox lock: {}", e))
+                            ToolError::ExecutionFailed(format!("Failed to acquire inbox lock: {e}"))
                         })?;
                         inbox.entry(input.to.clone()).or_insert_with(Vec::new).push(message);
                     }
@@ -381,7 +386,7 @@ impl SendMessageTool {
 
                     {
                         let mut inbox = self.inbox.write().map_err(|e| {
-                            ToolError::ExecutionFailed(format!("Failed to acquire inbox lock: {}", e))
+                            ToolError::ExecutionFailed(format!("Failed to acquire inbox lock: {e}"))
                         })?;
                         inbox.entry(input.to.clone()).or_insert_with(Vec::new).push(message);
                     }
@@ -392,7 +397,7 @@ impl SendMessageTool {
                             "Plan {} for request {}{}",
                             if *approve { "approved" } else { "rejected" },
                             request_id,
-                            feedback.as_ref().map(|f| format!(": {}", f)).unwrap_or_default()
+                            feedback.as_ref().map(|f| format!(": {f}")).unwrap_or_default()
                         ),
                         request_id: Some(request_id.clone()),
                         target: Some(input.to.clone()),
@@ -407,7 +412,7 @@ impl SendMessageTool {
 impl Tool for SendMessageTool {
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let send_input: SendMessageInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid send message input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid send message input: {e}")))?;
         let output = self.execute_send(send_input).await?;
         Ok(ToolOutput {
             content: output.message,

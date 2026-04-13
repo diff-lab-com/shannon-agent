@@ -144,11 +144,7 @@ impl GrepTool {
         for (idx, (line_num, line)) in lines.iter().enumerate() {
             if regex.is_match(line) {
                 // Collect context before
-                let ctx_before_start = if idx >= context_before {
-                    idx - context_before
-                } else {
-                    0
-                };
+                let ctx_before_start = idx.saturating_sub(context_before);
                 let context_before_lines: Vec<String> = lines[ctx_before_start..idx]
                     .iter()
                     .map(|(_, l)| l.clone())
@@ -195,7 +191,7 @@ impl GrepTool {
             for line_match in &file_match.matches {
                 // Context before lines
                 for ctx_line in &line_match.context_before {
-                    output.push_str("-");
+                    output.push('-');
                     if show_line_numbers {
                         // We don't have line numbers for context lines in this simplified impl
                         output.push_str("  ");
@@ -212,7 +208,7 @@ impl GrepTool {
                 output.push('\n');
                 // Context after lines
                 for ctx_line in &line_match.context_after {
-                    output.push_str("-");
+                    output.push('-');
                     if show_line_numbers {
                         output.push_str("  ");
                     }
@@ -307,7 +303,7 @@ impl Tool for GrepTool {
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
         // Parse input
         let grep_input: GrepInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid grep input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid grep input: {e}")))?;
 
         if grep_input.pattern.is_empty() {
             return Err(ToolError::InvalidInput("Pattern cannot be empty".to_string()));
@@ -331,8 +327,7 @@ impl Tool for GrepTool {
 
         if !search_root.exists() {
             return Err(ToolError::ExecutionFailed(format!(
-                "Path does not exist: {}",
-                search_path
+                "Path does not exist: {search_path}"
             )));
         }
 
@@ -350,9 +345,9 @@ impl Tool for GrepTool {
         if let Some(include) = &grep_input.include {
             let overrides = ignore::overrides::OverrideBuilder::new(&search_root)
                 .add(include.as_str())
-                .map_err(|e| ToolError::InvalidInput(format!("Invalid include pattern: {}", e)))?
+                .map_err(|e| ToolError::InvalidInput(format!("Invalid include pattern: {e}")))?
                 .build()
-                .map_err(|e| ToolError::InvalidInput(format!("Invalid include pattern: {}", e)))?;
+                .map_err(|e| ToolError::InvalidInput(format!("Invalid include pattern: {e}")))?;
             builder.overrides(overrides);
         }
 
@@ -428,7 +423,7 @@ impl Tool for GrepTool {
                 let mut map = HashMap::new();
                 map.insert("total_files".to_string(), json!(total_files));
                 map.insert("total_matches".to_string(), json!(total_matches));
-                map.insert("output_mode".to_string(), json!(format!("{:?}", output_mode).to_lowercase()));
+                map.insert("output_mode".to_string(), json!(format!("{output_mode:?}").to_lowercase()));
                 map.insert("truncated".to_string(), json!(total_matches >= max_results));
                 map
             },
@@ -469,7 +464,7 @@ fn path_matches_glob(path: &Path, pattern: &str) -> bool {
             // Check if the path is under this directory
             let sep_str = std::path::MAIN_SEPARATOR.to_string();
             let dir_with_sep = format!("{}{}", dir_part, '/');
-            let dir_with_sep_native = format!("{}{}", dir_part, sep_str);
+            let dir_with_sep_native = format!("{dir_part}{sep_str}");
             return path_str.contains(&dir_with_sep)
                 || path_str.contains(&dir_with_sep_native);
         }
@@ -489,8 +484,7 @@ fn path_matches_glob(path: &Path, pattern: &str) -> bool {
     // Fallback: check if filename matches pattern
     if let Some(file_name) = path.file_name() {
         let name = file_name.to_string_lossy();
-        if pattern.starts_with('*') {
-            let suffix = &pattern[1..];
+        if let Some(suffix) = pattern.strip_prefix('*') {
             return name.ends_with(suffix);
         }
         return name == pattern;
@@ -681,7 +675,7 @@ mod tests {
     async fn test_context_both_sides() {
         let dir = setup_test_files();
         let tool = GrepTool::new();
-        let mut input = create_grep_input("add", Some(&dir.path().join("src").to_str().unwrap()));
+        let mut input = create_grep_input("add", Some(dir.path().join("src").to_str().unwrap()));
         input["context_before"] = json!(1);
         input["context_after"] = json!(1);
 
@@ -777,8 +771,8 @@ mod tests {
         // Create many files with matching content
         for i in 0..20 {
             fs::write(
-                dir.path().join(format!("file_{}.txt", i)),
-                format!("match line here\nanother line\n"),
+                dir.path().join(format!("file_{i}.txt")),
+                "match line here\nanother line\n".to_string(),
             )
             .unwrap();
         }
@@ -794,9 +788,8 @@ mod tests {
             result.metadata.get("total_matches").unwrap().as_u64().unwrap(),
             5
         );
-        assert_eq!(
-            result.metadata.get("truncated").unwrap().as_bool().unwrap(),
-            true
+        assert!(
+            result.metadata.get("truncated").unwrap().as_bool().unwrap()
         );
     }
 
@@ -922,7 +915,7 @@ mod tests {
 
     #[test]
     fn test_grep_tool_default() {
-        let tool = GrepTool::default();
+        let tool = GrepTool;
         assert_eq!(tool.name(), "Grep");
     }
 
@@ -934,7 +927,7 @@ mod tests {
         let tool = GrepTool::new();
         let input = create_grep_input(
             "require",
-            Some(&dir.path().join("app.js").to_str().unwrap()),
+            Some(dir.path().join("app.js").to_str().unwrap()),
         );
 
         let result = tool.execute(input).await.unwrap();

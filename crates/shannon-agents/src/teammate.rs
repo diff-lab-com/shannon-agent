@@ -347,7 +347,7 @@ impl Teammate {
                     return Ok(AgentMessage::new_text(
                         self.name.clone(),
                         message.from,
-                        format!("Task {} accepted", id)
+                        format!("Task {id} accepted")
                     ));
                 }
             }

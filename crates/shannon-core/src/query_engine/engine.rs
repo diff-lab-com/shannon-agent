@@ -432,22 +432,19 @@ impl QueryEngine {
                                         StreamEvent::ContentBlockStart {
                                             content_block, ..
                                         } => {
-                                            match &content_block {
-                                                ContentBlock::ToolUse {
+                                            if let ContentBlock::ToolUse {
                                                     id,
                                                     name,
                                                     input,
-                                                } => {
-                                                    current_tool_use =
-                                                        Some((id.clone(), name.clone()));
-                                                    let _ = tx.send(Ok(QueryEvent::ToolUseRequest {
-                                                        query_id,
-                                                        tool_use_id: id.clone(),
-                                                        tool_name: name.clone(),
-                                                        tool_input: input.clone(),
-                                                    }));
-                                                }
-                                                _ => {}
+                                                } = &content_block {
+                                                current_tool_use =
+                                                    Some((id.clone(), name.clone()));
+                                                let _ = tx.send(Ok(QueryEvent::ToolUseRequest {
+                                                    query_id,
+                                                    tool_use_id: id.clone(),
+                                                    tool_name: name.clone(),
+                                                    tool_input: input.clone(),
+                                                }));
                                             }
                                         }
                                         StreamEvent::ContentBlockDelta { delta, .. } => {
@@ -508,8 +505,7 @@ impl QueryEngine {
                                                     let _ = tx.send(Ok(QueryEvent::Progress {
                                                         query_id,
                                                         message: format!(
-                                                            "Executing tool: {}",
-                                                            tool_name
+                                                            "Executing tool: {tool_name}"
                                                         ),
                                                     }));
 
@@ -546,7 +542,7 @@ impl QueryEngine {
                                                         // Classifier explicitly allowed — skip prompt
                                                         None
                                                     } else {
-                                                        let guard = permissions.read().unwrap();
+                                                        let guard = permissions.read().expect("permissions rwlock poisoned");
                                                         guard.create_permission_prompt(
                                                             &tool_name,
                                                             &tool_input,
@@ -618,7 +614,7 @@ impl QueryEngine {
                                                                 ) => {
                                                                     let _ = permissions
                                                                         .write()
-                                                                        .unwrap()
+                                                                        .expect("permissions rwlock poisoned")
                                                                         .process_permission_choice(
                                                                             session_id_for_permissions,
                                                                             &prompt,
@@ -672,8 +668,7 @@ impl QueryEngine {
                                                                         .clone(),
                                                                     progress,
                                                                     message: format!(
-                                                                        "Running for {}s...",
-                                                                        elapsed
+                                                                        "Running for {elapsed}s..."
                                                                     ),
                                                                 },
                                                             ));
@@ -702,7 +697,7 @@ impl QueryEngine {
                                                         }
                                                         Err(e) => {
                                                             let error_msg =
-                                                                format!("Tool error: {}", e);
+                                                                format!("Tool error: {e}");
                                                             let _ = tx.send(Ok(QueryEvent::ToolUseResult {
                                                                 query_id,
                                                                 tool_use_id: tool_id.clone(),
@@ -816,10 +811,7 @@ impl QueryEngine {
 
         // Convert channel receiver to stream
         let stream = stream::unfold(rx, move |mut receiver| async move {
-            match receiver.recv().await {
-                Some(event) => Some((event, receiver)),
-                None => None,
-            }
+            receiver.recv().await.map(|event| (event, receiver))
         });
 
         Box::pin(stream)
@@ -840,7 +832,7 @@ impl QueryEngine {
     /// Returns a formatted summary of accumulated API costs including
     /// input/output tokens and total USD cost.
     pub fn cost_summary(&self) -> String {
-        self.cost_tracker.read().unwrap().summary()
+        self.cost_tracker.read().expect("cost_tracker rwlock poisoned").summary()
     }
 }
 
@@ -985,7 +977,7 @@ mod tests {
         assert!(result.is_ok(), "Failed to save session: {:?}", result.err());
 
         // Verify file was created
-        let session_file = temp_dir.join(format!("{}.json", session_id));
+        let session_file = temp_dir.join(format!("{session_id}.json"));
         assert!(session_file.exists(), "Session file not created");
 
         // Load and verify
@@ -1050,6 +1042,6 @@ mod tests {
         // Should return Ok(false) for nonexistent session
         let result = engine.restore_session(nonexistent_id);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), false);
+        assert!(!result.unwrap());
     }
 }

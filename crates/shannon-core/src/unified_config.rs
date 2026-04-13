@@ -116,12 +116,12 @@ impl ConfigBuilder {
     /// Priority (highest to lowest):
     /// CLI overrides > env vars > local TOML > global TOML
     pub fn build(&self) -> ShannonConfig {
-        let merged = self
+        
+        self
             .global_toml
             .merge(&self.local_toml)
             .merge(&self.env_vars)
-            .merge(&self.cli_overrides);
-        merged
+            .merge(&self.cli_overrides)
     }
 }
 

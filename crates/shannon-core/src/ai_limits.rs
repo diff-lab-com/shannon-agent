@@ -119,7 +119,7 @@ impl AiLimitsTracker {
         // Auto-reset if window has expired
         let needs_reset = self
             .get_record(limit_type)
-            .map_or(false, |r| Utc::now() >= r.window_end);
+            .is_some_and(|r| Utc::now() >= r.window_end);
         if needs_reset {
             self.reset_window(limit_type);
         }

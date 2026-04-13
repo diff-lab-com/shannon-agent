@@ -86,13 +86,12 @@ Based on the above changes, create a single git commit:
 2. Stage relevant files and create the commit using HEREDOC syntax:
 ```bash
 git commit -m "$(cat <<'EOF'
-Commit message here.{attribution}
+Commit message here.{attribution_text}
 EOF
 )"
 ```
 
-You have the capability to call multiple tools in a single response. Stage and create the commit using a single message. Do not use any other tools or do anything else. Do not send any other text or messages besides these tool calls."##,
-        attribution = attribution_text
+You have the capability to call multiple tools in a single response. Stage and create the commit using a single message. Do not use any other tools or do anything else. Do not send any other text or messages besides these tool calls."##
     )
 }
 

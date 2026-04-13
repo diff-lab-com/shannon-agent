@@ -85,9 +85,8 @@ fn validate_command(command: &str) -> Result<(), String> {
     for (pattern, description) in danger_chars {
         if command.contains(pattern) {
             return Err(format!(
-                "Command rejected: contains {} ({:?}). \
-                 Only single basic commands with arguments are allowed.",
-                description, pattern
+                "Command rejected: contains {description} ({pattern:?}). \
+                 Only single basic commands with arguments are allowed."
             ));
         }
     }
@@ -101,10 +100,9 @@ fn validate_command(command: &str) -> Result<(), String> {
 fn validate_executable(executable: &str) -> Result<(), String> {
     // First check blocklist - these are never allowed
     for blocked in BLOCKED_EXECUTABLES {
-        if executable == *blocked || executable.ends_with(&format!("/{}", blocked)) {
+        if executable == *blocked || executable.ends_with(&format!("/{blocked}")) {
             return Err(format!(
-                "Executable '{}' is blocked for security reasons.",
-                executable
+                "Executable '{executable}' is blocked for security reasons."
             ));
         }
     }
@@ -117,14 +115,13 @@ fn validate_executable(executable: &str) -> Result<(), String> {
     };
 
     let is_allowed = ALLOWED_EXECUTABLES.iter().any(|allowed| {
-        exe_name == *allowed || executable.ends_with(&format!("/{}", allowed))
+        exe_name == *allowed || executable.ends_with(&format!("/{allowed}"))
     });
 
     if !is_allowed {
         return Err(format!(
-            "Executable '{}' is not in the allowed executables list. \
-             Please add it to ALLOWED_EXECUTABLES if it should be permitted.",
-            exe_name
+            "Executable '{exe_name}' is not in the allowed executables list. \
+             Please add it to ALLOWED_EXECUTABLES if it should be permitted."
         ));
     }
 
@@ -136,7 +133,7 @@ fn validate_executable(executable: &str) -> Result<(), String> {
 /// Splits on whitespace while respecting quoted strings.
 fn parse_command(command: &str) -> Result<(String, Vec<String>), String> {
     let parts = shell_words::split(command)
-        .map_err(|e| format!("Failed to parse command: {}", e))?;
+        .map_err(|e| format!("Failed to parse command: {e}"))?;
 
     if parts.is_empty() {
         return Err("Empty command".to_string());
@@ -223,19 +220,19 @@ impl Tool for ReplTool {
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
         let repl_input: ReplInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid REPL input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid REPL input: {e}")))?;
 
         // Step 1: Validate command doesn't contain dangerous metacharacters
         validate_command(&repl_input.command)
-            .map_err(|e| ToolError::InvalidInput(e))?;
+            .map_err(ToolError::InvalidInput)?;
 
         // Step 2: Parse command into executable and arguments
         let (executable, args) = parse_command(&repl_input.command)
-            .map_err(|e| ToolError::InvalidInput(e))?;
+            .map_err(ToolError::InvalidInput)?;
 
         // Step 3: Validate the executable is allowed
         validate_executable(&executable)
-            .map_err(|e| ToolError::InvalidInput(e))?;
+            .map_err(ToolError::InvalidInput)?;
 
         use std::process::Stdio;
         use tokio::process::Command;
@@ -259,7 +256,7 @@ impl Tool for ReplTool {
         let output = cmd
             .output()
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("REPL command failed: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("REPL command failed: {e}")))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -272,8 +269,7 @@ impl Tool for ReplTool {
                 stdout.clone()
             } else {
                 format!(
-                    "REPL command failed (exit {}): {}",
-                    exit_code, stderr
+                    "REPL command failed (exit {exit_code}): {stderr}"
                 )
             },
             is_error: !success,
@@ -368,7 +364,7 @@ mod tests {
         let exit_code = output.metadata.get("exit_code")
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
-        assert_ne!(exit_code, 0, "Exit code should be non-zero: {}", exit_code);
+        assert_ne!(exit_code, 0, "Exit code should be non-zero: {exit_code}");
     }
 
     #[tokio::test]

@@ -17,7 +17,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
-use tracing;
 
 // ---------------------------------------------------------------------------
 // Configuration types
@@ -225,7 +224,7 @@ impl AgentResult {
             status: AgentResultStatus::Skipped,
             output: None,
             duration: Duration::ZERO,
-            error: Some(format!("Agent '{}' was skipped", agent_name)),
+            error: Some(format!("Agent '{agent_name}' was skipped")),
         }
     }
 }
@@ -285,13 +284,13 @@ impl std::fmt::Display for DependencyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DependencyError::UnknownDependency(name) => {
-                write!(f, "unknown dependency '{}'", name)
+                write!(f, "unknown dependency '{name}'")
             }
             DependencyError::CircularDependency(cycle) => {
                 write!(f, "circular dependency detected: {}", cycle.join(" -> "))
             }
             DependencyError::DuplicateAgent(name) => {
-                write!(f, "duplicate agent name '{}'", name)
+                write!(f, "duplicate agent name '{name}'")
             }
         }
     }
@@ -549,7 +548,7 @@ impl MultiAgentSpawner {
                 let result = handle.await.unwrap_or_else(|e| {
                     AgentResult::failed(
                         "unknown".to_string(),
-                        format!("task join error: {}", e),
+                        format!("task join error: {e}"),
                         Duration::ZERO,
                     )
                 });
@@ -1157,7 +1156,7 @@ mod tests {
         // We can't directly test semaphore limiting easily,
         // but we verify the config is respected by checking results
         let agents: Vec<AgentConfig> = (0..8)
-            .map(|i| AgentConfig::new(format!("agent-{}", i), format!("task {}", i)))
+            .map(|i| AgentConfig::new(format!("agent-{i}"), format!("task {i}")))
             .collect();
         let config = MultiAgentConfig::new(agents).with_max_parallel(2);
         let result = MultiAgentSpawner::spawn(config).await;

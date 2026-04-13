@@ -2,7 +2,7 @@
 
 use crate::definition::{Skill, SkillSource};
 use crate::error::{SkillError, SkillResult};
-use crate::frontmatter::{parse_skill_frontmatter, ExecutionContext};
+use crate::frontmatter::parse_skill_frontmatter;
 use std::path::{Path, PathBuf};
 use tracing::{debug, trace, warn};
 use walkdir::WalkDir;
@@ -14,7 +14,7 @@ pub fn load_skill_from_file(path: &Path) -> SkillResult<Skill> {
     }
 
     let content = std::fs::read_to_string(path)
-        .map_err(|e| SkillError::Io(e))?;
+        .map_err(SkillError::Io)?;
 
     let parsed = parse_skill_frontmatter(&content, &path.display().to_string())?;
 
@@ -45,11 +45,7 @@ pub fn load_skill_from_file(path: &Path) -> SkillResult<Skill> {
     let user_invocable = parsed.frontmatter.user_invocable.unwrap_or(true);
 
     // Parse context
-    let context = match parsed.frontmatter.context {
-        Some(ExecutionContext::Fork) => Some(ExecutionContext::Fork),
-        Some(ExecutionContext::Inline) => Some(ExecutionContext::Inline),
-        None => None,
-    };
+    let context = parsed.frontmatter.context;
 
     let body = parsed.body;
     let content_length = body.len();
@@ -200,8 +196,7 @@ pub fn validate_path_within_base(path: &Path, base: &Path) -> SkillResult<()> {
 
     if !canonical_path.starts_with(&canonical_base) {
         return Err(SkillError::PathTraversal(format!(
-            "Path {:?} escapes base {:?}",
-            path, base
+            "Path {path:?} escapes base {base:?}"
         )));
     }
 

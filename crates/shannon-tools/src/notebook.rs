@@ -61,6 +61,7 @@ pub enum CellSource {
 
 impl CellSource {
     /// Convert to single string
+    #[allow(clippy::inherent_to_string)]
     pub fn to_string(&self) -> String {
         match self {
             CellSource::Single(s) => s.clone(),
@@ -69,6 +70,7 @@ impl CellSource {
     }
 
     /// Create from string
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         CellSource::Single(s.to_string())
     }
@@ -181,6 +183,12 @@ pub struct NotebookEditTool {
     description: String,
 }
 
+impl Default for NotebookEditTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NotebookEditTool {
     pub fn new() -> Self {
         Self {
@@ -191,10 +199,10 @@ impl NotebookEditTool {
     /// Load notebook from file
     fn load_notebook(path: &str) -> Result<NotebookContent, ToolError> {
         let content = fs::read_to_string(path)
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read notebook: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read notebook: {e}")))?;
 
         let notebook: NotebookContent = serde_json::from_str(&content)
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to parse notebook JSON: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to parse notebook JSON: {e}")))?;
 
         Ok(notebook)
     }
@@ -202,10 +210,10 @@ impl NotebookEditTool {
     /// Save notebook to file
     fn save_notebook(path: &str, notebook: &NotebookContent) -> Result<(), ToolError> {
         let json = serde_json::to_string_pretty(notebook)
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to serialize notebook: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to serialize notebook: {e}")))?;
 
         fs::write(path, json)
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write notebook: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write notebook: {e}")))?;
 
         Ok(())
     }
@@ -217,7 +225,7 @@ impl NotebookEditTool {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        format!("{:x}", timestamp)
+        format!("{timestamp:x}")
     }
 
     /// Find cell index by ID or numeric index
@@ -248,8 +256,7 @@ impl NotebookEditTool {
         }
 
         Err(ToolError::ExecutionFailed(format!(
-            "Cell with ID '{}' not found in notebook",
-            cell_id
+            "Cell with ID '{cell_id}' not found in notebook"
         )))
     }
 
@@ -432,7 +439,7 @@ impl NotebookEditTool {
 
         // Determine cell type for output
         let cell_type_str = output_cell_type
-            .map(|ct| format!("{:?}", ct).to_lowercase())
+            .map(|ct| format!("{ct:?}").to_lowercase())
             .unwrap_or_else(|| "code".to_string());
 
         Ok(NotebookEditOutput {
@@ -440,7 +447,7 @@ impl NotebookEditTool {
             cell_id,
             cell_type: cell_type_str,
             language,
-            edit_mode: format!("{:?}", edit_mode).to_lowercase(),
+            edit_mode: format!("{edit_mode:?}").to_lowercase(),
             error: None,
             notebook_path: notebook_path.clone(),
             original_file: original_content,
@@ -453,15 +460,15 @@ impl NotebookEditTool {
 impl Tool for NotebookEditTool {
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let edit_input: NotebookEditInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid notebook edit input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid notebook edit input: {e}")))?;
         let output = self.execute_edit(edit_input).await?;
 
         let notebook_path = output.notebook_path.clone();
         let is_error = output.error.is_some();
         let content = if let Some(err) = &output.error {
-            format!("Failed to edit notebook: {}", err)
+            format!("Failed to edit notebook: {err}")
         } else {
-            format!("Successfully edited notebook cell in {}", notebook_path)
+            format!("Successfully edited notebook cell in {notebook_path}")
         };
 
         Ok(ToolOutput {
@@ -518,7 +525,7 @@ impl Tool for NotebookEditTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    
     use tempfile::NamedTempFile;
 
     #[test]
@@ -536,8 +543,8 @@ mod tests {
         let id2 = NotebookEditTool::generate_cell_id();
         assert_ne!(id1, id2);
         // Verify hex format
-        assert!(id1.len() > 0);
-        assert!(id2.len() > 0);
+        assert!(!id1.is_empty());
+        assert!(!id2.is_empty());
     }
 
     #[test]
@@ -629,10 +636,10 @@ mod tests {
 
     #[test]
     fn test_notebook_save_load() {
-        let tool = NotebookEditTool::new();
+        let _tool = NotebookEditTool::new();
 
         // Create a temporary file
-        let mut temp_file = NamedTempFile::new().unwrap();
+        let temp_file = NamedTempFile::new().unwrap();
         let temp_path = temp_file.path().to_str().unwrap();
 
         // Create a notebook

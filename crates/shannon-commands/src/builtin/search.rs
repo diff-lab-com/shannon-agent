@@ -96,7 +96,7 @@ pub fn parse_search_args(args: &str) -> Result<SearchOptions, String> {
                 let count_str = t.split('=').nth(1).ok_or("Missing --count value")?;
                 options.count = count_str
                     .parse::<usize>()
-                    .map_err(|_| format!("Invalid count value: {}", count_str))?;
+                    .map_err(|_| format!("Invalid count value: {count_str}"))?;
             }
             "--regex" | "-r" => {
                 options.regex = true;
@@ -108,7 +108,7 @@ pub fn parse_search_args(args: &str) -> Result<SearchOptions, String> {
                 options.show_timestamps = false;
             }
             t if t.starts_with('-') => {
-                return Err(format!("Unknown option: {}", t));
+                return Err(format!("Unknown option: {t}"));
             }
             t => {
                 pattern_parts.push(t.to_string());

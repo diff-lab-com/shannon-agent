@@ -23,10 +23,10 @@ async fn test_concurrent_skill_registration() {
         let registry_clone = registry.clone();
         let handle = thread::spawn(move || {
             let skill = Skill::new(
-                format!("skill_{}", i),
-                format!("Skill{}", i),
-                format!("Description {}", i),
-                format!("Content {}", i),
+                format!("skill_{i}"),
+                format!("Skill{i}"),
+                format!("Description {i}"),
+                format!("Content {i}"),
             );
             registry_clone.lock().unwrap().register(skill)
         });
@@ -137,7 +137,7 @@ fn test_skill_discovery_and_search() {
             id.to_string(),
             name.to_string(),
             desc.to_string(),
-            format!("Content for {}", name),
+            format!("Content for {name}"),
         );
         registry.register(skill).unwrap();
     }
@@ -317,9 +317,9 @@ fn test_clear_registry() {
     // Register multiple skills
     for i in 0..5 {
         let skill = Skill::new(
-            format!("skill_clear_{}", i),
-            format!("Skill{}", i),
-            format!("Description {}", i),
+            format!("skill_clear_{i}"),
+            format!("Skill{i}"),
+            format!("Description {i}"),
             "Content".to_string(),
         );
         registry.register(skill).unwrap();

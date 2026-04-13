@@ -118,7 +118,7 @@ impl PolicyLimitsManager {
         // Check if tool is allowed
         if !self.is_tool_allowed(tool_name) {
             return Ok(PolicyCheckResult::Blocked {
-                reason: format!("Tool '{}' is not in the allowed tools list", tool_name),
+                reason: format!("Tool '{tool_name}' is not in the allowed tools list"),
             });
         }
 
@@ -126,7 +126,7 @@ impl PolicyLimitsManager {
         let blocked_paths = self.check_paths_in_input(input);
         if let Some(blocked_path) = blocked_paths.into_iter().next() {
             return Ok(PolicyCheckResult::Blocked {
-                reason: format!("Path '{}' is blocked by policy", blocked_path),
+                reason: format!("Path '{blocked_path}' is blocked by policy"),
             });
         }
 
@@ -143,7 +143,7 @@ impl PolicyLimitsManager {
         } else {
             self.limits.allowed_tools.iter().any(|t| {
                 t == tool_name
-                    || tool_name.starts_with(&format!("{}/", t))
+                    || tool_name.starts_with(&format!("{t}/"))
                     || t.ends_with('*') && tool_name.starts_with(&t[..t.len() - 1])
             })
         }
@@ -437,13 +437,13 @@ mod tests {
     #[test]
     fn test_policy_error_display() {
         let err = PolicyError::ToolBlocked("bash".to_string());
-        assert_eq!(format!("{}", err), "Tool 'bash' is blocked by policy");
+        assert_eq!(format!("{err}"), "Tool 'bash' is blocked by policy");
     }
 
     #[test]
     fn test_policy_error_path_blocked() {
         let err = PolicyError::PathBlocked("/etc/passwd".to_string());
-        assert_eq!(format!("{}", err), "Path '/etc/passwd' is blocked by policy");
+        assert_eq!(format!("{err}"), "Path '/etc/passwd' is blocked by policy");
     }
 
     // === PolicyCheckResult Tests ===

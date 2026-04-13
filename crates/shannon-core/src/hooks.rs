@@ -390,18 +390,12 @@ impl HookConfig {
 
 /// Top-level hooks configuration file structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct HooksFile {
     /// Map of event type to list of hook configs
     pub hooks: HashMap<String, Vec<HookConfig>>,
 }
 
-impl Default for HooksFile {
-    fn default() -> Self {
-        Self {
-            hooks: HashMap::new(),
-        }
-    }
-}
 
 impl HooksFile {
     /// Create an empty hooks file
@@ -444,7 +438,7 @@ impl HooksFile {
         for (event_type, configs) in other.hooks {
             self.hooks
                 .entry(event_type)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .extend(configs);
         }
     }
@@ -1329,7 +1323,7 @@ More lines"#;
         let result = manager.run_hooks(&event).await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("timed out"), "Error should mention timeout: {}", err);
+        assert!(err.contains("timed out"), "Error should mention timeout: {err}");
     }
 
     #[tokio::test]
@@ -1601,7 +1595,7 @@ More lines"#;
             }
         }"#;
 
-        std::fs::write(&hooks_path, &json).unwrap();
+        std::fs::write(&hooks_path, json).unwrap();
 
         let mut manager = HookManager::with_paths(
             PathBuf::from("/nonexistent"),
@@ -1625,7 +1619,7 @@ More lines"#;
                 Some(serde_json::json!({"command": "echo safe"}))
             );
         } else {
-            panic!("Expected Modify decision, got {:?}", resolved);
+            panic!("Expected Modify decision, got {resolved:?}");
         }
     }
 

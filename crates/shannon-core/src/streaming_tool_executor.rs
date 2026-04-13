@@ -427,8 +427,7 @@ impl StreamingToolExecutor {
                 && tool.status != ToolStatus::Yielded
             {
                 tool.fail(&format!(
-                    "Sibling abort: tool '{}' failed with: {}",
-                    error_tool_id, reason
+                    "Sibling abort: tool '{error_tool_id}' failed with: {reason}"
                 ));
             }
         }

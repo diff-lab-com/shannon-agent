@@ -73,6 +73,7 @@ pub enum ExecutionContext {
 /// Hooks configuration
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct HooksConfig {
     /// Pre-sampling hooks
     #[serde(rename = "preSamplingHook")]
@@ -83,14 +84,6 @@ pub struct HooksConfig {
     pub post_sampling: Option<Vec<String>>,
 }
 
-impl Default for HooksConfig {
-    fn default() -> Self {
-        Self {
-            pre_sampling: None,
-            post_sampling: None,
-        }
-    }
-}
 
 /// Argument configuration
 #[derive(Debug, Clone, Deserialize)]
@@ -203,7 +196,7 @@ impl std::str::FromStr for EffortLevel {
             "medium" => Ok(Self::Medium),
             "high" => Ok(Self::High),
             "maximum" => Ok(Self::Maximum),
-            _ => Err(format!("Invalid effort level: {}", s)),
+            _ => Err(format!("Invalid effort level: {s}")),
         }
     }
 }

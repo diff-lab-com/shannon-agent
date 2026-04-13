@@ -139,7 +139,7 @@ impl ApiError {
         // Fallback: use the raw body as the message.
         ApiError::ProviderError {
             provider: provider_name,
-            error_type: format!("http_{}", status),
+            error_type: format!("http_{status}"),
             message: body.to_string(),
         }
     }

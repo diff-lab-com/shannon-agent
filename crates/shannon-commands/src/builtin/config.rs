@@ -193,7 +193,7 @@ pub fn format_config_set(key: &str, value: &str) -> String {
                 format!("Invalid value '{}' for key '{}' (expected: {})", value, key, k.value_type)
             }
         }
-        None => format!("Unknown config key: '{}'", key),
+        None => format!("Unknown config key: '{key}'"),
     }
 }
 
@@ -203,7 +203,7 @@ pub fn format_config_reset(key: &str) -> String {
     let keys = known_config_keys();
     match keys.iter().find(|k| k.key == key) {
         Some(k) => format!("Reset {} to default: {}", key, k.default),
-        None => format!("Unknown config key: '{}'", key),
+        None => format!("Unknown config key: '{key}'"),
     }
 }
 

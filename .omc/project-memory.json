@@ -1,0 +1,386 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1775849181287,
+  "projectRoot": "/home/ed/workspace/backup/shannon-code",
+  "techStack": {
+    "languages": [
+      {
+        "name": "Rust",
+        "version": "1.85",
+        "confidence": "high",
+        "markers": [
+          "Cargo.toml"
+        ]
+      }
+    ],
+    "frameworks": [],
+    "packageManager": "cargo",
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": "cargo build",
+    "testCommand": "cargo test",
+    "lintCommand": "cargo clippy",
+    "devCommand": "cargo run",
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "docs"
+    ],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "claudedocs": {
+      "path": "claudedocs",
+      "purpose": null,
+      "fileCount": 7,
+      "lastAccessed": 1775849181277,
+      "keyFiles": [
+        "Shannon_Code_Audit_Report.md",
+        "architecture_analysis_report.md",
+        "dead_code_analysis.md",
+        "multiline_edit_test_report.md",
+        "session_summary.md"
+      ]
+    },
+    "crates": {
+      "path": "crates",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1775849181285,
+      "keyFiles": []
+    },
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 2,
+      "lastAccessed": 1775849181285,
+      "keyFiles": [
+        "SPEC.md",
+        "TEST_REPORT.md"
+      ]
+    },
+    "target": {
+      "path": "target",
+      "purpose": null,
+      "fileCount": 3,
+      "lastAccessed": 1775849181286,
+      "keyFiles": [
+        "CACHEDIR.TAG"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "crates/shannon-ui/src/repl.rs",
+      "accessCount": 27,
+      "lastAccessed": 1775884809665,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-cli/src/main.rs",
+      "accessCount": 25,
+      "lastAccessed": 1775886104650,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-core/src/query_engine/engine.rs",
+      "accessCount": 19,
+      "lastAccessed": 1775886148544,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-core/src/api/streaming.rs",
+      "accessCount": 17,
+      "lastAccessed": 1775882485269,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-tools/src/lib.rs",
+      "accessCount": 16,
+      "lastAccessed": 1775886148581,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-core/src/api/client.rs",
+      "accessCount": 14,
+      "lastAccessed": 1775882594207,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-core/src/query_engine/mod.rs",
+      "accessCount": 11,
+      "lastAccessed": 1775883469794,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-tools/src",
+      "accessCount": 9,
+      "lastAccessed": 1775884755090,
+      "type": "directory"
+    },
+    {
+      "path": "crates/shannon-core/src/api/types.rs",
+      "accessCount": 7,
+      "lastAccessed": 1775881828104,
+      "type": "file"
+    },
+    {
+      "path": "",
+      "accessCount": 7,
+      "lastAccessed": 1775883875275,
+      "type": "directory"
+    },
+    {
+      "path": "crates/shannon-mcp/src/client.rs",
+      "accessCount": 7,
+      "lastAccessed": 1775886063210,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-tools/src/mcp_tools.rs",
+      "accessCount": 6,
+      "lastAccessed": 1775883553322,
+      "type": "directory"
+    },
+    {
+      "path": "crates/shannon-core/src/query_engine/types.rs",
+      "accessCount": 6,
+      "lastAccessed": 1775884087221,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-core/src",
+      "accessCount": 6,
+      "lastAccessed": 1775886148628,
+      "type": "directory"
+    },
+    {
+      "path": "crates",
+      "accessCount": 5,
+      "lastAccessed": 1775857813774,
+      "type": "directory"
+    },
+    {
+      "path": "crates/shannon-tools/src/remote_trigger.rs",
+      "accessCount": 5,
+      "lastAccessed": 1775858116665,
+      "type": "directory"
+    },
+    {
+      "path": "crates/shannon-cli/Cargo.toml",
+      "accessCount": 4,
+      "lastAccessed": 1775856760705,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-core/src/query_engine/streaming.rs",
+      "accessCount": 4,
+      "lastAccessed": 1775884191414,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-core/src/permissions.rs",
+      "accessCount": 4,
+      "lastAccessed": 1775884755993,
+      "type": "file"
+    },
+    {
+      "path": "README.md",
+      "accessCount": 3,
+      "lastAccessed": 1775850921010,
+      "type": "file"
+    },
+    {
+      "path": "Cargo.toml",
+      "accessCount": 3,
+      "lastAccessed": 1775856683770,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-commands/src",
+      "accessCount": 3,
+      "lastAccessed": 1775859621776,
+      "type": "directory"
+    },
+    {
+      "path": "crates/shannon-core/src/api/mod.rs",
+      "accessCount": 3,
+      "lastAccessed": 1775881559352,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-tools/src/mcp.rs",
+      "accessCount": 3,
+      "lastAccessed": 1775883949328,
+      "type": "directory"
+    },
+    {
+      "path": "crates/shannon-cli/src/lib.rs",
+      "accessCount": 3,
+      "lastAccessed": 1775884809527,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-core/src/lib.rs",
+      "accessCount": 3,
+      "lastAccessed": 1775885894264,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-agents/src/lib.rs",
+      "accessCount": 3,
+      "lastAccessed": 1775886063115,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-ui/src/lib.rs",
+      "accessCount": 2,
+      "lastAccessed": 1775850582811,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-tools/src/todo.rs",
+      "accessCount": 2,
+      "lastAccessed": 1775850738368,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-tools/src/config.rs",
+      "accessCount": 2,
+      "lastAccessed": 1775857461949,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-tools/src/tool_search.rs",
+      "accessCount": 2,
+      "lastAccessed": 1775857996704,
+      "type": "directory"
+    },
+    {
+      "path": "crates/shannon-tools/Cargo.toml",
+      "accessCount": 2,
+      "lastAccessed": 1775858313916,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-core/src/magic_docs.rs",
+      "accessCount": 2,
+      "lastAccessed": 1775883430339,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-commands/src/builtin/search.rs",
+      "accessCount": 2,
+      "lastAccessed": 1775883518509,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-skills/src/executor.rs",
+      "accessCount": 2,
+      "lastAccessed": 1775883518555,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-tools/src/lsp_diagnostics.rs",
+      "accessCount": 2,
+      "lastAccessed": 1775884191561,
+      "type": "directory"
+    },
+    {
+      "path": "crates/shannon-mcp/src/lib.rs",
+      "accessCount": 2,
+      "lastAccessed": 1775884720054,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-ui/CLAUDE.md",
+      "accessCount": 2,
+      "lastAccessed": 1775884757814,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-skills/src/lib.rs",
+      "accessCount": 2,
+      "lastAccessed": 1775885940568,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-tools/src/brief.rs",
+      "accessCount": 1,
+      "lastAccessed": 1775849592838,
+      "type": "file"
+    },
+    {
+      "path": ".claude/settings.local.json",
+      "accessCount": 1,
+      "lastAccessed": 1775849637629,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-core/src/prevent_sleep.rs",
+      "accessCount": 1,
+      "lastAccessed": 1775849745143,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-ui/Cargo.toml",
+      "accessCount": 1,
+      "lastAccessed": 1775849776956,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-agents/Cargo.toml",
+      "accessCount": 1,
+      "lastAccessed": 1775849777056,
+      "type": "file"
+    },
+    {
+      "path": ".claude/skills/example-skill/SKILL.md",
+      "accessCount": 1,
+      "lastAccessed": 1775849916412,
+      "type": "file"
+    },
+    {
+      "path": "docs/SPEC.md",
+      "accessCount": 1,
+      "lastAccessed": 1775850360355,
+      "type": "file"
+    },
+    {
+      "path": "docs/TEST_REPORT.md",
+      "accessCount": 1,
+      "lastAccessed": 1775850395122,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-ui/src/render.rs",
+      "accessCount": 1,
+      "lastAccessed": 1775850583894,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-commands/src/lib.rs",
+      "accessCount": 1,
+      "lastAccessed": 1775850583977,
+      "type": "file"
+    },
+    {
+      "path": "crates/shannon-core/src/api/error.rs",
+      "accessCount": 1,
+      "lastAccessed": 1775853731563,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}

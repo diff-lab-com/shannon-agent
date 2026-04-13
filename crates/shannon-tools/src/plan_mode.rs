@@ -26,7 +26,7 @@ pub fn is_plan_mode_active(state: &PlanModeState) -> Result<bool, ToolError> {
     state
         .read()
         .map(|guard| *guard)
-        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read plan mode state: {}", e)))
+        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read plan mode state: {e}")))
 }
 
 /// Enter plan mode - switches to read-only analysis.
@@ -64,7 +64,7 @@ impl Tool for EnterPlanModeTool {
     async fn execute(&self, _input: serde_json::Value) -> ToolResult<ToolOutput> {
         {
             let mut state = self.plan_mode.write().map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to acquire plan mode lock: {}", e))
+                ToolError::ExecutionFailed(format!("Failed to acquire plan mode lock: {e}"))
             })?;
             *state = true;
         }
@@ -117,7 +117,7 @@ impl Tool for ExitPlanModeTool {
     async fn execute(&self, _input: serde_json::Value) -> ToolResult<ToolOutput> {
         {
             let mut state = self.plan_mode.write().map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to acquire plan mode lock: {}", e))
+                ToolError::ExecutionFailed(format!("Failed to acquire plan mode lock: {e}"))
             })?;
             *state = false;
         }
@@ -145,7 +145,7 @@ mod tests {
     #[test]
     fn test_new_plan_mode_state() {
         let state = new_plan_mode_state();
-        assert_eq!(*state.read().unwrap(), false);
+        assert!(!(*state.read().unwrap()));
     }
 
     #[test]
@@ -235,9 +235,8 @@ mod tests {
         assert!(output.content.contains("Entered plan mode"));
 
         assert!(is_plan_mode_active(&state).unwrap());
-        assert_eq!(
-            output.metadata.get("plan_mode_active").unwrap().as_bool().unwrap(),
-            true
+        assert!(
+            output.metadata.get("plan_mode_active").unwrap().as_bool().unwrap()
         );
     }
 
@@ -261,9 +260,8 @@ mod tests {
         assert!(output.content.contains("Exited plan mode"));
 
         assert!(!is_plan_mode_active(&state).unwrap());
-        assert_eq!(
-            output.metadata.get("plan_mode_active").unwrap().as_bool().unwrap(),
-            false
+        assert!(
+            !output.metadata.get("plan_mode_active").unwrap().as_bool().unwrap()
         );
     }
 

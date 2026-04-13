@@ -437,7 +437,7 @@ impl BundledSkills {
         let mut inner = self.inner.write()
             .map_err(|e| crate::error::SkillError::ExecutionFailed {
                 name: "bundled".to_string(),
-                message: format!("Failed to acquire lock: {}", e),
+                message: format!("Failed to acquire lock: {e}"),
             })?;
 
         let mut skill = skill;
@@ -458,7 +458,7 @@ impl BundledSkills {
         let mut inner = self.inner.write()
             .map_err(|e| crate::error::SkillError::ExecutionFailed {
                 name: "bundled".to_string(),
-                message: format!("Failed to acquire lock: {}", e),
+                message: format!("Failed to acquire lock: {e}"),
             })?;
 
         inner.clear();
@@ -470,6 +470,11 @@ impl BundledSkills {
         self.inner.read()
             .map(|inner| inner.len())
             .unwrap_or(0)
+    }
+
+    /// Returns `true` if there are no bundled skills.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 

@@ -1,0 +1,7 @@
+{
+  "tool_name": "Read",
+  "tool_input_preview": "{\"file_path\":\"/home/ed/workspace/backup/shannon-code/crates/shannon-core/src/tools/mod.rs\",\"limit\":100}",
+  "error": "File does not exist. Note: your current working directory is /home/ed/workspace/backup/shannon-code.",
+  "timestamp": "2026-04-11T05:13:20.986Z",
+  "retry_count": 1
+}

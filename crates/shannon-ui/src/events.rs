@@ -27,6 +27,7 @@ impl EventHandler {
     }
 
     /// Get the next event with timeout
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> io::Result<Option<Event>> {
         // Drain ALL pending events to prevent queue buildup and escape sequence leakage
         // This is critical because mouse events can accumulate rapidly

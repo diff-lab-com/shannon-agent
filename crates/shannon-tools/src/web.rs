@@ -75,6 +75,12 @@ pub struct WebFetchTool {
     client: Client,
 }
 
+impl Default for WebFetchTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WebFetchTool {
     pub fn new() -> Self {
         Self {
@@ -134,7 +140,7 @@ impl WebFetchTool {
 impl Tool for WebFetchTool {
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let fetch_input: WebFetchInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid WebFetch input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid WebFetch input: {e}")))?;
 
         let output = self
             .fetch_url(
@@ -144,7 +150,7 @@ impl Tool for WebFetchTool {
                 fetch_input.raw,
             )
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to fetch URL: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to fetch URL: {e}")))?;
 
         Ok(ToolOutput {
             content: format!("Successfully fetched {} bytes from {}", output.content_length, output.url),
@@ -327,6 +333,12 @@ pub struct WebSearchTool {
     provider: SearchProvider,
 }
 
+impl Default for WebSearchTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WebSearchTool {
     pub fn new() -> Self {
         // Primary: SHANNON_SEARCH_API_KEY. Fallback: TAVILY_API_KEY.
@@ -422,7 +434,7 @@ impl WebSearchTool {
         let response = self
             .client
             .post("https://api.tavily.com/search")
-            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Authorization", format!("Bearer {api_key}"))
             .header("Content-Type", "application/json")
             .json(&request_body)
             .send()
@@ -432,8 +444,7 @@ impl WebSearchTool {
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
             return Err(format!(
-                "Tavily API returned HTTP {}: {}",
-                status, body
+                "Tavily API returned HTTP {status}: {body}"
             )
             .into());
         }
@@ -467,7 +478,7 @@ impl WebSearchTool {
 impl Tool for WebSearchTool {
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let search_input: WebSearchInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid WebSearch input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid WebSearch input: {e}")))?;
 
         let output = self
             .search(
@@ -476,7 +487,7 @@ impl Tool for WebSearchTool {
                 &search_input.search_depth,
             )
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Search failed: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Search failed: {e}")))?;
 
         let results_json: Vec<serde_json::Value> = output.results.iter().map(|r| {
             json!({
@@ -628,7 +639,7 @@ fn decode_html_entity(chars: &mut std::iter::Peekable<std::str::Chars>) -> Strin
             }
             _ => {
                 // Not a valid entity, return literal '&' + what we consumed
-                return format!("&{}", buf);
+                return format!("&{buf}");
             }
         }
     }
@@ -653,7 +664,7 @@ fn decode_html_entity(chars: &mut std::iter::Peekable<std::str::Chars>) -> Strin
                 None => "&".to_string(),
             }
         }
-        _ => format!("&{};", buf),
+        _ => format!("&{buf};"),
     }
 }
 

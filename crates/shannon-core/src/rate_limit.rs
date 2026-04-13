@@ -272,9 +272,9 @@ impl ExponentialBackoff {
             u64::MAX
         };
 
-        let base_ms = self.base_delay.as_millis() as u128;
+        let base_ms = self.base_delay.as_millis();
         let delay_ms = base_ms.saturating_mul(multiplier as u128);
-        let capped_ms = delay_ms.min(self.max_delay.as_millis() as u128);
+        let capped_ms = delay_ms.min(self.max_delay.as_millis());
 
         if self.jitter {
             // Jitter: random between 50% and 100% of the delay
@@ -639,7 +639,7 @@ mod tests {
             remaining: 5,
             reset_at: Instant::now(),
         };
-        let debug = format!("{:?}", result);
+        let debug = format!("{result:?}");
         assert!(debug.contains("Allowed"));
         assert!(debug.contains("remaining: 5"));
     }
@@ -650,7 +650,7 @@ mod tests {
             retry_after: Duration::from_secs(2),
             limit: 60,
         };
-        let debug = format!("{:?}", result);
+        let debug = format!("{result:?}");
         assert!(debug.contains("Rejected"));
         assert!(debug.contains("retry_after: 2s"));
         assert!(debug.contains("limit: 60"));

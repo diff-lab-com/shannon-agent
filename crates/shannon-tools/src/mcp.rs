@@ -145,6 +145,12 @@ pub struct McpResourceTool {
     description: String,
 }
 
+impl Default for McpResourceTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl McpResourceTool {
     pub fn new() -> Self {
         Self {
@@ -212,8 +218,7 @@ impl McpResourceTool {
 
             if !client.connected {
                 return Err(ToolError::InvalidInput(format!(
-                    "Server '{}' is not connected",
-                    target_server
+                    "Server '{target_server}' is not connected"
                 )));
             }
 
@@ -260,12 +265,12 @@ impl Tool for McpResourceTool {
         match operation {
             "Read" => {
                 let read_input: ReadMcpResourceInput = serde_json::from_value(input)
-                    .map_err(|e| ToolError::InvalidInput(format!("Invalid read input: {}", e)))?;
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid read input: {e}")))?;
                 let server = read_input.server.clone();
                 let output = self.read_resource(read_input).await?;
                 let resource_count = output.contents.len();
                 Ok(ToolOutput {
-                    content: format!("Read {} MCP resource(s) from server {}", resource_count, server),
+                    content: format!("Read {resource_count} MCP resource(s) from server {server}"),
                     is_error: false,
                     metadata: {
                         let mut map = HashMap::new();
@@ -277,11 +282,11 @@ impl Tool for McpResourceTool {
             }
             "List" => {
                 let list_input: ListMcpResourcesInput = serde_json::from_value(input)
-                    .map_err(|e| ToolError::InvalidInput(format!("Invalid list input: {}", e)))?;
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid list input: {e}")))?;
                 let output = self.list_resources(list_input).await?;
                 let resource_count = output.resources.as_ref().map(|r| r.len()).unwrap_or(0);
                 Ok(ToolOutput {
-                    content: format!("Found {} resources on MCP servers", resource_count),
+                    content: format!("Found {resource_count} resources on MCP servers"),
                     is_error: false,
                     metadata: {
                         let mut map = HashMap::new();
@@ -293,8 +298,7 @@ impl Tool for McpResourceTool {
                 })
             }
             _ => Err(ToolError::InvalidInput(format!(
-                "Unknown operation: {}",
-                operation
+                "Unknown operation: {operation}"
             ))),
         }
     }

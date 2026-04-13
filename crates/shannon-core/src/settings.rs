@@ -140,7 +140,7 @@ impl Settings {
             if !(0.0..=1.0).contains(&temp) {
                 return Err(SettingsError::InvalidValue {
                     key: "temperature".to_string(),
-                    message: format!("temperature must be between 0.0 and 1.0, got {}", temp),
+                    message: format!("temperature must be between 0.0 and 1.0, got {temp}"),
                 });
             }
         }
@@ -185,7 +185,11 @@ impl Settings {
         match key {
             "version" => Some(Value::String(self.version.clone())),
             "model" => self.model.as_ref().map(|v| Value::String(v.clone())),
-            "temperature" => self.temperature.map(|v| Value::Number(serde_json::Number::from_f64(v as f64).unwrap())),
+            "temperature" => self.temperature.map(|v| {
+                let num = serde_json::Number::from_f64(v as f64)
+                    .expect("temperature f64 should be a valid JSON number");
+                Value::Number(num)
+            }),
             "max_tokens" => self.max_tokens.map(|v| Value::Number(v.into())),
             "tools_enabled" => Some(Value::Bool(self.tools_enabled)),
             "permissions_mode" => Some(Value::String(self.permissions_mode.clone())),
@@ -415,7 +419,7 @@ impl SettingsManager {
         // Join continuation lines (trailing backslash)
         let mut joined = String::with_capacity(content.len());
         for raw_line in content.lines() {
-            let trimmed_end = raw_line.trim_end_matches(|c| c == ' ' || c == '\t');
+            let trimmed_end = raw_line.trim_end_matches([' ', '\t']);
             if let Some(continued) = trimmed_end.strip_suffix('\\') {
                 joined.push_str(continued);
                 joined.push(' ');
@@ -671,9 +675,9 @@ mod tests {
         assert_eq!(settings.model, None);
         assert_eq!(settings.temperature, None);
         assert_eq!(settings.max_tokens, None);
-        assert_eq!(settings.tools_enabled, true);
+        assert!(settings.tools_enabled);
         assert_eq!(settings.permissions_mode, "ask");
-        assert_eq!(settings.auto_memory, true);
+        assert!(settings.auto_memory);
         assert_eq!(settings.theme, "dark");
     }
 
@@ -757,7 +761,7 @@ mod tests {
 
         // Set tools_enabled
         settings.set_value("tools_enabled", Value::Bool(false)).unwrap();
-        assert_eq!(settings.tools_enabled, false);
+        assert!(!settings.tools_enabled);
 
         // Set permissions_mode
         settings
@@ -767,7 +771,7 @@ mod tests {
 
         // Set auto_memory
         settings.set_value("auto_memory", Value::Bool(false)).unwrap();
-        assert_eq!(settings.auto_memory, false);
+        assert!(!settings.auto_memory);
 
         // Set theme
         settings
@@ -815,9 +819,9 @@ mod tests {
         assert_eq!(base.model, Some("claude-opus-4-6".to_string()));
         assert_eq!(base.temperature, Some(0.8));
         assert_eq!(base.max_tokens, Some(8192));
-        assert_eq!(base.tools_enabled, false);
+        assert!(!base.tools_enabled);
         assert_eq!(base.permissions_mode, "auto");
-        assert_eq!(base.auto_memory, false);
+        assert!(!base.auto_memory);
         assert_eq!(base.theme, "light");
     }
 
@@ -826,9 +830,9 @@ mod tests {
         let manager = SettingsManager::new();
 
         assert_eq!(manager.settings.version, SETTINGS_VERSION);
-        assert_eq!(manager.settings.tools_enabled, true);
+        assert!(manager.settings.tools_enabled);
         assert_eq!(manager.settings.permissions_mode, "ask");
-        assert_eq!(manager.settings.auto_memory, true);
+        assert!(manager.settings.auto_memory);
         assert_eq!(manager.settings.theme, "dark");
     }
 
@@ -856,7 +860,7 @@ mod tests {
         assert_eq!(manager2.settings.model, Some("claude-opus-4-6".to_string()));
         assert_eq!(manager2.settings.temperature, Some(0.7));
         assert_eq!(manager2.settings.max_tokens, Some(8192));
-        assert_eq!(manager2.settings.tools_enabled, false);
+        assert!(!manager2.settings.tools_enabled);
         assert_eq!(manager2.settings.permissions_mode, "auto");
     }
 
@@ -895,7 +899,7 @@ mod tests {
 
         // Test set with JSON object
         manager.set("tools_enabled", "false").unwrap();
-        assert_eq!(manager.settings.tools_enabled, false);
+        assert!(!manager.settings.tools_enabled);
     }
 
     #[test]
@@ -918,9 +922,9 @@ mod tests {
         assert_eq!(manager.settings.model, Some("claude-opus-4-6".to_string()));
         assert_eq!(manager.settings.temperature, Some(0.9));
         assert_eq!(manager.settings.max_tokens, Some(16000));
-        assert_eq!(manager.settings.tools_enabled, false);
+        assert!(!manager.settings.tools_enabled);
         assert_eq!(manager.settings.permissions_mode, "readonly");
-        assert_eq!(manager.settings.auto_memory, false);
+        assert!(!manager.settings.auto_memory);
         assert_eq!(manager.settings.theme, "light");
     }
 
@@ -963,7 +967,7 @@ mod tests {
 
         assert_eq!(manager.settings.model, Some("claude-opus-4-6".to_string()));
         assert_eq!(manager.settings.temperature, Some(0.8));
-        assert_eq!(manager.settings.tools_enabled, false);
+        assert!(!manager.settings.tools_enabled);
     }
 
     #[test]
@@ -1007,7 +1011,7 @@ mod tests {
         assert_eq!(settings.max_tokens, None);
 
         // Non-optional fields remain unchanged
-        assert_eq!(settings.tools_enabled, true);
+        assert!(settings.tools_enabled);
     }
 
     #[test]

@@ -114,6 +114,7 @@ impl OAuthClient {
     }
 
     /// Create a new OAuth client with predefined scopes.
+    #[allow(clippy::too_many_arguments)]
     pub fn with_scopes(
         id: &str,
         name: &str,
@@ -249,7 +250,7 @@ impl TokenEncryption {
         }
 
         // Encode as hex
-        Ok(encrypted.iter().map(|b| format!("{:02x}", b)).collect())
+        Ok(encrypted.iter().map(|b| format!("{b:02x}")).collect())
     }
 
     /// Decrypt a hex-encoded ciphertext back to the original plaintext.
@@ -333,6 +334,7 @@ impl OAuthService {
     // -----------------------------------------------------------------------
 
     /// Register a new OAuth client.
+    #[allow(clippy::too_many_arguments)]
     pub fn register_client(
         &mut self,
         id: &str,
@@ -349,7 +351,7 @@ impl OAuthService {
 
         let client = OAuthClient::new(id, name, client_id, client_secret, auth_url, token_url, redirect_url);
         self.clients.insert(id.to_string(), client);
-        Ok(self.clients.get(id).unwrap())
+        Ok(self.clients.get(id).expect("just inserted client should exist"))
     }
 
     /// List all registered client IDs.
@@ -420,8 +422,8 @@ impl OAuthService {
         // Store code mapped to state for exchange simulation
         self.pending_codes
             .get_mut(&code)
-            .unwrap()
-            .scope = format!("{}:state:{}", scope, state);
+            .expect("pending code was just created above")
+            .scope = format!("{scope}:state:{state}");
 
         Ok(url)
     }
@@ -485,12 +487,11 @@ impl OAuthService {
         let refresh = existing
             .refresh_token
             .as_ref()
-            .ok_or_else(|| OAuthError::TokenNotFound(format!("No refresh token for {}", client_id)))?;
+            .ok_or_else(|| OAuthError::TokenNotFound(format!("No refresh token for {client_id}")))?;
 
         if refresh.is_empty() {
             return Err(OAuthError::TokenNotFound(format!(
-                "Empty refresh token for {}",
-                client_id
+                "Empty refresh token for {client_id}"
             )));
         }
 

@@ -86,7 +86,7 @@ impl Tool for ListMcpResourcesTool {
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
         let list_input: ListResourcesInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid list resources input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid list resources input: {e}")))?;
 
         let filter_desc = list_input
             .server_name
@@ -99,7 +99,7 @@ impl Tool for ListMcpResourcesTool {
             .manager
             .list_resources(list_input)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to list resources: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to list resources: {e}")))?;
 
         let resource_count = output.resources.len();
         let server_names: Vec<&str> = output
@@ -195,7 +195,7 @@ impl Tool for ReadMcpResourceTool {
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
         let tool_input: ReadToolInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid read resource input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid read resource input: {e}")))?;
 
         debug!(
             server = %tool_input.server_name,
@@ -212,7 +212,7 @@ impl Tool for ReadMcpResourceTool {
             .manager
             .read_resource(mcp_input)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read resource: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read resource: {e}")))?;
 
         // Concatenate all content blocks into a single text string.
         let combined_text: String = output
@@ -245,7 +245,7 @@ impl Tool for ReadMcpResourceTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shannon_mcp::{McpResourceClient, Resource, ResourceContent, ContentBlock};
+    use shannon_mcp::{McpResourceClient, ResourceContent, ContentBlock};
     use shannon_mcp::protocol::Resource as ProtocolResource;
 
     /// A mock client that implements the McpResourceClient trait.
@@ -300,7 +300,7 @@ mod tests {
                 uri: uri.to_string(),
                 mime_type: Some("text/plain".to_string()),
                 contents: vec![ContentBlock::Text {
-                    text: format!("mock content for {}", uri),
+                    text: format!("mock content for {uri}"),
                 }],
             })
         }

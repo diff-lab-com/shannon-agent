@@ -19,6 +19,12 @@ pub struct ConversationMessage {
 /// Away summary generator
 pub struct AwaySummaryGenerator;
 
+impl Default for AwaySummaryGenerator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AwaySummaryGenerator {
     pub fn new() -> Self {
         Self
@@ -53,19 +59,19 @@ impl AwaySummaryGenerator {
         let task_hint = last_user_msg
             .map(|s| {
                 let truncated = s.chars().take(200).collect::<String>();
-                format!("Recent context: {}", truncated)
+                format!("Recent context: {truncated}")
             })
             .unwrap_or_default();
 
         let memory_hint = session_memory
-            .map(|m| format!("Session memory: {}", m))
+            .map(|m| format!("Session memory: {m}"))
             .unwrap_or_default();
 
         if task_hint.is_empty() && memory_hint.is_empty() {
             return None;
         }
 
-        Some(format!("{}\n{}", memory_hint, task_hint))
+        Some(format!("{memory_hint}\n{task_hint}"))
     }
 }
 
@@ -123,7 +129,7 @@ mod tests {
                 } else {
                     "assistant".to_string()
                 },
-                content: format!("Message {}", i),
+                content: format!("Message {i}"),
                 timestamp: None,
             });
         }

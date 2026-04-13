@@ -44,6 +44,12 @@ pub struct TaskOutputTool {
     task_store: TaskStore,
 }
 
+impl Default for TaskOutputTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TaskOutputTool {
     pub fn new() -> Self {
         Self {
@@ -59,6 +65,29 @@ impl TaskOutputTool {
         }
     }
 
+    /// Build output from a found task, deduplicating the extraction logic.
+    fn build_task_output(&self, task: &TodoItem, task_id: &str) -> TaskOutputOutput {
+        let output = if task.status == TodoStatus::Completed || !task.content.is_empty() {
+            Some(task.content.clone())
+        } else {
+            None
+        };
+
+        TaskOutputOutput {
+            found: true,
+            task: Some(task.clone()),
+            output: output.clone(),
+            message: if output.is_some() {
+                "Task output retrieved".to_string()
+            } else {
+                format!(
+                    "Task {} found (status: {:?}) but has no output yet",
+                    task_id, task.status
+                )
+            },
+        }
+    }
+
     async fn get_output(&self, input: TaskOutputInput) -> Result<TaskOutputOutput, ToolError> {
         let timeout_ms = input.timeout.unwrap_or(30000);
         let block = input.block.unwrap_or(true);
@@ -71,32 +100,11 @@ impl TaskOutputTool {
             loop {
                 {
                     let store = self.task_store.read().map_err(|e| {
-                        ToolError::ExecutionFailed(format!("Failed to acquire task store lock: {}", e))
+                        ToolError::ExecutionFailed(format!("Failed to acquire task store lock: {e}"))
                     })?;
 
                     if let Some(task) = store.get(&input.task_id) {
-                        // Task found — check if it has output (completed status or content)
-                        let output = if task.status == TodoStatus::Completed {
-                            Some(task.content.clone())
-                        } else if !task.content.is_empty() {
-                            Some(task.content.clone())
-                        } else {
-                            None
-                        };
-
-                        return Ok(TaskOutputOutput {
-                            found: true,
-                            task: Some(task.clone()),
-                            output: output.clone(),
-                            message: if output.is_some() {
-                                "Task output retrieved".to_string()
-                            } else {
-                                format!(
-                                    "Task {} found (status: {:?}) but has no output yet",
-                                    input.task_id, task.status
-                                )
-                            },
-                        });
+                        return Ok(self.build_task_output(task, &input.task_id));
                     }
                 }
 
@@ -114,29 +122,11 @@ impl TaskOutputTool {
         } else {
             // Non-blocking: just read once
             let store = self.task_store.read().map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to acquire task store lock: {}", e))
+                ToolError::ExecutionFailed(format!("Failed to acquire task store lock: {e}"))
             })?;
 
             if let Some(task) = store.get(&input.task_id) {
-                let output = if !task.content.is_empty() {
-                    Some(task.content.clone())
-                } else {
-                    None
-                };
-
-                Ok(TaskOutputOutput {
-                    found: true,
-                    task: Some(task.clone()),
-                    output: output.clone(),
-                    message: if output.is_some() {
-                        "Task output retrieved".to_string()
-                    } else {
-                        format!(
-                            "Task {} found (status: {:?}) but has no output yet",
-                            input.task_id, task.status
-                        )
-                    },
-                })
+                Ok(self.build_task_output(task, &input.task_id))
             } else {
                 Ok(TaskOutputOutput {
                     found: false,
@@ -153,7 +143,7 @@ impl TaskOutputTool {
 impl Tool for TaskOutputTool {
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let output_input: TaskOutputInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid task output input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid task output input: {e}")))?;
         let output = self.get_output(output_input).await?;
 
         Ok(ToolOutput {

@@ -84,7 +84,7 @@ impl std::fmt::Display for BridgeStatus {
             BridgeStatus::Connecting => write!(f, "connecting"),
             BridgeStatus::Connected => write!(f, "connected"),
             BridgeStatus::Disconnected => write!(f, "disconnected"),
-            BridgeStatus::Error(msg) => write!(f, "error: {}", msg),
+            BridgeStatus::Error(msg) => write!(f, "error: {msg}"),
         }
     }
 }
@@ -419,7 +419,7 @@ impl BridgeService {
         let id = session.id.clone();
         self.message_history.insert(id.clone(), Vec::new());
         self.sessions.insert(id.clone(), session);
-        Ok(self.sessions.get(&id).unwrap())
+        Ok(self.sessions.get(&id).expect("just inserted session should exist"))
     }
 
     /// Get a session by ID.
@@ -670,13 +670,13 @@ mod tests {
 
     #[test]
     fn test_bridge_status_properties() {
-        assert!(BridgeStatus::Connecting.is_active() == false);
+        assert!(!BridgeStatus::Connecting.is_active());
         assert!(BridgeStatus::Connected.is_active());
-        assert!(BridgeStatus::Disconnected.is_active() == false);
-        assert!(BridgeStatus::Error("test".to_string()).is_active() == false);
+        assert!(!BridgeStatus::Disconnected.is_active());
+        assert!(!BridgeStatus::Error("test".to_string()).is_active());
 
-        assert!(BridgeStatus::Connecting.is_terminal() == false);
-        assert!(BridgeStatus::Connected.is_terminal() == false);
+        assert!(!BridgeStatus::Connecting.is_terminal());
+        assert!(!BridgeStatus::Connected.is_terminal());
         assert!(BridgeStatus::Disconnected.is_terminal());
         assert!(BridgeStatus::Error("test".to_string()).is_terminal());
     }

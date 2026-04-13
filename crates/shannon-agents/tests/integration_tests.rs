@@ -456,7 +456,7 @@ mod multi_agent_tests {
     #[test]
     fn dependency_error_unknown_dependency() {
         let err = DependencyError::UnknownDependency("nonexistent".to_string());
-        let display = format!("{}", err);
+        let display = format!("{err}");
         assert!(display.contains("nonexistent"));
         assert!(display.contains("unknown dependency"));
     }
@@ -468,7 +468,7 @@ mod multi_agent_tests {
             "b".to_string(),
             "a".to_string(),
         ]);
-        let display = format!("{}", err);
+        let display = format!("{err}");
         assert!(display.contains("circular dependency"));
         assert!(display.contains("a -> b -> a"));
     }
@@ -476,7 +476,7 @@ mod multi_agent_tests {
     #[test]
     fn dependency_error_duplicate_agent() {
         let err = DependencyError::DuplicateAgent("agent-1".to_string());
-        let display = format!("{}", err);
+        let display = format!("{err}");
         assert!(display.contains("duplicate"));
         assert!(display.contains("agent-1"));
     }
@@ -936,34 +936,34 @@ mod error_tests {
     #[test]
     fn coordination_error_display() {
         let err = CoordinationError::TeamNotFound("backend".to_string());
-        assert_eq!(format!("{}", err), "team 'backend' not found");
+        assert_eq!(format!("{err}"), "team 'backend' not found");
 
         let err = CoordinationError::AgentNotFound("alice".to_string());
-        assert_eq!(format!("{}", err), "agent 'alice' not found in team");
+        assert_eq!(format!("{err}"), "agent 'alice' not found in team");
 
         let err = CoordinationError::AgentAlreadyMember("alice".to_string(), "backend".to_string());
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "agent 'alice' is already a member of team 'backend'"
         );
 
         let err = CoordinationError::MaxTeamSizeExceeded(5);
-        assert_eq!(format!("{}", err), "maximum team size (5) exceeded");
+        assert_eq!(format!("{err}"), "maximum team size (5) exceeded");
     }
 
     #[test]
     fn task_error_display() {
         let id = Uuid::nil();
         let err = TaskError::TaskNotFound(id);
-        let msg = format!("{}", err);
+        let msg = format!("{err}");
         assert!(msg.contains("not found"));
 
         let err = TaskError::CircularDependency(id);
-        let msg = format!("{}", err);
+        let msg = format!("{err}");
         assert!(msg.contains("circular"));
 
         let err = TaskError::NoAvailableAgents("task-x".to_string());
-        let msg = format!("{}", err);
+        let msg = format!("{err}");
         assert!(msg.contains("no available agents"));
     }
 
@@ -971,7 +971,7 @@ mod error_tests {
     fn agent_error_from_coordination() {
         let coord_err = CoordinationError::TeamNotFound("x".to_string());
         let agent_err: AgentError = coord_err.into();
-        let msg = format!("{}", agent_err);
+        let msg = format!("{agent_err}");
         assert!(msg.contains("coordination error"));
     }
 
@@ -979,14 +979,14 @@ mod error_tests {
     fn agent_error_from_task() {
         let task_err = TaskError::TaskNotFound(Uuid::nil());
         let agent_err: AgentError = task_err.into();
-        let msg = format!("{}", agent_err);
+        let msg = format!("{agent_err}");
         assert!(msg.contains("task error"));
     }
 
     #[test]
     fn agent_error_worktree() {
         let err = AgentError::Worktree("branch already exists".to_string());
-        let msg = format!("{}", err);
+        let msg = format!("{err}");
         assert!(msg.contains("worktree error"));
         assert!(msg.contains("branch already exists"));
     }
@@ -994,7 +994,7 @@ mod error_tests {
     #[test]
     fn agent_error_communication() {
         let err = AgentError::Communication("channel closed".to_string());
-        let msg = format!("{}", err);
+        let msg = format!("{err}");
         assert!(msg.contains("communication error"));
         assert!(msg.contains("channel closed"));
     }

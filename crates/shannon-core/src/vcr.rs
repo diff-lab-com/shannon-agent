@@ -276,7 +276,7 @@ impl Vcr {
             let entry = entry?;
             let path = entry.path();
 
-            if path.extension().map_or(false, |ext| ext == "json") {
+            if path.extension().is_some_and(|ext| ext == "json") {
                 match self.load_recording_from_file(&path) {
                     Ok(recording) => {
                         self.index.insert(recording.id.clone(), recording);
@@ -305,7 +305,7 @@ impl Vcr {
 
     /// Get the file path for a recording with the given ID.
     fn recording_path(&self, id: &str) -> PathBuf {
-        self.config.record_dir.join(format!("{}.json", id))
+        self.config.record_dir.join(format!("{id}.json"))
     }
 
     /// Load a single recording from a file.
@@ -395,7 +395,7 @@ mod tests {
             .filter_map(|e| e.ok())
             .collect();
         assert_eq!(files.len(), 1);
-        assert!(files[0].path().extension().map_or(false, |e| e == "json"));
+        assert!(files[0].path().extension().is_some_and(|e| e == "json"));
     }
 
     #[test]
@@ -573,10 +573,10 @@ mod tests {
     #[test]
     fn test_vcr_error_display() {
         let err = VcrError::NotFound("test-id".to_string());
-        assert_eq!(format!("{}", err), "Recording not found: test-id");
+        assert_eq!(format!("{err}"), "Recording not found: test-id");
 
         let err = VcrError::ReplayModeActive;
-        assert_eq!(format!("{}", err), "VCR is in replay mode; recording is disabled");
+        assert_eq!(format!("{err}"), "VCR is in replay mode; recording is disabled");
     }
 
     #[test]

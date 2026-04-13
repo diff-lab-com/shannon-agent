@@ -339,14 +339,14 @@ impl TranscriptStore {
     /// Create a store in the default location (`~/.shannon/transcripts/`).
     pub fn new() -> Result<Self, TranscriptError> {
         let base = dirs::home_dir()
-            .ok_or_else(|| TranscriptError::NotInitialized)?;
+            .ok_or(TranscriptError::NotInitialized)?;
         let dir = base.join(".shannon").join("transcripts");
         Self::new_in_dir(dir)
     }
 
     /// Get the file path for a session.
     fn session_path(&self, session_id: &str) -> PathBuf {
-        self.transcripts_dir.join(format!("{}.jsonl", session_id))
+        self.transcripts_dir.join(format!("{session_id}.jsonl"))
     }
 
     /// Append a transcript entry to its session file.
@@ -358,7 +358,7 @@ impl TranscriptStore {
             .open(&path)?;
         let line = serde_json::to_string(entry)
             .map_err(|e| TranscriptError::Serialization(e.to_string()))?;
-        writeln!(file, "{}", line)?;
+        writeln!(file, "{line}")?;
         debug!(
             session_id = %entry.session_id,
             entry_id = %entry.id,
@@ -530,10 +530,10 @@ impl TranscriptStore {
                     stats.last_entry = Some(entry.timestamp);
                 }
                 _ => {
-                    if entry.timestamp < stats.first_entry.unwrap() {
+                    if entry.timestamp < stats.first_entry.expect("first_entry set in None case") {
                         stats.first_entry = Some(entry.timestamp);
                     }
-                    if entry.timestamp > stats.last_entry.unwrap() {
+                    if entry.timestamp > stats.last_entry.expect("last_entry set in None case") {
                         stats.last_entry = Some(entry.timestamp);
                     }
                 }
@@ -796,7 +796,7 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             TranscriptError::SessionNotFound(id) => assert_eq!(id, "nonexistent"),
-            other => panic!("Expected SessionNotFound, got: {:?}", other),
+            other => panic!("Expected SessionNotFound, got: {other:?}"),
         }
     }
 
@@ -878,7 +878,7 @@ mod tests {
         for i in 0..20 {
             s.append_entry(&make_entry(
                 TranscriptRole::User,
-                &format!("message {}", i),
+                &format!("message {i}"),
                 "s1",
             ))
             .unwrap();

@@ -142,6 +142,12 @@ pub struct AgentTool {
     description: String,
 }
 
+impl Default for AgentTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AgentTool {
     pub fn new() -> Self {
         Self {
@@ -211,7 +217,7 @@ impl Tool for AgentTool {
         match operation {
             "Spawn" => {
                 let spawn_input: AgentSpawnInput = serde_json::from_value(input)
-                    .map_err(|e| ToolError::InvalidInput(format!("Invalid spawn input: {}", e)))?;
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid spawn input: {e}")))?;
                 let output = self.spawn_agent(spawn_input).await?;
                 Ok(ToolOutput {
                     content: output.message,
@@ -227,7 +233,7 @@ impl Tool for AgentTool {
             }
             "SendMessage" => {
                 let msg_input: SendMessageInput = serde_json::from_value(input)
-                    .map_err(|e| ToolError::InvalidInput(format!("Invalid message input: {}", e)))?;
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid message input: {e}")))?;
                 let output = self.send_message(msg_input).await?;
                 Ok(ToolOutput {
                     content: format!("Message {} delivered successfully", output.message_id),
@@ -245,7 +251,7 @@ impl Tool for AgentTool {
             }
             "CreateTeam" => {
                 let team_input: CreateTeamInput = serde_json::from_value(input)
-                    .map_err(|e| ToolError::InvalidInput(format!("Invalid team input: {}", e)))?;
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid team input: {e}")))?;
                 let output = self.create_team(team_input).await?;
                 Ok(ToolOutput {
                     content: format!("Team {} created successfully", output.team_name),
@@ -262,7 +268,7 @@ impl Tool for AgentTool {
             }
             "Shutdown" => {
                 let shutdown_input: ShutdownInput = serde_json::from_value(input)
-                    .map_err(|e| ToolError::InvalidInput(format!("Invalid shutdown input: {}", e)))?;
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid shutdown input: {e}")))?;
                 let output = self.shutdown_agent(shutdown_input).await?;
                 Ok(ToolOutput {
                     content: output.message,
@@ -276,8 +282,7 @@ impl Tool for AgentTool {
                 })
             }
             _ => Err(ToolError::InvalidInput(format!(
-                "Unknown operation: {}",
-                operation
+                "Unknown operation: {operation}"
             ))),
         }
     }

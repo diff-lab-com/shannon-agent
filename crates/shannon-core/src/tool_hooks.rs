@@ -386,7 +386,7 @@ impl ToolHookChain {
                         "Hook result for '{}': {}{}",
                         ctx.tool_name,
                         result.decision,
-                        result.message.as_ref().map(|m| format!(" - {}", m)).unwrap_or_default()
+                        result.message.as_ref().map(|m| format!(" - {m}")).unwrap_or_default()
                     );
                     results.push(result.clone());
 
@@ -578,8 +578,7 @@ impl ToolHook for PermissionToolHook {
         for pattern in &self.denied_patterns {
             if input_str.contains(pattern) {
                 return Ok(ToolHookResult::deny(format!(
-                    "Input matches denied pattern: {}",
-                    pattern
+                    "Input matches denied pattern: {pattern}"
                 )));
             }
         }

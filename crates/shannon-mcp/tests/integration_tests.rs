@@ -467,7 +467,7 @@ fn test_server_capabilities_with_tools() {
 
     assert!(parsed.tools.is_some());
     let tools = parsed.tools.unwrap();
-    assert_eq!(tools.list_changed, true);
+    assert!(tools.list_changed);
 }
 
 #[test]
@@ -669,7 +669,7 @@ async fn test_concurrent_requests() {
     // Send multiple requests concurrently
     for i in 0..5 {
         let request = JsonRpcRequest::with_id(
-            &format!("req-{}", i),
+            format!("req-{i}"),
             "test_method",
             Some(serde_json::json!({"index": i}))
         );

@@ -132,6 +132,12 @@ pub struct SkillTool {
     registry: SkillRegistry,
 }
 
+impl Default for SkillTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SkillTool {
     pub fn new() -> Self {
         Self {
@@ -191,7 +197,7 @@ impl SkillTool {
         let normalized_name = input.skill.trim().strip_prefix('/').unwrap_or(&input.skill);
 
         let command = self.find_skill(normalized_name).ok_or_else(|| {
-            ToolError::InvalidInput(format!("Unknown skill: {}", normalized_name))
+            ToolError::InvalidInput(format!("Unknown skill: {normalized_name}"))
         })?;
 
         // Check if command is a prompt-based skill
@@ -202,7 +208,7 @@ impl SkillTool {
                 allowed_tools: None,
                 model: None,
                 status: None,
-                result: Some(format!("Skill {} is not a prompt-based skill", normalized_name)),
+                result: Some(format!("Skill {normalized_name} is not a prompt-based skill")),
                 agent_id: None,
             });
         }
@@ -221,7 +227,7 @@ impl SkillTool {
 impl Tool for SkillTool {
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let invoke_input: SkillInvokeInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid skill invoke input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid skill invoke input: {e}")))?;
         let output = self.execute_invoke(invoke_input).await?;
 
         let content = if output.success {

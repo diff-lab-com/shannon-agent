@@ -46,8 +46,7 @@ mod repl_tool_injection_tests {
         let err_msg = result.unwrap_err();
         assert!(
             err_msg.contains("command chaining") || err_msg.contains(";"),
-            "Error should mention command chaining: {}",
-            err_msg
+            "Error should mention command chaining: {err_msg}"
         );
     }
 
@@ -58,8 +57,7 @@ mod repl_tool_injection_tests {
         let err_msg = result.unwrap_err();
         assert!(
             err_msg.contains("pipe") || err_msg.contains("|"),
-            "Error should mention pipe: {}",
-            err_msg
+            "Error should mention pipe: {err_msg}"
         );
     }
 
@@ -70,8 +68,7 @@ mod repl_tool_injection_tests {
         let err_msg = result.unwrap_err();
         assert!(
             err_msg.contains("command chaining") || err_msg.contains("&&"),
-            "Error should mention command chaining: {}",
-            err_msg
+            "Error should mention command chaining: {err_msg}"
         );
     }
 
@@ -83,8 +80,7 @@ mod repl_tool_injection_tests {
         // The error message mentions "pipe" since || is checked after | in the danger_chars list
         assert!(
             err_msg.contains("command chaining") || err_msg.contains("|"),
-            "Error should mention command chaining or pipe: {}",
-            err_msg
+            "Error should mention command chaining or pipe: {err_msg}"
         );
     }
 
@@ -97,8 +93,7 @@ mod repl_tool_injection_tests {
         let err_msg = result.unwrap_err();
         assert!(
             err_msg.contains("command substitution") || err_msg.contains("$("),
-            "Error should mention command substitution: {}",
-            err_msg
+            "Error should mention command substitution: {err_msg}"
         );
     }
 
@@ -109,8 +104,7 @@ mod repl_tool_injection_tests {
         let err_msg = result.unwrap_err();
         assert!(
             err_msg.contains("command substitution") || err_msg.contains("`"),
-            "Error should mention command substitution: {}",
-            err_msg
+            "Error should mention command substitution: {err_msg}"
         );
     }
 
@@ -123,8 +117,7 @@ mod repl_tool_injection_tests {
         let err_msg = result.unwrap_err();
         assert!(
             err_msg.contains("redirection") || err_msg.contains(">"),
-            "Error should mention redirection: {}",
-            err_msg
+            "Error should mention redirection: {err_msg}"
         );
     }
 
@@ -135,8 +128,7 @@ mod repl_tool_injection_tests {
         let err_msg = result.unwrap_err();
         assert!(
             err_msg.contains("redirection") || err_msg.contains(">>"),
-            "Error should mention redirection: {}",
-            err_msg
+            "Error should mention redirection: {err_msg}"
         );
     }
 
@@ -147,8 +139,7 @@ mod repl_tool_injection_tests {
         let err_msg = result.unwrap_err();
         assert!(
             err_msg.contains("redirection") || err_msg.contains("<"),
-            "Error should mention redirection: {}",
-            err_msg
+            "Error should mention redirection: {err_msg}"
         );
     }
 
@@ -161,8 +152,7 @@ mod repl_tool_injection_tests {
         let err_msg = result.unwrap_err();
         assert!(
             err_msg.contains("blocked") || err_msg.contains("not allowed") || err_msg.contains("rm"),
-            "Error should mention blocked executable: {}",
-            err_msg
+            "Error should mention blocked executable: {err_msg}"
         );
     }
 
@@ -173,8 +163,7 @@ mod repl_tool_injection_tests {
         let err_msg = result.unwrap_err();
         assert!(
             err_msg.contains("blocked") || err_msg.contains("not allowed") || err_msg.contains("mkfs"),
-            "Error should mention blocked executable: {}",
-            err_msg
+            "Error should mention blocked executable: {err_msg}"
         );
     }
 
@@ -185,8 +174,7 @@ mod repl_tool_injection_tests {
         let err_msg = result.unwrap_err();
         assert!(
             err_msg.contains("blocked") || err_msg.contains("not allowed") || err_msg.contains("dd"),
-            "Error should mention blocked executable: {}",
-            err_msg
+            "Error should mention blocked executable: {err_msg}"
         );
     }
 
@@ -197,8 +185,7 @@ mod repl_tool_injection_tests {
         let err_msg = result.unwrap_err();
         assert!(
             err_msg.contains("blocked") || err_msg.contains("not allowed") || err_msg.contains("shutdown"),
-            "Error should mention blocked executable: {}",
-            err_msg
+            "Error should mention blocked executable: {err_msg}"
         );
     }
 
@@ -209,8 +196,7 @@ mod repl_tool_injection_tests {
         let err_msg = result.unwrap_err();
         assert!(
             err_msg.contains("blocked") || err_msg.contains("not allowed") || err_msg.contains("chmod"),
-            "Error should mention blocked executable: {}",
-            err_msg
+            "Error should mention blocked executable: {err_msg}"
         );
     }
 
@@ -221,8 +207,7 @@ mod repl_tool_injection_tests {
         let err_msg = result.unwrap_err();
         assert!(
             err_msg.contains("blocked") || err_msg.contains("not allowed") || err_msg.contains("kill"),
-            "Error should mention blocked executable: {}",
-            err_msg
+            "Error should mention blocked executable: {err_msg}"
         );
     }
 
@@ -233,8 +218,7 @@ mod repl_tool_injection_tests {
         let err_msg = result.unwrap_err();
         assert!(
             err_msg.contains("blocked") || err_msg.contains("not allowed") || err_msg.contains("sudo"),
-            "Error should mention blocked executable: {}",
-            err_msg
+            "Error should mention blocked executable: {err_msg}"
         );
     }
 
@@ -249,8 +233,7 @@ mod repl_tool_injection_tests {
         if let Err(err_msg) = result {
             assert!(
                 !err_msg.contains("blocked") && !err_msg.contains("not allowed"),
-                "ls should be allowed, got: {}",
-                err_msg
+                "ls should be allowed, got: {err_msg}"
             );
         }
     }
@@ -263,8 +246,7 @@ mod repl_tool_injection_tests {
         if let Err(err_msg) = result {
             assert!(
                 !err_msg.contains("blocked") && !err_msg.contains("not allowed"),
-                "cat should be allowed, got: {}",
-                err_msg
+                "cat should be allowed, got: {err_msg}"
             );
         }
     }
@@ -276,8 +258,7 @@ mod repl_tool_injection_tests {
         if let Err(err_msg) = result {
             assert!(
                 !err_msg.contains("blocked") && !err_msg.contains("not allowed"),
-                "cargo should be allowed, got: {}",
-                err_msg
+                "cargo should be allowed, got: {err_msg}"
             );
         }
     }
@@ -291,8 +272,7 @@ mod repl_tool_injection_tests {
         let err_msg = result.unwrap_err();
         assert!(
             err_msg.contains("blocked") || err_msg.contains("not allowed") || err_msg.contains("ALLOWED_EXECUTABLES") || err_msg.contains("whitelist"),
-            "Error should mention not in whitelist: {}",
-            err_msg
+            "Error should mention not in whitelist: {err_msg}"
         );
     }
 
@@ -305,8 +285,7 @@ mod repl_tool_injection_tests {
         let err_msg = result.unwrap_err();
         assert!(
             err_msg.contains("newline") || err_msg.contains("line"),
-            "Error should mention newline: {}",
-            err_msg
+            "Error should mention newline: {err_msg}"
         );
     }
 
@@ -325,16 +304,14 @@ mod repl_tool_injection_tests {
             let result = execute_command(injection).await;
             assert!(
                 result.is_err(),
-                "Complex injection should be rejected: {}",
-                injection
+                "Complex injection should be rejected: {injection}"
             );
             let err_msg = result.unwrap_err();
             assert!(
                 err_msg.contains("command chaining")
                     || err_msg.contains("pipe")
                     || err_msg.contains("command substitution"),
-                "Error should mention the specific issue: {}",
-                err_msg
+                "Error should mention the specific issue: {err_msg}"
             );
         }
     }
@@ -396,8 +373,7 @@ mod sandbox_traversal_tests {
             let result = sandbox.validate(&attempt).await;
             assert!(
                 result.is_err(),
-                "Traversal attempt should be rejected: {:?}",
-                attempt
+                "Traversal attempt should be rejected: {attempt:?}"
             );
         }
     }
@@ -418,11 +394,10 @@ mod sandbox_traversal_tests {
             SandboxError::Denied(msg) => {
                 assert!(
                     msg.contains("restricted") || msg.contains("denied"),
-                    "Error should mention restricted: {}",
-                    msg
+                    "Error should mention restricted: {msg}"
                 );
             }
-            other => panic!("Expected Denied error, got: {:?}", other),
+            other => panic!("Expected Denied error, got: {other:?}"),
         }
     }
 
@@ -503,8 +478,7 @@ mod sandbox_traversal_tests {
         let result = sandbox.validate(&project_path).await;
         assert!(
             result.is_ok(),
-            "Path within allowed roots should be permitted: {:?}",
-            result
+            "Path within allowed roots should be permitted: {result:?}"
         );
     }
 
@@ -524,14 +498,13 @@ mod sandbox_traversal_tests {
             SandboxError::OutsideAllowedRoots(msg) => {
                 assert!(
                     msg.contains("not within") || msg.contains("allowed root"),
-                    "Error should mention allowed roots: {}",
-                    msg
+                    "Error should mention allowed roots: {msg}"
                 );
             }
             SandboxError::ResolutionFailed(_) => {
                 // Also acceptable if the path doesn't exist or can't be resolved
             }
-            other => panic!("Expected OutsideAllowedRoots error, got: {:?}", other),
+            other => panic!("Expected OutsideAllowedRoots error, got: {other:?}"),
         }
     }
 
@@ -600,7 +573,7 @@ mod sandbox_traversal_tests {
             SandboxError::InvalidPath => {
                 // Expected
             }
-            other => panic!("Expected InvalidPath error, got: {:?}", other),
+            other => panic!("Expected InvalidPath error, got: {other:?}"),
         }
     }
 
@@ -624,9 +597,7 @@ mod sandbox_traversal_tests {
             let result = sandbox.validate(Path::new(path_str)).await;
             assert!(
                 result.is_err(),
-                "Default config should deny '{}', got: {:?}",
-                path_str,
-                result
+                "Default config should deny '{path_str}', got: {result:?}"
             );
         }
     }
@@ -817,8 +788,7 @@ mod powershell_destructive_tests {
         assert!(is_error, "Should be rejected as error");
         assert!(
             content.contains("security risk") || content.contains("rejected"),
-            "Error should mention security: {}",
-            content
+            "Error should mention security: {content}"
         );
     }
 
@@ -978,8 +948,7 @@ mod powershell_destructive_tests {
                 // as long as it's not a security bypass
                 assert!(
                     !e.contains("allowed") || e.contains("not found"),
-                    "Error should indicate command not available, not security bypass: {}",
-                    e
+                    "Error should indicate command not available, not security bypass: {e}"
                 );
             }
         }
@@ -1036,8 +1005,7 @@ mod powershell_destructive_tests {
         assert!(is_error, "Should require confirmation");
         assert!(
             content.contains("confirmation") || content.contains("requires"),
-            "Error should mention confirmation: {}",
-            content
+            "Error should mention confirmation: {content}"
         );
     }
 

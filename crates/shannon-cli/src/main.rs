@@ -370,7 +370,7 @@ fn run_noninteractive_query(query: &str, stream: bool, config: &CliConfig) -> Re
             }
             Ok(_) => {}
             Err(e) => {
-                eprintln!("Warning: plugin discovery failed: {}", e);
+                eprintln!("Warning: plugin discovery failed: {e}");
             }
         }
         shannon_core::register_plugin_tools(&plugin_manager, &mut tools);
@@ -380,7 +380,7 @@ fn run_noninteractive_query(query: &str, stream: bool, config: &CliConfig) -> Re
             let mut mcp_registry = shannon_core::mcp_advanced::McpServerRegistry::new();
             let mcp_count = mcp_registry.load_from_default_paths();
             if mcp_count > 0 {
-                eprintln!("Discovered {} MCP server(s)", mcp_count);
+                eprintln!("Discovered {mcp_count} MCP server(s)");
                 for config in mcp_registry.enabled_servers() {
                     let description = format!(
                         "Execute tool calls on MCP server '{}' ({})",
@@ -412,7 +412,7 @@ fn run_noninteractive_query(query: &str, stream: bool, config: &CliConfig) -> Re
 
         // Validate and warn
         if let Err(e) = client_config.validate() {
-            eprintln!("Warning: {}", e);
+            eprintln!("Warning: {e}");
         }
 
         let client = if client_config.provider.requires_auth() {

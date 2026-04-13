@@ -489,7 +489,7 @@ pub fn calculate_next_fire(cron: &str, after: NaiveDateTime) -> Option<NaiveDate
     let max_search = after + Duration::days(366);
 
     while candidate <= max_search {
-        let month = candidate.month() as u32;
+        let month = candidate.month();
         if !months.matches(month) {
             // Skip to the first day of the next matching month
             candidate = skip_to_next_month(&candidate, &months);
@@ -518,20 +518,20 @@ pub fn calculate_next_fire(cron: &str, after: NaiveDateTime) -> Option<NaiveDate
         };
 
         if !day_match {
-            candidate = candidate + Duration::days(1);
+            candidate += Duration::days(1);
             candidate = candidate.with_hour(0).unwrap_or(candidate)
                 .with_minute(0).unwrap_or(candidate);
             continue;
         }
 
         if !hours.matches(hour) {
-            candidate = candidate + Duration::hours(1);
+            candidate += Duration::hours(1);
             candidate = candidate.with_minute(0).unwrap_or(candidate);
             continue;
         }
 
         if !minutes.matches(minute) {
-            candidate = candidate + Duration::minutes(1);
+            candidate += Duration::minutes(1);
             continue;
         }
 
@@ -544,7 +544,7 @@ pub fn calculate_next_fire(cron: &str, after: NaiveDateTime) -> Option<NaiveDate
 
 /// Skip to the first day of the next matching month.
 fn skip_to_next_month(current: &NaiveDateTime, months: &CronFieldValues) -> NaiveDateTime {
-    let mut month = current.month() as u32;
+    let mut month = current.month();
     let mut year = current.year();
 
     loop {
@@ -576,7 +576,7 @@ fn skip_to_next_month(current: &NaiveDateTime, months: &CronFieldValues) -> Naiv
 fn cron_to_human(cron: &str) -> String {
     let parts: Vec<&str> = cron.split_whitespace().collect();
     if parts.len() != 5 {
-        return format!("Invalid cron: {}", cron);
+        return format!("Invalid cron: {cron}");
     }
 
     let minute = humanize_field(parts[0], "minute", None);
@@ -586,20 +586,20 @@ fn cron_to_human(cron: &str) -> String {
     let dow = humanize_field(parts[4], "weekday", Some(DAY_NAMES));
 
     if parts[2] == "*" && parts[4] != "*" {
-        format!("At {}:{} on {}", hour, minute, dow)
+        format!("At {hour}:{minute} on {dow}")
     } else if parts[4] == "*" && parts[2] != "*" {
-        format!("At {}:{} on the {} of {}", hour, minute, dom, month)
+        format!("At {hour}:{minute} on the {dom} of {month}")
     } else if parts[2] == "*" && parts[4] == "*" {
-        format!("At {}:{} every day", hour, minute)
+        format!("At {hour}:{minute} every day")
     } else {
-        format!("At {}:{} on {} of {}, {}", hour, minute, dom, month, dow)
+        format!("At {hour}:{minute} on {dom} of {month}, {dow}")
     }
 }
 
 /// Humanize a single cron field value.
 fn humanize_field(field: &str, name: &str, names: Option<&[(&str, u32)]>) -> String {
     if field == "*" {
-        return format!("every {}", name);
+        return format!("every {name}");
     }
 
     if let Some(names) = names {
@@ -613,8 +613,8 @@ fn humanize_field(field: &str, name: &str, names: Option<&[(&str, u32)]>) -> Str
 
     // Handle step
     if let Some((base, step)) = field.split_once('/') {
-        let base_str = if base == "*" { format!("every {}", name) } else { base.to_string() };
-        return format!("{} (every {})", base_str, step);
+        let base_str = if base == "*" { format!("every {name}") } else { base.to_string() };
+        return format!("{base_str} (every {step})");
     }
 
     // Handle range
@@ -670,7 +670,7 @@ impl CronTool {
         // Check max jobs limit
         let job_count = {
             let store = self.store.read().map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to acquire store lock: {}", e))
+                ToolError::ExecutionFailed(format!("Failed to acquire store lock: {e}"))
             })?;
             store.len()
         };
@@ -692,7 +692,7 @@ impl CronTool {
         // Calculate next fire time
         let next_run = calculate_next_fire(&input.cron, now.naive_local())
             .map(|dt| {
-                let local = Local.from_local_datetime(&dt).single().unwrap_or_else(|| now);
+                let local = Local.from_local_datetime(&dt).single().unwrap_or(now);
                 local.to_rfc3339()
             });
 
@@ -719,7 +719,7 @@ impl CronTool {
 
         {
             let mut store = self.store.write().map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to acquire store lock: {}", e))
+                ToolError::ExecutionFailed(format!("Failed to acquire store lock: {e}"))
             })?;
             store.insert(id.clone(), job);
         }
@@ -740,7 +740,7 @@ impl CronTool {
     async fn delete_cron(&self, input: CronDeleteInput) -> Result<CronDeleteOutput, ToolError> {
         let exists = {
             let store = self.store.read().map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to acquire store lock: {}", e))
+                ToolError::ExecutionFailed(format!("Failed to acquire store lock: {e}"))
             })?;
             store.contains_key(&input.id)
         };
@@ -754,7 +754,7 @@ impl CronTool {
 
         {
             let mut store = self.store.write().map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to acquire store lock: {}", e))
+                ToolError::ExecutionFailed(format!("Failed to acquire store lock: {e}"))
             })?;
             store.remove(&input.id);
         }
@@ -768,7 +768,7 @@ impl CronTool {
         self.prune_expired_jobs();
 
         let store = self.store.read().map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to acquire store lock: {}", e))
+            ToolError::ExecutionFailed(format!("Failed to acquire store lock: {e}"))
         })?;
 
         let jobs: Vec<CronJobInfo> = store
@@ -815,11 +815,11 @@ impl CronTool {
     pub fn fire_job(&self, job_id: &str) -> Result<bool, ToolError> {
         let should_delete = {
             let mut store = self.store.write().map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to acquire store lock: {}", e))
+                ToolError::ExecutionFailed(format!("Failed to acquire store lock: {e}"))
             })?;
 
             let job = store.get_mut(job_id).ok_or_else(|| {
-                ToolError::InvalidInput(format!("No scheduled job with id '{}'", job_id))
+                ToolError::InvalidInput(format!("No scheduled job with id '{job_id}'"))
             })?;
 
             if !job.recurring {
@@ -830,7 +830,7 @@ impl CronTool {
                 // Recurring: update next_run
                 let now = Local::now();
                 if let Some(next) = calculate_next_fire(&job.cron, now.naive_local()) {
-                    let local = Local.from_local_datetime(&next).single().unwrap_or_else(|| now);
+                    let local = Local.from_local_datetime(&next).single().unwrap_or(now);
                     job.next_run = Some(local.to_rfc3339());
                 }
                 false
@@ -839,7 +839,7 @@ impl CronTool {
 
         if should_delete {
             let mut store = self.store.write().map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to acquire store lock: {}", e))
+                ToolError::ExecutionFailed(format!("Failed to acquire store lock: {e}"))
             })?;
             store.remove(job_id);
         }
@@ -865,7 +865,7 @@ impl Tool for CronTool {
         match operation {
             "Create" => {
                 let create_input: CronCreateInput = serde_json::from_value(input)
-                    .map_err(|e| ToolError::InvalidInput(format!("Invalid create cron input: {}", e)))?;
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid create cron input: {e}")))?;
                 let output = self.create_cron(create_input).await?;
                 Ok(ToolOutput {
                     content: format!("Created cron job with ID: {}", output.id),
@@ -890,7 +890,7 @@ impl Tool for CronTool {
             }
             "Delete" => {
                 let delete_input: CronDeleteInput = serde_json::from_value(input)
-                    .map_err(|e| ToolError::InvalidInput(format!("Invalid delete cron input: {}", e)))?;
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid delete cron input: {e}")))?;
                 let output = self.delete_cron(delete_input).await?;
                 Ok(ToolOutput {
                     content: format!("Deleted cron job: {}", output.id),
@@ -904,7 +904,7 @@ impl Tool for CronTool {
             }
             "List" => {
                 let list_input: CronListInput = serde_json::from_value(input)
-                    .map_err(|e| ToolError::InvalidInput(format!("Invalid list cron input: {}", e)))?;
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid list cron input: {e}")))?;
                 let output = self.list_cron(list_input).await?;
                 Ok(ToolOutput {
                     content: format!("Found {} cron jobs", output.jobs.len()),
@@ -917,8 +917,7 @@ impl Tool for CronTool {
                 })
             }
             _ => Err(ToolError::InvalidInput(format!(
-                "Unknown operation: {}",
-                operation
+                "Unknown operation: {operation}"
             ))),
         }
     }
@@ -1307,7 +1306,7 @@ mod tests {
             "prompt": "Ping server"
         })).await.unwrap();
 
-        assert_eq!(result.metadata.get("recurring").unwrap().as_bool().unwrap(), true);
+        assert!(result.metadata.get("recurring").unwrap().as_bool().unwrap());
         // Should have expires_at (7-day expiry)
         assert!(result.metadata.get("expires_at").is_some());
         // Should have next_run
@@ -1325,7 +1324,7 @@ mod tests {
             "recurring": false
         })).await.unwrap();
 
-        assert_eq!(result.metadata.get("recurring").unwrap().as_bool().unwrap(), false);
+        assert!(!result.metadata.get("recurring").unwrap().as_bool().unwrap());
         // Should have expires_at (1-day safety net)
         assert!(result.metadata.get("expires_at").is_some());
     }
@@ -1559,7 +1558,7 @@ mod tests {
         assert!(results[50].is_err());
         let err_msg = match &results[50] {
             Err(e) => e.to_string(),
-            other => panic!("expected Err at results[50], got: {:?}", other),
+            other => panic!("expected Err at results[50], got: {other:?}"),
         };
         assert!(err_msg.contains("max 50"));
     }

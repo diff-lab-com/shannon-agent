@@ -242,6 +242,12 @@ pub struct TaskGetTool {
     task_store: TaskStore,
 }
 
+impl Default for TodoWriteTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TodoWriteTool {
     pub fn new() -> Self {
         Self {
@@ -258,7 +264,7 @@ impl TodoWriteTool {
         // Get old todos
         let old_todos = {
             let store = self.store.read().map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to acquire store lock: {}", e))
+                ToolError::ExecutionFailed(format!("Failed to acquire store lock: {e}"))
             })?;
             store.get(key).cloned().unwrap_or_default()
         };
@@ -271,7 +277,7 @@ impl TodoWriteTool {
             // Clear completed todos
             {
                 let mut store = self.store.write().map_err(|e| {
-                    ToolError::ExecutionFailed(format!("Failed to acquire store lock: {}", e))
+                    ToolError::ExecutionFailed(format!("Failed to acquire store lock: {e}"))
                 })?;
                 store.insert(key.clone(), Vec::new());
             }
@@ -280,7 +286,7 @@ impl TodoWriteTool {
             // Store new todos
             {
                 let mut store = self.store.write().map_err(|e| {
-                    ToolError::ExecutionFailed(format!("Failed to acquire store lock: {}", e))
+                    ToolError::ExecutionFailed(format!("Failed to acquire store lock: {e}"))
                 })?;
                 store.insert(key.clone(), input.todos.clone());
             }
@@ -310,7 +316,7 @@ impl TodoWriteTool {
 impl Tool for TodoWriteTool {
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let write_input: TodoWriteInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid todo write input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid todo write input: {e}")))?;
         let output = self.write_todos(write_input).await?;
 
         let todo_count = output.new_todos.len();
@@ -320,7 +326,7 @@ impl Tool for TodoWriteTool {
             let pending = output.new_todos.iter()
                 .filter(|t| t.status == TodoStatus::Pending)
                 .count();
-            format!("Updated todo list: {} items ({} pending)", todo_count, pending)
+            format!("Updated todo list: {todo_count} items ({pending} pending)")
         };
 
         Ok(ToolOutput {
@@ -369,6 +375,12 @@ impl Tool for TodoWriteTool {
     }
 }
 
+impl Default for TaskCreateTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TaskCreateTool {
     pub fn new() -> Self {
         Self {
@@ -397,14 +409,14 @@ impl TaskCreateTool {
 
         {
             let mut store = self.task_store.write().map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to acquire task store lock: {}", e))
+                ToolError::ExecutionFailed(format!("Failed to acquire task store lock: {e}"))
             })?;
             store.insert(task_id.clone(), task);
         }
 
         Ok(TaskCreateOutput {
             task_id,
-            message: format!("Task created successfully"),
+            message: "Task created successfully".to_string(),
         })
     }
 }
@@ -413,7 +425,7 @@ impl TaskCreateTool {
 impl Tool for TaskCreateTool {
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let create_input: TaskCreateInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid task create input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid task create input: {e}")))?;
         let output = self.create_task(create_input).await?;
 
         Ok(ToolOutput {
@@ -461,6 +473,12 @@ impl Tool for TaskCreateTool {
     }
 }
 
+impl Default for TaskListTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TaskListTool {
     pub fn new() -> Self {
         Self {
@@ -478,7 +496,7 @@ impl TaskListTool {
 
     async fn list_tasks(&self, input: TaskListInput) -> Result<TaskListOutput, ToolError> {
         let store = self.task_store.read().map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to acquire task store lock: {}", e))
+            ToolError::ExecutionFailed(format!("Failed to acquire task store lock: {e}"))
         })?;
 
         let mut tasks: Vec<TodoItem> = store
@@ -511,7 +529,7 @@ impl TaskListTool {
 impl Tool for TaskListTool {
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let list_input: TaskListInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid task list input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid task list input: {e}")))?;
         let output = self.list_tasks(list_input).await?;
 
         Ok(ToolOutput {
@@ -548,6 +566,12 @@ impl Tool for TaskListTool {
     }
 }
 
+impl Default for TaskUpdateTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TaskUpdateTool {
     pub fn new() -> Self {
         Self {
@@ -565,7 +589,7 @@ impl TaskUpdateTool {
 
     async fn update_task(&self, input: TaskUpdateInput) -> Result<TaskUpdateOutput, ToolError> {
         let mut store = self.task_store.write().map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to acquire task store lock: {}", e))
+            ToolError::ExecutionFailed(format!("Failed to acquire task store lock: {e}"))
         })?;
 
         let task = store
@@ -579,8 +603,7 @@ impl TaskUpdateTool {
                 "in_progress" => TodoStatus::InProgress,
                 "completed" => TodoStatus::Completed,
                 _ => return Err(ToolError::InvalidInput(format!(
-                    "Invalid status: {}. Must be pending, in_progress, or completed",
-                    status_str
+                    "Invalid status: {status_str}. Must be pending, in_progress, or completed"
                 ))),
             };
         }
@@ -607,7 +630,7 @@ impl TaskUpdateTool {
 impl Tool for TaskUpdateTool {
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let update_input: TaskUpdateInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid task update input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid task update input: {e}")))?;
         let output = self.update_task(update_input).await?;
 
         Ok(ToolOutput {
@@ -656,6 +679,12 @@ impl Tool for TaskUpdateTool {
     }
 }
 
+impl Default for TaskGetTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TaskGetTool {
     pub fn new() -> Self {
         Self {
@@ -673,7 +702,7 @@ impl TaskGetTool {
 
     async fn get_task(&self, input: TaskGetInput) -> Result<TaskGetOutput, ToolError> {
         let store = self.task_store.read().map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to acquire task store lock: {}", e))
+            ToolError::ExecutionFailed(format!("Failed to acquire task store lock: {e}"))
         })?;
 
         let task = store.get(&input.task_id).cloned();
@@ -689,7 +718,7 @@ impl TaskGetTool {
 impl Tool for TaskGetTool {
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let get_input: TaskGetInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid task get input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid task get input: {e}")))?;
         let output = self.get_task(get_input).await?;
 
         Ok(ToolOutput {
@@ -736,6 +765,7 @@ impl Tool for TaskGetTool {
 mod tests {
     use super::*;
 
+    #[allow(dead_code)]
     fn create_test_todo_item(content: &str, status: TodoStatus) -> TodoItem {
         TodoItem {
             task_id: Uuid::new_v4().to_string(),

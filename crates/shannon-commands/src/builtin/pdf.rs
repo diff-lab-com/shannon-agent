@@ -310,7 +310,7 @@ impl PdfTable {
         // Header
         for (i, header) in self.headers.iter().enumerate() {
             let width = col_widths.get(i).copied().unwrap_or(4);
-            output.push_str(&format!(" {:width$} |", header, width = width));
+            output.push_str(&format!(" {header:width$} |"));
         }
         output.push('\n');
 
@@ -324,7 +324,7 @@ impl PdfTable {
         for row in &self.rows {
             for (i, cell) in row.iter().enumerate() {
                 let width = col_widths.get(i).copied().unwrap_or(4);
-                output.push_str(&format!(" {:width$} |", cell, width = width));
+                output.push_str(&format!(" {cell:width$} |"));
             }
             output.push('\n');
         }
@@ -374,7 +374,7 @@ pub fn get_pdf_prompt(file_path: &str, options: &PdfOptions) -> String {
     let mut args = file_path.to_string();
 
     if let Some(pages) = &options.pages {
-        args.push_str(&format!(" --pages {:?}", pages));
+        args.push_str(&format!(" --pages {pages:?}"));
     }
     if options.use_ocr {
         args.push_str(" --ocr");

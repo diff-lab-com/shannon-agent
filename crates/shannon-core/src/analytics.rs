@@ -440,7 +440,7 @@ impl AnalyticsStore {
                 let tool_calls = session_tool_calls.get(&session_id).copied().unwrap_or(0);
                 let errors = session_errors.get(&session_id).copied().unwrap_or(0);
                 let duration_ms = ended_at.map(|end| {
-                    (end - started_at).num_milliseconds().unsigned_abs() as u64
+                    (end - started_at).num_milliseconds().unsigned_abs()
                 });
                 SessionStats {
                     session_id,
@@ -539,15 +539,19 @@ impl AnalyticsStore {
 
     /// Returns a high-level summary of all analytics.
     pub fn summary(&self) -> AnalyticsSummary {
-        let mut s = AnalyticsSummary::default();
-        s.total_events = self.events.len();
-        s.total_sessions = self
+        let total_sessions = self
             .events
             .iter()
             .filter(|e| matches!(e.event_type, AnalyticsEventType::SessionStart))
             .map(|e| e.session_id.as_str())
             .collect::<std::collections::HashSet<_>>()
             .len();
+
+        let mut s = AnalyticsSummary {
+            total_events: self.events.len(),
+            total_sessions,
+            ..Default::default()
+        };
 
         for event in &self.events {
             match &event.event_type {

@@ -88,7 +88,7 @@ impl SkillExecutor {
 
         // ${0}, ${1}, etc. - indexed arguments
         for (i, arg) in args.iter().enumerate() {
-            let placeholder = format!("${{{}}}", i);
+            let placeholder = format!("${{{i}}}");
             result = result.replace(&placeholder, arg);
         }
 
@@ -143,7 +143,7 @@ impl SkillExecutor {
                 let cmd = &caps[1];
                 match executor.execute(cmd, &context.cwd) {
                     Ok(output) => output,
-                    Err(e) => format!("[Command failed: {}]", e),
+                    Err(e) => format!("[Command failed: {e}]"),
                 }
             }).to_string();
         }
@@ -155,7 +155,7 @@ impl SkillExecutor {
                 let cmd = &caps[1];
                 match executor.execute(cmd, &context.cwd) {
                     Ok(output) => output,
-                    Err(e) => format!("[Command failed: {}]", e),
+                    Err(e) => format!("[Command failed: {e}]"),
                 }
             }).to_string();
         }
@@ -193,15 +193,20 @@ fn validate_shell_command(command: &str) -> SkillResult<()> {
             return Err(SkillError::ExecutionFailed {
                 name: "shell".to_string(),
                 message: format!(
-                    "Command rejected: contains {} ({:?}). \
-                     Only single basic commands with arguments are allowed.",
-                    description, pattern
+                    "Command rejected: contains {description} ({pattern:?}). \
+                     Only single basic commands with arguments are allowed."
                 ),
             });
         }
     }
 
     Ok(())
+}
+
+impl Default for ShellExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ShellExecutor {
@@ -224,7 +229,7 @@ impl ShellExecutor {
         let parts = shell_words::split(command)
             .map_err(|e| SkillError::ExecutionFailed {
                 name: "shell".to_string(),
-                message: format!("Failed to parse command: {}", e),
+                message: format!("Failed to parse command: {e}"),
             })?;
 
         if parts.is_empty() {
@@ -241,14 +246,14 @@ impl ShellExecutor {
             .output()
             .map_err(|e| SkillError::ExecutionFailed {
                 name: "shell".to_string(),
-                message: format!("Failed to execute command: {}", e),
+                message: format!("Failed to execute command: {e}"),
             })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(SkillError::ExecutionFailed {
                 name: "shell".to_string(),
-                message: format!("Command failed: {}", stderr),
+                message: format!("Command failed: {stderr}"),
             });
         }
 

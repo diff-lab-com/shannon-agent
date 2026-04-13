@@ -256,7 +256,7 @@ impl BillingManager {
         let now = Utc::now();
         let start = NaiveDateTime::new(
             NaiveDate::from_ymd_opt(now.year(), now.month(), 1).unwrap_or(now.date_naive()),
-            chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+            chrono::NaiveTime::from_hms_opt(0, 0, 0).expect("midnight is always a valid time"),
         ).and_utc();
         let end = now;
         self.summarize_period(start, end)
@@ -308,7 +308,7 @@ impl BillingManager {
         let now = Utc::now();
         let start = NaiveDateTime::new(
             NaiveDate::from_ymd_opt(now.year(), now.month(), 1).unwrap_or(now.date_naive()),
-            chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+            chrono::NaiveTime::from_hms_opt(0, 0, 0).expect("midnight is always a valid time"),
         ).and_utc();
 
         let mut daily: HashMap<String, DailyUsage> = HashMap::new();
@@ -433,8 +433,7 @@ impl BillingManager {
                 current_cost: current_total,
                 budget_limit: limit,
                 message: format!(
-                    "Budget exceeded: ${:.2} of ${:.2} monthly budget used",
-                    current_total, limit
+                    "Budget exceeded: ${current_total:.2} of ${limit:.2} monthly budget used"
                 ),
                 timestamp: Utc::now(),
             };
@@ -496,7 +495,7 @@ impl BillingConfig {
 fn days_in_current_month(now: DateTime<Utc>) -> u32 {
     // Get the last day of the current month by going to the first day of next month and subtracting 1
     let year = now.year();
-    let month = now.month() as u32 + 1;
+    let month = now.month() + 1;
     let (next_year, next_month) = if month > 12 { (year + 1, 1) } else { (year, month) };
 
     // Use chrono's NaiveDate to compute days in month

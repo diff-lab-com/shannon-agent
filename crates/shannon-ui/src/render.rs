@@ -110,7 +110,7 @@ impl Renderer {
 
             // If the code ends with a trailing newline the iterator will have
             // produced an empty final element -- drop it for cleanliness.
-            if lines.last().map_or(false, |l| l.spans.is_empty()) {
+            if lines.last().is_some_and(|l| l.spans.is_empty()) {
                 lines.pop();
             }
 
@@ -134,12 +134,12 @@ impl Renderer {
     /// bold (**text**), inline code (`text`), and plain paragraphs.
     pub fn render_markdown(&self, text: &str) -> Vec<Line<'static>> {
         let mut output: Vec<Line<'static>> = Vec::new();
-        let mut lines_iter = text.lines().peekable();
+        let lines_iter = text.lines().peekable();
         let mut in_code_block = false;
         let mut code_lang = String::new();
         let mut code_buffer = String::new();
 
-        while let Some(line) = lines_iter.next() {
+        for line in lines_iter {
             if in_code_block {
                 if line.trim_start().starts_with("```") {
                     // End of code block
@@ -308,7 +308,7 @@ fn heading_level(line: &str) -> Option<usize> {
         }
     }
     // Must be followed by a space (or end of line) to be a heading
-    if count >= 1 && count <= 6 && line.chars().nth(count).map_or(true, |c| c == ' ') {
+    if (1..=6).contains(&count) && line.chars().nth(count).is_none_or(|c| c == ' ') {
         Some(count)
     } else {
         None
@@ -325,13 +325,13 @@ fn parse_inline_fragments(text: &str) -> Vec<Span<'static>> {
         match ch {
             '*' => {
                 // Check for bold: **
-                if chars.peek().map_or(false, |(_, c)| *c == '*') {
+                if chars.peek().is_some_and(|(_, c)| *c == '*') {
                     chars.next(); // consume second '*'
                     // Collect until closing **
                     let mut bold_text = String::new();
                     let mut found_close = false;
                     while let Some((_, c)) = chars.next() {
-                        if c == '*' && chars.peek().map_or(false, |(_, nc)| *nc == '*') {
+                        if c == '*' && chars.peek().is_some_and(|(_, nc)| *nc == '*') {
                             chars.next(); // consume closing **
                             found_close = true;
                             break;
@@ -358,7 +358,7 @@ fn parse_inline_fragments(text: &str) -> Vec<Span<'static>> {
                 // Inline code
                 let mut code_text = String::new();
                 let mut found_close = false;
-                while let Some((_, c)) = chars.next() {
+                for (_, c) in chars.by_ref() {
                     if c == '`' {
                         found_close = true;
                         break;
@@ -528,7 +528,7 @@ mod tests {
         for level in 1..=6 {
             let md = format!("{} Heading {}", "#".repeat(level), level);
             let lines = renderer.render_markdown(&md);
-            assert_eq!(lines.len(), 1, "Heading level {}", level);
+            assert_eq!(lines.len(), 1, "Heading level {level}");
         }
     }
 

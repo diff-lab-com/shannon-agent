@@ -146,6 +146,7 @@ impl LspDiagnostic {
 
 /// Aggregate summary of all diagnostics currently stored in the registry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct DiagnosticSummary {
     /// Total number of diagnostics.
     pub total: usize,
@@ -163,19 +164,6 @@ pub struct DiagnosticSummary {
     pub files_with_diagnostics: Vec<String>,
 }
 
-impl Default for DiagnosticSummary {
-    fn default() -> Self {
-        Self {
-            total: 0,
-            errors: 0,
-            warnings: 0,
-            info: 0,
-            hints: 0,
-            files_with_errors: Vec::new(),
-            files_with_diagnostics: Vec::new(),
-        }
-    }
-}
 
 impl std::fmt::Display for DiagnosticSummary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -675,7 +663,7 @@ mod tests {
         let mut reg = DiagnosticRegistry::new();
         reg.update("a.rs", vec![make_error("a.rs", 1)]);
         let s = reg.summary();
-        let text = format!("{}", s);
+        let text = format!("{s}");
         assert!(text.contains("1 total"));
         assert!(text.contains("1 errors"));
         assert!(text.contains("0 warnings"));

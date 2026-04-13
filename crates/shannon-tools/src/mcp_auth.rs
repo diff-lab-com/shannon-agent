@@ -139,7 +139,7 @@ impl Tool for McpAuthTool {
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
         let action: McpAuthAction = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid McpAuth input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid McpAuth input: {e}")))?;
 
         match action {
             McpAuthAction::List => {
@@ -178,16 +178,14 @@ impl Tool for McpAuthTool {
 
                         Ok(ToolOutput {
                             content: format!(
-                                "Authorization required for {}. Please visit:\n\n{}\n\nThen use the Token action with the authorization code.",
-                                server_name, auth_url
+                                "Authorization required for {server_name}. Please visit:\n\n{auth_url}\n\nThen use the Token action with the authorization code."
                             ),
                             is_error: false,
                             metadata,
                         })
                     }
                     None => Err(ToolError::NotFound(format!(
-                        "No OAuth config registered for MCP server: {}",
-                        server_name
+                        "No OAuth config registered for MCP server: {server_name}"
                     ))),
                 }
             }
@@ -210,7 +208,7 @@ impl Tool for McpAuthTool {
                 metadata.insert("server_name".to_string(), json!(server_name));
 
                 Ok(ToolOutput {
-                    content: format!("Successfully authenticated with {}", server_name),
+                    content: format!("Successfully authenticated with {server_name}"),
                     is_error: false,
                     metadata,
                 })
@@ -223,14 +221,13 @@ impl Tool for McpAuthTool {
                         token.access_token =
                             format!("refreshed_{}", uuid::Uuid::new_v4().simple());
                         Ok(ToolOutput {
-                            content: format!("Refreshed token for {}", server_name),
+                            content: format!("Refreshed token for {server_name}"),
                             is_error: false,
                             metadata: HashMap::new(),
                         })
                     }
                     None => Err(ToolError::NotFound(format!(
-                        "No token found for: {}",
-                        server_name
+                        "No token found for: {server_name}"
                     ))),
                 }
             }
@@ -239,7 +236,7 @@ impl Tool for McpAuthTool {
                 let mut tokens = self.tokens.write().await;
                 tokens.remove(&server_name);
                 Ok(ToolOutput {
-                    content: format!("Revoked authentication for {}", server_name),
+                    content: format!("Revoked authentication for {server_name}"),
                     is_error: false,
                     metadata: HashMap::new(),
                 })
@@ -281,7 +278,7 @@ mod tests {
             ToolError::NotFound(msg) => {
                 assert!(msg.contains("unknown-server"));
             }
-            other => panic!("Expected NotFound, got: {:?}", other),
+            other => panic!("Expected NotFound, got: {other:?}"),
         }
     }
 

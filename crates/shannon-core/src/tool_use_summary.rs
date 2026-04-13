@@ -114,6 +114,8 @@ impl Default for ToolUseSummaryGenerator {
     }
 }
 
+type ApiClientFn = dyn Fn(String) -> Pin<Box<dyn Future<Output = Result<String, Box<dyn std::error::Error>>>>>;
+
 impl ToolUseSummaryGenerator {
     pub fn new() -> Self {
         Self { ai_config: None }
@@ -176,7 +178,7 @@ impl ToolUseSummaryGenerator {
     pub async fn generate_ai_summary(
         &self,
         tools: &[ToolUseInfo],
-        api_client: &dyn Fn(String) -> Pin<Box<dyn Future<Output = Result<String, Box<dyn std::error::Error>>>>>,
+        api_client: &ApiClientFn,
     ) -> Option<EnhancedToolUseSummary> {
         // Check if AI is enabled
         if !self.ai_enabled() {
@@ -187,7 +189,7 @@ impl ToolUseSummaryGenerator {
             return None;
         }
 
-        let config = self.ai_config.as_ref().unwrap();
+        let config = self.ai_config.as_ref().expect("ai_config must be set when ai_enabled() is true");
         let prompt = self.build_ai_prompt(tools);
 
         // Attempt AI generation
@@ -215,17 +217,17 @@ impl ToolUseSummaryGenerator {
             .iter()
             .map(|tool| {
                 let input_summary = summarize_value(&tool.input, 200);
-                let output_summary = if tool.output.is_null() || tool.output.as_object().map_or(true, |o| o.is_empty()) {
+                let output_summary = if tool.output.is_null() || tool.output.as_object().is_none_or(|o| o.is_empty()) {
                     String::new()
                 } else {
                     let s = summarize_value(&tool.output, 100);
-                    format!(" -> {}", s)
+                    format!(" -> {s}")
                 };
                 format!("- {}: {}{}", tool.name, input_summary, output_summary)
             })
             .collect();
 
-        let config = self.ai_config.as_ref().unwrap();
+        let config = self.ai_config.as_ref().expect("ai_config must be set when ai_enabled() is true");
 
         format!(
             "Generate a concise git-commit-style summary label (max {} chars) for these tool calls. \
@@ -266,7 +268,7 @@ impl ToolUseSummaryGenerator {
             if let Some(space_pos) = truncated.rfind(' ') {
                 truncated.truncate(space_pos);
             }
-            format!("{}...", truncated)
+            format!("{truncated}...")
         }
     }
 
@@ -277,11 +279,11 @@ impl ToolUseSummaryGenerator {
         match tool_names.as_slice() {
             [name] if name.contains("Read") || name.contains("Glob") || name.contains("Grep") => {
                 let target = extract_target(&tools[0].input);
-                format!("Searched in {}", target)
+                format!("Searched in {target}")
             }
             [name] if name.contains("Write") || name.contains("Edit") => {
                 let target = extract_target(&tools[0].input);
-                format!("Modified {}", target)
+                format!("Modified {target}")
             }
             [name] if name.contains("Bash") => {
                 let cmd = tools[0]
@@ -290,7 +292,7 @@ impl ToolUseSummaryGenerator {
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
                 let truncated = cmd.chars().take(50).collect::<String>();
-                format!("Ran: {}", truncated)
+                format!("Ran: {truncated}")
             }
             _ => {
                 let primary = tool_names.first().unwrap_or(&"Tool");

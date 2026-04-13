@@ -1122,7 +1122,7 @@ mod tests {
 
         // Should have received progress events
         let mut received = Vec::new();
-        while let Some(p) = rx.try_recv().ok() {
+        while let Ok(p) = rx.try_recv() {
             received.push(p);
         }
         assert!(!received.is_empty());

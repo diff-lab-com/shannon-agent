@@ -115,7 +115,7 @@ impl DiffHunk {
         } else {
             format!("{},{}", self.new_start, self.new_count)
         };
-        format!("@@ -{} +{} @@", old_range, new_range)
+        format!("@@ -{old_range} +{new_range} @@")
     }
 
     /// Recalculate stats for this hunk.
@@ -344,7 +344,7 @@ impl DiffRenderer {
         let mut output = String::new();
 
         // Header
-        let header = format!("Side-by-side diff: {}", file_path);
+        let header = format!("Side-by-side diff: {file_path}");
         output.push_str(&format!(
             "{}{}{}",
             self.colors.bold, header, self.colors.reset
@@ -404,7 +404,7 @@ impl DiffRenderer {
                 DiffLineType::Header => continue,
             };
 
-            output.push_str(&format!("{} | {}\n", left, right));
+            output.push_str(&format!("{left} | {right}\n"));
         }
 
         output
@@ -424,11 +424,11 @@ impl DiffRenderer {
         if self.show_line_numbers {
             let old_num = line
                 .line_number_old
-                .map(|n| format!("{:>4}", n))
+                .map(|n| format!("{n:>4}"))
                 .unwrap_or_else(|| "    ".to_string());
             let new_num = line
                 .line_number_new
-                .map(|n| format!("{:>4}", n))
+                .map(|n| format!("{n:>4}"))
                 .unwrap_or_else(|| "    ".to_string());
             result.push_str(&format!("{}{} | {}{}{}",
                 self.colors.dim,
@@ -452,7 +452,7 @@ impl DiffRenderer {
         if content.len() >= width {
             format!("{}...", &content[..width.saturating_sub(3)])
         } else {
-            format!("{:width$}", content, width = width)
+            format!("{content:width$}")
         }
     }
 

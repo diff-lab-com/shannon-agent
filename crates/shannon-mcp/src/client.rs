@@ -77,7 +77,7 @@ impl<T: Transport> McpClient<T> {
             .await?;
 
         let result: InitializeResult = serde_json::from_value(response)
-            .map_err(|e| McpError::Protocol(format!("Invalid initialize result: {}", e)))?;
+            .map_err(|e| McpError::Protocol(format!("Invalid initialize result: {e}")))?;
 
         // Store server capabilities
         *self.server_capabilities.lock().await = Some(result.capabilities.clone());
@@ -96,7 +96,7 @@ impl<T: Transport> McpClient<T> {
         debug!("Listing tools");
         let response = self.send_request("tools/list", None).await?;
         let tools: ListToolsResult = serde_json::from_value(response)
-            .map_err(|e| McpError::Protocol(format!("Invalid tools list result: {}", e)))?;
+            .map_err(|e| McpError::Protocol(format!("Invalid tools list result: {e}")))?;
         Ok(tools)
     }
 
@@ -111,7 +111,7 @@ impl<T: Transport> McpClient<T> {
 
         let response = self.send_request("tools/call", Some(params)).await?;
         let content: ToolContent = serde_json::from_value(response)
-            .map_err(|e| McpError::Protocol(format!("Invalid tool call result: {}", e)))?;
+            .map_err(|e| McpError::Protocol(format!("Invalid tool call result: {e}")))?;
 
         Ok(content)
     }
@@ -121,7 +121,7 @@ impl<T: Transport> McpClient<T> {
         debug!("Listing resources");
         let response = self.send_request("resources/list", None).await?;
         let resources: ListResourcesResult = serde_json::from_value(response)
-            .map_err(|e| McpError::Protocol(format!("Invalid resources list result: {}", e)))?;
+            .map_err(|e| McpError::Protocol(format!("Invalid resources list result: {e}")))?;
         Ok(resources)
     }
 
@@ -132,7 +132,7 @@ impl<T: Transport> McpClient<T> {
         let params = serde_json::json!({ "uri": uri });
         let response = self.send_request("resources/read", Some(params)).await?;
         let content: ResourceContent = serde_json::from_value(response)
-            .map_err(|e| McpError::Protocol(format!("Invalid resource read result: {}", e)))?;
+            .map_err(|e| McpError::Protocol(format!("Invalid resource read result: {e}")))?;
 
         Ok(content)
     }
@@ -142,7 +142,7 @@ impl<T: Transport> McpClient<T> {
         debug!("Listing resource templates");
         let response = self.send_request("resources/templates/list", None).await?;
         let templates: ListResourceTemplatesResult = serde_json::from_value(response)
-            .map_err(|e| McpError::Protocol(format!("Invalid resource templates result: {}", e)))?;
+            .map_err(|e| McpError::Protocol(format!("Invalid resource templates result: {e}")))?;
         Ok(templates)
     }
 
@@ -151,7 +151,7 @@ impl<T: Transport> McpClient<T> {
         debug!("Listing prompts");
         let response = self.send_request("prompts/list", None).await?;
         let prompts: ListPromptsResult = serde_json::from_value(response)
-            .map_err(|e| McpError::Protocol(format!("Invalid prompts list result: {}", e)))?;
+            .map_err(|e| McpError::Protocol(format!("Invalid prompts list result: {e}")))?;
         Ok(prompts)
     }
 
@@ -170,7 +170,7 @@ impl<T: Transport> McpClient<T> {
 
         let response = self.send_request("prompts/get", Some(params)).await?;
         let content: ToolContent = serde_json::from_value(response)
-            .map_err(|e| McpError::Protocol(format!("Invalid prompt get result: {}", e)))?;
+            .map_err(|e| McpError::Protocol(format!("Invalid prompt get result: {e}")))?;
 
         Ok(content)
     }
@@ -186,7 +186,7 @@ impl<T: Transport> McpClient<T> {
 
         let response = self.send_request("completion/complete", Some(params)).await?;
         let result: CompletionResult = serde_json::from_value(response)
-            .map_err(|e| McpError::Protocol(format!("Invalid completion result: {}", e)))?;
+            .map_err(|e| McpError::Protocol(format!("Invalid completion result: {e}")))?;
 
         Ok(result)
     }
@@ -208,7 +208,7 @@ impl<T: Transport> McpClient<T> {
         let params = serde_json::json!({ "uri": uri });
         let response = self.send_request("resources/subscribe", Some(params)).await?;
         let result: SubscribeResult = serde_json::from_value(response)
-            .map_err(|e| McpError::Protocol(format!("Invalid subscribe result: {}", e)))?;
+            .map_err(|e| McpError::Protocol(format!("Invalid subscribe result: {e}")))?;
 
         Ok(result.subscribed)
     }
@@ -220,7 +220,7 @@ impl<T: Transport> McpClient<T> {
         let params = serde_json::json!({ "uri": uri });
         let response = self.send_request("resources/unsubscribe", Some(params)).await?;
         let result: SubscribeResult = serde_json::from_value(response)
-            .map_err(|e| McpError::Protocol(format!("Invalid unsubscribe result: {}", e)))?;
+            .map_err(|e| McpError::Protocol(format!("Invalid unsubscribe result: {e}")))?;
 
         Ok(result.subscribed)
     }

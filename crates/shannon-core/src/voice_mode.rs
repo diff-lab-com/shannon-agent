@@ -392,7 +392,7 @@ impl KeywordSpotter {
             if let Some(idx) = lower.find(&wake_lower) {
                 let end = idx + wake.len();
                 // Remove the wake word and any trailing punctuation/space/comma
-                let trimmed = result[end..].trim_start_matches(|c: char| c == ',' || c == ' ');
+                let trimmed = result[end..].trim_start_matches([',', ' ']);
                 result = format!("{}{}", &result[..idx], trimmed);
             }
         }
@@ -866,7 +866,7 @@ mod tests {
                 assert!(service.current_session().is_some());
                 assert_eq!(service.current_session().unwrap().id, session_id);
             }
-            other => panic!("Expected Started, got {:?}", other),
+            other => panic!("Expected Started, got {other:?}"),
         }
 
         // Feed transcription
@@ -880,7 +880,7 @@ mod tests {
             VoiceCommandResult::Stopped { text, .. } => {
                 assert_eq!(text, "hello");
             }
-            other => panic!("Expected Stopped, got {:?}", other),
+            other => panic!("Expected Stopped, got {other:?}"),
         }
     }
 
@@ -912,7 +912,7 @@ mod tests {
             VoiceCommandResult::Status { status, .. } => {
                 assert_eq!(status, VoiceStatus::Idle);
             }
-            other => panic!("Expected Status, got {:?}", other),
+            other => panic!("Expected Status, got {other:?}"),
         }
     }
 
@@ -930,7 +930,7 @@ mod tests {
             VoiceCommandResult::LanguageChanged { language } => {
                 assert_eq!(language, "fr-FR");
             }
-            other => panic!("Expected LanguageChanged, got {:?}", other),
+            other => panic!("Expected LanguageChanged, got {other:?}"),
         }
         assert_eq!(service.config().language, "fr-FR");
     }

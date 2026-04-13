@@ -1,6 +1,6 @@
 //! Benchmark for query engine operations
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{criterion_group, criterion_main, Criterion};
 use shannon_core::{QueryContext};
 use shannon_core::query_engine::QueryMetadata;
 use uuid::Uuid;

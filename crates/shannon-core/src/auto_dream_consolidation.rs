@@ -331,7 +331,7 @@ impl ConsolidationPrompt {
 
         let summary = by_category
             .iter()
-            .map(|(cat, count)| format!("- {}: {}", cat, count))
+            .map(|(cat, count)| format!("- {cat}: {count}"))
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -657,7 +657,7 @@ mod tests {
     #[test]
     fn test_enhanced_result_display() {
         let result = EnhancedConsolidationResult::new(100, 85, 10, 5, 250);
-        let display = format!("{}", result);
+        let display = format!("{result}");
         assert!(display.contains("100 -> 85"));
         assert!(display.contains("15.0% reduction"));
         assert!(display.contains("10 merged"));

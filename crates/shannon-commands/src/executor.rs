@@ -149,7 +149,7 @@ impl CommandExecutor {
                 if let Some(ref template) = cmd.prompt_template {
                     Ok(template.replace("{args}", args))
                 } else {
-                    Ok(format!("Execute the /{} command with args: '{}'", command_name, args))
+                    Ok(format!("Execute the /{command_name} command with args: '{args}'"))
                 }
             }
             _ => Err(CommandError::ExecutionError(
@@ -213,13 +213,13 @@ impl SharedExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::command::{CommandBase, PromptCommand};
-    use std::collections::HashMap;
+    
+    
 
     fn create_test_registry() -> CommandRegistry {
-        let registry = CommandRegistry::new();
+        
         // Commands would be registered here
-        registry
+        CommandRegistry::new()
     }
 
     #[tokio::test]

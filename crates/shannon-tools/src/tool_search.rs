@@ -60,7 +60,7 @@ impl ToolSearchTool {
     /// Core search logic: list tools from the registry and apply filters.
     fn search(&self, input: ToolSearchInput) -> Result<ToolSearchOutput, ToolError> {
         let registry = self.registry.read().map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to acquire registry lock: {}", e))
+            ToolError::ExecutionFailed(format!("Failed to acquire registry lock: {e}"))
         })?;
 
         let all_tools = registry.list_tools_info();
@@ -145,7 +145,7 @@ impl Tool for ToolSearchTool {
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
         // Accept empty / missing fields gracefully
         let search_input: ToolSearchInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid tool search input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid tool search input: {e}")))?;
 
         let output = self.search(search_input)?;
 

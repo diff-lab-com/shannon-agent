@@ -136,14 +136,14 @@ pub fn parse_git_status(output: &str) -> Option<GitStatusInfo> {
 
     for line in output.lines() {
         // Branch line: "On branch main" or "HEAD detached at abc123"
-        if line.starts_with("On branch ") {
-            branch = line["On branch ".len()..].to_string();
-        } else if line.starts_with("HEAD detached at ") {
-            branch = format!("(detached) {}", line["HEAD detached at ".len()..].to_string());
+        if let Some(rest) = line.strip_prefix("On branch ") {
+            branch = rest.to_string();
+        } else if let Some(rest) = line.strip_prefix("HEAD detached at ") {
+            branch = format!("(detached) {rest}");
         }
 
         // Short format parsing: "MM file.txt" (status codes in first two chars)
-        if line.len() > 3 && !line.starts_with(' ') && line.chars().next().map_or(false, |c| c == 'M' || c == 'A' || c == 'D' || c == 'R' || c == 'C' || c == 'U' || c == '?' || c == '!') {
+        if line.len() > 3 && !line.starts_with(' ') && line.chars().next().is_some_and(|c| c == 'M' || c == 'A' || c == 'D' || c == 'R' || c == 'C' || c == 'U' || c == '?' || c == '!') {
             let staged_status = line.chars().next().filter(|c| *c != ' ');
             let unstaged_status = line.chars().nth(1).filter(|c| *c != ' ');
             let path = line[3..].trim().to_string();
@@ -253,14 +253,14 @@ fn format_branch_verbose(info: &GitStatusInfo) -> String {
         if !info.untracked.is_empty() {
             output.push_str("\nUntracked files:\n");
             for file in &info.untracked {
-                output.push_str(&format!("  {}\n", file));
+                output.push_str(&format!("  {file}\n"));
             }
         }
 
         if !info.conflicts.is_empty() {
             output.push_str("\nUnmerged paths:\n");
             for file in &info.conflicts {
-                output.push_str(&format!("  {}\n", file));
+                output.push_str(&format!("  {file}\n"));
             }
         }
     } else {

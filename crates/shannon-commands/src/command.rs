@@ -207,6 +207,7 @@ pub struct LocalJSXCommand {
 
 /// Unified command type
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     Prompt(PromptCommand),
     Local(LocalCommand),
@@ -263,7 +264,7 @@ impl fmt::Display for Command {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "/{}", self.name())?;
         if let Some(hint) = self.argument_hint() {
-            write!(f, " {}", hint)?;
+            write!(f, " {hint}")?;
         }
         Ok(())
     }

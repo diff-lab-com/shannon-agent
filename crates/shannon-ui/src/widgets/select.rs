@@ -152,7 +152,7 @@ impl MultiSelectWidget {
                         Style::default().fg(Color::DarkGray),
                     ),
                     Span::styled(
-                        format!("[{}]", check_mark),
+                        format!("[{check_mark}]"),
                         Style::default()
                             .fg(if is_selected { Color::Green } else { Color::White })
                             .add_modifier(Modifier::BOLD),
@@ -389,7 +389,7 @@ impl FileSelectorWidget {
                 content.push(Line::from(vec![
                     Span::styled(prefix, Style::default().fg(Color::Yellow)),
                     Span::styled(
-                        format!("{}/", dir),
+                        format!("{dir}/"),
                         Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD),
                     ),
                 ]));

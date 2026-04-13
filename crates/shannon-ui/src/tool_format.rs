@@ -253,7 +253,7 @@ fn format_table(s: &str) -> String {
                 let width = col_widths[i];
                 // Truncate cell content if wider than column width
                 let display_cell: String = cell.chars().take(width).collect();
-                line.push_str(&format!("{:width$}", display_cell, width = width));
+                line.push_str(&format!("{display_cell:width$}"));
                 line.push_str(" | ");
             }
         }
@@ -272,7 +272,7 @@ fn format_table(s: &str) -> String {
                 .map(|&w| format!("{}{}", "-".repeat(w), "-".repeat(0)))
                 .collect::<Vec<_>>()
                 .join("-+-");
-            output.push_str(&format!("|-{}-|\n", sep));
+            output.push_str(&format!("|-{sep}-|\n"));
         }
     }
 
@@ -410,8 +410,8 @@ mod tests {
         let mut obj = serde_json::Map::new();
         for i in 0..100 {
             obj.insert(
-                format!("key_{}", i),
-                serde_json::Value::String(format!("value_{}", i)),
+                format!("key_{i}"),
+                serde_json::Value::String(format!("value_{i}")),
             );
         }
         let large_json = serde_json::to_string(&serde_json::Value::Object(obj)).unwrap();

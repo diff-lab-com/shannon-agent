@@ -900,7 +900,7 @@ mod e2e_client_tests {
             }
         }
         // Both tool calls must be delivered — this was the P0-2 bug
-        assert_eq!(tool_starts.len(), 2, "Both tool calls should be delivered, got {:?}", tool_starts);
+        assert_eq!(tool_starts.len(), 2, "Both tool calls should be delivered, got {tool_starts:?}");
         assert_eq!(tool_starts[0], (0, "bash".to_string()));
         assert_eq!(tool_starts[1], (1, "read".to_string()));
     }
@@ -1303,15 +1303,15 @@ mod query_pipeline_tests {
         while let Some(result) = stream.next().await {
             match result {
                 Ok(event) => events.push(event),
-                Err(e) => panic!("Stream error: {}", e),
+                Err(e) => panic!("Stream error: {e}"),
             }
         }
 
         let has_text = events.iter().any(|e| matches!(e, QueryEvent::Text { .. }));
         let has_completed = events.iter().any(|e| matches!(e, QueryEvent::Completed { .. }));
 
-        assert!(has_text, "Expected Text event, got: {:?}", events);
-        assert!(has_completed, "Expected Completed event, got: {:?}", events);
+        assert!(has_text, "Expected Text event, got: {events:?}");
+        assert!(has_completed, "Expected Completed event, got: {events:?}");
 
         // Verify text content
         let text_content: String = events
@@ -1405,7 +1405,7 @@ mod query_pipeline_tests {
         while let Some(result) = stream.next().await {
             match result {
                 Ok(event) => events.push(event),
-                Err(e) => panic!("Stream error: {}", e),
+                Err(e) => panic!("Stream error: {e}"),
             }
         }
 
@@ -1414,9 +1414,9 @@ mod query_pipeline_tests {
         let has_tool_result = events.iter().any(|e| matches!(e, QueryEvent::ToolUseResult { .. }));
         let has_completed = events.iter().any(|e| matches!(e, QueryEvent::Completed { .. }));
 
-        assert!(has_tool_request, "Expected ToolUseRequest event, got: {:?}", events);
-        assert!(has_tool_result, "Expected ToolUseResult event, got: {:?}", events);
-        assert!(has_completed, "Expected Completed event, got: {:?}", events);
+        assert!(has_tool_request, "Expected ToolUseRequest event, got: {events:?}");
+        assert!(has_tool_result, "Expected ToolUseResult event, got: {events:?}");
+        assert!(has_completed, "Expected Completed event, got: {events:?}");
 
         mock1.assert();
         mock2.assert();
@@ -1454,7 +1454,7 @@ mod query_pipeline_tests {
                     error.to_lowercase().contains("authentication")
                         || error.contains("401")
                         || error.to_lowercase().contains("unauthorized"),
-                    "Error should mention auth issue: {}", error
+                    "Error should mention auth issue: {error}"
                 );
                 has_failed = true;
             }
@@ -1584,7 +1584,7 @@ mod query_pipeline_tests {
         // Process a query
         let ctx = make_context("Remember this");
         let mut stream = engine.process_query(ctx, None).await;
-        while let Some(_) = stream.next().await {}
+        while (stream.next().await).is_some() {}
 
         // Verify session ID is set
         assert_eq!(engine.session_id(), session_id);
@@ -1662,7 +1662,7 @@ mod conversation_export_tests {
                 "assistant" => "## Assistant",
                 _ => "## System",
             };
-            md.push_str(&format!("{}\n\n{}\n\n---\n\n", heading, content));
+            md.push_str(&format!("{heading}\n\n{content}\n\n---\n\n"));
         }
 
         // Verify format
@@ -1773,7 +1773,7 @@ mod conversation_export_tests {
                 total_input_tokens: 10 * (i + 1) as u64,
                 total_output_tokens: 5 * (i + 1) as u64,
                 turn_count: i + 1,
-                title: Some(format!("Session {}", i)),
+                title: Some(format!("Session {i}")),
             };
             state_manager.save_session(&sid, &[], &metadata).unwrap();
             saved_ids.push(sid);

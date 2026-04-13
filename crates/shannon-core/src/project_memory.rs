@@ -36,6 +36,7 @@ pub struct ProjectMemoryConfig {
 
 /// Frontmatter metadata from a project memory file
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct ProjectMemoryMetadata {
     /// Priority for this configuration (higher = more important)
     pub priority: i32,
@@ -53,19 +54,6 @@ pub struct ProjectMemoryMetadata {
     pub tool_permissions: Option<serde_json::Value>,
 }
 
-impl Default for ProjectMemoryMetadata {
-    fn default() -> Self {
-        Self {
-            priority: 0,
-            disable_auto_memory: false,
-            model: None,
-            temperature: None,
-            max_tokens: None,
-            instructions_for: None,
-            tool_permissions: None,
-        }
-    }
-}
 
 /// Result of a project memory file search
 #[derive(Debug, Clone)]
@@ -249,7 +237,7 @@ impl ProjectMemoryManager {
 
             // Parse YAML frontmatter
             let metadata: ProjectMemoryMetadata = serde_yaml::from_str(frontmatter)
-                .map_err(|e| ProjectMemoryError::InvalidFrontmatter(format!("YAML parsing error: {}", e)))?;
+                .map_err(|e| ProjectMemoryError::InvalidFrontmatter(format!("YAML parsing error: {e}")))?;
 
             (metadata, main_content)
         } else {
@@ -290,7 +278,7 @@ impl ProjectMemoryManager {
 
         // Add model overrides if present
         if let Some(ref model) = config.metadata.model {
-            parts.push(format!("Model Override: {}", model));
+            parts.push(format!("Model Override: {model}"));
         }
         if config.metadata.disable_auto_memory {
             parts.push("Auto Memory: Disabled".to_string());
@@ -454,6 +442,13 @@ fn dirs_home() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+// Backward compatibility aliases
+pub type ClaudeMdConfig = ProjectMemoryConfig;
+pub type ClaudeMdMetadata = ProjectMemoryMetadata;
+pub type ClaudeMdManager = ProjectMemoryManager;
+pub type ClaudeMdSearchResult = ProjectMemorySearchResult;
+pub type ClaudeMdError = ProjectMemoryError;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -571,10 +566,3 @@ Another instruction"#;
         assert_eq!(merged.max_tokens, Some(4096));
     }
 }
-
-// Backward compatibility aliases
-pub type ClaudeMdConfig = ProjectMemoryConfig;
-pub type ClaudeMdMetadata = ProjectMemoryMetadata;
-pub type ClaudeMdManager = ProjectMemoryManager;
-pub type ClaudeMdSearchResult = ProjectMemorySearchResult;
-pub type ClaudeMdError = ProjectMemoryError;

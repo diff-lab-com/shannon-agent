@@ -299,8 +299,8 @@ impl FileDiff {
             .unwrap_or_else(|| "/dev/null".to_string());
         let new_path = self.snapshot_after.file_path.display().to_string();
 
-        output.push_str(&format!("--- {}\n", old_path));
-        output.push_str(&format!("+++ {}\n", new_path));
+        output.push_str(&format!("--- {old_path}\n"));
+        output.push_str(&format!("+++ {new_path}\n"));
 
         for hunk in &self.hunks {
             output.push_str(&format!(
@@ -434,7 +434,7 @@ impl FileHistoryManager {
                 let mut snapshots = Vec::new();
 
                 for id in &snapshot_ids {
-                    let snapshot_path = self.file_dir(&file_path).join(format!("{}.json", id));
+                    let snapshot_path = self.file_dir(&file_path).join(format!("{id}.json"));
                     if snapshot_path.exists() {
                         if let Ok(content) = std::fs::read_to_string(&snapshot_path) {
                             if let Ok(snapshot) = serde_json::from_str::<FileSnapshot>(&content) {
@@ -622,7 +622,7 @@ impl FileHistoryManager {
         // Second pass: delete the snapshot files
         for (file_path, snapshot_id) in &files_to_delete {
             let snapshot_path =
-                self.file_dir(file_path).join(format!("{}.json", snapshot_id));
+                self.file_dir(file_path).join(format!("{snapshot_id}.json"));
             let _ = std::fs::remove_file(snapshot_path);
         }
 
@@ -763,21 +763,23 @@ fn simple_diff(before: &[&str], after: &[&str]) -> Vec<DiffHunk> {
         .count();
 
     // Add context lines for prefix
-    for i in 0..common_prefix {
-        diff_ops.push(DiffOp::Context(before[i].to_string()));
+    for line in before.iter().take(common_prefix) {
+        diff_ops.push(DiffOp::Context((*line).to_string()));
     }
 
     // Add changed lines
-    for i in common_prefix..before.len().saturating_sub(common_suffix) {
-        diff_ops.push(DiffOp::Remove(before[i].to_string()));
+    let before_change_end = before.len().saturating_sub(common_suffix);
+    for line in before.iter().take(before_change_end).skip(common_prefix) {
+        diff_ops.push(DiffOp::Remove((*line).to_string()));
     }
-    for i in common_prefix..after.len().saturating_sub(common_suffix) {
-        diff_ops.push(DiffOp::Add(after[i].to_string()));
+    let after_change_end = after.len().saturating_sub(common_suffix);
+    for line in after.iter().take(after_change_end).skip(common_prefix) {
+        diff_ops.push(DiffOp::Add((*line).to_string()));
     }
 
     // Add context lines for suffix
-    for i in after.len().saturating_sub(common_suffix)..after.len() {
-        diff_ops.push(DiffOp::Context(after[i].to_string()));
+    for line in after.iter().skip(after.len().saturating_sub(common_suffix)) {
+        diff_ops.push(DiffOp::Context((*line).to_string()));
     }
 
     group_into_hunks(diff_ops)
@@ -924,7 +926,7 @@ pub fn compute_content_hash(content: &str) -> String {
 
 /// Encode bytes as lowercase hex.
 fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Recursively compute the total size of a directory in bytes.
@@ -953,7 +955,7 @@ fn dir_size(path: &Path) -> Result<u64, std::io::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    
 
     // ---- FileOperation tests -----------------------------------------------
 
@@ -1073,7 +1075,7 @@ mod tests {
         let mut history = FileHistory::new(PathBuf::from("/tmp/test.rs"), 3);
 
         for i in 0..5 {
-            let content = format!("version_{}", i);
+            let content = format!("version_{i}");
             let snapshot = FileSnapshot::new(PathBuf::from("/tmp/test.rs"), content, FileOperation::Edit);
             history.add_snapshot(snapshot);
         }
@@ -1322,7 +1324,7 @@ mod tests {
 
         // Record snapshots within the current limit (10)
         for i in 0..10 {
-            let content = format!("version_{}", i);
+            let content = format!("version_{i}");
             let _ = manager.record_snapshot(path, &content, FileOperation::Edit);
         }
 

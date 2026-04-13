@@ -231,8 +231,7 @@ impl std::fmt::Display for ApprovalDecision {
                 allowed_permissions,
             } => write!(
                 f,
-                "approved with restrictions: {:?}",
-                allowed_permissions
+                "approved with restrictions: {allowed_permissions:?}"
             ),
         }
     }
@@ -808,7 +807,7 @@ mod tests {
             ApprovalDecision::ApproveWithRestrictions { allowed_permissions } => {
                 assert!(allowed_permissions.is_empty());
             }
-            _ => panic!("Expected ApproveWithRestrictions, got {:?}", decision),
+            _ => panic!("Expected ApproveWithRestrictions, got {decision:?}"),
         }
         assert!(!mgr.is_approved("network-server"));
         assert_eq!(mgr.pending_requests().len(), 1);

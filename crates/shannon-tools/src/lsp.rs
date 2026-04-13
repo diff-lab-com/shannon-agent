@@ -97,7 +97,7 @@ impl LspClient {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .map_err(|e| format!("Failed to launch language server '{}': {}", server_command, e))?;
+            .map_err(|e| format!("Failed to launch language server '{server_command}': {e}"))?;
 
         let root_uri = path_to_uri(root_path);
 
@@ -137,7 +137,7 @@ impl LspClient {
         if response.get("error").is_some() {
             return Err(format!(
                 "LSP initialize failed: {}",
-                response["error"].to_string()
+                response["error"]
             ));
         }
 
@@ -174,7 +174,7 @@ impl LspClient {
         loop {
             let mut header_line = String::new();
             let bytes_read = reader.read_line(&mut header_line).await
-                .map_err(|e| format!("Failed to read LSP response header: {}", e))?;
+                .map_err(|e| format!("Failed to read LSP response header: {e}"))?;
 
             if bytes_read == 0 {
                 return Err("LSP server closed connection".to_string());
@@ -187,21 +187,21 @@ impl LspClient {
 
             if let Some(length_str) = header_line.strip_prefix("Content-Length: ") {
                 let length: usize = length_str.trim().parse()
-                    .map_err(|e| format!("Invalid Content-Length: {}", e))?;
+                    .map_err(|e| format!("Invalid Content-Length: {e}"))?;
 
                 // Read the empty line after headers
                 let mut sep = String::new();
                 reader.read_line(&mut sep).await
-                    .map_err(|e| format!("Failed to read header separator: {}", e))?;
+                    .map_err(|e| format!("Failed to read header separator: {e}"))?;
 
                 // Read the body
                 let mut body = vec![0u8; length];
                 reader.read_exact(&mut body).await
-                    .map_err(|e| format!("Failed to read LSP response body: {}", e))?;
+                    .map_err(|e| format!("Failed to read LSP response body: {e}"))?;
 
                 let body_str = String::from_utf8_lossy(&body);
                 let response: serde_json::Value = serde_json::from_str(&body_str)
-                    .map_err(|e| format!("Failed to parse LSP response: {} | body: {}", e, body_str))?;
+                    .map_err(|e| format!("Failed to parse LSP response: {e} | body: {body_str}"))?;
 
                 // Return if this is the response to our request
                 if response.get("id").and_then(|v| v.as_i64()) == Some(id) {
@@ -234,15 +234,15 @@ impl LspClient {
         stdin
             .write_all(header.as_bytes())
             .await
-            .map_err(|e| format!("Failed to write to LSP server: {}", e))?;
+            .map_err(|e| format!("Failed to write to LSP server: {e}"))?;
         stdin
             .write_all(body)
             .await
-            .map_err(|e| format!("Failed to write body to LSP server: {}", e))?;
+            .map_err(|e| format!("Failed to write body to LSP server: {e}"))?;
         stdin
             .flush()
             .await
-            .map_err(|e| format!("Failed to flush LSP server stdin: {}", e))?;
+            .map_err(|e| format!("Failed to flush LSP server stdin: {e}"))?;
 
         Ok(())
     }
@@ -251,7 +251,7 @@ impl LspClient {
     async fn open_document(&mut self, file_path: &Path, language_id: &str) -> Result<(), String> {
         let content = tokio::fs::read_to_string(file_path)
             .await
-            .map_err(|e| format!("Failed to read file for LSP: {}", e))?;
+            .map_err(|e| format!("Failed to read file for LSP: {e}"))?;
 
         let uri = path_to_uri(file_path);
 
@@ -286,7 +286,7 @@ impl LspClient {
         let response = self.send_request("textDocument/definition", &params).await?;
 
         if let Some(error) = response.get("error") {
-            return Err(format!("LSP definition error: {}", error));
+            return Err(format!("LSP definition error: {error}"));
         }
 
         let result = response
@@ -317,7 +317,7 @@ impl LspClient {
         let response = self.send_request("textDocument/references", &params).await?;
 
         if let Some(error) = response.get("error") {
-            return Err(format!("LSP references error: {}", error));
+            return Err(format!("LSP references error: {error}"));
         }
 
         let result = response
@@ -346,7 +346,7 @@ impl LspClient {
         let response = self.send_request("textDocument/hover", &params).await?;
 
         if let Some(error) = response.get("error") {
-            return Err(format!("LSP hover error: {}", error));
+            return Err(format!("LSP hover error: {error}"));
         }
 
         let result = response.get("result");
@@ -380,7 +380,7 @@ impl LspClient {
         let response = self.send_request("textDocument/documentSymbol", &params).await?;
 
         if let Some(error) = response.get("error") {
-            return Err(format!("LSP document symbol error: {}", error));
+            return Err(format!("LSP document symbol error: {error}"));
         }
 
         let result = response
@@ -467,7 +467,7 @@ fn parse_locations(result: &serde_json::Value) -> Result<Vec<LspLocation>, Strin
     // Single location
     if let Some(_uri) = result.get("uri") {
         let loc: LspLocation = serde_json::from_value(result.clone())
-            .map_err(|e| format!("Failed to parse location: {}", e))?;
+            .map_err(|e| format!("Failed to parse location: {e}"))?;
         return Ok(vec![loc]);
     }
 
@@ -476,7 +476,7 @@ fn parse_locations(result: &serde_json::Value) -> Result<Vec<LspLocation>, Strin
         let mut locations = Vec::new();
         for item in arr {
             let loc: LspLocation = serde_json::from_value(item.clone())
-                .map_err(|e| format!("Failed to parse location: {}", e))?;
+                .map_err(|e| format!("Failed to parse location: {e}"))?;
             locations.push(loc);
         }
         return Ok(locations);
@@ -487,7 +487,7 @@ fn parse_locations(result: &serde_json::Value) -> Result<Vec<LspLocation>, Strin
         return Ok(Vec::new());
     }
 
-    Err(format!("Unexpected location response format: {}", result))
+    Err(format!("Unexpected location response format: {result}"))
 }
 
 /// Extract hover contents string from the various LSP hover content forms.
@@ -670,7 +670,7 @@ fn symbol_kind_to_string(kind: u64) -> String {
         24 => "Event".to_string(),
         25 => "Operator".to_string(),
         26 => "TypeParameter".to_string(),
-        _ => format!("Unknown({})", kind),
+        _ => format!("Unknown({kind})"),
     }
 }
 
@@ -768,6 +768,12 @@ pub struct GoToDefinitionTool {
     description: String,
 }
 
+impl Default for GoToDefinitionTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GoToDefinitionTool {
     pub fn new() -> Self {
         Self {
@@ -791,9 +797,8 @@ impl GoToDefinitionTool {
         let language_id = detect_language_id(&file_path);
         let (server_cmd, server_args) = detect_server_command(language_id).ok_or_else(|| {
             ToolError::ExecutionFailed(format!(
-                "No language server configured for language '{}'. \
-                 Supported languages: rust, typescript, javascript, python, go, java, c, cpp.",
-                language_id
+                "No language server configured for language '{language_id}'. \
+                 Supported languages: rust, typescript, javascript, python, go, java, c, cpp."
             ))
         })?;
 
@@ -805,17 +810,16 @@ impl GoToDefinitionTool {
 
         if which_result.is_err() || !which_result.unwrap().status.success() {
             return Err(ToolError::ExecutionFailed(format!(
-                "Language server '{}' not found. Please install it to use code intelligence features.",
-                server_cmd
+                "Language server '{server_cmd}' not found. Please install it to use code intelligence features."
             )));
         }
 
         let root_path = find_workspace_root(&file_path);
-        let args: Vec<&str> = server_args.iter().copied().collect();
+        let args: Vec<&str> = server_args.to_vec();
 
         let mut client = LspClient::launch(server_cmd, &args, &root_path)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
 
         let result = client
             .goto_definition(&file_path, input.line, input.character, language_id)
@@ -824,7 +828,7 @@ impl GoToDefinitionTool {
         // Always attempt shutdown
         let _ = client.shutdown().await;
 
-        let locations = result.map_err(|e| ToolError::ExecutionFailed(e))?;
+        let locations = result.map_err(ToolError::ExecutionFailed)?;
 
         Ok(GoToDefinitionOutput {
             count: locations.len(),
@@ -866,7 +870,7 @@ impl Tool for GoToDefinitionTool {
 
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let def_input: GoToDefinitionInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid go_to_definition input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid go_to_definition input: {e}")))?;
 
         let output = self.execute_inner(def_input).await?;
 
@@ -898,6 +902,12 @@ pub struct FindReferencesTool {
     description: String,
 }
 
+impl Default for FindReferencesTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FindReferencesTool {
     pub fn new() -> Self {
         Self {
@@ -920,8 +930,7 @@ impl FindReferencesTool {
         let language_id = detect_language_id(&file_path);
         let (server_cmd, server_args) = detect_server_command(language_id).ok_or_else(|| {
             ToolError::ExecutionFailed(format!(
-                "No language server configured for language '{}'.",
-                language_id
+                "No language server configured for language '{language_id}'."
             ))
         })?;
 
@@ -932,17 +941,16 @@ impl FindReferencesTool {
 
         if which_result.is_err() || !which_result.unwrap().status.success() {
             return Err(ToolError::ExecutionFailed(format!(
-                "Language server '{}' not found. Please install it.",
-                server_cmd
+                "Language server '{server_cmd}' not found. Please install it."
             )));
         }
 
         let root_path = find_workspace_root(&file_path);
-        let args: Vec<&str> = server_args.iter().copied().collect();
+        let args: Vec<&str> = server_args.to_vec();
 
         let mut client = LspClient::launch(server_cmd, &args, &root_path)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
 
         let result = client
             .find_references(
@@ -956,7 +964,7 @@ impl FindReferencesTool {
 
         let _ = client.shutdown().await;
 
-        let locations = result.map_err(|e| ToolError::ExecutionFailed(e))?;
+        let locations = result.map_err(ToolError::ExecutionFailed)?;
 
         Ok(FindReferencesOutput {
             count: locations.len(),
@@ -1002,7 +1010,7 @@ impl Tool for FindReferencesTool {
 
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let ref_input: FindReferencesInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid find_references input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid find_references input: {e}")))?;
 
         let output = self.execute_inner(ref_input).await?;
 
@@ -1034,6 +1042,12 @@ pub struct HoverTool {
     description: String,
 }
 
+impl Default for HoverTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HoverTool {
     pub fn new() -> Self {
         Self {
@@ -1057,8 +1071,7 @@ impl HoverTool {
         let language_id = detect_language_id(&file_path);
         let (server_cmd, server_args) = detect_server_command(language_id).ok_or_else(|| {
             ToolError::ExecutionFailed(format!(
-                "No language server configured for language '{}'.",
-                language_id
+                "No language server configured for language '{language_id}'."
             ))
         })?;
 
@@ -1069,17 +1082,16 @@ impl HoverTool {
 
         if which_result.is_err() || !which_result.unwrap().status.success() {
             return Err(ToolError::ExecutionFailed(format!(
-                "Language server '{}' not found. Please install it.",
-                server_cmd
+                "Language server '{server_cmd}' not found. Please install it."
             )));
         }
 
         let root_path = find_workspace_root(&file_path);
-        let args: Vec<&str> = server_args.iter().copied().collect();
+        let args: Vec<&str> = server_args.to_vec();
 
         let mut client = LspClient::launch(server_cmd, &args, &root_path)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
 
         let result = client
             .hover(&file_path, input.line, input.character, language_id)
@@ -1087,7 +1099,7 @@ impl HoverTool {
 
         let _ = client.shutdown().await;
 
-        let hover_result = result.map_err(|e| ToolError::ExecutionFailed(e))?;
+        let hover_result = result.map_err(ToolError::ExecutionFailed)?;
 
         Ok(HoverOutput {
             result: hover_result,
@@ -1128,7 +1140,7 @@ impl Tool for HoverTool {
 
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let hover_input: HoverInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid hover input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid hover input: {e}")))?;
 
         let output = self.execute_inner(hover_input).await?;
 
@@ -1161,6 +1173,12 @@ pub struct DocumentSymbolTool {
     description: String,
 }
 
+impl Default for DocumentSymbolTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DocumentSymbolTool {
     pub fn new() -> Self {
         Self {
@@ -1184,8 +1202,7 @@ impl DocumentSymbolTool {
         let language_id = detect_language_id(&file_path);
         let (server_cmd, server_args) = detect_server_command(language_id).ok_or_else(|| {
             ToolError::ExecutionFailed(format!(
-                "No language server configured for language '{}'.",
-                language_id
+                "No language server configured for language '{language_id}'."
             ))
         })?;
 
@@ -1196,17 +1213,16 @@ impl DocumentSymbolTool {
 
         if which_result.is_err() || !which_result.unwrap().status.success() {
             return Err(ToolError::ExecutionFailed(format!(
-                "Language server '{}' not found. Please install it.",
-                server_cmd
+                "Language server '{server_cmd}' not found. Please install it."
             )));
         }
 
         let root_path = find_workspace_root(&file_path);
-        let args: Vec<&str> = server_args.iter().copied().collect();
+        let args: Vec<&str> = server_args.to_vec();
 
         let mut client = LspClient::launch(server_cmd, &args, &root_path)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
 
         let result = client
             .document_symbols(&file_path, language_id)
@@ -1214,7 +1230,7 @@ impl DocumentSymbolTool {
 
         let _ = client.shutdown().await;
 
-        let symbols = result.map_err(|e| ToolError::ExecutionFailed(e))?;
+        let symbols = result.map_err(ToolError::ExecutionFailed)?;
 
         Ok(DocumentSymbolOutput {
             count: symbols.len(),
@@ -1248,7 +1264,7 @@ impl Tool for DocumentSymbolTool {
 
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let sym_input: DocumentSymbolInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid document_symbol input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid document_symbol input: {e}")))?;
 
         let output = self.execute_inner(sym_input).await?;
 

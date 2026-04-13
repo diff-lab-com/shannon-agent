@@ -81,7 +81,7 @@ impl std::fmt::Display for TaskResult {
             self.duration.as_secs_f64()
         )?;
         if let Some(count) = self.items_cleaned {
-            write!(f, " ({} items)", count)?;
+            write!(f, " ({count} items)")?;
         }
         Ok(())
     }
@@ -172,7 +172,7 @@ impl HousekeepingTask for TempFileCleanupTask {
         let mut errors = 0usize;
 
         let entries = std::fs::read_dir(&tmp_dir)
-            .map_err(|e| format!("Failed to read tmp dir: {}", e))?;
+            .map_err(|e| format!("Failed to read tmp dir: {e}"))?;
 
         for entry in entries {
             let entry = match entry {
@@ -203,9 +203,9 @@ impl HousekeepingTask for TempFileCleanupTask {
         }
 
         let msg = if errors > 0 {
-            format!("Removed {} temp files ({} errors)", removed, errors)
+            format!("Removed {removed} temp files ({errors} errors)")
         } else {
-            format!("Removed {} temp files", removed)
+            format!("Removed {removed} temp files")
         };
 
         Ok((msg, Some(removed)))
@@ -238,14 +238,14 @@ impl HousekeepingTask for CacheRefreshTask {
         let marker = cache_dir.join(".last_refresh");
         let ts = Utc::now().to_rfc3339();
         std::fs::write(&marker, ts.as_bytes())
-            .map_err(|e| format!("Failed to write refresh marker: {}", e))?;
+            .map_err(|e| format!("Failed to write refresh marker: {e}"))?;
 
         let entry_count = std::fs::read_dir(&cache_dir)
             .map(|entries| entries.filter_map(|e| e.ok()).count())
             .unwrap_or(0);
 
         Ok((
-            format!("Cache refreshed, {} entries found", entry_count),
+            format!("Cache refreshed, {entry_count} entries found"),
             Some(entry_count),
         ))
     }
@@ -277,7 +277,7 @@ impl HousekeepingTask for OldSessionPruneTask {
         let mut removed = 0usize;
 
         let entries = std::fs::read_dir(&sessions_dir)
-            .map_err(|e| format!("Failed to read sessions dir: {}", e))?;
+            .map_err(|e| format!("Failed to read sessions dir: {e}"))?;
 
         for entry in entries {
             let entry = match entry {
@@ -289,18 +289,17 @@ impl HousekeepingTask for OldSessionPruneTask {
                 if let Ok(modified) = metadata.modified() {
                     if modified < cutoff {
                         let path = entry.path();
-                        if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                            if std::fs::remove_file(&path).is_ok() {
+                        if path.extension().and_then(|e| e.to_str()) == Some("json")
+                            && std::fs::remove_file(&path).is_ok() {
                                 removed += 1;
                             }
-                        }
                     }
                 }
             }
         }
 
         Ok((
-            format!("Pruned {} old sessions", removed),
+            format!("Pruned {removed} old sessions"),
             Some(removed),
         ))
     }
@@ -332,7 +331,7 @@ impl HousekeepingTask for LogRotationTask {
         let mut rotated = 0usize;
 
         let entries = std::fs::read_dir(&logs_dir)
-            .map_err(|e| format!("Failed to read logs dir: {}", e))?;
+            .map_err(|e| format!("Failed to read logs dir: {e}"))?;
 
         for entry in entries {
             let entry = match entry {
@@ -346,7 +345,7 @@ impl HousekeepingTask for LogRotationTask {
                     // "Rotate" by renaming to .old.
                     if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                         let archive_path =
-                            path.parent().unwrap_or(&logs_dir).join(format!("{}.old", stem));
+                            path.parent().unwrap_or(&logs_dir).join(format!("{stem}.old"));
                         if std::fs::rename(&path, &archive_path).is_ok() {
                             rotated += 1;
                         }
@@ -356,7 +355,7 @@ impl HousekeepingTask for LogRotationTask {
         }
 
         Ok((
-            format!("Rotated {} log files", rotated),
+            format!("Rotated {rotated} log files"),
             Some(rotated),
         ))
     }
@@ -689,7 +688,7 @@ mod tests {
         fs::write(tmp_dir.join("recent.txt"), "data").unwrap();
 
         // All files are recent, so nothing should be removed.
-        let (msg, count) = task.execute(&dir).unwrap();
+        let (_msg, count) = task.execute(&dir).unwrap();
         assert_eq!(count, Some(0));
         assert!(tmp_dir.join("recent.txt").exists());
     }
@@ -712,7 +711,7 @@ mod tests {
     fn test_old_session_prune_task_no_dir() {
         let task = OldSessionPruneTask;
         let dir = temp_dir();
-        let (msg, count) = task.execute(&dir).unwrap();
+        let (_msg, count) = task.execute(&dir).unwrap();
         assert_eq!(count, Some(0));
     }
 
@@ -727,7 +726,7 @@ mod tests {
         fs::write(sessions_dir.join("recent.json"), "{}").unwrap();
         fs::write(sessions_dir.join("recent2.json"), "{}").unwrap();
 
-        let (msg, count) = task.execute(&dir).unwrap();
+        let (_msg, count) = task.execute(&dir).unwrap();
         // All files are recent, so none should be pruned.
         assert_eq!(count, Some(0));
         assert!(sessions_dir.join("recent.json").exists());
@@ -737,7 +736,7 @@ mod tests {
     fn test_log_rotation_task_no_dir() {
         let task = LogRotationTask;
         let dir = temp_dir();
-        let (msg, count) = task.execute(&dir).unwrap();
+        let (_msg, count) = task.execute(&dir).unwrap();
         assert_eq!(count, Some(0));
     }
 
@@ -755,7 +754,7 @@ mod tests {
         let large_log = logs_dir.join("large.log");
         fs::write(&large_log, "x".repeat(11 * 1024 * 1024)).unwrap();
 
-        let (msg, count) = task.execute(&dir).unwrap();
+        let (_msg, count) = task.execute(&dir).unwrap();
         assert_eq!(count, Some(1));
         assert!(logs_dir.join("small.log").exists());
         assert!(!large_log.exists());
@@ -849,7 +848,7 @@ mod tests {
 
         let results = keeper.run_all();
         assert_eq!(results.len(), 4);
-        for (_, result) in &results {
+        for result in results.values() {
             assert!(result.success);
         }
     }
@@ -911,7 +910,7 @@ mod tests {
             duration: Duration::from_millis(500),
             items_cleaned: Some(10),
         };
-        let display = format!("{}", result);
+        let display = format!("{result}");
         assert!(display.contains("[OK]"));
         assert!(display.contains("test_task"));
         assert!(display.contains("All good"));
@@ -927,7 +926,7 @@ mod tests {
             duration: Duration::from_millis(100),
             items_cleaned: None,
         };
-        let display = format!("{}", result);
+        let display = format!("{result}");
         assert!(display.contains("[FAILED]"));
         assert!(display.contains("fail_task"));
     }

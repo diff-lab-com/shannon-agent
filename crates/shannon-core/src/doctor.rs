@@ -423,7 +423,7 @@ impl Doctor {
             .unwrap_or_else(|_| "api.anthropic.com".to_string());
 
         // Attempt DNS resolution
-        let addr_str = format!("{}:443", api_host);
+        let addr_str = format!("{api_host}:443");
         let resolve_result = std::net::ToSocketAddrs::to_socket_addrs(&addr_str);
         match resolve_result {
             Ok(addrs) => {
@@ -432,13 +432,13 @@ impl Doctor {
                     DiagnosticCheck::pass(
                         "Network Connectivity",
                         DiagnosticCategory::Network,
-                        format!("Successfully resolved {}", api_host),
+                        format!("Successfully resolved {api_host}"),
                     )
                 } else {
                     DiagnosticCheck::warn(
                         "Network Connectivity",
                         DiagnosticCategory::Network,
-                        format!("DNS resolution returned no addresses for {}", api_host),
+                        format!("DNS resolution returned no addresses for {api_host}"),
                         Some("Check your network connection and DNS settings.".to_string()),
                     )
                 }
@@ -446,7 +446,7 @@ impl Doctor {
             Err(e) => DiagnosticCheck::fail(
                 "Network Connectivity",
                 DiagnosticCategory::Network,
-                format!("Cannot resolve {}: {}", api_host, e),
+                format!("Cannot resolve {api_host}: {e}"),
                 Some("Verify network connectivity and DNS configuration.".to_string()),
             ),
         }
@@ -480,7 +480,7 @@ impl Doctor {
                 format!("Missing tools: {}", missing.join(", ")),
                 Some(format!(
                     "Install missing tools: {}",
-                    missing.iter().map(|t| format!("'{}'", t)).collect::<Vec<_>>().join(", ")
+                    missing.iter().map(|t| format!("'{t}'")).collect::<Vec<_>>().join(", ")
                 )),
             )
         }
@@ -510,7 +510,7 @@ impl Doctor {
         match std::fs::read_dir(&home_dir) {
             Ok(_) => {}
             Err(e) => {
-                issues.push(format!("Cannot read home directory: {}", e));
+                issues.push(format!("Cannot read home directory: {e}"));
             }
         }
 
@@ -519,7 +519,7 @@ impl Doctor {
             match std::fs::read_dir(&shannon_dir) {
                 Ok(_) => {}
                 Err(e) => {
-                    issues.push(format!("Cannot read ~/.shannon: {}", e));
+                    issues.push(format!("Cannot read ~/.shannon: {e}"));
                 }
             }
             // Test write permission
@@ -529,7 +529,7 @@ impl Doctor {
                     let _ = std::fs::remove_file(&test_file);
                 }
                 Err(e) => {
-                    issues.push(format!("Cannot write to ~/.shannon: {}", e));
+                    issues.push(format!("Cannot write to ~/.shannon: {e}"));
                 }
             }
         } else {
@@ -539,7 +539,7 @@ impl Doctor {
                     let _ = std::fs::remove_dir(&shannon_dir);
                 }
                 Err(e) => {
-                    issues.push(format!("Cannot create ~/.shannon: {}", e));
+                    issues.push(format!("Cannot create ~/.shannon: {e}"));
                 }
             }
         }
@@ -548,7 +548,7 @@ impl Doctor {
         match std::fs::read_dir(".") {
             Ok(_) => {}
             Err(e) => {
-                issues.push(format!("Cannot read current directory: {}", e));
+                issues.push(format!("Cannot read current directory: {e}"));
             }
         }
 
@@ -601,7 +601,7 @@ impl Doctor {
                 return DiagnosticCheck::fail(
                     "Configuration",
                     DiagnosticCategory::Configuration,
-                    format!("Cannot read settings file: {}", e),
+                    format!("Cannot read settings file: {e}"),
                     Some("Check file permissions for ~/.shannon/settings.json".to_string()),
                 );
             }
@@ -614,7 +614,7 @@ impl Doctor {
                 return DiagnosticCheck::fail(
                     "Configuration",
                     DiagnosticCategory::Configuration,
-                    format!("Invalid JSON in settings file: {}", e),
+                    format!("Invalid JSON in settings file: {e}"),
                     Some("Fix the JSON syntax in ~/.shannon/settings.json".to_string()),
                 );
             }
@@ -631,7 +631,7 @@ impl Doctor {
                 Err(e) => DiagnosticCheck::fail(
                     "Configuration",
                     DiagnosticCategory::Configuration,
-                    format!("Settings validation error: {}", e),
+                    format!("Settings validation error: {e}"),
                     Some("Fix the invalid settings in ~/.shannon/settings.json".to_string()),
                 ),
             }
@@ -684,7 +684,7 @@ impl Doctor {
                     DiagnosticCheck::pass(
                         "Disk Space",
                         DiagnosticCategory::Disk,
-                        format!("{:.1} GB free", free_gb),
+                        format!("{free_gb:.1} GB free"),
                     )
                 }
             }
@@ -703,7 +703,7 @@ impl Doctor {
                     Err(e) => DiagnosticCheck::fail(
                         "Disk Space",
                         DiagnosticCategory::Disk,
-                        format!("Cannot write to disk: {}", e),
+                        format!("Cannot write to disk: {e}"),
                         Some("Check disk space and write permissions.".to_string()),
                     ),
                 }
@@ -806,7 +806,7 @@ fn get_disk_space(path: &std::path::Path) -> Option<u64> {
         // by the FFI call. We use `assume_init_read()` to move the initialized value out.
         let stat = unsafe { stat.assume_init_read() };
         // Available space = block size * available blocks
-        Some(stat.f_bsize as u64 * stat.f_bavail as u64)
+        Some(stat.f_bsize * stat.f_bavail)
     } else {
         // statvfs failed; the stat struct may be uninitialized, so we must not read it.
         // Returning None is the correct error handling path.

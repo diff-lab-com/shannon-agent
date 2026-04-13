@@ -222,7 +222,7 @@ impl UiAdapter for DefaultUiAdapter {
         };
 
         if let Some(ref title) = message.title {
-            println!("{}{}", prefix, title);
+            println!("{prefix}{title}");
             println!("{}{}", prefix, message.content);
         } else {
             println!("{}{}", prefix, message.content);
@@ -232,8 +232,8 @@ impl UiAdapter for DefaultUiAdapter {
 
     async fn display_progress(&self, message: &str, percent: Option<u8>) -> UiResult<()> {
         match percent {
-            Some(p) => print!("\r[{}%] {}", p, message),
-            None => print!("\r  {}", message),
+            Some(p) => print!("\r[{p}%] {message}"),
+            None => print!("\r  {message}"),
         }
         use std::io::Write;
         std::io::stdout().flush()?;
@@ -241,7 +241,7 @@ impl UiAdapter for DefaultUiAdapter {
     }
 
     async fn read_input(&self, prompt: &str) -> UiResult<String> {
-        print!("{} ", prompt);
+        print!("{prompt} ");
         use std::io::Write;
         std::io::stdout().flush()?;
 
@@ -251,7 +251,7 @@ impl UiAdapter for DefaultUiAdapter {
     }
 
     async fn confirm(&self, message: &str) -> UiResult<bool> {
-        let input = self.read_input(&format!("{} [y/N]", message)).await?;
+        let input = self.read_input(&format!("{message} [y/N]")).await?;
         Ok(input.eq_ignore_ascii_case("y") || input.eq_ignore_ascii_case("yes"))
     }
 

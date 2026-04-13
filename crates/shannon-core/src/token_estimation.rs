@@ -37,6 +37,12 @@ pub struct ConversationMessageSummary {
 
 pub struct TokenEstimator;
 
+impl Default for TokenEstimator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TokenEstimator {
     pub fn new() -> Self {
         Self
@@ -92,7 +98,7 @@ impl TokenEstimator {
         TokenEstimate {
             estimated_tokens: tokens,
             bytes_per_token: bpt,
-            method: format!("{:?}", method),
+            method: format!("{method:?}"),
         }
     }
 }

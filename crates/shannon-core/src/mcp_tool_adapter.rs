@@ -44,7 +44,7 @@ impl McpToolAdapter {
         description: String,
         input_schema: Value,
     ) -> Self {
-        let tool_name = format!("mcp_{}", server_name);
+        let tool_name = format!("mcp_{server_name}");
         Self {
             server_name,
             command,
@@ -109,7 +109,7 @@ impl Tool for McpToolAdapter {
         });
 
         let request_json = serde_json::to_string(&request)
-            .map_err(|e| ToolError::InvalidInput(format!("Failed to serialize request: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Failed to serialize request: {e}")))?;
 
         // Split command into program + args
         let mut parts: Vec<String> = command
@@ -318,7 +318,7 @@ mod tests {
             "desc".to_string(),
             serde_json::json!({"type": "object"}),
         );
-        let debug_str = format!("{:?}", adapter);
+        let debug_str = format!("{adapter:?}");
         assert!(debug_str.contains("test"));
         assert!(debug_str.contains("mcp_test"));
     }

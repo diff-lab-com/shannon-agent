@@ -190,8 +190,7 @@ impl McpResourceManager {
             if !readers.contains_key(name) {
                 let available = readers.keys().cloned().collect::<Vec<_>>().join(", ");
                 return Err(McpError::InvalidRequest(format!(
-                    "Server '{}' not found. Available servers: {}",
-                    name, available
+                    "Server '{name}' not found. Available servers: {available}"
                 )));
             }
         }
@@ -409,7 +408,7 @@ mod tests {
                 uri: uri.to_string(),
                 mime_type: Some("text/plain".to_string()),
                 contents: vec![ContentBlock::Text {
-                    text: format!("content of {}", uri),
+                    text: format!("content of {uri}"),
                 }],
             })
         }

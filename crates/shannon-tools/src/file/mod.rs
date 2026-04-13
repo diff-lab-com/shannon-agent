@@ -44,7 +44,7 @@ async fn validate_path(sandbox: &PathSandbox, path: &str) -> ToolResult<()> {
     sandbox
         .validate(Path::new(path))
         .await
-        .map_err(|e| ToolError::InvalidInput(format!("Path sandbox: {}", e)))?;
+        .map_err(|e| ToolError::InvalidInput(format!("Path sandbox: {e}")))?;
     Ok(())
 }
 
@@ -52,6 +52,12 @@ async fn validate_path(sandbox: &PathSandbox, path: &str) -> ToolResult<()> {
 pub struct ReadTool {
     description: String,
     sandbox: PathSandbox,
+}
+
+impl Default for ReadTool {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ReadTool {
@@ -104,7 +110,7 @@ impl Tool for ReadTool {
 
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let read_input: read::ReadInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid read input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid read input: {e}")))?;
 
         validate_path(&self.sandbox, &read_input.file_path).await?;
 
@@ -116,6 +122,12 @@ impl Tool for ReadTool {
 pub struct WriteTool {
     description: String,
     sandbox: PathSandbox,
+}
+
+impl Default for WriteTool {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WriteTool {
@@ -164,7 +176,7 @@ impl Tool for WriteTool {
 
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let write_input: write::WriteInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid write input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid write input: {e}")))?;
 
         validate_path(&self.sandbox, &write_input.file_path).await?;
 
@@ -176,6 +188,12 @@ impl Tool for WriteTool {
 pub struct EditTool {
     description: String,
     sandbox: PathSandbox,
+}
+
+impl Default for EditTool {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EditTool {
@@ -232,7 +250,7 @@ impl Tool for EditTool {
 
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let edit_input: edit::EditInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid edit input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid edit input: {e}")))?;
 
         validate_path(&self.sandbox, &edit_input.file_path).await?;
 
@@ -244,6 +262,12 @@ impl Tool for EditTool {
 pub struct GlobTool {
     description: String,
     sandbox: PathSandbox,
+}
+
+impl Default for GlobTool {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GlobTool {
@@ -288,7 +312,7 @@ impl Tool for GlobTool {
 
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let glob_input: glob::GlobInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid glob input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid glob input: {e}")))?;
 
         // Validate the base path (if provided) through the sandbox
         if let Some(ref base_path) = glob_input.path {

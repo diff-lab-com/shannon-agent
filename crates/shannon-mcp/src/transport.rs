@@ -75,7 +75,7 @@ impl StdioTransport {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()
-            .map_err(|e| TransportError::Process(format!("Failed to spawn process: {}", e)))?;
+            .map_err(|e| TransportError::Process(format!("Failed to spawn process: {e}")))?;
 
         let stdin = child.stdin.take().ok_or_else(|| {
             TransportError::Process("Failed to open stdin".to_string())
@@ -118,7 +118,7 @@ impl StdioTransport {
 impl Transport for StdioTransport {
     async fn send(&mut self, message: &str) -> Result<(), TransportError> {
         if let Some(ref mut stdin) = self.stdin {
-            writeln!(stdin, "{}", message)?;
+            writeln!(stdin, "{message}")?;
             stdin.flush()?;
             debug!("Sent stdio message: {} bytes", message.len());
             Ok(())
@@ -188,10 +188,12 @@ impl Drop for StdioTransport {
 ///
 /// Note: This transport is NOT Sync due to the nature of streaming connections.
 /// It should be used within a single async context or wrapped in a mutex if needed.
+type ByteStream = Pin<Box<dyn futures_util::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send>>;
+
 pub struct SseTransport {
     client: reqwest::Client,
     endpoint: String,
-    stream: Option<Pin<Box<dyn futures_util::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send>>>,
+    stream: Option<ByteStream>,
     buffer: String,
 }
 
@@ -220,7 +222,7 @@ impl SseTransport {
             .header("Accept", "text/event-stream")
             .send()
             .await
-            .map_err(|e| TransportError::Sse(format!("Connection failed: {}", e)))?;
+            .map_err(|e| TransportError::Sse(format!("Connection failed: {e}")))?;
 
         if !response.status().is_success() {
             return Err(TransportError::Sse(format!(
@@ -249,7 +251,7 @@ impl Transport for SseTransport {
             .body(message.to_string())
             .send()
             .await
-            .map_err(|e| TransportError::Sse(format!("POST request failed: {}", e)))?;
+            .map_err(|e| TransportError::Sse(format!("POST request failed: {e}")))?;
 
         if !response.status().is_success() {
             return Err(TransportError::Sse(format!(
@@ -279,9 +281,9 @@ impl Transport for SseTransport {
                                     debug!("SSE received: {} bytes", data.len());
                                     return Ok(Some(data));
                                 }
-                            } else if line.starts_with("data:") {
+                            } else if let Some(rest) = line.strip_prefix("data:") {
                                 // Accumulate data line
-                                let data = line[5..].trim();
+                                let data = rest.trim();
                                 if !self.buffer.is_empty() {
                                     self.buffer.push('\n');
                                 }
@@ -291,7 +293,7 @@ impl Transport for SseTransport {
                         }
                     }
                     Some(Err(e)) => {
-                        return Err(TransportError::Sse(format!("Stream error: {}", e)));
+                        return Err(TransportError::Sse(format!("Stream error: {e}")));
                     }
                     None => {
                         // Stream closed - return any accumulated data
@@ -342,7 +344,7 @@ impl HttpTransport {
             .body(message.to_string())
             .send()
             .await
-            .map_err(|e| TransportError::Http(format!("Request failed: {}", e)))?;
+            .map_err(|e| TransportError::Http(format!("Request failed: {e}")))?;
 
         if !response.status().is_success() {
             return Err(TransportError::Http(format!(
@@ -354,7 +356,7 @@ impl HttpTransport {
         let body = response
             .text()
             .await
-            .map_err(|e| TransportError::Http(format!("Failed to read response: {}", e)))?;
+            .map_err(|e| TransportError::Http(format!("Failed to read response: {e}")))?;
 
         Ok(body)
     }
@@ -403,7 +405,7 @@ impl WebSocketTransport {
 
         let (stream, _) = tokio_tungstenite::connect_async(&self.endpoint)
             .await
-            .map_err(|e| TransportError::WebSocket(format!("Connection failed: {}", e)))?;
+            .map_err(|e| TransportError::WebSocket(format!("Connection failed: {e}")))?;
 
         self.stream = Some(stream);
         info!("WebSocket connection established");
@@ -419,7 +421,7 @@ impl Transport for WebSocketTransport {
             stream
                 .send(msg)
                 .await
-                .map_err(|e| TransportError::WebSocket(format!("Send failed: {}", e)))?;
+                .map_err(|e| TransportError::WebSocket(format!("Send failed: {e}")))?;
             debug!("WebSocket sent: {} bytes", message.len());
             Ok(())
         } else {
@@ -463,7 +465,7 @@ impl Transport for WebSocketTransport {
                         self.receive().await
                     }
                 }
-                Some(Err(e)) => Err(TransportError::WebSocket(format!("Receive error: {}", e))),
+                Some(Err(e)) => Err(TransportError::WebSocket(format!("Receive error: {e}"))),
                 None => Ok(None),
             }
         } else {

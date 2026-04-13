@@ -176,6 +176,12 @@ pub struct TaskTool {
     next_id: Arc<RwLock<usize>>,
 }
 
+impl Default for TaskTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TaskTool {
     pub fn new() -> Self {
         Self {
@@ -210,7 +216,7 @@ impl TaskTool {
 
         Ok(TaskCreateOutput {
             task,
-            message: format!("Created task {}", task_id),
+            message: format!("Created task {task_id}"),
         })
     }
 
@@ -317,7 +323,7 @@ impl Tool for TaskTool {
         match operation {
             "Create" => {
                 let create_input: TaskCreateInput = serde_json::from_value(input)
-                    .map_err(|e| ToolError::InvalidInput(format!("Invalid create input: {}", e)))?;
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid create input: {e}")))?;
                 let output = self.create_task(create_input).await?;
                 Ok(ToolOutput {
                     content: output.message,
@@ -331,7 +337,7 @@ impl Tool for TaskTool {
             }
             "Update" => {
                 let update_input: TaskUpdateInput = serde_json::from_value(input)
-                    .map_err(|e| ToolError::InvalidInput(format!("Invalid update input: {}", e)))?;
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid update input: {e}")))?;
                 let output = self.update_task(update_input).await?;
                 Ok(ToolOutput {
                     content: output.message,
@@ -345,14 +351,14 @@ impl Tool for TaskTool {
             }
             "Get" => {
                 let get_input: TaskGetInput = serde_json::from_value(input)
-                    .map_err(|e| ToolError::InvalidInput(format!("Invalid get input: {}", e)))?;
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid get input: {e}")))?;
                 let task_id = get_input.task_id.clone();
                 let output = self.get_task(get_input).await?;
                 Ok(ToolOutput {
                     content: if output.found {
-                        format!("Task found: {}", task_id)
+                        format!("Task found: {task_id}")
                     } else {
-                        format!("Task not found: {}", task_id)
+                        format!("Task not found: {task_id}")
                     },
                     is_error: !output.found,
                     metadata: {
@@ -367,7 +373,7 @@ impl Tool for TaskTool {
             }
             "List" => {
                 let list_input: TaskListInput = serde_json::from_value(input)
-                    .map_err(|e| ToolError::InvalidInput(format!("Invalid list input: {}", e)))?;
+                    .map_err(|e| ToolError::InvalidInput(format!("Invalid list input: {e}")))?;
                 let output = self.list_tasks(list_input).await?;
                 Ok(ToolOutput {
                     content: format!("Found {} tasks", output.count),
@@ -381,8 +387,7 @@ impl Tool for TaskTool {
                 })
             }
             _ => Err(ToolError::InvalidInput(format!(
-                "Unknown operation: {}",
-                operation
+                "Unknown operation: {operation}"
             ))),
         }
     }

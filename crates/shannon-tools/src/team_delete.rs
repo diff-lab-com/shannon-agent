@@ -54,6 +54,12 @@ pub struct TeamDeleteTool {
     task_store: TaskStore,
 }
 
+impl Default for TeamDeleteTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TeamDeleteTool {
     pub fn new() -> Self {
         Self {
@@ -75,7 +81,7 @@ impl TeamDeleteTool {
         // Remove team from registry
         let removed_team = {
             let mut registry = self.team_registry.write().map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to acquire team registry lock: {}", e))
+                ToolError::ExecutionFailed(format!("Failed to acquire team registry lock: {e}"))
             })?;
 
             registry.remove(&input.team_name)
@@ -84,7 +90,7 @@ impl TeamDeleteTool {
         // Clean up tasks associated with this team
         let tasks_removed = {
             let mut store = self.task_store.write().map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to acquire task store lock: {}", e))
+                ToolError::ExecutionFailed(format!("Failed to acquire task store lock: {e}"))
             })?;
 
             let before_count = store.len();
@@ -120,7 +126,7 @@ impl TeamDeleteTool {
 impl Tool for TeamDeleteTool {
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
         let delete_input: TeamDeleteInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid team delete input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid team delete input: {e}")))?;
         let output = self.delete_team(delete_input).await?;
 
         Ok(ToolOutput {
@@ -209,7 +215,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_team_delete_success() {
-        let (team_registry, task_store, tool) = setup();
+        let (team_registry, _task_store, tool) = setup();
 
         team_registry
             .write()

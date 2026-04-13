@@ -28,8 +28,7 @@ impl ToolRegistry {
         let name = tool.name().to_string();
         if self.tools.contains_key(&name) {
             return Err(ToolError::RegistryError(format!(
-                "Tool {} already registered",
-                name
+                "Tool {name} already registered"
             )));
         }
         self.tools.insert(name, tool);
@@ -220,7 +219,7 @@ mod tests {
         // Register multiple tools
         for i in 0..5 {
             let tool = Box::new(AsyncTool {
-                name: format!("async_tool_{}", i),
+                name: format!("async_tool_{i}"),
                 delay_ms: 10,
             });
             registry.register(tool).unwrap();
@@ -233,7 +232,7 @@ mod tests {
         for i in 0..5 {
             let registry_clone = registry.clone();
             let handle = tokio::spawn(async move {
-                let tool_name = format!("async_tool_{}", i);
+                let tool_name = format!("async_tool_{i}");
                 let input = serde_json::json!({"input": format!("request_{}", i)});
                 registry_clone.execute(&tool_name, input).await
             });
@@ -403,7 +402,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_tool_registration() {
-        use dashmap::DashMap;
+        
 
         let registry = std::sync::Arc::new(std::sync::Mutex::new(ToolRegistry::new()));
         let num_threads = 10;
@@ -415,7 +414,7 @@ mod tests {
             let registry_clone = registry.clone();
             let handle = tokio::spawn(async move {
                 let tool = Box::new(DummyTool {
-                    name: format!("concurrent_tool_{}", i),
+                    name: format!("concurrent_tool_{i}"),
                 });
                 registry_clone.lock().unwrap().register(tool)
             });

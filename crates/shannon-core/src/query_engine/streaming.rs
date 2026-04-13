@@ -41,36 +41,35 @@ impl ConversationState {
                                 block_chars +=
                                     name.len() + serde_json::to_string(input).map_or(0, |s| s.len())
                             }
-                            crate::api::ContentBlock::ToolResult { content, .. } => {
-                                if let Some(c) = content {
-                                    match c {
-                                        crate::api::ToolResultContent::Single(s) => {
-                                            block_chars += s.len()
-                                        }
-                                        crate::api::ToolResultContent::Multiple(blocks) => {
-                                            block_chars +=
-                                                blocks.iter().map(|b| match b {
-                                                    crate::api::ContentBlock::Text { text } => {
-                                                        text.len()
-                                                    }
-                                                    crate::api::ContentBlock::ToolUse {
-                                                        name,
-                                                        input,
-                                                        ..
-                                                    } => {
-                                                        name.len()
-                                                            + serde_json::to_string(input)
-                                                                .map_or(0, |s| s.len())
-                                                    }
-                                                    crate::api::ContentBlock::ToolResult {
-                                                        ..
-                                                    } => 0,
-                                                    _ => 0,
-                                                }).sum::<usize>();
-                                        }
+                            crate::api::ContentBlock::ToolResult { content: Some(c), .. } => {
+                                match c {
+                                    crate::api::ToolResultContent::Single(s) => {
+                                        block_chars += s.len()
+                                    }
+                                    crate::api::ToolResultContent::Multiple(blocks) => {
+                                        block_chars +=
+                                            blocks.iter().map(|b| match b {
+                                                crate::api::ContentBlock::Text { text } => {
+                                                    text.len()
+                                                }
+                                                crate::api::ContentBlock::ToolUse {
+                                                    name,
+                                                    input,
+                                                    ..
+                                                } => {
+                                                    name.len()
+                                                        + serde_json::to_string(input)
+                                                            .map_or(0, |s| s.len())
+                                                }
+                                                crate::api::ContentBlock::ToolResult {
+                                                    ..
+                                                } => 0,
+                                                _ => 0,
+                                            }).sum::<usize>();
                                     }
                                 }
                             }
+                            crate::api::ContentBlock::ToolResult { content: None, .. } => {}
                             _ => {}
                         }
                     }
@@ -115,7 +114,7 @@ impl ConversationState {
                 let summary_msg = crate::api::Message {
                     role: "system".to_string(),
                     content: crate::api::MessageContent::Text(
-                        format!("[Previous conversation summary]\n\n{}", summary),
+                        format!("[Previous conversation summary]\n\n{summary}"),
                     ),
                 };
 
@@ -144,7 +143,7 @@ impl ConversationState {
                     } else {
                         text.clone()
                     };
-                    summary_parts.push(format!("{}: {}", role, preview));
+                    summary_parts.push(format!("{role}: {preview}"));
                     turn_count += 1;
                 }
                 crate::api::MessageContent::Blocks(blocks) => {

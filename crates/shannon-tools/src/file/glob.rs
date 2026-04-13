@@ -101,7 +101,7 @@ fn build_result(path: &Path) -> Option<GlobResult> {
 
 /// Sort results by modification time descending (most recent first), with an
 /// alphabetical-path fallback.
-fn sort_results(results: &mut Vec<GlobResult>) {
+fn sort_results(results: &mut [GlobResult]) {
     results.sort_by(|a, b| {
         match (&a.modified, &b.modified) {
             (Some(ma), Some(mb)) => mb.cmp(ma).then_with(|| a.path.cmp(&b.path)),
@@ -121,7 +121,7 @@ pub async fn execute(input: GlobInput) -> Result<ToolOutput, ToolError> {
     // If the base directory does not exist, return early with empty results.
     if !base.exists() {
         return Ok(ToolOutput {
-            content: format!("Directory not found: {}", base_path),
+            content: format!("Directory not found: {base_path}"),
             is_error: true,
             metadata: HashMap::new(),
         });
@@ -132,7 +132,7 @@ pub async fn execute(input: GlobInput) -> Result<ToolOutput, ToolError> {
 
     // Compile the glob pattern once.
     let glob_pattern = glob::Pattern::new(pattern)
-        .map_err(|e| ToolError::InvalidInput(format!("Invalid glob pattern '{}': {}", pattern, e)))?;
+        .map_err(|e| ToolError::InvalidInput(format!("Invalid glob pattern '{pattern}': {e}")))?;
 
     // Use `ignore::WalkBuilder` for .gitignore-aware traversal.
     let mut builder = ignore::WalkBuilder::new(&base);
@@ -185,7 +185,7 @@ pub async fn execute(input: GlobInput) -> Result<ToolOutput, ToolError> {
 
     // Build the output content summary.
     let content = if count == 0 {
-        format!("No files found matching pattern: {}", pattern)
+        format!("No files found matching pattern: {pattern}")
     } else {
         let file_list: Vec<String> = results.iter().map(|r| r.path.clone()).collect();
         format!(
@@ -420,7 +420,7 @@ mod tests {
 
         // Helper: check that the last path component of `f` equals `name`.
         let filename_is = |f: &str, name: &str| -> bool {
-            Path::new(f).file_name().map_or(false, |n| n == name)
+            Path::new(f).file_name().is_some_and(|n| n == name)
         };
 
         assert!(files.iter().any(|f| filename_is(f, "mod.rs")));

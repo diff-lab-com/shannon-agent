@@ -245,14 +245,14 @@ impl PermissionMemory {
                 self.always_allowed.insert(tool_name.clone());
                 self.session_choices
                     .entry(session_id)
-                    .or_insert_with(HashMap::new)
+                    .or_default()
                     .insert(tool_name, choice);
             }
             PermissionChoice::Deny => {
                 self.always_denied.insert(tool_name.clone());
                 self.session_choices
                     .entry(session_id)
-                    .or_insert_with(HashMap::new)
+                    .or_default()
                     .insert(tool_name, choice);
             }
             PermissionChoice::AllowOnce => {
@@ -411,7 +411,7 @@ impl PermissionManager {
     pub fn grant_permission(&mut self, session_id: uuid::Uuid, permission: Permission) {
         self.session_permissions
             .entry(session_id)
-            .or_insert_with(HashSet::new)
+            .or_default()
             .insert(permission);
     }
 
@@ -436,21 +436,19 @@ impl PermissionManager {
         // Check session-specific permissions first
         if let Some(perms) = self.session_permissions.get(&session_id) {
             for perm in perms {
-                if perm.resource == required.resource && perm.action == required.action {
-                    if perm.grants(required.level) {
+                if perm.resource == required.resource && perm.action == required.action
+                    && perm.grants(required.level) {
                         return Ok(());
                     }
-                }
             }
         }
 
         // Fall back to default permissions
         for perm in &self.default_permissions {
-            if perm.resource == required.resource && perm.action == required.action {
-                if perm.grants(required.level) {
+            if perm.resource == required.resource && perm.action == required.action
+                && perm.grants(required.level) {
                     return Ok(());
                 }
-            }
         }
 
         Err(PermissionError::Denied(format!(
@@ -503,7 +501,7 @@ impl PermissionManager {
                 tool_name: tool_name.to_string(),
                 tool_input: tool_input.clone(),
                 risk_level: RiskLevel::Critical,
-                description: format!("This tool is denied: {}", tool_name),
+                description: format!("This tool is denied: {tool_name}"),
                 is_confirmation: false,
             });
         }
@@ -682,8 +680,7 @@ impl PermissionManager {
         }
         if self.memory.is_always_denied(tool_name) {
             return Err(PermissionError::Denied(format!(
-                "Tool '{}' is always denied",
-                tool_name
+                "Tool '{tool_name}' is always denied"
             )));
         }
 
@@ -862,11 +859,11 @@ mod tests {
             let mgr = Arc::clone(&manager);
             let session_id = Uuid::new_v4();
             handles.push(tokio::spawn(async move {
-                let perm = Permission::new("file", &format!("action_{}", i), PermissionLevel::Write);
+                let perm = Permission::new("file", &format!("action_{i}"), PermissionLevel::Write);
                 mgr.lock().await.grant_permission(session_id, perm.clone());
 
                 let result = mgr.lock().await.check_permission(session_id, &perm);
-                assert!(result.is_ok(), "Permission for action_{} should be granted", i);
+                assert!(result.is_ok(), "Permission for action_{i} should be granted");
             }));
         }
         for handle in handles {

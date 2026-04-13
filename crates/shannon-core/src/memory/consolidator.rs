@@ -28,6 +28,12 @@ pub struct MemoryConsolidator {
     similarity_threshold: f64,
 }
 
+impl Default for MemoryConsolidator {
+    fn default() -> Self {
+        Self::new(0.8)
+    }
+}
+
 impl MemoryConsolidator {
     /// Create a new consolidator with the given similarity threshold.
     ///
@@ -37,11 +43,6 @@ impl MemoryConsolidator {
         Self {
             similarity_threshold: similarity_threshold.clamp(0.0, 1.0),
         }
-    }
-
-    /// Create a consolidator with the default threshold of 0.8.
-    pub fn default() -> Self {
-        Self::new(0.8)
     }
 
     /// Run consolidation on the given memory store.

@@ -98,14 +98,14 @@ impl WorktreeManager {
     pub async fn new(config: WorktreeConfig) -> Result<Self, AgentError> {
         // Ensure base directory exists
         tokio::fs::create_dir_all(&config.base_dir).await
-            .map_err(|e| AgentError::Worktree(format!("Failed to create base directory: {}", e)))?;
+            .map_err(|e| AgentError::Worktree(format!("Failed to create base directory: {e}")))?;
 
         // Verify we're in a git repository
         let output = Command::new("git")
             .args(["rev-parse", "--is-inside-work-tree"])
             .current_dir(&config.repository_path)
             .output()
-            .map_err(|e| AgentError::Worktree(format!("Failed to execute git: {}", e)))?;
+            .map_err(|e| AgentError::Worktree(format!("Failed to execute git: {e}")))?;
 
         if !output.status.success() {
             return Err(AgentError::Worktree(
@@ -131,7 +131,7 @@ impl WorktreeManager {
         });
 
         let branch = branch_name.unwrap_or_else(|| {
-            format!("worktree/{}", session_id)
+            format!("worktree/{session_id}")
         });
 
         let worktree_path = self.config.base_dir.join(&session_id);
@@ -153,7 +153,7 @@ impl WorktreeManager {
         let output = cmd
             .current_dir(&self.config.repository_path)
             .output()
-            .map_err(|e| AgentError::Worktree(format!("Failed to execute git: {}", e)))?;
+            .map_err(|e| AgentError::Worktree(format!("Failed to execute git: {e}")))?;
 
         if !output.status.success() {
             return Err(AgentError::Worktree(format!(
@@ -192,7 +192,7 @@ impl WorktreeManager {
         task_id: Option<uuid::Uuid>,
     ) -> Result<WorktreeSession, AgentError> {
         let session_id = format!("agent-{}-{}", agent_name, uuid::Uuid::new_v4());
-        let branch_name = format!("agent-work/{}", agent_name);
+        let branch_name = format!("agent-work/{agent_name}");
 
         let mut session = self.create_session(
             Some(session_id.clone()),
@@ -244,7 +244,7 @@ impl WorktreeManager {
         let mut sessions = self.active_sessions.write().await;
 
         let session = sessions.get_mut(session_id)
-            .ok_or_else(|| AgentError::Worktree(format!("Session '{}' not found", session_id)))?;
+            .ok_or_else(|| AgentError::Worktree(format!("Session '{session_id}' not found")))?;
 
         session.metadata.insert(key, value);
 
@@ -261,7 +261,7 @@ impl WorktreeManager {
         let mut sessions = self.active_sessions.write().await;
 
         let session = sessions.get(session_id)
-            .ok_or_else(|| AgentError::Worktree(format!("Session '{}' not found", session_id)))?
+            .ok_or_else(|| AgentError::Worktree(format!("Session '{session_id}' not found")))?
             .clone();
 
         // Check for uncommitted changes
@@ -275,7 +275,7 @@ impl WorktreeManager {
         }
 
         let session = sessions.remove(session_id)
-            .ok_or_else(|| AgentError::Worktree(format!("Session '{}' not found", session_id)))?;
+            .ok_or_else(|| AgentError::Worktree(format!("Session '{session_id}' not found")))?;
 
         match action {
             ExitAction::Keep => {
@@ -319,7 +319,7 @@ impl WorktreeManager {
             .args(["rev-parse", "--abbrev-ref", "HEAD"])
             .current_dir(&self.config.repository_path)
             .output()
-            .map_err(|e| AgentError::Worktree(format!("Failed to execute git: {}", e)))?;
+            .map_err(|e| AgentError::Worktree(format!("Failed to execute git: {e}")))?;
 
         if !output.status.success() {
             return Err(AgentError::Worktree(
@@ -337,7 +337,7 @@ impl WorktreeManager {
             .args(["status", "--porcelain"])
             .current_dir(path)
             .output()
-            .map_err(|e| AgentError::Worktree(format!("Failed to execute git: {}", e)))?;
+            .map_err(|e| AgentError::Worktree(format!("Failed to execute git: {e}")))?;
 
         Ok(!output.stdout.is_empty())
     }
@@ -349,7 +349,7 @@ impl WorktreeManager {
             .arg(path.to_str().unwrap())
             .current_dir(&self.config.repository_path)
             .output()
-            .map_err(|e| AgentError::Worktree(format!("Failed to execute git: {}", e)))?;
+            .map_err(|e| AgentError::Worktree(format!("Failed to execute git: {e}")))?;
 
         if !output.status.success() {
             return Err(AgentError::Worktree(format!(
@@ -367,7 +367,7 @@ impl WorktreeManager {
             .args(["branch", "-D", branch_name])
             .current_dir(&self.config.repository_path)
             .output()
-            .map_err(|e| AgentError::Worktree(format!("Failed to execute git: {}", e)))?;
+            .map_err(|e| AgentError::Worktree(format!("Failed to execute git: {e}")))?;
 
         if !output.status.success() {
             tracing::warn!(
@@ -432,8 +432,7 @@ fn validate_name(name: &str) -> Result<(), ToolError> {
         .all(|c| c.is_alphanumeric() || c == '.' || c == '_' || c == '-')
     {
         return Err(ToolError::ExecutionFailed(format!(
-            "Worktree name '{}' contains invalid characters. Use only letters, digits, dots, underscores, and dashes.",
-            name
+            "Worktree name '{name}' contains invalid characters. Use only letters, digits, dots, underscores, and dashes."
         )));
     }
     Ok(())
@@ -464,6 +463,12 @@ fn generate_random_name() -> String {
 /// Tool that creates a git worktree and switches the session into it.
 pub struct EnterWorktreeTool {
     session: Arc<RwLock<Option<WorktreeSession>>>,
+}
+
+impl Default for EnterWorktreeTool {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EnterWorktreeTool {
@@ -509,14 +514,14 @@ impl Tool for EnterWorktreeTool {
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
         let parsed: EnterWorktreeToolInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid enter_worktree input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid enter_worktree input: {e}")))?;
 
         // Prevent double-entry.
         {
             let guard = self
                 .session
                 .read()
-                .map_err(|e| ToolError::ExecutionFailed(format!("Lock error: {}", e)))?;
+                .map_err(|e| ToolError::ExecutionFailed(format!("Lock error: {e}")))?;
             if guard.is_some() {
                 return Err(ToolError::ExecutionFailed(
                     "Already inside a worktree session".into(),
@@ -525,7 +530,7 @@ impl Tool for EnterWorktreeTool {
         }
 
         let cwd = std::env::current_dir()
-            .map_err(|e| ToolError::ExecutionFailed(format!("Cannot determine cwd: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Cannot determine cwd: {e}")))?;
         let git_root = find_git_root(&cwd).ok_or_else(|| {
             ToolError::ExecutionFailed("Not in a git repository".into())
         })?;
@@ -540,7 +545,7 @@ impl Tool for EnterWorktreeTool {
         };
 
         let worktree_path = git_root.join(".claude").join("worktrees").join(&name);
-        let branch = format!("worktree/{}", name);
+        let branch = format!("worktree/{name}");
 
         // Create the worktree.
         let output = Command::new("git")
@@ -548,7 +553,7 @@ impl Tool for EnterWorktreeTool {
             .arg(worktree_path.to_str().unwrap())
             .current_dir(&git_root)
             .output()
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to run git: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to run git: {e}")))?;
 
         if !output.status.success() {
             return Err(ToolError::ExecutionFailed(format!(
@@ -572,7 +577,7 @@ impl Tool for EnterWorktreeTool {
             let mut guard = self
                 .session
                 .write()
-                .map_err(|e| ToolError::ExecutionFailed(format!("Lock error: {}", e)))?;
+                .map_err(|e| ToolError::ExecutionFailed(format!("Lock error: {e}")))?;
             *guard = Some(session);
         }
 
@@ -604,6 +609,12 @@ impl Tool for EnterWorktreeTool {
 /// Tool that exits the current worktree session, optionally removing it.
 pub struct ExitWorktreeTool {
     session: Arc<RwLock<Option<WorktreeSession>>>,
+}
+
+impl Default for ExitWorktreeTool {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ExitWorktreeTool {
@@ -651,13 +662,13 @@ impl Tool for ExitWorktreeTool {
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
         let parsed: ExitWorktreeToolInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid exit_worktree input: {}", e)))?;
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid exit_worktree input: {e}")))?;
 
         let session = {
             let guard = self
                 .session
                 .read()
-                .map_err(|e| ToolError::ExecutionFailed(format!("Lock error: {}", e)))?;
+                .map_err(|e| ToolError::ExecutionFailed(format!("Lock error: {e}")))?;
             guard
                 .as_ref()
                 .cloned()
@@ -674,7 +685,7 @@ impl Tool for ExitWorktreeTool {
                     let mut guard = self
                         .session
                         .write()
-                        .map_err(|e| ToolError::ExecutionFailed(format!("Lock error: {}", e)))?;
+                        .map_err(|e| ToolError::ExecutionFailed(format!("Lock error: {e}")))?;
                     *guard = None;
                 }
 
@@ -716,7 +727,7 @@ impl Tool for ExitWorktreeTool {
                     .arg(session.path.to_str().unwrap())
                     .output()
                     .map_err(|e| {
-                        ToolError::ExecutionFailed(format!("Failed to run git: {}", e))
+                        ToolError::ExecutionFailed(format!("Failed to run git: {e}"))
                     })?;
 
                 if !output.status.success() {
@@ -731,7 +742,7 @@ impl Tool for ExitWorktreeTool {
                     let mut guard = self
                         .session
                         .write()
-                        .map_err(|e| ToolError::ExecutionFailed(format!("Lock error: {}", e)))?;
+                        .map_err(|e| ToolError::ExecutionFailed(format!("Lock error: {e}")))?;
                     *guard = None;
                 }
 
@@ -756,8 +767,7 @@ impl Tool for ExitWorktreeTool {
             }
 
             other => Err(ToolError::InvalidInput(format!(
-                "Invalid action '{}'. Expected 'keep' or 'remove'.",
-                other
+                "Invalid action '{other}'. Expected 'keep' or 'remove'."
             ))),
         }
     }
@@ -768,7 +778,7 @@ fn has_uncommitted_changes(path: &Path) -> Result<bool, ToolError> {
     let output = Command::new("git")
         .args(["-C", path.to_str().unwrap(), "status", "--porcelain"])
         .output()
-        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to run git: {}", e)))?;
+        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to run git: {e}")))?;
 
     Ok(!output.stdout.is_empty())
 }
@@ -884,9 +894,9 @@ mod tests {
         // The isolated session starts as None, so this should error.
 
         let result = rt.block_on(tool.execute(json!({"action": "keep"})));
-        assert!(result.is_err(), "Expected error when no active session, got: {:?}", result);
+        assert!(result.is_err(), "Expected error when no active session, got: {result:?}");
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("No active worktree session"), "Error message: {}", err);
+        assert!(err.contains("No active worktree session"), "Error message: {err}");
     }
 
     #[test]
@@ -910,9 +920,9 @@ mod tests {
         }
 
         let result = rt.block_on(tool.execute(json!({"action": "invalid"})));
-        assert!(result.is_err(), "Expected error for invalid action, got: {:?}", result);
+        assert!(result.is_err(), "Expected error for invalid action, got: {result:?}");
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("Invalid action"), "Error message: {}", err);
+        assert!(err.contains("Invalid action"), "Error message: {err}");
     }
 
     #[test]
