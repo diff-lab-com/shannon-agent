@@ -36,7 +36,7 @@ impl<T> SelectItem<T> {
 }
 
 /// Multi-select widget for choosing multiple options
-#[allow(dead_code)]
+#[derive(Debug)]
 pub struct MultiSelectWidget {
     items: Vec<SelectItem<String>>,
     selected_indices: Vec<usize>,
@@ -46,7 +46,21 @@ pub struct MultiSelectWidget {
     show_indices: bool,
 }
 
-#[allow(dead_code)]
+impl Clone for MultiSelectWidget {
+    fn clone(&self) -> Self {
+        let mut state = ListState::default();
+        state.select(self.state.selected());
+        Self {
+            items: self.items.clone(),
+            selected_indices: self.selected_indices.clone(),
+            state,
+            focused_index: self.focused_index,
+            title: self.title.clone(),
+            show_indices: self.show_indices,
+        }
+    }
+}
+
 impl MultiSelectWidget {
     /// Create a new multi-select widget
     pub fn new(title: String) -> Self {

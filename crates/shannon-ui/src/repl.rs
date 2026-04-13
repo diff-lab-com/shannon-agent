@@ -9,7 +9,7 @@ use crate::{
         ChatWidget, ChatRole, PromptWidget, MainLayoutWidget,
         dialog::{DialogWidget, InputDialog},
         progress::{ProgressBarWidget, SpinnerWidget, MultiProgressWidget},
-        select::{FuzzyPickerWidget, FileSelectorWidget, SelectItem},
+        select::{FuzzyPickerWidget, FileSelectorWidget, MultiSelectWidget, SelectItem},
     },
     Result,
 };
@@ -88,6 +88,8 @@ pub struct ReplState {
     pub multi_progress: MultiProgressWidget,
     /// Whether multi-progress is visible (tools running in parallel)
     pub multi_progress_visible: bool,
+    /// Active multi-select widget (e.g., for /select-tools)
+    pub multi_select: Option<MultiSelectWidget>,
 }
 
 impl Default for ReplState {
@@ -120,6 +122,7 @@ impl Default for ReplState {
             file_selector: None,
             multi_progress: MultiProgressWidget::new(),
             multi_progress_visible: false,
+            multi_select: None,
         }
     }
 }
@@ -466,6 +469,20 @@ impl Repl {
                         pb,
                     );
                     selector.render(f, f.area());
+                } else if let Some(ref msel) = state.multi_select {
+                    // Render main layout first, then overlay the multi-select
+                    MainLayoutWidget::render_complete_with_spinner(
+                        f,
+                        chat,
+                        prompt,
+                        &state.status,
+                        state.model.as_deref(),
+                        Some(state.tokens_used),
+                        &state.working_directory,
+                        Some(spinner),
+                        pb,
+                    );
+                    msel.render(f, f.area());
                 } else {
                     MainLayoutWidget::render_complete_with_spinner(
                         f,
@@ -478,6 +495,18 @@ impl Repl {
                         Some(spinner),
                         pb,
                     );
+                }
+
+                // Overlay multi-progress bars at the bottom if active
+                if state.multi_progress_visible {
+                    let mp_height = 3u16.min(f.area().height.saturating_sub(10));
+                    let mp_area = ratatui::layout::Rect {
+                        x: f.area().x + 2,
+                        y: f.area().bottom().saturating_sub(mp_height + 3),
+                        width: f.area().width.saturating_sub(4),
+                        height: mp_height,
+                    };
+                    state.multi_progress.render(f, mp_area);
                 }
             })?;
 
@@ -544,6 +573,11 @@ impl Repl {
         // If file selector is active, handle file selector input
         if self.state.file_selector.is_some() {
             return self.handle_file_selector_input(key);
+        }
+
+        // If multi-select is active, handle multi-select input
+        if self.state.multi_select.is_some() {
+            return self.handle_multi_select_input(key);
         }
 
         match key.code {
@@ -702,8 +736,17 @@ impl Repl {
     fn handle_tab_completion(&mut self) -> Result<()> {
         let input = self.prompt.input().to_string();
 
-        // Get available commands from registry
-        let command_names = self.runtime.block_on(self.command_registry.list_names());
+        // Get available commands from shared executor's registry
+        let mut command_names = self.runtime.block_on(async {
+            self.shared_executor.registry().await.list_names().await
+        });
+
+        // Also include plugin commands in completion candidates
+        for cmd in self.plugin_manager.get_plugin_commands() {
+            if !command_names.iter().any(|n| n == &cmd.name) {
+                command_names.push(cmd.name.clone());
+            }
+        }
 
         // Perform completion
         if let Some((completion, start, end)) = self.tab_complete_command(&input, &command_names) {
@@ -1094,9 +1137,11 @@ impl Repl {
                 self.state.file_selector = None;
 
                 if let Some(path) = selected_path {
+                    // Fill the selected path into the prompt for immediate use
+                    self.prompt.set_input(path);
                     self.chat.add_message(
                         ChatRole::System,
-                        format!("Selected file: {path}"),
+                        "File selected — press Enter to send as query, or edit the path.".to_string(),
                     );
                 }
             }
@@ -1116,6 +1161,76 @@ impl Repl {
             }
             _ => {}
         }
+        Ok(())
+    }
+
+    /// Handle multi-select widget keyboard input
+    fn handle_multi_select_input(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
+        match key.code {
+            crossterm::event::KeyCode::Up => {
+                if let Some(ref mut sel) = self.state.multi_select {
+                    sel.move_up();
+                }
+            }
+            crossterm::event::KeyCode::Down => {
+                if let Some(ref mut sel) = self.state.multi_select {
+                    sel.move_down();
+                }
+            }
+            crossterm::event::KeyCode::Char(' ') => {
+                if let Some(ref mut sel) = self.state.multi_select {
+                    sel.toggle_current();
+                }
+            }
+            crossterm::event::KeyCode::Char('a') => {
+                if let Some(ref mut sel) = self.state.multi_select {
+                    sel.select_all();
+                }
+            }
+            crossterm::event::KeyCode::Char('d') => {
+                if let Some(ref mut sel) = self.state.multi_select {
+                    sel.deselect_all();
+                }
+            }
+            crossterm::event::KeyCode::Enter => {
+                // Extract values before dropping the widget
+                let values: Vec<String> = self.state.multi_select
+                    .as_ref()
+                    .map(|sel| sel.selected_values().iter().map(|v| v.to_string()).collect())
+                    .unwrap_or_default();
+                self.state.multi_select = None;
+
+                if values.is_empty() {
+                    self.chat.add_message(ChatRole::System, "No items selected.".to_string());
+                } else {
+                    self.chat.add_message(ChatRole::System, format!("Selected: {}", values.join(", ")));
+                }
+            }
+            crossterm::event::KeyCode::Esc => {
+                self.state.multi_select = None;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Handle /select-tools command — choose which tools to enable
+    fn handle_select_tools_command(&mut self) -> Result<()> {
+        let tool_info = if let Some(ref engine) = self.query_engine {
+            engine.tools().list_tools_info()
+        } else {
+            Vec::new()
+        };
+
+        let items: Vec<SelectItem<String>> = tool_info.iter().map(|info| {
+            SelectItem::new(info.name.clone(), info.name.clone())
+                .with_description(info.description.clone())
+        }).collect();
+
+        let widget = MultiSelectWidget::new("Select Tools".to_string())
+            .with_items(items);
+
+        self.state.multi_select = Some(widget);
         Ok(())
     }
 
@@ -1167,9 +1282,9 @@ impl Repl {
         let args = parsed.args.as_str();
 
         // Check if command exists in the registry or as a plugin command
-        let command_exists = self.runtime.block_on(
-            self.command_registry.contains(cmd_name)
-        );
+        let command_exists = self.runtime.block_on(async {
+            self.shared_executor.registry().await.contains(cmd_name).await
+        });
         let is_plugin_command = self.plugin_manager.get_plugin_commands()
             .iter().any(|c| c.name == cmd_name);
 
@@ -1221,9 +1336,11 @@ impl Repl {
                 }
                 "model" => {
                     if args.is_empty() {
-                        self.chat.add_message(
-                            ChatRole::System,
-                            format!("Current model: {}", self.state.model.as_deref().unwrap_or("default")),
+                        // Show input dialog for interactive model selection
+                        self.show_input_dialog(
+                            "Set Model",
+                            "Enter model name (e.g. claude-3.5-sonnet, gpt-4o)...",
+                            "set_model",
                         );
                     } else {
                         self.state.model = Some(args.to_string());
@@ -1275,6 +1392,7 @@ impl Repl {
                 "export" | "save" => self.handle_export_command(args)?,
                 "diff" => self.handle_diff_command(args)?,
                 "browse" | "files" => self.handle_browse_command(args)?,
+                "select-tools" | "tools" => self.handle_select_tools_command()?,
                 _ => {
                     // Check plugin commands first (via PluginExecutable bridge)
                     let plugin_cmd = self.plugin_manager.get_plugin_commands()
@@ -1289,7 +1407,9 @@ impl Repl {
                             format!("Running /{cmd_name} (plugin)..."),
                         );
                         self.handle_query(&prompt)?;
-                    } else if let Ok(command) = self.runtime.block_on(self.command_registry.get(cmd_name)) {
+                    } else {
+                        let registry = self.runtime.block_on(self.shared_executor.registry());
+                        if let Ok(command) = self.runtime.block_on(registry.get(cmd_name)) {
                         // Handle prompt-based commands (export, diff, commit, review_pr, pdf, debug, etc.)
                         // These have prompt templates that should be sent to the AI for execution.
                         match &*command {
@@ -1321,6 +1441,7 @@ impl Repl {
                         }
                     }
                 }
+            }
             }
             Ok(())
         } else {
@@ -2393,6 +2514,17 @@ impl Repl {
                         Some(spinner),
                         pb,
                     );
+                    // Overlay multi-progress bars at bottom
+                    if state.multi_progress_visible {
+                        let mp_height = 3u16.min(f.area().height.saturating_sub(10));
+                        let mp_area = ratatui::layout::Rect {
+                            x: f.area().x + 2,
+                            y: f.area().bottom().saturating_sub(mp_height + 3),
+                            width: f.area().width.saturating_sub(4),
+                            height: mp_height,
+                        };
+                        state.multi_progress.render(f, mp_area);
+                    }
                 })?;
 
                 if query_finished {
@@ -2752,13 +2884,12 @@ mod tests {
     }
 
     #[test]
-    fn test_repl_model_show_command() {
+    fn test_repl_model_show_dialog() {
         let mut repl = Repl::new().unwrap();
-        let msg_count_before = repl.chat.len();
         repl.handle_command("/model").unwrap();
-        assert_eq!(repl.chat.len(), msg_count_before + 1);
-        let last_msg = &repl.chat.last_message().unwrap().content;
-        assert!(last_msg.contains("Current model:"));
+        // Should show input dialog instead of chat message
+        assert!(repl.state.input_dialog.is_some());
+        assert_eq!(repl.state.input_dialog_action.as_deref(), Some("set_model"));
     }
 
     #[test]
