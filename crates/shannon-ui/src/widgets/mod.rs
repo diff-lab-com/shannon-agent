@@ -223,7 +223,7 @@ impl StatusBarWidget {
                 bar_str.push(']');
                 span_vec.push(Span::styled(bar_str, Style::default().fg(Color::Cyan)));
                 span_vec.push(Span::styled(
-                    format!(" {:.0}%", pct),
+                    format!(" {pct:.0}%"),
                     Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
                 ));
             }
@@ -558,6 +558,7 @@ impl MainLayoutWidget {
     }
 
     /// Render the complete UI with spinner animation support
+    #[allow(clippy::too_many_arguments)]
     pub fn render_complete_with_spinner(
         frame: &mut Frame,
         chat: &ChatWidget,

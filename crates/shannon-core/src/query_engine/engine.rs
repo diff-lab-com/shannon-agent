@@ -71,6 +71,7 @@ pub struct QueryEngine {
     /// Session ID for conversation persistence
     pub(crate) session_id: Uuid,
     /// Rule-based permission classifier for pre-checking tool invocations.
+    #[allow(dead_code)] // Used via crate::permission_classifier module, not field access
     pub(crate) permission_classifier: crate::permission_classifier::PermissionClassifier,
 }
 

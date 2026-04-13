@@ -1086,7 +1086,7 @@ impl Repl {
         if let Err(e) = selector.refresh() {
             self.chat.add_message(
                 ChatRole::System,
-                format!("Failed to browse {}: {e}", path),
+                format!("Failed to browse {path}: {e}"),
             );
             return Ok(());
         }

@@ -84,7 +84,7 @@ pub enum ExportFormat {
 
 impl ExportFormat {
     /// Parse format from string
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse_format(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "md" | "markdown" => Some(ExportFormat::Markdown),
             "json" => Some(ExportFormat::Json),
@@ -362,10 +362,10 @@ mod tests {
 
     #[test]
     fn test_export_format_from_str() {
-        assert_eq!(ExportFormat::from_str("md"), Some(ExportFormat::Markdown));
-        assert_eq!(ExportFormat::from_str("markdown"), Some(ExportFormat::Markdown));
-        assert_eq!(ExportFormat::from_str("json"), Some(ExportFormat::Json));
-        assert_eq!(ExportFormat::from_str("invalid"), None);
+        assert_eq!(ExportFormat::parse_format("md"), Some(ExportFormat::Markdown));
+        assert_eq!(ExportFormat::parse_format("markdown"), Some(ExportFormat::Markdown));
+        assert_eq!(ExportFormat::parse_format("json"), Some(ExportFormat::Json));
+        assert_eq!(ExportFormat::parse_format("invalid"), None);
     }
 
     #[test]

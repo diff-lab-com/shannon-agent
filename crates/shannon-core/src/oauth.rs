@@ -446,6 +446,13 @@ impl OAuthService {
             return Err(OAuthError::InvalidAuthCode);
         }
 
+        // Validate that the redirect_url matches the registered client
+        if let Ok(registered_client) = self.get_client(client_id) {
+            if pending.redirect_url != registered_client.redirect_url {
+                return Err(OAuthError::InvalidAuthCode);
+            }
+        }
+
         if Utc::now() >= pending.expires_at {
             self.pending_codes.remove(code);
             return Err(OAuthError::InvalidAuthCode);
