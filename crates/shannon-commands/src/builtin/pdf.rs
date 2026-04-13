@@ -1,12 +1,18 @@
 //! /pdf command - Process PDF documents
+//!
+//! Provides the `/pdf` slash command which instructs the AI to extract and
+//! analyse content from a PDF file using `poppler-utils`. The types defined
+//! here (`PdfContent`, `PdfPage`, `PdfTable`, `PdfImage`, `PdfMetadata`,
+//! `ImageFormat`, `PdfOptions`) describe the expected output structure so
+//! that callers can parse the AI response back into structured data.
 
 use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
 
 /// PDF processing prompt template
 ///
 /// Instructs the AI to use poppler-utils (`pdftotext`, `pdfinfo`, `pdfimages`)
-/// to extract content, then produce a structured analysis using the same
-/// categories defined in [`PdfContent`], [`PdfPage`], and [`PdfTable`].
+/// to extract content, then produce a structured analysis. The output sections
+/// correspond to the fields of [`PdfMetadata`], [`PdfPage`], and [`PdfTable`].
 const PDF_PROMPT: &str = r##"
 Process and analyze a PDF document.
 
@@ -26,7 +32,16 @@ Arguments: {args}
 ## Output Format
 
 ### Document Metadata
-- Title, Author, Pages, Creation date, whether encrypted
+- **Title**: document title
+- **Author**: document author
+- **Subject**: document subject (if available)
+- **Keywords**: keywords (if available)
+- **Creator**: creating application
+- **Producer**: PDF producer
+- **Creation date**: when created
+- **Modification date**: when last modified
+- **Pages**: total page count
+- **Encrypted**: yes/no
 
 ### Content Summary
 - Purpose and main topics of the document
@@ -34,7 +49,7 @@ Arguments: {args}
 
 ### Key Findings
 - Important data, figures, tables, or quotes (bullet points)
-- If tables found, format them as markdown tables
+- If tables found, format them as markdown tables with headers and rows
 
 ### Quality Notes
 - OCR errors, missing content, formatting issues
@@ -155,6 +170,94 @@ pub struct PdfContent {
 
     /// Metadata
     pub metadata: PdfMetadata,
+}
+
+#[allow(dead_code)]
+impl PdfContent {
+    /// Parse AI-generated markdown output into structured PDF content.
+    ///
+    /// The AI prompt produces sections like "### Document Metadata" with
+    /// key-value pairs and bullet lists. This method extracts the known
+    /// fields into the typed structures.
+    pub fn from_ai_output(source_path: &str, ai_output: &str) -> Self {
+        let mut content = Self {
+            source_path: source_path.to_string(),
+            ..Default::default()
+        };
+
+        let mut in_metadata = false;
+        let mut in_findings = false;
+
+        for line in ai_output.lines() {
+            let trimmed = line.trim();
+
+            // Track which section we're in
+            if trimmed.starts_with("### Document Metadata") {
+                in_metadata = true;
+                in_findings = false;
+                continue;
+            } else if trimmed.starts_with("### Key Findings") || trimmed.starts_with("### Content Summary") {
+                in_metadata = false;
+                in_findings = true;
+                continue;
+            } else if trimmed.starts_with("###") {
+                in_metadata = false;
+                in_findings = false;
+                continue;
+            }
+
+            if in_metadata {
+                // Parse both "**Key**: value" and "- **Key**: value" patterns
+                let candidate = if let Some(stripped) = trimmed.strip_prefix("- ") {
+                    stripped.trim()
+                } else if let Some(stripped) = trimmed.strip_prefix("* ") {
+                    stripped.trim()
+                } else {
+                    trimmed
+                };
+
+                if let Some(rest) = candidate.strip_prefix("**") {
+                    if let Some(end) = rest.find("**:") {
+                        let key = rest[..end].trim();
+                        let value = rest[end + 3..].trim();
+                        match key {
+                            "Title" => content.metadata.title = Some(value.to_string()),
+                            "Author" => content.metadata.author = Some(value.to_string()),
+                            "Subject" => content.metadata.subject = Some(value.to_string()),
+                            "Keywords" => content.metadata.keywords = Some(value.to_string()),
+                            "Creator" => content.metadata.creator = Some(value.to_string()),
+                            "Producer" => content.metadata.producer = Some(value.to_string()),
+                            "Creation date" => content.metadata.creation_date = Some(value.to_string()),
+                            "Modification date" => content.metadata.modification_date = Some(value.to_string()),
+                            "Pages" => {
+                                if let Ok(n) = value.parse::<usize>() {
+                                    content.metadata.page_count = n;
+                                    content.total_pages = n;
+                                }
+                            }
+                            "Encrypted" => {
+                                content.metadata.encrypted = value.to_lowercase().starts_with('y');
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            if in_findings {
+                // Capture bullet points as page content (simplified)
+                if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
+                    let text = trimmed[2..].to_string();
+                    if !text.is_empty() {
+                        let page_num = content.pages.len() + 1;
+                        content.pages.push(PdfPage::new(page_num, text));
+                    }
+                }
+            }
+        }
+
+        content
+    }
 }
 
 /// Single page from PDF
@@ -506,6 +609,70 @@ mod tests {
     fn test_pdf_content_default() {
         let content = PdfContent::default();
         assert!(content.source_path.is_empty());
+        assert_eq!(content.total_pages, 0);
+        assert!(content.pages.is_empty());
+    }
+
+    #[test]
+    fn test_pdf_content_from_ai_output() {
+        let ai_output = r#"
+### Document Metadata
+- **Title**: Research Paper on Rust
+- **Author**: Jane Doe
+- **Subject**: Programming Languages
+- **Keywords**: rust, systems, safety
+- **Creator**: LaTeX
+- **Producer**: pdfTeX
+- **Creation date**: 2024-01-15
+- **Modification date**: 2024-02-20
+- **Pages**: 42
+- **Encrypted**: no
+
+### Content Summary
+This paper explores ownership semantics in Rust.
+
+### Key Findings
+- Rust provides memory safety without garbage collection
+- The borrow checker enforces ownership rules at compile time
+- Zero-cost abstractions enable high-level patterns with low-level performance
+
+### Quality Notes
+- Text extraction appears complete
+"#;
+        let content = PdfContent::from_ai_output("paper.pdf", ai_output);
+
+        assert_eq!(content.source_path, "paper.pdf");
+        assert_eq!(content.total_pages, 42);
+        assert_eq!(content.metadata.title.as_deref(), Some("Research Paper on Rust"));
+        assert_eq!(content.metadata.author.as_deref(), Some("Jane Doe"));
+        assert_eq!(content.metadata.subject.as_deref(), Some("Programming Languages"));
+        assert_eq!(content.metadata.keywords.as_deref(), Some("rust, systems, safety"));
+        assert_eq!(content.metadata.creator.as_deref(), Some("LaTeX"));
+        assert_eq!(content.metadata.producer.as_deref(), Some("pdfTeX"));
+        assert!(!content.metadata.encrypted);
+        // Bullet points from Key Findings should become pages
+        assert!(!content.pages.is_empty());
+        assert!(content.pages[0].text.contains("memory safety"));
+    }
+
+    #[test]
+    fn test_pdf_content_from_ai_output_encrypted() {
+        let ai_output = r#"
+### Document Metadata
+- **Pages**: 10
+- **Encrypted**: yes
+
+### Key Findings
+"#;
+        let content = PdfContent::from_ai_output("secure.pdf", ai_output);
+        assert_eq!(content.total_pages, 10);
+        assert!(content.metadata.encrypted);
+    }
+
+    #[test]
+    fn test_pdf_content_from_ai_output_empty() {
+        let content = PdfContent::from_ai_output("empty.pdf", "No PDF content found.");
+        assert_eq!(content.source_path, "empty.pdf");
         assert_eq!(content.total_pages, 0);
         assert!(content.pages.is_empty());
     }

@@ -70,3 +70,11 @@ pub mod commands {
 pub mod help_utils {
     pub use super::help::{generate_help, get_command_help, all_help_entries, HelpCategory, CommandHelpEntry};
 }
+
+/// Re-export PDF types for external consumers
+#[allow(unused_imports)]
+pub mod pdf_types {
+    pub use super::pdf::{
+        PdfContent, PdfPage, PdfTable, PdfImage, PdfMetadata, PdfOptions, ImageFormat,
+    };
+}
