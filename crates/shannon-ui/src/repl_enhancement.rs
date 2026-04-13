@@ -364,6 +364,42 @@ impl InputBuffer {
         self.lines.get(self.cursor_row).map(|l| l.chars().count()).unwrap_or(0)
     }
 
+    /// Get the text of the current line.
+    pub fn current_line(&self) -> &str {
+        self.lines.get(self.cursor_row).map(|s| s.as_str()).unwrap_or("")
+    }
+
+    /// Get the word at or immediately before the cursor on the current line.
+    pub fn current_word(&self) -> String {
+        let line = match self.lines.get(self.cursor_row) {
+            Some(l) => l.as_str(),
+            None => return String::new(),
+        };
+        let col = self.cursor_col.min(line.chars().count());
+        let chars: Vec<char> = line.chars().collect();
+        // Find end of word: skip to end of current word or stay at col
+        let mut end = col;
+        while end < chars.len() && !chars[end].is_whitespace() {
+            end += 1;
+        }
+        // Find start of word
+        let mut start = col;
+        while start > 0 && !chars[start - 1].is_whitespace() {
+            start -= 1;
+        }
+        if start >= end {
+            return String::new();
+        }
+        chars[start..end].iter().collect()
+    }
+
+    /// Insert text at the cursor position.
+    pub fn insert_text(&mut self, text: &str) {
+        for ch in text.chars() {
+            self.insert_char(ch);
+        }
+    }
+
     /// Insert a character at the cursor position.
     pub fn insert_char(&mut self, ch: char) {
         if self.cursor_row >= self.lines.len() {

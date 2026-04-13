@@ -4,6 +4,7 @@ use crate::{
     events::EventHandler,
     render::Renderer,
     repl_enhancement::{DiffData, ReplHistory, ReplRenderer, TurnDiff},
+    vim::{VimAction, VimHandler},
     widgets::{
         ChatWidget, ChatRole, PromptWidget, MainLayoutWidget,
         dialog::DialogWidget,
@@ -148,6 +149,8 @@ pub struct Repl {
     tab_completion_state: TabCompletionState,
     /// Plugin manager for discovering, loading, and managing plugins
     plugin_manager: PluginManager,
+    /// Vim key handler for vim mode support (yy/yw/p yank/paste)
+    vim_handler: VimHandler,
 }
 
 /// State for tab completion cycling
@@ -309,6 +312,7 @@ impl Repl {
             tools_invoked: 0,
             tab_completion_state: TabCompletionState::default(),
             plugin_manager,
+            vim_handler: VimHandler::new(),
         })
     }
 
@@ -500,7 +504,9 @@ impl Repl {
                 }
             }
             crossterm::event::KeyCode::Esc => {
-                self.prompt.clear();
+                // Route through vim handler for normal-mode Esc
+                let action = self.vim_handler.process_key(key);
+                self.handle_vim_action(action);
             }
             crossterm::event::KeyCode::Left => {
                 // Move cursor left within input
@@ -516,6 +522,68 @@ impl Repl {
             _ => {}
         }
         Ok(())
+    }
+
+    /// Handle vim actions produced by the VimHandler
+    fn handle_vim_action(&mut self, action: VimAction) {
+        match action {
+            VimAction::YankLine { count } => {
+                let line = self.prompt.current_line();
+                let yanked = if count > 1 { line.repeat(count) } else { line };
+                self.vim_handler.set_yank_buffer(yanked);
+            }
+            VimAction::PasteAfter => {
+                let text = self.vim_handler.yank_buffer().to_string();
+                if !text.is_empty() {
+                    self.prompt.insert_text(&text);
+                }
+            }
+            VimAction::InsertChar { c } => {
+                self.prompt.add_char(c);
+            }
+            VimAction::Backspace => {
+                self.prompt.backspace();
+            }
+            VimAction::SubmitInput => {
+                if let Err(e) = self.submit_input() {
+                    self.chat.add_message(ChatRole::System, format!("Input error: {e}"));
+                }
+            }
+            VimAction::MoveCursor { direction, count } => {
+                for _ in 0..count {
+                    use crate::vim::Direction;
+                    match direction {
+                        Direction::Left => self.prompt.cursor_left(),
+                        Direction::Right => self.prompt.cursor_right(),
+                        Direction::Up => self.prompt.cursor_up(),
+                        Direction::Down => self.prompt.cursor_down(),
+                        // LineStart/LineEnd etc. map to Home/End for now
+                        Direction::LineStart | Direction::FileStart => {
+                            // Move cursor to start of line
+                            let col = self.prompt.cursor_position();
+                            for _ in 0..col { self.prompt.cursor_left(); }
+                        }
+                        Direction::LineEnd | Direction::FileEnd => {
+                            // Approximate: move right a lot
+                            for _ in 0..100 { self.prompt.cursor_right(); }
+                        }
+                        Direction::WordForward | Direction::WordBackward => {
+                            // Not directly supported by PromptWidget, skip for now
+                        }
+                    }
+                }
+            }
+            VimAction::DeleteLine { .. } => {
+                let line = self.prompt.current_line();
+                self.vim_handler.set_yank_buffer(line);
+                self.prompt.clear();
+            }
+            VimAction::ClearInput => {
+                self.prompt.clear();
+            }
+            // Actions that don't need REPL-level handling (mode transitions, no-ops)
+            _ => {}
+        }
     }
 
     /// Handle tab completion

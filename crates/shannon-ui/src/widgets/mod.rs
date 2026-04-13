@@ -429,6 +429,21 @@ impl PromptWidget {
         self.buffer.move_down();
     }
 
+    /// Get the text of the current line at the cursor
+    pub fn current_line(&self) -> String {
+        self.buffer.current_line().to_string()
+    }
+
+    /// Get the word at or near the cursor
+    pub fn current_word(&self) -> String {
+        self.buffer.current_word()
+    }
+
+    /// Insert text at the cursor position
+    pub fn insert_text(&mut self, text: &str) {
+        self.buffer.insert_text(text);
+    }
+
     /// Get current cursor position (column)
     pub fn cursor_position(&self) -> usize {
         self.buffer.cursor_col()
