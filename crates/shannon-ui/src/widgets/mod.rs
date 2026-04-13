@@ -177,11 +177,32 @@ impl StatusBarWidget {
         model: Option<&str>,
         tokens_used: Option<u64>,
     ) {
+        Self::render_with_spinner(frame, area, status, model, tokens_used, None);
+    }
+
+    /// Render enhanced status bar with spinner animation
+    pub fn render_with_spinner(
+        frame: &mut Frame,
+        area: Rect,
+        status: &str,
+        model: Option<&str>,
+        tokens_used: Option<u64>,
+        spinner: Option<&crate::widgets::progress::SpinnerWidget>,
+    ) {
         // Build span with owned strings for proper lifetime
-        let mut span_vec: Vec<Span<'static>> = vec![
-            Span::styled(" Status: ", Style::default().fg(Color::Gray)),
-            Span::styled(status.to_string(), Style::default().fg(Color::White)),
-        ];
+        let mut span_vec: Vec<Span<'static>> = Vec::new();
+
+        // Show spinner frame when processing
+        if let Some(sp) = spinner {
+            if status != "Ready" {
+                let frame_str = sp.current_char().to_string();
+                span_vec.push(Span::styled(frame_str, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)));
+                span_vec.push(Span::raw(" "));
+            }
+        }
+
+        span_vec.push(Span::styled("Status: ", Style::default().fg(Color::Gray)));
+        span_vec.push(Span::styled(status.to_string(), Style::default().fg(Color::White)));
 
         if let Some(m) = model {
             span_vec.push(Span::styled(" | Model: ", Style::default().fg(Color::Gray)));
@@ -518,6 +539,20 @@ impl MainLayoutWidget {
         tokens_used: Option<u64>,
         working_dir: &str,
     ) {
+        Self::render_complete_with_spinner(frame, chat, prompt, status, model, tokens_used, working_dir, None);
+    }
+
+    /// Render the complete UI with spinner animation support
+    pub fn render_complete_with_spinner(
+        frame: &mut Frame,
+        chat: &ChatWidget,
+        prompt: &PromptWidget,
+        status: &str,
+        model: Option<&str>,
+        tokens_used: Option<u64>,
+        working_dir: &str,
+        spinner: Option<&crate::widgets::progress::SpinnerWidget>,
+    ) {
         let area = frame.area();
 
         let (header_area, chat_area, prompt_area, status_area, _) = Self::layout(area);
@@ -526,7 +561,7 @@ impl MainLayoutWidget {
         HeaderWidget::render(frame, header_area, model, tokens_used, working_dir);
         chat.render(frame, chat_area);
         prompt.render(frame, prompt_area);
-        StatusBarWidget::render_enhanced(frame, status_area, status, model, tokens_used);
+        StatusBarWidget::render_with_spinner(frame, status_area, status, model, tokens_used, spinner);
     }
 }
 

@@ -1826,3 +1826,174 @@ mod conversation_export_tests {
         assert_eq!(parsed[0]["content"][1]["type"], "tool_use");
     }
 }
+
+mod permission_flow_tests {
+    use futures::StreamExt;
+    use mockito::{Server, ServerGuard};
+    use shannon_core::api::{LlmClient, LlmClientConfig, LlmProvider};
+    use shannon_core::permissions::{PermissionChoice, PermissionManager};
+    use shannon_core::query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata, PermissionRequest};
+    use shannon_core::state::StateManager;
+    use shannon_core::tools::ToolRegistry;
+    use uuid::Uuid;
+
+    struct AnthropicKeyGuard(Option<std::ffi::OsString>);
+    impl AnthropicKeyGuard {
+        fn set() -> Self {
+            let old = std::env::var_os("ANTHROPIC_API_KEY");
+            unsafe { std::env::set_var("ANTHROPIC_API_KEY", "test-key"); }
+            Self(old)
+        }
+    }
+    impl Drop for AnthropicKeyGuard {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(v) => unsafe { std::env::set_var("ANTHROPIC_API_KEY", v); },
+                None => unsafe { std::env::remove_var("ANTHROPIC_API_KEY"); },
+            }
+        }
+    }
+
+    fn make_client(server: &ServerGuard) -> LlmClient {
+        let config = LlmClientConfig {
+            api_key: "test-key".to_string(),
+            base_url: server.url(),
+            model: "test-model".to_string(),
+            max_tokens: 1024,
+            timeout_seconds: 30,
+            api_version: "2023-06-01".to_string(),
+            provider: LlmProvider::Anthropic,
+            extra_headers: Default::default(),
+            retry_config: shannon_core::api::RetryConfig::default(),
+            fallback_provider: None,
+            fallback_base_url: None,
+            max_stream_reconnects: 3,
+        };
+        LlmClient::new(config)
+    }
+
+    fn make_context(message: &str) -> QueryContext {
+        QueryContext {
+            query_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            user_message: message.to_string(),
+            metadata: QueryMetadata {
+                timestamp: chrono::Utc::now(),
+                tools_allowed: true,
+                max_tokens: Some(1024),
+                model: "test-model".to_string(),
+                temperature: None,
+                top_p: None,
+            },
+        }
+    }
+
+    /// Test: tool permission denied → graceful error event, not panic.
+    /// The pipeline should emit a ToolUseRequest, we deny it via the
+    /// permission channel, and the engine should recover gracefully.
+    #[tokio::test]
+    async fn test_permission_denied_flow() {
+        let _guard = AnthropicKeyGuard::set();
+        let mut server = Server::new_async().await;
+
+        // First response: assistant requests a tool use
+        let tool_sse = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_perm\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_perm\",\"name\":\"bash\",\"input\":{}}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"command\\\":\\\"rm -rf /\\\"}\"}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        );
+
+        // After permission denied, the engine should send a tool_result with is_error
+        // and then make another LLM call. We provide a recovery response.
+        let recovery_sse = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_recovery\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":20,\"output_tokens\":0}}}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Understood, I won't run that command.\"}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":20,\"output_tokens\":8}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        );
+
+        server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(tool_sse)
+            .expect(1)
+            .create();
+
+        server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(recovery_sse)
+            .expect(1)
+            .create();
+
+        let client = make_client(&server);
+        let engine = QueryEngine::with_defaults(
+            client,
+            ToolRegistry::new(),
+            PermissionManager::new(),
+            StateManager::new(),
+        );
+
+        let ctx = make_context("Delete everything");
+        let (perm_tx, mut perm_rx) = tokio::sync::mpsc::unbounded_channel::<PermissionRequest>();
+
+        // Spawn a task to deny the permission request
+        let deny_handle = tokio::spawn(async move {
+            // Wait for a permission request
+            if let Some(req) = perm_rx.recv().await {
+                // Deny the permission
+                let _ = req.response_tx.send(PermissionChoice::Deny);
+            }
+        });
+
+        let mut stream = engine.process_query(ctx, Some(perm_tx)).await;
+
+        let mut events = Vec::new();
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(event) => events.push(event),
+                Err(e) => {
+                    // Permission denied should not cause a stream error;
+                    // it should be handled gracefully within the event flow
+                    panic!("Unexpected stream error: {e}");
+                }
+            }
+        }
+
+        // Wait for the deny task to complete
+        let _ = deny_handle.await;
+
+        // Should have completed (not failed) - the engine recovered
+        let has_completed = events.iter().any(|e| matches!(e, QueryEvent::Completed { .. }));
+        let has_tool_request = events.iter().any(|e| matches!(e, QueryEvent::ToolUseRequest { .. }));
+
+        assert!(has_tool_request, "Expected ToolUseRequest event before denial");
+
+        // Engine should complete gracefully (either with recovery text or just Completed)
+        // The key assertion is that it doesn't panic or hang
+        assert!(
+            has_completed || events.iter().any(|e| matches!(e, QueryEvent::Failed { .. })),
+            "Expected either Completed or Failed event, got: {:?}",
+            events.iter().map(|e| match e {
+                QueryEvent::Started { .. } => "Started",
+                QueryEvent::Text { .. } => "Text",
+                QueryEvent::ToolUseRequest { .. } => "ToolUseRequest",
+                QueryEvent::ToolUseResult { .. } => "ToolUseResult",
+                QueryEvent::TurnCompleted { .. } => "TurnCompleted",
+                QueryEvent::Progress { .. } => "Progress",
+                QueryEvent::Usage { .. } => "Usage",
+                QueryEvent::Cost { .. } => "Cost",
+                QueryEvent::ToolProgress { .. } => "ToolProgress",
+                QueryEvent::Completed { .. } => "Completed",
+                QueryEvent::Failed { .. } => "Failed",
+            }).collect::<Vec<_>>()
+        );
+    }
+}

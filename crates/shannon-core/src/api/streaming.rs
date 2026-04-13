@@ -655,6 +655,153 @@ mod tests {
         );
     }
 
+    // -- Edge case: Anthropic message_delta before content_block_start --
+
+    #[test]
+    fn test_anthropic_message_delta_before_content_block_start() {
+        // Anthropic sometimes sends message_delta (with stop_reason) before
+        // the content_block_stop event. This should not panic or lose events.
+        let lines = vec![
+            r#"data: {"type":"message_start","message":{"id":"msg_edge1","role":"assistant","content":[],"model":"claude-3","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":0}}}"#,
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}"#,
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":10,"output_tokens":2}}"#,
+            r#"data: {"type":"content_block_stop","index":0}"#,
+            "data: [DONE]",
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::Anthropic);
+        // Should get: MessageStart, ContentBlockStart, ContentBlockDelta, MessageDelta, ContentBlockStop, MessageStop
+        assert!(events.len() >= 4, "Expected at least 4 events, got {}", events.len());
+
+        // Verify the events are all Ok
+        for (i, e) in events.iter().enumerate() {
+            assert!(e.is_ok(), "Event {i} should be Ok, got Err: {:?}", e.as_ref().err());
+        }
+    }
+
+    // -- Edge case: Anthropic mixed text + tool_use in same stream --
+
+    #[test]
+    fn test_anthropic_mixed_text_and_tool_use() {
+        // A single Anthropic SSE stream that produces both text content and a tool_use block
+        let lines = vec![
+            r#"data: {"type":"message_start","message":{"id":"msg_mix","role":"assistant","content":[],"model":"claude-3","stop_reason":null,"usage":{"input_tokens":20,"output_tokens":0}}}"#,
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Let me search for that."}}"#,
+            r#"data: {"type":"content_block_stop","index":0}"#,
+            r#"data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tool_001","name":"web_search","input":{}}}"#,
+            r#"data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"query\":"}}"#,
+            r#"data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\"rust\"}"}}"#,
+            r#"data: {"type":"content_block_stop","index":1}"#,
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":20,"output_tokens":30}}"#,
+            "data: [DONE]",
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::Anthropic);
+
+        let text_deltas: Vec<_> = events.iter().filter_map(|e| match e {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                if let ContentDelta::TextDelta { text } = delta {
+                    Some(text.clone())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }).collect();
+
+        assert!(
+            text_deltas.iter().any(|t| t.contains("search")),
+            "Should have text delta with 'search', got: {text_deltas:?}"
+        );
+
+        // Verify all events parsed successfully
+        for (i, e) in events.iter().enumerate() {
+            assert!(e.is_ok(), "Event {i} should be Ok, got: {:?}", e.as_ref().err());
+        }
+    }
+
+    // -- Edge case: OpenAI delta with no content or tool_calls fields at all --
+
+    #[test]
+    fn test_openai_delta_completely_empty() {
+        // OpenAI sometimes sends chunks with an empty choices array or
+        // delta objects with no content/tool_calls fields (role-only deltas, etc.)
+        let lines = vec![
+            r#"data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1234,"model":"gpt-4","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}"#,
+            r#"data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1234,"model":"gpt-4","choices":[{"index":0,"delta":{},"finish_reason":null}]}"#,
+            r#"data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1234,"model":"gpt-4","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}"#,
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::OpenAI);
+        // The empty delta and role-only delta should not produce content events
+        let text_events: Vec<_> = events.iter().filter_map(|e| match e {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => Some(delta.clone()),
+            _ => None,
+        }).collect();
+
+        // Only the third chunk with "content":"Hello" should produce a text delta
+        assert_eq!(text_events.len(), 1, "Expected exactly 1 text delta from 3 chunks");
+        match &text_events[0] {
+            ContentDelta::TextDelta { text } => assert_eq!(text, "Hello"),
+            other => panic!("Expected TextDelta, got {other:?}"),
+        }
+    }
+
+    // -- Edge case: Ollama streaming with done:true as final chunk --
+
+    #[test]
+    fn test_ollama_done_true_final_chunk() {
+        let lines = vec![
+            r#"data: {"message":{"role":"assistant","content":"Hi"}}"#,
+            r#"data: {"message":{"role":"assistant","content":" there"}}"#,
+            r#"data: {"done":true,"total_duration":123456789}"#,
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::Ollama);
+        let text_deltas: Vec<_> = events.iter().filter_map(|e| match e {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                if let ContentDelta::TextDelta { text } = delta {
+                    Some(text.as_str())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }).collect();
+
+        assert_eq!(text_deltas, vec!["Hi", " there"]);
+        // done:true should not produce a content event
+    }
+
+    // -- Edge case: Multiple malformed JSON lines interspersed with valid ones --
+
+    #[test]
+    fn test_mixed_valid_invalid_sse_lines() {
+        let lines = vec![
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"good"}}"#,
+            r#"data: {broken"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"recovered"}}"#,
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::Anthropic);
+
+        let ok_count = events.iter().filter(|e| e.is_ok()).count();
+        let err_count = events.iter().filter(|e| e.is_err()).count();
+
+        assert_eq!(ok_count, 2, "Should have 2 successful events");
+        assert_eq!(err_count, 1, "Should have 1 error from malformed JSON");
+
+        // Verify the valid events' content
+        let texts: Vec<String> = events.iter().filter_map(|e| match e {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                if let ContentDelta::TextDelta { text } = delta {
+                    Some(text.clone())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }).collect();
+        assert_eq!(texts, vec!["good", "recovered"]);
+    }
+
     /// Test-only constructor for SseStream that doesn't require an HTTP response.
     impl SseStream {
         fn for_test(last_event_id: LastEventId) -> Self {

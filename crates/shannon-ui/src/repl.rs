@@ -365,6 +365,7 @@ impl Repl {
             let chat = &self.chat;
             let prompt = &self.prompt;
             let state = self.state.clone();
+            let spinner = &self.state.spinner;
 
             terminal.draw(|f| {
                 if let Some(ref dialog) = state.permission_dialog {
@@ -372,7 +373,7 @@ impl Repl {
                     self.render_permission_dialog(f, f.area(), dialog);
                 } else if let Some(ref dialog) = state.active_dialog {
                     // Render main layout first, then overlay the dialog
-                    MainLayoutWidget::render_complete(
+                    MainLayoutWidget::render_complete_with_spinner(
                         f,
                         chat,
                         prompt,
@@ -380,10 +381,11 @@ impl Repl {
                         state.model.as_deref(),
                         Some(state.tokens_used),
                         &state.working_directory,
+                        Some(spinner),
                     );
                     dialog.render(f, f.area());
                 } else {
-                    MainLayoutWidget::render_complete(
+                    MainLayoutWidget::render_complete_with_spinner(
                         f,
                         chat,
                         prompt,
@@ -391,6 +393,7 @@ impl Repl {
                         state.model.as_deref(),
                         Some(state.tokens_used),
                         &state.working_directory,
+                        Some(spinner),
                     );
                 }
             })?;
@@ -425,7 +428,10 @@ impl Repl {
                 }
             }
             crate::events::Event::Tick => {
-                // Handle periodic updates
+                // Advance spinner animation during query processing
+                if self.state.status != "Ready" {
+                    self.state.spinner.tick();
+                }
             }
         }
     }
@@ -946,15 +952,39 @@ impl Repl {
                 "history" => self.handle_history_command(args)?,
                 "worktree" => self.handle_worktree_command(args)?,
                 "credentials" | "creds" | "cred" => self.handle_credentials_command(args)?,
+                "export" | "save" => self.handle_export_command(args)?,
+                "diff" => self.handle_diff_command(args)?,
                 _ => {
-                    // Command is in registry but not handled by REPL (e.g., commit, diff, etc.)
-                    // For now, just show the command description
+                    // Handle prompt-based commands (export, diff, commit, review_pr, pdf, debug, etc.)
+                    // These have prompt templates that should be sent to the AI for execution.
                     if let Ok(command) = self.runtime.block_on(self.command_registry.get(cmd_name)) {
-                        let desc = command.description();
-                        self.chat.add_message(
-                            ChatRole::System,
-                            format!("/{cmd_name} — {desc}"),
-                        );
+                        match &*command {
+                            shannon_commands::Command::Prompt(prompt_cmd) => {
+                                if let Some(ref template) = prompt_cmd.prompt_template {
+                                    // Render the prompt template with user arguments
+                                    let prompt = template.replace("{args}", if args.is_empty() { "" } else { args });
+                                    // Display the command invocation in chat
+                                    self.chat.add_message(
+                                        ChatRole::System,
+                                        format!("Running /{cmd_name}..."),
+                                    );
+                                    // Send the rendered prompt to the AI query engine
+                                    self.handle_query(&prompt)?;
+                                } else {
+                                    self.chat.add_message(
+                                        ChatRole::System,
+                                        format!("/{cmd_name} — {}", prompt_cmd.base.description),
+                                    );
+                                }
+                            }
+                            _ => {
+                                let desc = command.description();
+                                self.chat.add_message(
+                                    ChatRole::System,
+                                    format!("/{cmd_name} — {desc}"),
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -1620,6 +1650,118 @@ impl Repl {
          /credentials count             - Show stored credential count\n".to_string()
     }
 
+    /// Handle /export command — export session to file
+    fn handle_export_command(&mut self, args: &str) -> Result<()> {
+        // Parse export arguments
+        // Determine format: default markdown, or json if specified
+        let format = if args.contains("json") { "json" } else { "md" };
+
+        // Find filename: last non-flag argument
+        let filename = args.split_whitespace()
+            .find(|t| !["md", "markdown", "json", "--no-metadata", "--no-timestamps"].contains(t))
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                let ext = if format == "json" { "json" } else { "md" };
+                let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+                format!("shannon_session_{ts}.{ext}")
+            });
+
+        // Collect messages from chat
+        let mut md = String::from("# Shannon Session Export\n\n");
+        md.push_str(&format!("**Model:** {}\n", self.state.model.as_deref().unwrap_or("default")));
+        md.push_str(&format!("**Working Directory:** {}\n", self.state.working_directory));
+        md.push_str(&format!("**Tokens Used:** {}\n", self.state.tokens_used));
+        md.push_str(&format!("**Commands Run:** {}\n", self.commands_run));
+        md.push_str(&format!("**Tools Invoked:** {}\n", self.tools_invoked));
+
+        if let Some(started) = &self.session_started_at {
+            let elapsed = chrono::Utc::now() - *started;
+            let mins = elapsed.num_minutes();
+            let secs = elapsed.num_seconds() % 60;
+            md.push_str(&format!("**Duration:** {mins}m {secs}s\n"));
+        }
+        md.push_str("\n---\n\n");
+
+        for i in 0..self.chat.len() {
+            if let Some(msg) = self.chat.get_message(i) {
+                let role = match msg.role {
+                    ChatRole::User => "## User",
+                    ChatRole::Assistant => "## Assistant",
+                    ChatRole::System => "## System",
+                    ChatRole::Tool => "## Tool",
+                };
+                let ts = msg.timestamp.format("%H:%M:%S");
+                md.push_str(&format!("{role} ({ts})\n\n{}\n\n---\n\n", msg.content));
+            }
+        }
+
+        match std::fs::write(&filename, &md) {
+            Ok(_) => {
+                self.chat.add_message(
+                    ChatRole::System,
+                    format!("Session exported to: {filename} ({} messages, markdown format)", self.chat.len()),
+                );
+            }
+            Err(e) => {
+                self.chat.add_message(
+                    ChatRole::System,
+                    format!("Failed to export session: {e}"),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Handle /diff command — show git diff analysis
+    fn handle_diff_command(&mut self, args: &str) -> Result<()> {
+        let diff_args = if args.trim().is_empty() { "HEAD" } else { args.trim() };
+        let output = std::process::Command::new("git")
+            .args(["diff", diff_args])
+            .current_dir(&self.state.working_directory)
+            .output();
+
+        match output {
+            Ok(result) => {
+                let stdout = String::from_utf8_lossy(&result.stdout);
+                let stderr = String::from_utf8_lossy(&result.stderr);
+
+                if !stderr.is_empty() && stdout.is_empty() {
+                    self.chat.add_message(
+                        ChatRole::System,
+                        format!("Git diff error: {stderr}"),
+                    );
+                } else if stdout.is_empty() {
+                    self.chat.add_message(
+                        ChatRole::System,
+                        "No changes found.".to_string(),
+                    );
+                } else {
+                    // Summarize diff stats from the output
+                    let lines = stdout.lines().count();
+                    let files: Vec<&str> = stdout.lines()
+                        .filter(|l| l.starts_with("diff --git"))
+                        .collect();
+                    self.chat.add_message(
+                        ChatRole::System,
+                        format!(
+                            "Git diff ({} files, {} lines):\n{}",
+                            files.len(),
+                            lines,
+                            if stdout.len() > 4000 { format!("{}\n... (truncated)", &stdout[..4000]) } else { stdout.to_string() }
+                        ),
+                    );
+                }
+            }
+            Err(e) => {
+                self.chat.add_message(
+                    ChatRole::System,
+                    format!("Failed to run git diff: {e}"),
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Check for Shannon updates on startup (non-blocking)
     fn check_for_updates(&self) -> Option<String> {
         use shannon_core::updater::{AutoUpdater, UpdaterConfig};
@@ -1852,8 +1994,11 @@ impl Repl {
                 let chat = &self.chat;
                 let prompt = &self.prompt;
                 let state = self.state.clone();
+                // Tick spinner during streaming, before borrowing for render
+                self.state.spinner.tick();
+                let spinner = &self.state.spinner;
                 polling_terminal.draw(|f| {
-                    MainLayoutWidget::render_complete(
+                    MainLayoutWidget::render_complete_with_spinner(
                         f,
                         chat,
                         prompt,
@@ -1861,6 +2006,7 @@ impl Repl {
                         state.model.as_deref(),
                         Some(state.tokens_used),
                         &state.working_directory,
+                        Some(spinner),
                     );
                 })?;
 

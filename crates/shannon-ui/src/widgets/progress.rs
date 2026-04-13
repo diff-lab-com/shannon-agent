@@ -11,11 +11,9 @@ use ratatui::{
 };
 
 /// Unicode block characters for smooth progress display
-#[allow(dead_code)]
 const BLOCKS: [&str; 9] = [" ", "▏", "▎", "█", "▌", "▋", "▊", "▉", "█"];
 
 /// Progress bar widget
-#[allow(dead_code)]
 pub struct ProgressBarWidget {
     title: Option<String>,
     progress: f64,
@@ -27,7 +25,6 @@ pub struct ProgressBarWidget {
     animation_frame: usize,
 }
 
-#[allow(dead_code)]
 impl ProgressBarWidget {
     /// Create a new progress bar
     pub fn new() -> Self {
@@ -223,6 +220,11 @@ impl SpinnerWidget {
     /// Get current frame index
     pub fn current_frame(&self) -> usize {
         self.current_frame
+    }
+
+    /// Get the current spinner character
+    pub fn current_char(&self) -> &'static str {
+        self.frames[self.current_frame]
     }
 
     /// Get the message text (if any)

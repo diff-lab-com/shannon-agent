@@ -2097,4 +2097,128 @@ mod tests {
         let result = engine.micro_compact(&mut messages).unwrap();
         assert_eq!(result.messages_compacted, 1);
     }
+
+    // -- Edge case: system prompt preserved during compression --
+
+    #[test]
+    fn test_compact_preserves_system_prompt_at_front() {
+        let mut engine = CompactEngine::new(
+            CompactConfig {
+                keep_recent_count: 4,
+                ..Default::default()
+            },
+            Box::new(RuleBasedSummarizer::new()),
+        )
+        .unwrap();
+
+        let mut messages = vec![
+            system_msg("You are a helpful coding assistant."),
+        ];
+        for i in 0..15 {
+            messages.push(user_msg(&format!("User query {i}")));
+            messages.push(assistant_msg(&format!("Response {i}")));
+        }
+
+        engine.compact(&mut messages).unwrap();
+
+        // The original system prompt should still be present somewhere
+        let has_system_prompt = messages.iter().any(|m| {
+            matches!(&m.content, MessageContent::Text(t) if t.contains("helpful coding assistant"))
+        });
+        assert!(has_system_prompt, "System prompt should be preserved after compaction");
+    }
+
+    // -- Edge case: concurrent compact guard --
+
+    #[test]
+    fn test_compact_already_in_progress() {
+        let mut engine = CompactEngine::with_defaults().unwrap();
+        // Manually set the compacting flag to simulate concurrent access
+        engine.compacting = true;
+        let mut messages = vec![user_msg("test")];
+        let result = engine.compact(&mut messages);
+        assert!(matches!(result, Err(CompactError::AlreadyInProgress)));
+    }
+
+    // -- Edge case: token estimation within reasonable bounds --
+
+    #[test]
+    fn test_token_estimation_reasonable_bounds() {
+        // 100 chars ≈ 25 tokens (at 4 chars/token)
+        let msg = user_msg(&"A".repeat(100));
+        let tokens = estimate_message_tokens(&msg);
+        assert!((20..=30).contains(&tokens), "100 chars should be ~25 tokens, got {tokens}");
+
+        // 1000 chars ≈ 250 tokens
+        let msg = user_msg(&"B".repeat(1000));
+        let tokens = estimate_message_tokens(&msg);
+        assert!((240..=260).contains(&tokens), "1000 chars should be ~250 tokens, got {tokens}");
+
+        // Single char = 1 token (min(1))
+        let msg = user_msg("X");
+        let tokens = estimate_message_tokens(&msg);
+        assert_eq!(tokens, 1);
+    }
+
+    // -- Edge case: group_compact with mixed tool_use and text messages --
+
+    #[test]
+    fn test_group_compact_mixed_tool_and_text() {
+        let mut engine = CompactEngine::new(
+            CompactConfig {
+                keep_recent_count: 4,
+                ..Default::default()
+            },
+            Box::new(RuleBasedSummarizer::new()),
+        )
+        .unwrap();
+
+        let mut messages = vec![
+            user_msg("Look at my project"),
+            assistant_msg("Let me check."),
+            tool_use_msg("t1", "bash", "find . -name '*.rs'"),
+            tool_result_msg("t1", "src/main.rs\nsrc/lib.rs"),
+            assistant_msg("I found your Rust files."),
+            user_msg("How many lines?"),
+            tool_use_msg("t2", "bash", "wc -l src/main.rs"),
+            tool_result_msg("t2", "42 src/main.rs"),
+            assistant_msg("42 lines total."),
+            user_msg("Add a new function"),
+            assistant_msg("Done! I've added the function."),
+            user_msg("Now run the tests"),
+            assistant_msg("All tests pass."),
+            user_msg("Great, commit it"),
+            assistant_msg("Committed."),
+        ];
+
+        let original_count = messages.len();
+        let result = engine.group_compact(&mut messages).unwrap();
+        assert!(result.messages_removed > 0);
+        assert!(messages.len() < original_count);
+        // Recent messages should be preserved
+        let last_msg = messages.last().unwrap();
+        assert_eq!(last_msg.role, "assistant");
+    }
+
+    // -- Edge case: set_config validates new config --
+
+    #[test]
+    fn test_set_config_validates() {
+        let mut engine = CompactEngine::with_defaults().unwrap();
+
+        let valid = CompactConfig {
+            max_output_tokens: 3000,
+            ..Default::default()
+        };
+        assert!(engine.set_config(valid).is_ok());
+        assert_eq!(engine.config().max_output_tokens, 3000);
+
+        let invalid = CompactConfig {
+            max_output_tokens: 0,
+            ..Default::default()
+        };
+        assert!(engine.set_config(invalid).is_err());
+        // Original config should be preserved after failed update
+        assert_eq!(engine.config().max_output_tokens, 3000);
+    }
 }

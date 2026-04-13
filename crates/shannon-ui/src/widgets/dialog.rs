@@ -341,12 +341,10 @@ impl ConfirmDialog {
 }
 
 /// Alert dialog builder
-#[allow(dead_code)]
 pub struct AlertDialog {
     dialog: DialogWidget,
 }
 
-#[allow(dead_code)]
 impl AlertDialog {
     /// Create a new alert dialog
     pub fn new(title: String) -> Self {
