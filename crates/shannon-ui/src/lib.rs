@@ -2,7 +2,7 @@
 //!
 //! Terminal-based user interface for Shannon using Ratatui.
 
-mod repl;
+pub mod repl;
 mod widgets;
 mod events;
 mod render;
