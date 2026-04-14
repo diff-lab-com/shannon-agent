@@ -144,6 +144,18 @@ impl QueryEngine {
         }
     }
 
+    /// Set a custom system prompt, replacing the default.
+    pub fn with_system_prompt(mut self, prompt: String) -> Self {
+        self.config.system_prompt = Some(prompt);
+        self
+    }
+
+    /// Append content to the existing system prompt.
+    pub fn append_system_prompt(&mut self, content: &str) {
+        let current = self.config.system_prompt.take().unwrap_or_default();
+        self.config.system_prompt = Some(format!("{current}\n\n{content}"));
+    }
+
     /// Attach a memory store to this query engine.
     ///
     /// Enables memory-augmented queries (relevant memories injected into the
@@ -212,6 +224,13 @@ impl QueryEngine {
     /// Clear the conversation history
     pub fn clear_conversation(&mut self) {
         self.conversation = ConversationState::default();
+    }
+
+    /// Replace the conversation history with new messages (e.g., after compaction)
+    pub fn replace_conversation(&mut self, messages: Vec<Message>) {
+        let turn_count = messages.iter().filter(|m| m.role == "user").count();
+        self.conversation.messages = messages;
+        self.conversation.turn_count = turn_count;
     }
 
     /// Process a query with streaming events

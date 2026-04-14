@@ -894,6 +894,94 @@ fn test_repl_doctor_in_help() {
     assert!(last_msg.contains("/doctor"));
 }
 
+// ── /compact Command Tests ──────────────────────────────────────────
+
+#[test]
+fn test_repl_compact_status() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/compact status".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Context Analysis"));
+    assert!(last_msg.contains("Estimated tokens"));
+    assert!(last_msg.contains("Context usage"));
+}
+
+#[test]
+fn test_repl_compact_no_conversation() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/compact".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    // With no conversation history beyond the initial messages, compact should
+    // report no change or compact successfully
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(
+        last_msg.contains("Context compacted")
+        || last_msg.contains("No conversation")
+        || last_msg.contains("Compact")
+    );
+}
+
+#[test]
+fn test_repl_compact_in_help() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/help".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("/compact"));
+}
+
+#[test]
+fn test_repl_compact_tab_completion() {
+    let args = crate::repl::input::complete_command_args("compact", "");
+    assert!(args.contains(&"status".to_string()));
+    assert!(args.contains(&"truncate".to_string()));
+    assert!(args.contains(&"micro".to_string()));
+    assert!(args.contains(&"group".to_string()));
+}
+
+#[test]
+fn test_repl_compact_tab_completion_prefix() {
+    let args = crate::repl::input::complete_command_args("compact", "st");
+    assert!(args.contains(&"status".to_string()));
+    assert!(!args.contains(&"truncate".to_string()));
+}
+
+// ── /cost Command Tests ──────────────────────────────────────────
+
+#[test]
+fn test_repl_cost_command() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/cost".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Cost Summary"));
+    assert!(last_msg.contains("Model:"));
+    assert!(last_msg.contains("Tokens used:"));
+    assert!(last_msg.contains("Session duration:"));
+}
+
+#[test]
+fn test_repl_cost_with_usage() {
+    let mut repl = Repl::new().unwrap();
+    repl.state.tokens_used = 5000;
+    repl.state.total_cost_usd = 0.15;
+    repl.prompt.set_input("/cost".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("5.0k"));
+    assert!(last_msg.contains("0.15"));
+}
+
+#[test]
+fn test_repl_cost_in_help() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/help".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("/cost"));
+}
+
 // ── /team Command Tests ────────────────────────────────────────────
 
 #[test]

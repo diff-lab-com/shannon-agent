@@ -427,7 +427,7 @@ fn run_noninteractive_query(query: &str, stream: bool, config: &CliConfig) -> Re
         let base_engine = QueryEngine::with_defaults(client, tools, permissions, state);
 
         // Initialize memory store at ~/.shannon/memories/
-        let engine = {
+        let mut engine = {
             let memory_path = dirs::home_dir()
                 .map(|h| h.join(".shannon").join("memories"))
                 .unwrap_or_else(|| std::path::PathBuf::from(".shannon/memories"));
@@ -435,6 +435,11 @@ fn run_noninteractive_query(query: &str, stream: bool, config: &CliConfig) -> Re
             let _ = mem_store.load();
             base_engine.with_memory(mem_store)
         };
+
+        // Auto-load project instructions (CLAUDE.md, AGENTS.md, GEMINI.md)
+        if let Some(instructions) = shannon_core::project_instructions::load_from_cwd() {
+            engine.append_system_prompt(&instructions.content);
+        }
 
         let context = QueryContext {
             query_id: Uuid::new_v4(),

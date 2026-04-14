@@ -478,6 +478,73 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("Use to diagnose issues with your Shannon Code installation and environment")
             .with_related(vec!["config", "debug"])
         ),
+        "compact" => Some(
+            CommandHelpEntry::new(
+                "compact".to_string(),
+                "Compact conversation context to reduce token usage".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("[status|truncate|micro|group]")
+            .with_examples(vec!["/compact", "/compact status", "/compact truncate", "/compact micro"])
+            .with_when_to_use("Use when context is getting large and you want to reduce token usage")
+            .with_related(vec!["history", "cost"])
+        ),
+        "cost" => Some(
+            CommandHelpEntry::new(
+                "cost".to_string(),
+                "Show cost summary for the current session".to_string(),
+                HelpCategory::System,
+            )
+            .with_examples(vec!["/cost"])
+            .with_when_to_use("Use to check token usage, session cost, and cost rate")
+            .with_related(vec!["history", "compact"])
+        ),
+        "team" => Some(
+            CommandHelpEntry::new(
+                "team".to_string(),
+                "Multi-agent team orchestration".to_string(),
+                HelpCategory::Skills,
+            )
+            .with_arg_hint("[create|add|task|assign|status|list|run|shutdown]")
+            .with_examples(vec!["/team create my-team", "/team add my-team agent1", "/team task my-team fix bug", "/team run"])
+            .with_when_to_use("Use to create and manage multi-agent teams for parallel task execution")
+            .with_related(vec!["worktree"])
+        ),
+        "credentials" => Some(
+            CommandHelpEntry::new(
+                "credentials".to_string(),
+                "Manage stored credentials".to_string(),
+                HelpCategory::System,
+            )
+            .with_aliases(vec!["creds", "cred"])
+            .with_arg_hint("[list|store|get|delete|count]")
+            .with_examples(vec!["/credentials list", "/credentials store my-service my-token"])
+            .with_when_to_use("Use to store or retrieve API keys and other credentials")
+            .with_related(vec!["config"])
+        ),
+        "browse" => Some(
+            CommandHelpEntry::new(
+                "browse".to_string(),
+                "Browse files and directories".to_string(),
+                HelpCategory::Files,
+            )
+            .with_aliases(vec!["files"])
+            .with_arg_hint("[path]")
+            .with_examples(vec!["/browse", "/browse ./src"])
+            .with_when_to_use("Use to interactively browse and select files from the filesystem")
+            .with_related(vec!["search"])
+        ),
+        "tools" => Some(
+            CommandHelpEntry::new(
+                "tools".to_string(),
+                "Select and manage available tools".to_string(),
+                HelpCategory::System,
+            )
+            .with_aliases(vec!["select-tools"])
+            .with_examples(vec!["/tools"])
+            .with_when_to_use("Use to enable or disable specific tools for the current session")
+            .with_related(vec!["config"])
+        ),
         _ => None,
     }
 }
@@ -503,6 +570,12 @@ pub fn all_help_entries() -> Vec<CommandHelpEntry> {
         get_command_help("history").unwrap(),
         get_command_help("worktree").unwrap(),
         get_command_help("doctor").unwrap(),
+        get_command_help("compact").unwrap(),
+        get_command_help("cost").unwrap(),
+        get_command_help("team").unwrap(),
+        get_command_help("credentials").unwrap(),
+        get_command_help("browse").unwrap(),
+        get_command_help("tools").unwrap(),
     ]
 }
 

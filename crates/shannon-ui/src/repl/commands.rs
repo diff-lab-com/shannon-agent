@@ -59,7 +59,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
     let is_plugin_command = repl.plugin_manager.get_plugin_commands()
         .iter().any(|c| c.name == cmd_name);
     // Commands handled in the match block but not in the global registry
-    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team"];
+    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "compact", "cost"];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
     if command_exists || is_plugin_command || is_repl_command {
@@ -83,6 +83,8 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "select-tools" | "tools" => handle_select_tools(repl)?,
             "debug" | "dbg" | "dev" => handle_debug(repl, args)?,
             "doctor" | "check" | "diagnostics" => handle_doctor(repl, args)?,
+            "compact" => handle_compact(repl, args)?,
+            "cost" => handle_cost(repl)?,
             "team" => handle_team(repl, args)?,
             _ => handle_other_command(repl, cmd_name, args)?,
         }
@@ -1057,6 +1059,145 @@ fn handle_debug(repl: &mut Repl, args: &str) -> Result<()> {
     };
 
     repl.chat.add_message(ChatRole::System, output);
+    Ok(())
+}
+
+fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
+    use shannon_core::compact::{CompactEngine, CompactStrategy};
+
+    let Some(ref engine) = repl.query_engine else {
+        repl.chat.add_message(ChatRole::System, "No query engine available.".to_string());
+        return Ok(());
+    };
+
+    let history = engine.conversation_history();
+
+    // Analyze first
+    let compact_engine = match CompactEngine::with_defaults() {
+        Ok(e) => e,
+        Err(e) => {
+            repl.chat.add_message(ChatRole::System, format!("Compact engine error: {e}"));
+            return Ok(());
+        }
+    };
+
+    let analysis = compact_engine.analyze_context(&history);
+
+    // Parse subcommand
+    let subcmd = args.trim();
+    if subcmd == "status" || subcmd == "info" {
+        let info = format!(
+            "Context Analysis:\n  Estimated tokens: {}\n  Context usage: {:.1}%\n  Messages: {}\n  Should compact: {}\n  Recommended strategy: {}\n  Compactable messages: {}\n  Micro-compact candidates: {}",
+            analysis.estimated_tokens,
+            analysis.context_usage_ratio * 100.0,
+            history.len(),
+            if analysis.should_compact { "yes" } else { "no" },
+            analysis.recommended_strategy,
+            analysis.compactable_message_count,
+            analysis.micro_compact_candidates,
+        );
+        repl.chat.add_message(ChatRole::System, info);
+        return Ok(());
+    }
+
+    // Perform compaction
+    if history.is_empty() {
+        repl.chat.add_message(ChatRole::System, "No conversation to compact.".to_string());
+        return Ok(());
+    }
+
+    let strategy = match subcmd {
+        "truncate" => CompactStrategy::TruncateOld,
+        "micro" => CompactStrategy::MicroCompress,
+        "group" => CompactStrategy::GroupCompress,
+        _ => CompactStrategy::SummarizeOld,
+    };
+
+    let mut messages = history;
+    let mut compact_engine = compact_engine;
+
+    let result = match strategy {
+        CompactStrategy::MicroCompress => compact_engine.micro_compact(&mut messages),
+        CompactStrategy::GroupCompress => compact_engine.group_compact(&mut messages),
+        _ => compact_engine.compact(&mut messages),
+    };
+
+    match result {
+        Ok(compact_result) => {
+            // Post-cleanup
+            let cleanup_removed = compact_engine.post_compact_cleanup(&mut messages);
+
+            // Update the query engine's conversation
+            if let Some(ref mut engine) = repl.query_engine {
+                engine.replace_conversation(messages);
+            }
+
+            let mut report = format!(
+                "Context compacted:\n  Strategy: {}\n  Tokens: {} → {} ({:.1}% reduction)\n  Messages removed: {}\n  Messages compacted: {}\n  Duration: {:.2}s",
+                compact_result.strategy,
+                compact_result.original_tokens,
+                compact_result.compacted_tokens,
+                compact_result.reduction_ratio * 100.0,
+                compact_result.messages_removed,
+                compact_result.messages_compacted,
+                compact_result.duration.as_secs_f64(),
+            );
+            if cleanup_removed > 0 {
+                report.push_str(&format!("\n  Cleanup removed {cleanup_removed} duplicate messages"));
+            }
+            repl.chat.add_message(ChatRole::System, report);
+        }
+        Err(e) => {
+            repl.chat.add_message(ChatRole::System, format!("Compact failed: {e}"));
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_cost(repl: &mut Repl) -> Result<()> {
+    let Some(ref engine) = repl.query_engine else {
+        repl.chat.add_message(ChatRole::System, "No query engine available.".to_string());
+        return Ok(());
+    };
+
+    let stats = engine.conversation_stats();
+    let model = repl.state.model.as_deref().unwrap_or("unknown");
+
+    let mut report = format!(
+        "Cost Summary:\n  Model: {}\n  Messages: {} turns\n  Tokens used: {} ({:.1}k)\n  Session cost: ${:.4}\n  Working dir: {}",
+        model,
+        stats.turn_count,
+        repl.state.tokens_used,
+        repl.state.tokens_used as f64 / 1000.0,
+        repl.state.total_cost_usd,
+        repl.state.working_directory,
+    );
+
+    if let Some(started) = &repl.session_started_at {
+        let elapsed = chrono::Utc::now() - *started;
+        let mins = elapsed.num_minutes();
+        let secs = elapsed.num_seconds() % 60;
+        report.push_str(&format!("\n  Session duration: {mins}m {secs}s"));
+
+        if mins > 0 {
+            let cost_per_min = repl.state.total_cost_usd / mins as f64;
+            report.push_str(&format!("\n  Cost rate: ${cost_per_min:.4}/min"));
+        }
+    }
+
+    if repl.diff_data.total_files_modified() > 0 || repl.diff_data.total_files_created() > 0 {
+        report.push_str(&format!(
+            "\n  Files changed: +{}/-{} ({} modified, {} created, {} deleted)",
+            repl.diff_data.total_additions(),
+            repl.diff_data.total_deletions(),
+            repl.diff_data.total_files_modified(),
+            repl.diff_data.total_files_created(),
+            repl.diff_data.total_files_deleted(),
+        ));
+    }
+
+    repl.chat.add_message(ChatRole::System, report);
     Ok(())
 }
 

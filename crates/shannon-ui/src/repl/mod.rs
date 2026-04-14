@@ -307,7 +307,7 @@ impl Repl {
         );
 
         // Initialize memory store at ~/.shannon/memories/
-        let query_engine = {
+        let mut query_engine = {
             let memory_path = dirs::home_dir()
                 .map(|h| h.join(".shannon").join("memories"))
                 .unwrap_or_else(|| std::path::PathBuf::from(".shannon/memories"));
@@ -316,6 +316,11 @@ impl Repl {
             let _ = mem_store.load();
             base_engine.with_memory(mem_store)
         };
+
+        // Auto-load project instructions (CLAUDE.md, AGENTS.md, GEMINI.md)
+        if let Some(instructions) = shannon_core::project_instructions::load_from_cwd() {
+            query_engine.append_system_prompt(&instructions.content);
+        }
 
         // Create permission request channel
         let (permission_req_tx, permission_req_rx) = tokio::sync::mpsc::unbounded_channel();
