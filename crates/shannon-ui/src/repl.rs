@@ -181,6 +181,8 @@ pub struct Repl {
     plugin_manager: PluginManager,
     /// Vim key handler for vim mode support (yy/yw/p yank/paste)
     vim_handler: VimHandler,
+    /// Multi-agent team coordinator (lazy-initialized on /team create)
+    team_coordinator: Option<shannon_agents::AgentCoordinator>,
 }
 
 /// State for tab completion cycling
@@ -350,6 +352,7 @@ impl Repl {
             tab_completion_state: TabCompletionState::default(),
             plugin_manager,
             vim_handler: VimHandler::new(),
+            team_coordinator: None,
         })
     }
 
@@ -1395,6 +1398,8 @@ impl Repl {
                 "browse" | "files" => self.handle_browse_command(args)?,
                 "select-tools" | "tools" => self.handle_select_tools_command()?,
                 "debug" | "dbg" | "dev" => self.handle_debug_command(args)?,
+                "doctor" | "check" | "diagnostics" => self.handle_doctor_command(args)?,
+                "team" => self.handle_team_command(args)?,
                 _ => {
                     // Check plugin commands first (via PluginExecutable bridge)
                     let plugin_cmd = self.plugin_manager.get_plugin_commands()
@@ -1855,6 +1860,165 @@ impl Repl {
                     ChatRole::System,
                     "Unknown worktree action. Use: enter <name>, exit [--keep|--remove], or status".to_string(),
                 );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Handle /team command — multi-agent team orchestration
+    fn handle_team_command(&mut self, args: &str) -> Result<()> {
+        use shannon_agents::{
+            AgentCoordinator, CoordinatorConfig,
+            TeammateConfig, TaskPriority,
+        };
+
+        let parts: Vec<&str> = args.splitn(4, ' ').collect();
+        let subcommand = parts.first().copied().unwrap_or("help");
+
+        match subcommand {
+            "help" | "" => {
+                let help = "\
+/team create <name> [description]  — Create a new agent team
+/team add <team> <agent-name>  — Add agent to team
+/team task <team> <subject>  — Add a task
+/team assign <team>  — Assign pending tasks to available agents
+/team status [team]  — Show team status
+/team list  — List all teams
+/team shutdown  — Shutdown team";
+                self.chat.add_message(ChatRole::System, help.to_string());
+            }
+            "create" => {
+                let name = parts.get(1).copied().unwrap_or("");
+                if name.is_empty() {
+                    self.chat.add_message(ChatRole::System, "Usage: /team create <name> [description]".to_string());
+                    return Ok(());
+                }
+                let description = parts.get(2..).map(|s| s.join(" ")).unwrap_or_default();
+                let config = CoordinatorConfig::default();
+                match self.runtime.block_on(AgentCoordinator::new(config)) {
+                    Ok(coordinator) => {
+                        match self.runtime.block_on(coordinator.create_team(name.to_string(), description)) {
+                            Ok(()) => {
+                                self.team_coordinator = Some(coordinator);
+                                self.chat.add_message(ChatRole::System, format!("Team '{name}' created."));
+                            }
+                            Err(e) => {
+                                self.chat.add_message(ChatRole::System, format!("Failed to create team: {e}"));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.chat.add_message(ChatRole::System, format!("Failed to initialize coordinator: {e}"));
+                    }
+                }
+            }
+            "add" => {
+                let team_name = parts.get(1).copied().unwrap_or("");
+                let agent_name = parts.get(2).copied().unwrap_or("");
+                if team_name.is_empty() || agent_name.is_empty() {
+                    self.chat.add_message(ChatRole::System, "Usage: /team add <team> <agent-name>".to_string());
+                    return Ok(());
+                }
+                if let Some(ref coordinator) = self.team_coordinator {
+                    let config = TeammateConfig::default();
+                    match self.runtime.block_on(coordinator.add_teammate(team_name, agent_name.to_string(), config)) {
+                        Ok(()) => {
+                            self.chat.add_message(ChatRole::System, format!("Agent '{agent_name}' added to team '{team_name}'."));
+                        }
+                        Err(e) => {
+                            self.chat.add_message(ChatRole::System, format!("Failed to add agent: {e}"));
+                        }
+                    }
+                } else {
+                    self.chat.add_message(ChatRole::System, "No team created yet. Use /team create first.".to_string());
+                }
+            }
+            "task" => {
+                let team_name = parts.get(1).copied().unwrap_or("");
+                let subject = parts.get(2..).map(|s| s.join(" ")).unwrap_or_default();
+                if team_name.is_empty() || subject.is_empty() {
+                    self.chat.add_message(ChatRole::System, "Usage: /team task <team> <subject>".to_string());
+                    return Ok(());
+                }
+                if let Some(ref coordinator) = self.team_coordinator {
+                    match self.runtime.block_on(coordinator.add_task(team_name, subject.clone(), String::new(), TaskPriority::Medium)) {
+                        Ok(task_id) => {
+                            self.chat.add_message(ChatRole::System, format!("Task added to '{team_name}': {subject} (id: {task_id})"));
+                        }
+                        Err(e) => {
+                            self.chat.add_message(ChatRole::System, format!("Failed to add task: {e}"));
+                        }
+                    }
+                } else {
+                    self.chat.add_message(ChatRole::System, "No team created yet. Use /team create first.".to_string());
+                }
+            }
+            "assign" => {
+                let team_name = parts.get(1).copied().unwrap_or("");
+                if team_name.is_empty() {
+                    self.chat.add_message(ChatRole::System, "Usage: /team assign <team>".to_string());
+                    return Ok(());
+                }
+                if let Some(ref coordinator) = self.team_coordinator {
+                    match self.runtime.block_on(coordinator.assign_task(team_name, uuid::Uuid::nil())) {
+                        Ok(agent) => {
+                            self.chat.add_message(ChatRole::System, format!("Task assigned to '{agent}' in team '{team_name}'."));
+                        }
+                        Err(e) => {
+                            self.chat.add_message(ChatRole::System, format!("Failed to assign task: {e}"));
+                        }
+                    }
+                } else {
+                    self.chat.add_message(ChatRole::System, "No team created yet. Use /team create first.".to_string());
+                }
+            }
+            "status" => {
+                let team_name = parts.get(1).copied().unwrap_or("");
+                if let Some(ref coordinator) = self.team_coordinator {
+                    if team_name.is_empty() {
+                        let teams = self.runtime.block_on(coordinator.list_teams());
+                        if teams.is_empty() {
+                            self.chat.add_message(ChatRole::System, "No teams created yet.".to_string());
+                        } else {
+                            let output = format!("Teams:\n{}", teams.iter().map(|t| format!("  - {t}")).collect::<Vec<_>>().join("\n"));
+                            self.chat.add_message(ChatRole::System, output);
+                        }
+                    } else {
+                        match self.runtime.block_on(coordinator.team_status(team_name)) {
+                            Ok(status) => { self.chat.add_message(ChatRole::System, status); }
+                            Err(e) => { self.chat.add_message(ChatRole::System, format!("Failed to get status: {e}")); }
+                        }
+                    }
+                } else {
+                    self.chat.add_message(ChatRole::System, "No team created yet. Use /team create first.".to_string());
+                }
+            }
+            "list" => {
+                if let Some(ref coordinator) = self.team_coordinator {
+                    let teams = self.runtime.block_on(coordinator.list_teams());
+                    if teams.is_empty() {
+                        self.chat.add_message(ChatRole::System, "No teams created yet.".to_string());
+                    } else {
+                        let output = format!("Teams:\n{}", teams.iter().map(|t| format!("  - {t}")).collect::<Vec<_>>().join("\n"));
+                        self.chat.add_message(ChatRole::System, output);
+                    }
+                } else {
+                    self.chat.add_message(ChatRole::System, "No team created yet. Use /team create first.".to_string());
+                }
+            }
+            "shutdown" => {
+                if let Some(ref coordinator) = self.team_coordinator {
+                    match self.runtime.block_on(coordinator.shutdown()) {
+                        Ok(()) => { self.chat.add_message(ChatRole::System, "Team shut down.".to_string()); }
+                        Err(e) => { self.chat.add_message(ChatRole::System, format!("Failed to shutdown: {e}")); }
+                    }
+                } else {
+                    self.chat.add_message(ChatRole::System, "No active team.".to_string());
+                }
+            }
+            _ => {
+                self.chat.add_message(ChatRole::System, format!("Unknown subcommand: {subcommand}. Use /team help."));
             }
         }
 
@@ -2326,6 +2490,16 @@ impl Repl {
         };
 
         self.chat.add_message(ChatRole::System, output);
+        Ok(())
+    }
+
+    /// Handle /doctor command — run local diagnostic checks without consuming AI tokens
+    fn handle_doctor_command(&mut self, _args: &str) -> Result<()> {
+        use shannon_commands::doctor_utils::{run_all_checks, format_doctor_report};
+
+        let results = run_all_checks();
+        let report = format_doctor_report(&results);
+        self.chat.add_message(ChatRole::System, report);
         Ok(())
     }
 

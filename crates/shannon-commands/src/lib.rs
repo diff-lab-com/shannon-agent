@@ -94,6 +94,10 @@ pub mod review_utils {
     pub use crate::builtin::review_utils::*;
 }
 
+pub mod doctor_utils {
+    pub use crate::builtin::doctor_utils::*;
+}
+
 /// Create a new command registry with all built-in commands registered
 pub fn create_registry() -> CommandRegistry {
     let registry = CommandRegistry::new();

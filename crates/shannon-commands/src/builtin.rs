@@ -152,3 +152,13 @@ pub mod review_utils {
         ReviewResult, Assessment,
     };
 }
+
+/// Re-export doctor utilities for REPL integration
+pub mod doctor_utils {
+    pub use super::doctor::{
+        CheckStatus, CheckResult,
+        run_all_checks, check_api_keys, check_required_tools,
+        check_git_repo, check_disk_space, check_config_files,
+        check_rust_toolchain, format_doctor_report,
+    };
+}
