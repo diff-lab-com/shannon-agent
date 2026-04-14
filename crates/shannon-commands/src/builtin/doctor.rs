@@ -242,7 +242,7 @@ fn check_git_repo() -> CheckResult {
 
 // ── Shannon-specific checks (not in core Doctor) ──────────────────
 
-/// Check for Shannon configuration files
+/// Check for Shannon-specific configuration files (not covered by core Doctor)
 pub fn check_config_files() -> CheckResult {
     let home = std::env::var("HOME").unwrap_or_default();
     let config_paths = [
@@ -260,14 +260,13 @@ pub fn check_config_files() -> CheckResult {
 
     if !found_configs.is_empty() {
         CheckResult {
-            name: "Configuration".to_string(),
-            status: CheckStatus::Pass,
-            message: format!("Found: {}", found_configs.join(", ")),
+            name: "Shannon Config".to_string(),
+            status: CheckStatus::Pass,            message: format!("Found: {}", found_configs.join(", ")),
             fix_hint: None,
         }
     } else {
         CheckResult {
-            name: "Configuration".to_string(),
+            name: "Shannon Config".to_string(),
             status: CheckStatus::Warn,
             message: "No Shannon config files found (using defaults)".to_string(),
             fix_hint: Some("Create .shannon.toml or ~/.shannon/config.toml for custom settings".to_string()),
@@ -375,7 +374,7 @@ mod tests {
     #[test]
     fn test_check_config_files_runs() {
         let result = check_config_files();
-        assert_eq!(result.name, "Configuration");
+        assert_eq!(result.name, "Shannon Config");
     }
 
     #[test]
@@ -424,5 +423,72 @@ mod tests {
         assert!(!results.is_empty());
         // Core Doctor provides 7 checks + 2 Shannon-specific = 9 total
         assert!(results.len() >= 7);
+    }
+
+    // ── Integration tests for core Doctor delegation ──
+
+    #[test]
+    fn test_convert_status_all_variants() {
+        assert_eq!(convert_status(&shannon_core::doctor::CheckStatus::Pass), CheckStatus::Pass);
+        assert_eq!(convert_status(&shannon_core::doctor::CheckStatus::Warn), CheckStatus::Warn);
+        assert_eq!(convert_status(&shannon_core::doctor::CheckStatus::Fail), CheckStatus::Fail);
+        assert_eq!(convert_status(&shannon_core::doctor::CheckStatus::Skip), CheckStatus::Skip);
+    }
+
+    #[test]
+    fn test_core_doctor_report_structure() {
+        // Verify core Doctor produces a valid report
+        let doctor = shannon_core::doctor::Doctor::new();
+        let report = doctor.run_full_diagnostic();
+        assert!(report.is_ok(), "Core Doctor should produce a report without errors");
+
+        let report = report.unwrap();
+        assert!(!report.checks.is_empty(), "Core Doctor should return at least one check");
+
+        for check in &report.checks {
+            assert!(!check.name.is_empty(), "Each check should have a name");
+        }
+    }
+
+    #[test]
+    fn test_run_all_checks_includes_shannon_specific() {
+        let results = run_all_checks();
+        let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
+
+        // Shannon-specific checks should always be present
+        assert!(names.iter().any(|n| *n == "Rust Toolchain"), "Should include Rust Toolchain check");
+        assert!(names.iter().any(|n| *n == "Shannon Config"), "Should include Shannon Config check");
+    }
+
+    #[test]
+    fn test_run_all_checks_no_duplicates() {
+        let results = run_all_checks();
+        let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
+
+        // Shannon-specific checks should not duplicate core Doctor checks
+        let rust_count = names.iter().filter(|n| **n == "Rust Toolchain").count();
+        let config_count = names.iter().filter(|n| **n == "Shannon Config").count();
+        assert_eq!(rust_count, 1, "Rust Toolchain should appear exactly once");
+        assert_eq!(config_count, 1, "Configuration should appear exactly once");
+    }
+
+    #[test]
+    fn test_fallback_api_keys_check() {
+        // The fallback check should produce a valid result
+        let result = check_api_keys();
+        assert_eq!(result.name, "API Keys");
+        assert!(matches!(result.status, CheckStatus::Pass | CheckStatus::Fail));
+    }
+
+    #[test]
+    fn test_fallback_required_tools_check() {
+        let result = check_required_tools();
+        assert_eq!(result.name, "Tools");
+    }
+
+    #[test]
+    fn test_fallback_git_repo_check() {
+        let result = check_git_repo();
+        assert_eq!(result.name, "Git");
     }
 }

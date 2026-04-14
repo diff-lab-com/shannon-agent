@@ -70,10 +70,6 @@ pub struct QueryEngine {
     pub(crate) memory: Option<Arc<std::sync::RwLock<MemoryStore>>>,
     /// Session ID for conversation persistence
     pub(crate) session_id: Uuid,
-    /// Rule-based permission classifier for pre-checking tool invocations.
-    /// Stored for access via `crate::permission_classifier` module path in permissions flow
-    #[allow(dead_code)]
-    pub(crate) permission_classifier: crate::permission_classifier::PermissionClassifier,
 }
 
 impl QueryEngine {
@@ -97,7 +93,6 @@ impl QueryEngine {
             cost_tracker: Arc::new(RwLock::new(CostTracker::new(model))),
             memory: None,
             session_id,
-            permission_classifier: crate::permission_classifier::PermissionClassifier::new(),
         }
     }
 
@@ -120,7 +115,6 @@ impl QueryEngine {
             cost_tracker: Arc::new(RwLock::new(CostTracker::new(model))),
             memory: None,
             session_id,
-            permission_classifier: crate::permission_classifier::PermissionClassifier::new(),
         }
     }
 
@@ -147,7 +141,6 @@ impl QueryEngine {
             cost_tracker: Arc::new(RwLock::new(CostTracker::new(model))),
             memory: None,
             session_id,
-            permission_classifier: crate::permission_classifier::PermissionClassifier::new(),
         }
     }
 
