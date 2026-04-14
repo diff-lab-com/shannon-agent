@@ -326,6 +326,9 @@ pub struct PermissionManager {
 
     /// Memory of user choices
     memory: PermissionMemory,
+
+    /// Reusable permission classifier (avoids recompiling regex patterns per call)
+    classifier: crate::permission_classifier::PermissionClassifier,
 }
 
 impl PermissionManager {
@@ -337,6 +340,7 @@ impl PermissionManager {
             tool_permissions: HashMap::new(),
             tool_policies: HashMap::new(),
             memory: PermissionMemory::new(),
+            classifier: crate::permission_classifier::PermissionClassifier::new(),
         };
 
         // Register default tool policies for common tools
@@ -622,9 +626,8 @@ impl PermissionManager {
         tool_name: &str,
         tool_input: &serde_json::Value,
     ) -> Result<Option<PermissionPrompt>, PermissionError> {
-        // First, run the classifier
-        let classifier = crate::permission_classifier::PermissionClassifier::new();
-        let result = classifier.classify(tool_name, tool_input);
+        // First, run the classifier (reuses pre-compiled regex patterns)
+        let result = self.classifier.classify(tool_name, tool_input);
 
         match result.decision {
             crate::permission_classifier::RuleDecision::Deny => {
