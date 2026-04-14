@@ -466,7 +466,6 @@ mod tests {
     // -- Send + Sync compile-time verification ----------------------------
     // The following function body will fail to compile if ToolSearchTool is
     // not Send + Sync.
-    #[allow(dead_code)]
     fn _assert_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<ToolSearchTool>();

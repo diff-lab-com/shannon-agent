@@ -873,4 +873,63 @@ mod repl_command_dispatch_tests {
         let parsed = parser.parse("/tools").unwrap();
         assert_eq!(parsed.name, "tools");
     }
+
+    #[test]
+    fn test_parse_team_command() {
+        let parser = CommandParser::new();
+        let parsed = parser.parse("/team create my-team").unwrap();
+        assert_eq!(parsed.name, "team");
+        assert!(parsed.args.contains("create"));
+        assert!(parsed.args.contains("my-team"));
+    }
+
+    #[test]
+    fn test_parse_team_add() {
+        let parser = CommandParser::new();
+        let parsed = parser.parse("/team add my-team agent-1").unwrap();
+        assert_eq!(parsed.name, "team");
+        assert!(parsed.args.contains("add"));
+        assert!(parsed.args.contains("agent-1"));
+    }
+
+    #[test]
+    fn test_parse_team_task() {
+        let parser = CommandParser::new();
+        let parsed = parser.parse("/team task my-team implement auth").unwrap();
+        assert_eq!(parsed.name, "team");
+        assert!(parsed.args.contains("task"));
+        assert!(parsed.args.contains("implement"));
+    }
+
+    #[test]
+    fn test_parse_team_status() {
+        let parser = CommandParser::new();
+        let parsed = parser.parse("/team status my-team").unwrap();
+        assert_eq!(parsed.name, "team");
+        assert!(parsed.args.contains("status"));
+    }
+
+    #[test]
+    fn test_parse_team_run() {
+        let parser = CommandParser::new();
+        let parsed = parser.parse("/team run").unwrap();
+        assert_eq!(parsed.name, "team");
+        assert!(parsed.args.contains("run"));
+    }
+
+    #[test]
+    fn test_parse_team_list() {
+        let parser = CommandParser::new();
+        let parsed = parser.parse("/team list").unwrap();
+        assert_eq!(parsed.name, "team");
+        assert!(parsed.args.contains("list"));
+    }
+
+    #[test]
+    fn test_parse_team_shutdown() {
+        let parser = CommandParser::new();
+        let parsed = parser.parse("/team shutdown").unwrap();
+        assert_eq!(parsed.name, "team");
+        assert!(parsed.args.contains("shutdown"));
+    }
 }

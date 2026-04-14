@@ -99,11 +99,12 @@ fn kill_caffeinate() {
 }
 
 /// Platform: no-op for non-macOS
+/// Platform: no-op stub for non-macOS (real impl gated by `#[cfg(target_os = "macos")]`)
 #[cfg(not(target_os = "macos"))]
 #[allow(dead_code)]
 fn spawn_caffeinate() {}
 
-/// Platform: no-op for non-macOS
+/// Platform: no-op stub for non-macOS
 #[cfg(not(target_os = "macos"))]
 #[allow(dead_code)]
 fn kill_caffeinate() {}

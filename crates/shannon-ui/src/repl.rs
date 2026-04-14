@@ -1885,6 +1885,7 @@ impl Repl {
 /team assign <team>  — Assign pending tasks to available agents
 /team status [team]  — Show team status
 /team list  — List all teams
+/team run  — Execute pending tasks in parallel
 /team shutdown  — Shutdown team";
                 self.chat.add_message(ChatRole::System, help.to_string());
             }
@@ -1924,7 +1925,12 @@ impl Repl {
                     let config = TeammateConfig::default();
                     match self.runtime.block_on(coordinator.add_teammate(team_name, agent_name.to_string(), config)) {
                         Ok(()) => {
-                            self.chat.add_message(ChatRole::System, format!("Agent '{agent_name}' added to team '{team_name}'."));
+                            // Attempt to create an isolated worktree for the agent
+                            let worktree_msg = match self.create_agent_worktree(agent_name) {
+                                Ok(path) => format!(" (worktree: {})", path.display()),
+                                Err(reason) => format!(" (worktree skipped: {reason})"),
+                            };
+                            self.chat.add_message(ChatRole::System, format!("Agent '{agent_name}' added to team '{team_name}'.{worktree_msg}"));
                         }
                         Err(e) => {
                             self.chat.add_message(ChatRole::System, format!("Failed to add agent: {e}"));
@@ -2017,12 +2023,68 @@ impl Repl {
                     self.chat.add_message(ChatRole::System, "No active team.".to_string());
                 }
             }
+            "run" => {
+                use shannon_agents::{MultiAgentSpawner, SpawnAgentConfig};
+                if let Some(ref coordinator) = self.team_coordinator {
+                    let task_board = coordinator.task_board();
+                    let ready_tasks = self.runtime.block_on(task_board.list_ready_tasks());
+                    if ready_tasks.is_empty() {
+                        self.chat.add_message(ChatRole::System, "No pending tasks to execute.".to_string());
+                        return Ok(());
+                    }
+                    let agent_configs: Vec<SpawnAgentConfig> = ready_tasks
+                        .iter()
+                        .map(|t| SpawnAgentConfig::new(
+                            format!("agent-{}", t.id),
+                            t.subject.clone(),
+                        ))
+                        .collect();
+                    let config = shannon_agents::MultiAgentConfig::new(agent_configs);
+                    self.chat.add_message(ChatRole::System, "Starting parallel execution...".to_string());
+                    let result = self.runtime.block_on(MultiAgentSpawner::spawn(config));
+                    let mut report = format!(
+                        "Execution complete: {} succeeded, {} failed ({:.1}s)\n",
+                        result.success_count,
+                        result.failure_count,
+                        result.total_duration.as_secs_f64(),
+                    );
+                    for ar in &result.agent_results {
+                        report.push_str(&format!(
+                            "  [{}] {} ({:.1}s){}\n",
+                            ar.status,
+                            ar.agent_name,
+                            ar.duration.as_secs_f64(),
+                            ar.error.as_ref().map(|e| format!(" — {e}")).unwrap_or_default(),
+                        ));
+                    }
+                    self.chat.add_message(ChatRole::System, report);
+                } else {
+                    self.chat.add_message(ChatRole::System, "No team created yet. Use /team create first.".to_string());
+                }
+            }
             _ => {
                 self.chat.add_message(ChatRole::System, format!("Unknown subcommand: {subcommand}. Use /team help."));
             }
         }
 
         Ok(())
+    }
+
+    /// Create an isolated git worktree for an agent.
+    /// Returns the worktree path on success, or a human-readable reason on failure.
+    fn create_agent_worktree(&self, agent_name: &str) -> std::result::Result<std::path::PathBuf, String> {
+        use shannon_agents::{WorktreeManager, WorktreeConfig};
+
+        let config = WorktreeConfig::default();
+        let manager = self.runtime.block_on(WorktreeManager::new(config))
+            .map_err(|e| format!("{e}"))?;
+
+        let session = self.runtime.block_on(
+            manager.create_agent_session(agent_name, None)
+        )
+        .map_err(|e| format!("{e}"))?;
+
+        Ok(session.path)
     }
 
     /// Handle /config command — manage runtime configuration

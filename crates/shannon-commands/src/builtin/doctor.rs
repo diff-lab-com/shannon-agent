@@ -109,6 +109,7 @@ pub struct CheckResult {
 pub fn run_all_checks() -> Vec<CheckResult> {
     vec![
         check_api_keys(),
+        check_network(),
         check_required_tools(),
         check_git_repo(),
         check_disk_space(),
@@ -149,6 +150,80 @@ pub fn check_api_keys() -> CheckResult {
             status: CheckStatus::Fail,
             message: "No API keys found in environment".to_string(),
             fix_hint: Some("Set ANTHROPIC_API_KEY or OPENAI_API_KEY in your shell profile".to_string()),
+        }
+    }
+}
+
+/// Check network connectivity to AI provider endpoints
+pub fn check_network() -> CheckResult {
+    let endpoints = [
+        ("Anthropic API", "https://api.anthropic.com"),
+        ("OpenAI API", "https://api.openai.com"),
+    ];
+    let mut reachable = Vec::new();
+    let mut unreachable = Vec::new();
+
+    for (name, url) in &endpoints {
+        // Use curl for a lightweight connectivity probe (HEAD request, 5s timeout)
+        let result = std::process::Command::new("curl")
+            .args(["-s", "-o", "/dev/null", "-w", "%{http_code}", "--head", "--max-time", "5", url])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output();
+
+        match result {
+            Ok(out) if out.status.success() => {
+                let code = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                // Any HTTP response (even 401/403) means network works
+                if !code.is_empty() && code != "000" {
+                    reachable.push(*name);
+                } else {
+                    unreachable.push((*name, "no response".to_string()));
+                }
+            }
+            Ok(out) => {
+                let msg = if out.status.code() == Some(28) {
+                    "timeout".to_string()
+                } else {
+                    "connection failed".to_string()
+                };
+                unreachable.push((*name, msg));
+            }
+            Err(_) => {
+                unreachable.push((*name, "curl not available".to_string()));
+            }
+        }
+    }
+
+    if !reachable.is_empty() && unreachable.is_empty() {
+        CheckResult {
+            name: "Network".to_string(),
+            status: CheckStatus::Pass,
+            message: format!("Reachable: {}", reachable.join(", ")),
+            fix_hint: None,
+        }
+    } else if !reachable.is_empty() {
+        let failed: Vec<String> = unreachable.iter().map(|(n, r)| format!("{n} ({r})")).collect();
+        CheckResult {
+            name: "Network".to_string(),
+            status: CheckStatus::Warn,
+            message: format!("Partial: {} reachable, {} unreachable", reachable.join(", "), failed.join(", ")),
+            fix_hint: Some("Check internet connection or proxy settings".to_string()),
+        }
+    } else if unreachable.iter().any(|(_, r)| r == "curl not available") {
+        CheckResult {
+            name: "Network".to_string(),
+            status: CheckStatus::Skip,
+            message: "curl not available for connectivity test".to_string(),
+            fix_hint: None,
+        }
+    } else {
+        let failed: Vec<String> = unreachable.iter().map(|(n, r)| format!("{n} ({r})")).collect();
+        CheckResult {
+            name: "Network".to_string(),
+            status: CheckStatus::Fail,
+            message: format!("Unreachable: {}", failed.join(", ")),
+            fix_hint: Some("Check internet connection, DNS, or firewall settings".to_string()),
         }
     }
 }
@@ -442,6 +517,14 @@ mod tests {
     }
 
     #[test]
+    fn test_check_network_runs() {
+        let result = check_network();
+        assert_eq!(result.name, "Network");
+        // Either pass, warn, fail, or skip depending on network/curl
+        assert!(matches!(result.status, CheckStatus::Pass | CheckStatus::Warn | CheckStatus::Fail | CheckStatus::Skip));
+    }
+
+    #[test]
     fn test_check_git_repo_runs() {
         let result = check_git_repo();
         assert_eq!(result.name, "Git");
@@ -503,7 +586,7 @@ mod tests {
     fn test_run_all_checks() {
         let results = run_all_checks();
         assert!(!results.is_empty());
-        assert!(results.len() >= 6); // At least 6 checks
+        assert!(results.len() >= 7); // At least 7 checks
     }
 
     #[test]
