@@ -95,6 +95,8 @@ pub struct ReplState {
     pub multi_select: Option<crate::widgets::select::MultiSelectWidget>,
     /// Current completion suggestions to display (populated by Tab, cleared by typing)
     pub completion_suggestions: Vec<String>,
+    /// Index of the currently highlighted completion suggestion
+    pub completion_suggestion_index: usize,
 }
 
 impl Default for ReplState {
@@ -129,6 +131,7 @@ impl Default for ReplState {
             multi_progress_visible: false,
             multi_select: None,
             completion_suggestions: Vec::new(),
+            completion_suggestion_index: 0,
         }
     }
 }

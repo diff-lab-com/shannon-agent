@@ -1257,8 +1257,14 @@ mod tests {
 
         // Write a team file, then a local file with same name but same content time
         fs::write(team.join("existing.md"), "v1\n").unwrap();
-        // Touch the local file at the same time (or slightly older)
         fs::write(local.join("existing.md"), "v1\n").unwrap();
+
+        // Force identical timestamps — rapid sequential writes may differ by nanoseconds
+        let _ = std::process::Command::new("touch")
+            .arg("-r")
+            .arg(team.join("existing.md"))
+            .arg(local.join("existing.md"))
+            .status();
 
         let config = TeamMemoryConfig {
             enabled: true,

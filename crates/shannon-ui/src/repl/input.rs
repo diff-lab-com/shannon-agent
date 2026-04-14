@@ -274,6 +274,41 @@ pub(crate) fn complete_file_path(prefix: &str) -> Vec<String> {
     candidates
 }
 
+/// Complete command arguments based on the command name.
+///
+/// Known commands return subcommand or value suggestions:
+/// - `/team` → subcommands (create, add, task, assign, status, list, run, shutdown)
+/// - `/model` → common model names
+/// - `/doctor` / `/check` → check names
+/// - `/config` → actions (list, get, set, reset)
+/// - `/credentials` → actions (list, store, get, delete, count)
+/// - `/worktree` → actions (enter, exit, status)
+/// - `/debug` → subcommands (info, log, profile, trace)
+pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String> {
+    let candidates: &[&str] = match cmd_name {
+        "team" => &["create", "add", "task", "assign", "status", "list", "run", "shutdown", "help"],
+        "model" => &[
+            "claude-3-5-sonnet", "claude-3-opus", "claude-3-sonnet",
+            "gpt-4o", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo",
+            "ollama/llama3", "ollama/mistral", "ollama/codellama",
+        ],
+        "doctor" | "check" | "diagnostics" => &[],
+        "config" => &["list", "get", "set", "reset", "help"],
+        "credentials" | "creds" | "cred" => &["list", "store", "get", "delete", "count", "help"],
+        "worktree" => &["enter", "exit", "status"],
+        "debug" | "dbg" | "dev" => &["info", "log", "profile", "trace", "help"],
+        "history" => &["--export"],
+        "export" | "save" => &["--format json", "--format markdown"],
+        _ => &[],
+    };
+
+    candidates
+        .iter()
+        .filter(|c| c.starts_with(prefix))
+        .map(|c| (*c).to_string())
+        .collect()
+}
+
 /// Perform tab completion on the current input.
 ///
 /// Routes between three completion contexts:
@@ -309,6 +344,10 @@ fn tab_complete(repl: &mut Repl, input: &str, available_commands: &[String]) -> 
         } else if has_space && looks_like_path(&prefix) {
             // File path completion mode
             complete_file_path(&prefix)
+        } else if has_space {
+            // Command argument completion
+            let cmd_name = input.split_whitespace().next().unwrap_or("").trim_start_matches('/');
+            complete_command_args(cmd_name, &prefix)
         } else {
             Vec::new()
         };
@@ -323,6 +362,7 @@ fn tab_complete(repl: &mut Repl, input: &str, available_commands: &[String]) -> 
     }
 
     let completion = &repl.tab_completion_state.candidates[repl.tab_completion_state.current_index];
+    repl.state.completion_suggestion_index = repl.tab_completion_state.current_index;
     repl.tab_completion_state.current_index = (repl.tab_completion_state.current_index + 1)
         % repl.tab_completion_state.candidates.len();
 

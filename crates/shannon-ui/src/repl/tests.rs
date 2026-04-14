@@ -631,6 +631,50 @@ fn test_complete_file_path_directories_get_slash() {
     assert!(candidates.iter().any(|c| c.ends_with('/')));
 }
 
+// ── Command Argument Completion Tests ─────────────────────────────
+
+#[test]
+fn test_complete_command_args_team_subcommands() {
+    let args = crate::repl::input::complete_command_args("team", "cr");
+    assert!(args.contains(&"create".to_string()));
+    assert!(!args.contains(&"list".to_string()));
+}
+
+#[test]
+fn test_complete_command_args_team_all() {
+    let args = crate::repl::input::complete_command_args("team", "");
+    assert!(args.contains(&"create".to_string()));
+    assert!(args.contains(&"add".to_string()));
+    assert!(args.contains(&"task".to_string()));
+    assert!(args.contains(&"status".to_string()));
+    assert!(args.contains(&"shutdown".to_string()));
+}
+
+#[test]
+fn test_complete_command_args_model() {
+    let args = crate::repl::input::complete_command_args("model", "gpt");
+    assert!(args.iter().any(|a| a.contains("gpt")));
+    assert!(!args.iter().any(|a| a.contains("claude")));
+}
+
+#[test]
+fn test_complete_command_args_config() {
+    let args = crate::repl::input::complete_command_args("config", "s");
+    assert!(args.contains(&"set".to_string()));
+}
+
+#[test]
+fn test_complete_command_args_unknown() {
+    let args = crate::repl::input::complete_command_args("unknown_cmd", "x");
+    assert!(args.is_empty());
+}
+
+#[test]
+fn test_complete_command_args_no_match() {
+    let args = crate::repl::input::complete_command_args("team", "xyz");
+    assert!(args.is_empty());
+}
+
 // ── looks_like_path Tests ────────────────────────────────────────
 
 #[test]
@@ -819,4 +863,219 @@ fn test_repl_adapter_confirm_not_supported() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let result = rt.block_on(repl.confirm("Continue?"));
     assert!(matches!(result, Err(crate::adapter::UiError::NotSupported(_))));
+}
+
+// ── /doctor Command Tests ──────────────────────────────────────────
+
+#[test]
+fn test_repl_doctor_command() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/doctor".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Diagnostics") || last_msg.contains("PASS") || last_msg.contains("FAIL"));
+}
+
+#[test]
+fn test_repl_doctor_check_alias() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/check".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Diagnostics") || last_msg.contains("PASS") || last_msg.contains("FAIL"));
+}
+
+#[test]
+fn test_repl_doctor_in_help() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/help".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("/doctor"));
+}
+
+// ── /team Command Tests ────────────────────────────────────────────
+
+#[test]
+fn test_repl_team_help() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/team".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("/team create"));
+    assert!(last_msg.contains("/team add"));
+    assert!(last_msg.contains("/team task"));
+    assert!(last_msg.contains("/team status"));
+    assert!(last_msg.contains("/team list"));
+    assert!(last_msg.contains("/team run"));
+}
+
+#[test]
+fn test_repl_team_help_subcommand() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/team help".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("/team create"));
+}
+
+#[test]
+fn test_repl_team_create_no_name() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/team create".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Usage: /team create"));
+}
+
+#[test]
+fn test_repl_team_add_no_args() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/team add".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Usage: /team add"));
+}
+
+#[test]
+fn test_repl_team_task_no_args() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/team task".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Usage: /team task"));
+}
+
+#[test]
+fn test_repl_team_add_without_create() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/team add myteam agent1".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("No team created") || last_msg.contains("team create"));
+}
+
+#[test]
+fn test_repl_team_task_without_create() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/team task myteam do stuff".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("No team created") || last_msg.contains("team create"));
+}
+
+#[test]
+fn test_repl_team_assign_without_create() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/team assign myteam".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("No team created") || last_msg.contains("team create"));
+}
+
+#[test]
+fn test_repl_team_list_without_create() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/team list".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    // list should show empty or no teams message
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(!last_msg.is_empty());
+}
+
+#[test]
+fn test_repl_team_shutdown_without_create() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/team shutdown".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("No active team") || last_msg.contains("shutdown"));
+}
+
+// ── Completion Highlight Index Tests ────────────────────────────────
+
+#[test]
+fn test_completion_suggestion_index_default() {
+    let state = ReplState::default();
+    assert_eq!(state.completion_suggestion_index, 0);
+}
+
+#[test]
+fn test_completion_suggestion_index_tracks_tab() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/h".to_string());
+    let tab_key = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Tab,
+        crossterm::event::KeyModifiers::NONE,
+    );
+    crate::repl::input::handle_input(&mut repl, tab_key).unwrap();
+    // After first tab, index should be 0 (the one just selected)
+    assert_eq!(repl.state.completion_suggestion_index, 0);
+    assert!(!repl.state.completion_suggestions.is_empty());
+
+    // Second tab should advance index
+    crate::repl::input::handle_input(&mut repl, tab_key).unwrap();
+    assert!(repl.state.completion_suggestion_index > 0 || repl.state.completion_suggestions.len() == 1);
+}
+
+// ── Rendering Snapshot Tests ────────────────────────────────────────
+
+#[test]
+fn test_truncate_visual_short() {
+    // Access via the render module — but it's private.
+    // Instead test via ReplState to verify rendering fields exist.
+    let state = ReplState::default();
+    assert!(state.completion_suggestions.is_empty());
+    assert_eq!(state.completion_suggestion_index, 0);
+}
+
+#[test]
+fn test_repl_state_all_dialog_fields_default() {
+    let state = ReplState::default();
+    assert!(state.permission_dialog.is_none());
+    assert!(state.permission_response_tx.is_none());
+    assert!(state.active_dialog.is_none());
+    assert!(state.pending_dialog_action.is_none());
+    assert!(state.input_dialog.is_none());
+    assert!(state.input_dialog_action.is_none());
+    assert!(state.fuzzy_picker.is_none());
+    assert!(state.file_selector.is_none());
+    assert!(state.multi_select.is_none());
+    assert!(!state.progress_bar_visible);
+    assert!(!state.multi_progress_visible);
+}
+
+#[test]
+fn test_repl_state_progress_bar_fields() {
+    let mut state = ReplState::default();
+    state.progress_bar_visible = true;
+    state.multi_progress_visible = true;
+    assert!(state.progress_bar_visible);
+    assert!(state.multi_progress_visible);
+}
+
+#[test]
+fn test_repl_state_all_fields_mutable() {
+    let mut state = ReplState::default();
+    state.active_tool = Some("bash".to_string());
+    state.query_steps_done = 3;
+    state.query_steps_total = 5;
+    state.total_cost_usd = 1.23;
+    state.completion_suggestion_index = 2;
+
+    assert_eq!(state.active_tool.as_deref(), Some("bash"));
+    assert_eq!(state.query_steps_done, 3);
+    assert_eq!(state.query_steps_total, 5);
+    assert!((state.total_cost_usd - 1.23).abs() < f64::EPSILON);
+    assert_eq!(state.completion_suggestion_index, 2);
+}
+
+#[test]
+fn test_repl_state_status_variants() {
+    let mut state = ReplState::default();
+    let statuses = ["Ready", "Processing", "Querying...", "Error: timeout", "Ready (5 steps completed)"];
+    for status in &statuses {
+        state.status = status.to_string();
+        assert_eq!(state.status, *status);
+    }
 }

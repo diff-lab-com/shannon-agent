@@ -58,8 +58,11 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
     });
     let is_plugin_command = repl.plugin_manager.get_plugin_commands()
         .iter().any(|c| c.name == cmd_name);
+    // Commands handled in the match block but not in the global registry
+    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team"];
+    let is_repl_command = repl_only_commands.contains(&cmd_name);
 
-    if command_exists || is_plugin_command {
+    if command_exists || is_plugin_command || is_repl_command {
         match cmd_name {
             "help" => handle_help(repl, args)?,
             "clear" => handle_clear(repl)?,

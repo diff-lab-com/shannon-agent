@@ -78,7 +78,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
 
         // Overlay completion suggestions popup above the prompt
         if !state.completion_suggestions.is_empty() {
-            render_completion_suggestions(f, f.area(), &state.completion_suggestions);
+            render_completion_suggestions(f, f.area(), &state.completion_suggestions, state.completion_suggestion_index);
         }
     })?;
 
@@ -176,6 +176,7 @@ fn render_completion_suggestions(
     frame: &mut ratatui::Frame,
     area: Rect,
     suggestions: &[String],
+    selected_index: usize,
 ) {
     let max_visible = 8u16;
     let visible = max_visible.min(suggestions.len() as u16);
@@ -202,11 +203,20 @@ fn render_completion_suggestions(
     let lines: Vec<Line> = suggestions
         .iter()
         .take(visible as usize)
-        .map(|s| {
-            Line::from(Span::styled(
-                truncate_visual(s, (popup_width - 4) as usize),
-                Style::default().fg(Color::Cyan),
-            ))
+        .enumerate()
+        .map(|(i, s)| {
+            let text = truncate_visual(s, (popup_width - 4) as usize);
+            if i == selected_index {
+                Line::from(Span::styled(
+                    format!("▶ {text}"),
+                    Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ))
+            } else {
+                Line::from(Span::styled(
+                    format!("  {text}"),
+                    Style::default().fg(Color::Cyan),
+                ))
+            }
         })
         .collect();
 
