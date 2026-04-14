@@ -151,7 +151,7 @@ impl Default for UpdaterConfig {
 pub struct AutoUpdater {
     config: UpdaterConfig,
     client: reqwest::Client,
-    last_check: Instant,
+    last_check: Option<Instant>,
     cached_status: Option<UpdateStatus>,
 }
 
@@ -167,7 +167,7 @@ impl AutoUpdater {
         Self {
             config,
             client,
-            last_check: Instant::now() - Duration::from_secs(u64::MAX), // force first check
+            last_check: None, // never checked — first check will proceed immediately
             cached_status: None,
         }
     }
@@ -181,14 +181,16 @@ impl AutoUpdater {
             };
         }
 
-        if self.last_check.elapsed() < self.config.check_interval {
-            debug!("update check skipped; interval not elapsed");
-            return self
-                .cached_status
-                .clone()
-                .unwrap_or(UpdateStatus::UpToDate {
-                    current: CURRENT_VERSION.to_string(),
-                });
+        if let Some(last) = self.last_check {
+            if last.elapsed() < self.config.check_interval {
+                debug!("update check skipped; interval not elapsed");
+                return self
+                    .cached_status
+                    .clone()
+                    .unwrap_or(UpdateStatus::UpToDate {
+                        current: CURRENT_VERSION.to_string(),
+                    });
+            }
         }
 
         self.force_check().await
@@ -196,7 +198,7 @@ impl AutoUpdater {
 
     /// Check for updates regardless of when the last check was performed.
     pub async fn force_check(&mut self) -> UpdateStatus {
-        self.last_check = Instant::now();
+        self.last_check = Some(Instant::now());
 
         let result = match self.fetch_latest_release().await {
             Ok(release) => {
