@@ -21,7 +21,7 @@ If no subcommand is given, default to listing all credentials.
 
 /// Create the /credentials command
 pub fn command() -> Command {
-    Command::Prompt(PromptCommand {
+    Command::Prompt(Box::new(PromptCommand {
         base: CommandBase {
             name: "credentials".to_string(),
             aliases: vec!["creds".to_string(), "cred".to_string()],
@@ -53,7 +53,7 @@ pub fn command() -> Command {
         agent: None,
         paths: vec![],
         prompt_template: Some(CREDENTIALS_PROMPT.to_string()),
-    })
+    }))
 }
 
 /// Credential actions

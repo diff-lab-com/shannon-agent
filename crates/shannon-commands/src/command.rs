@@ -207,9 +207,8 @@ pub struct LocalJSXCommand {
 
 /// Unified command type
 #[derive(Debug, Clone)]
-#[allow(clippy::large_enum_variant)]
 pub enum Command {
-    Prompt(PromptCommand),
+    Prompt(Box<PromptCommand>),
     Local(LocalCommand),
     LocalJSX(LocalJSXCommand),
 }

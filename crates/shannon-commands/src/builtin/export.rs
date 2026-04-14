@@ -38,7 +38,7 @@ Use the Bash tool to write the output file.
 
 /// Create the /export command
 pub fn command() -> Command {
-    Command::Prompt(PromptCommand {
+    Command::Prompt(Box::new(PromptCommand {
         base: CommandBase {
             name: "export".to_string(),
             aliases: vec!["save".to_string(), "export-session".to_string()],
@@ -70,7 +70,7 @@ pub fn command() -> Command {
         agent: None,
         paths: vec![],
         prompt_template: Some(EXPORT_PROMPT.to_string()),
-    })
+    }))
 }
 
 /// Export format

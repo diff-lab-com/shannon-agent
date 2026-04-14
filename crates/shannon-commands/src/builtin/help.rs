@@ -22,7 +22,7 @@ For each command, show: name, aliases, description, argument hint, usage example
 
 /// Create the /help command
 pub fn command() -> Command {
-    Command::Prompt(PromptCommand {
+    Command::Prompt(Box::new(PromptCommand {
         base: CommandBase {
             name: "help".to_string(),
             aliases: vec!["?".to_string(), "commands".to_string()],
@@ -54,7 +54,7 @@ pub fn command() -> Command {
         agent: None,
         paths: vec![],
         prompt_template: Some(HELP_PROMPT.to_string()),
-    })
+    }))
 }
 
 /// Help category for organizing commands

@@ -26,7 +26,7 @@ Present the output clearly:
 
 /// Create the /status command
 pub fn command() -> Command {
-    Command::Prompt(PromptCommand {
+    Command::Prompt(Box::new(PromptCommand {
         base: CommandBase {
             name: "status".to_string(),
             aliases: vec!["st".to_string(), "git-status".to_string()],
@@ -62,7 +62,7 @@ pub fn command() -> Command {
         agent: None,
         paths: vec![],
         prompt_template: Some(STATUS_PROMPT.to_string()),
-    })
+    }))
 }
 
 /// Git status information

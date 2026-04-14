@@ -19,7 +19,7 @@ const COMMIT_ATTRIBUTION: &str = "\n\nCo-Authored-By: Shannon Code <noreply@shan
 
 /// Create the /commit command
 pub fn command() -> Command {
-    Command::Prompt(PromptCommand {
+    Command::Prompt(Box::new(PromptCommand {
         base: CommandBase {
             name: "commit".to_string(),
             aliases: vec!["ci".to_string()],
@@ -58,7 +58,7 @@ pub fn command() -> Command {
         agent: None,
         paths: vec![],
         prompt_template: Some(get_prompt_template(&get_default_branch(), true)),
-    })
+    }))
 }
 
 /// Get the prompt template for the commit command

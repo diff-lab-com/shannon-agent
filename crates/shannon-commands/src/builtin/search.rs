@@ -17,7 +17,7 @@ If no pattern is given, show the last 20 commands.
 
 /// Create the /search command
 pub fn command() -> Command {
-    Command::Prompt(PromptCommand {
+    Command::Prompt(Box::new(PromptCommand {
         base: CommandBase {
             name: "search".to_string(),
             aliases: vec!["?".to_string(), "history-search".to_string(), "hist".to_string()],
@@ -49,7 +49,7 @@ pub fn command() -> Command {
         agent: None,
         paths: vec![],
         prompt_template: Some(SEARCH_PROMPT.to_string()),
-    })
+    }))
 }
 
 /// Search options parsed from command arguments

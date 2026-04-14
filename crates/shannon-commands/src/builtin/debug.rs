@@ -32,7 +32,7 @@ For `trace`, acknowledge the toggle state.
 
 /// Create the /debug command
 pub fn command() -> Command {
-    Command::Prompt(PromptCommand {
+    Command::Prompt(Box::new(PromptCommand {
         base: CommandBase {
             name: "debug".to_string(),
             aliases: vec!["dbg".to_string(), "dev".to_string()],
@@ -64,7 +64,7 @@ pub fn command() -> Command {
         agent: None,
         paths: vec![],
         prompt_template: Some(DEBUG_PROMPT.to_string()),
-    })
+    }))
 }
 
 /// Debug subcommands

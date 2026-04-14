@@ -22,7 +22,7 @@ If no subcommand is given, default to listing all settings.
 
 /// Create the /config command
 pub fn command() -> Command {
-    Command::Prompt(PromptCommand {
+    Command::Prompt(Box::new(PromptCommand {
         base: CommandBase {
             name: "config".to_string(),
             aliases: vec!["cfg".to_string(), "settings".to_string()],
@@ -54,7 +54,7 @@ pub fn command() -> Command {
         agent: None,
         paths: vec![],
         prompt_template: Some(CONFIG_PROMPT.to_string()),
-    })
+    }))
 }
 
 /// Configuration actions

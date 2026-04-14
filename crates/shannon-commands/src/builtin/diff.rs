@@ -33,7 +33,7 @@ If the diff is large, focus on the most significant changes first.
 
 /// Create the /diff command
 pub fn command() -> Command {
-    Command::Prompt(PromptCommand {
+    Command::Prompt(Box::new(PromptCommand {
         base: CommandBase {
             name: "diff".to_string(),
             aliases: vec!["git-diff".to_string()],
@@ -69,7 +69,7 @@ pub fn command() -> Command {
         agent: None,
         paths: vec![],
         prompt_template: Some(DIFF_PROMPT.to_string()),
-    })
+    }))
 }
 
 /// Diff scope

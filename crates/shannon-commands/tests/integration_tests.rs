@@ -12,7 +12,7 @@ use shannon_commands::{
 // ── Helpers ──────────────────────────────────────────────────────
 
 fn make_prompt_command(name: &str, desc: &str) -> Command {
-    Command::Prompt(PromptCommand {
+    Command::Prompt(Box::new(PromptCommand {
         base: CommandBase {
             name: name.to_string(),
             aliases: vec![],
@@ -42,7 +42,7 @@ fn make_prompt_command(name: &str, desc: &str) -> Command {
         agent: None,
         paths: vec![],
         prompt_template: None,
-    })
+    }))
 }
 
 fn make_local_command(name: &str, desc: &str) -> Command {

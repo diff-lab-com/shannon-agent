@@ -58,7 +58,7 @@ Keep the review concise. Skip categories with no issues found.
 
 /// Create the /review-pr command
 pub fn command() -> Command {
-    Command::Prompt(PromptCommand {
+    Command::Prompt(Box::new(PromptCommand {
         base: CommandBase {
             name: "review-pr".to_string(),
             aliases: vec!["pr-review".to_string(), "ultrareview".to_string()],
@@ -95,7 +95,7 @@ pub fn command() -> Command {
         agent: None,
         paths: vec![],
         prompt_template: Some(REVIEW_PROMPT.to_string()),
-    })
+    }))
 }
 
 /// Get the review prompt with PR number

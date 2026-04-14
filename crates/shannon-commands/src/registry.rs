@@ -300,7 +300,7 @@ mod tests {
     use crate::command::{CommandBase, PromptCommand};
 
     fn create_test_command(name: &str, description: &str) -> Command {
-        Command::Prompt(PromptCommand {
+        Command::Prompt(Box::new(PromptCommand {
             base: CommandBase {
                 name: name.to_string(),
                 aliases: vec![],
@@ -330,7 +330,7 @@ mod tests {
             agent: None,
             paths: vec![],
             prompt_template: None,
-        })
+        }))
     }
 
     #[tokio::test]

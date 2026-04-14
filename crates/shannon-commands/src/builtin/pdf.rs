@@ -60,7 +60,7 @@ If the file does not exist or is not a PDF, report the error clearly.
 
 /// Create the /pdf command
 pub fn command() -> Command {
-    Command::Prompt(PromptCommand {
+    Command::Prompt(Box::new(PromptCommand {
         base: CommandBase {
             name: "pdf".to_string(),
             aliases: vec!["read-pdf".to_string(), "analyze-pdf".to_string()],
@@ -96,7 +96,7 @@ pub fn command() -> Command {
         agent: None,
         paths: vec!["*.pdf".to_string()],
         prompt_template: Some(PDF_PROMPT.to_string()),
-    })
+    }))
 }
 
 /// PDF processing options

@@ -32,7 +32,7 @@ Use shell commands to gather information (uname, which, df, git, etc.).
 
 /// Create the /doctor command
 pub fn command() -> Command {
-    Command::Prompt(PromptCommand {
+    Command::Prompt(Box::new(PromptCommand {
         base: CommandBase {
             name: "doctor".to_string(),
             aliases: vec!["check".to_string(), "diagnostics".to_string()],
@@ -71,7 +71,7 @@ pub fn command() -> Command {
         agent: None,
         paths: vec![],
         prompt_template: Some(DOCTOR_PROMPT.to_string()),
-    })
+    }))
 }
 
 // ── Local diagnostic checks (no AI tokens consumed) ─────────────

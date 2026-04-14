@@ -13,15 +13,10 @@ pub use types::{
     QueryEvent, QueryMetadata, QueryStream,
 };
 
-// Re-export ConversationState for use within this crate and tests.
-// It was crate-private in the original flat file; tests in this module need it.
-// Note: Currently unused but kept for potential future test use.
-#[allow(unused_imports)]
-pub(crate) use streaming::ConversationState;
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::streaming::ConversationState;
     use crate::tools::{Tool, ToolOutput};
     use async_trait::async_trait;
     use std::collections::HashMap;
