@@ -65,10 +65,12 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Char(c) => {
             repl.prompt.add_char(c);
+            repl.state.completion_suggestions.clear();
             Ok(())
         }
         KeyCode::Backspace => {
             repl.prompt.backspace();
+            repl.state.completion_suggestions.clear();
             Ok(())
         }
         KeyCode::Up => {
@@ -192,7 +194,7 @@ fn handle_tab_completion(repl: &mut Repl) -> Result<()> {
         }
     }
 
-    if let Some((completion, start, end)) = tab_complete_command(repl, &input, &command_names) {
+    if let Some((completion, start, end)) = tab_complete(repl, &input, &command_names) {
         let mut new_input = String::new();
         if start > 0 && start <= input.len() {
             new_input.push_str(&input[..start]);
@@ -207,18 +209,92 @@ fn handle_tab_completion(repl: &mut Repl) -> Result<()> {
     Ok(())
 }
 
-/// Perform tab completion on the current input
+/// Determine if a word looks like a file path
+pub(crate) fn looks_like_path(word: &str) -> bool {
+    word.starts_with('/')
+        || word.starts_with("./")
+        || word.starts_with("../")
+        || word.starts_with('~')
+        || (word.contains('/') && !word.starts_with('/'))
+}
+
+/// Complete a file system path.
+///
+/// Expands `~` to the home directory, lists matching entries in the parent
+/// directory, and appends `/` to directories. Returns up to 20 candidates.
+pub(crate) fn complete_file_path(prefix: &str) -> Vec<String> {
+    use std::path::PathBuf;
+
+    let expanded = if prefix.starts_with('~') {
+        if let Some(home) = dirs::home_dir() {
+            prefix.replacen('~', &home.to_string_lossy(), 1)
+        } else {
+            prefix.to_string()
+        }
+    } else {
+        prefix.to_string()
+    };
+
+    let path = PathBuf::from(&expanded);
+    let (parent_dir, file_prefix) = if expanded.ends_with('/') {
+        (path.clone(), String::new())
+    } else {
+        (
+            path.parent().unwrap_or_else(|| std::path::Path::new(".")).to_path_buf(),
+            path.file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_default(),
+        )
+    };
+
+    let entries = match std::fs::read_dir(&parent_dir) {
+        Ok(rd) => rd,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut candidates: Vec<String> = entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with(&file_prefix) {
+                return None;
+            }
+            // Reconstruct with original prefix style
+            let suffix = &name[file_prefix.len()..];
+            if entry.path().is_dir() {
+                Some(format!("{prefix}{suffix}/"))
+            } else {
+                Some(format!("{prefix}{suffix}"))
+            }
+        })
+        .take(20)
+        .collect();
+
+    candidates.sort();
+    candidates
+}
+
+/// Perform tab completion on the current input.
+///
+/// Routes between three completion contexts:
+/// 1. Command name completion (input starts with `/`, no space)
+/// 2. File path completion (argument word looks like a path)
+/// 3. No completion (fallback)
 ///
 /// Returns the completed text and the range to replace (start, end).
-fn tab_complete_command(repl: &mut Repl, input: &str, available_commands: &[String]) -> Option<(String, usize, usize)> {
+fn tab_complete(repl: &mut Repl, input: &str, available_commands: &[String]) -> Option<(String, usize, usize)> {
     let (prefix, word_start, word_end) = extract_completion_word(input, repl);
 
     // Reset completion state if the prefix changed
-    if repl.tab_completion_state.last_prefix != prefix {
+    if repl.tab_completion_state.last_prefix != prefix || repl.tab_completion_state.candidates.is_empty() {
         repl.tab_completion_state.last_prefix = prefix.clone();
         repl.tab_completion_state.current_index = 0;
 
-        repl.tab_completion_state.candidates = if prefix.starts_with('/') {
+        // Determine completion context
+        let has_space = input.trim_end_matches(' ').contains(' ');
+
+        repl.tab_completion_state.candidates = if !has_space && prefix.starts_with('/') {
+            // Command name completion mode
             available_commands
                 .iter()
                 .filter(|cmd| {
@@ -227,14 +303,22 @@ fn tab_complete_command(repl: &mut Repl, input: &str, available_commands: &[Stri
                 })
                 .map(|cmd| format!("/{cmd}"))
                 .collect()
-        } else if prefix.is_empty() {
+        } else if !has_space && prefix.is_empty() {
+            // Empty input — show all commands
             available_commands.iter().map(|c| format!("/{c}")).collect()
+        } else if has_space && looks_like_path(&prefix) {
+            // File path completion mode
+            complete_file_path(&prefix)
         } else {
             Vec::new()
         };
+
+        // Update visual suggestions
+        repl.state.completion_suggestions = repl.tab_completion_state.candidates.clone();
     }
 
     if repl.tab_completion_state.candidates.is_empty() {
+        repl.state.completion_suggestions.clear();
         return None;
     }
 
@@ -245,18 +329,35 @@ fn tab_complete_command(repl: &mut Repl, input: &str, available_commands: &[Stri
     Some((completion.clone(), word_start, word_end))
 }
 
-/// Extract the word to complete from input
+/// Extract the word to complete from input.
+///
+/// Returns `(prefix, word_start, word_end)` where:
+/// - `prefix` is the text to match against candidates
+/// - `word_start`/`word_end` is the byte range to replace in the input
+///
+/// Context detection:
+/// - No space in input → command completion mode (whole input is the prefix)
+/// - Space present → argument mode (last word after space is the prefix)
 pub(crate) fn extract_completion_word(input: &str, _repl: &Repl) -> (String, usize, usize) {
-    let start = if let Some(last_slash) = input.rfind('/') {
-        last_slash
-    } else if let Some(last_space) = input.rfind(' ') {
-        last_space + 1
-    } else {
-        0
-    };
+    let trimmed = input.trim_end_matches(' ');
+    if trimmed.is_empty() {
+        return (String::new(), 0, 0);
+    }
 
-    let end = input.len();
-    (input[start..].to_string(), start, end)
+    let last_space = trimmed.rfind(' ');
+
+    match last_space {
+        None => {
+            // No space — command completion mode
+            (trimmed.to_string(), 0, input.len())
+        }
+        Some(space_pos) => {
+            // Argument mode — extract last word after space
+            let word_start = space_pos + 1;
+            let word = &trimmed[word_start..];
+            (word.to_string(), word_start, input.len())
+        }
+    }
 }
 
 // ── Dialog Input Handlers ──────────────────────────────────────────

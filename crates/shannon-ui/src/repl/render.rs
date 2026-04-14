@@ -75,6 +75,11 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             };
             state.multi_progress.render(f, mp_area);
         }
+
+        // Overlay completion suggestions popup above the prompt
+        if !state.completion_suggestions.is_empty() {
+            render_completion_suggestions(f, f.area(), &state.completion_suggestions);
+        }
     })?;
 
     Ok(())
@@ -164,4 +169,68 @@ pub fn render_permission_dialog(
         .wrap(Wrap { trim: true });
 
     frame.render_widget(paragraph, dialog_area);
+}
+
+/// Render a completion suggestions popup above the prompt area.
+fn render_completion_suggestions(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    suggestions: &[String],
+) {
+    let max_visible = 8u16;
+    let visible = max_visible.min(suggestions.len() as u16);
+    if visible == 0 {
+        return;
+    }
+
+    let popup_height = visible + 2; // +2 for borders
+    let popup_width = 40u16.min(area.width.saturating_sub(4));
+
+    // Position just above the bottom status/prompt area (approx 4 lines from bottom)
+    let y = area.bottom().saturating_sub(popup_height + 4);
+    let x = area.x + 1;
+
+    let popup_area = Rect {
+        x,
+        y,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    frame.render_widget(Clear, popup_area);
+
+    let lines: Vec<Line> = suggestions
+        .iter()
+        .take(visible as usize)
+        .map(|s| {
+            Line::from(Span::styled(
+                truncate_visual(s, (popup_width - 4) as usize),
+                Style::default().fg(Color::Cyan),
+            ))
+        })
+        .collect();
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray))
+                .border_type(ratatui::widgets::BorderType::Rounded)
+                .title(" Completions "),
+        );
+
+    frame.render_widget(paragraph, popup_area);
+}
+
+/// Truncate a string to fit within a visual width, appending "…" if truncated.
+fn truncate_visual(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        let mut end = max_len.saturating_sub(1);
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &s[..end])
+    }
 }

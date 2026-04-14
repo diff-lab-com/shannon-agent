@@ -417,10 +417,10 @@ fn test_extract_completion_word_empty() {
 #[test]
 fn test_extract_completion_word_after_space() {
     let repl = Repl::new().unwrap();
-    let (prefix, start, end) = crate::repl::input::extract_completion_word("/commit some ", &repl);
-    assert_eq!(prefix, "/commit some ");
-    assert_eq!(start, 0);
-    assert_eq!(end, 13);
+    let (prefix, start, end) = crate::repl::input::extract_completion_word("/commit some", &repl);
+    assert_eq!(prefix, "some");
+    assert_eq!(start, 8);
+    assert_eq!(end, 12);
 }
 
 #[test]
@@ -430,6 +430,354 @@ fn test_extract_completion_word_nested_command() {
     assert_eq!(prefix, "/con");
     assert_eq!(start, 18);
     assert_eq!(end, 22);
+}
+
+#[test]
+fn test_extract_completion_word_trailing_spaces() {
+    let repl = Repl::new().unwrap();
+    let (prefix, start, end) = crate::repl::input::extract_completion_word("/help   ", &repl);
+    assert_eq!(prefix, "/help");
+    assert_eq!(start, 0);
+    assert_eq!(end, 8);
+}
+
+#[test]
+fn test_extract_completion_word_path_argument() {
+    let repl = Repl::new().unwrap();
+    let (prefix, start, end) = crate::repl::input::extract_completion_word("/edit /home/user", &repl);
+    assert_eq!(prefix, "/home/user");
+    assert_eq!(start, 6);
+    assert_eq!(end, 16);
+}
+
+#[test]
+fn test_extract_completion_word_relative_path() {
+    let repl = Repl::new().unwrap();
+    let (prefix, start, end) = crate::repl::input::extract_completion_word("/edit ./src/ma", &repl);
+    assert_eq!(prefix, "./src/ma");
+    assert_eq!(start, 6);
+    assert_eq!(end, 14);
+}
+
+#[test]
+fn test_extract_completion_word_only_spaces() {
+    let repl = Repl::new().unwrap();
+    let (prefix, start, end) = crate::repl::input::extract_completion_word("   ", &repl);
+    assert_eq!(prefix, "");
+    assert_eq!(start, 0);
+    assert_eq!(end, 0);
+}
+
+// ── Tab Completion Integration Tests ──────────────────────────────
+
+#[test]
+fn test_tab_complete_command_from_partial() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/hel".to_string());
+    let tab_key = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Tab,
+        crossterm::event::KeyModifiers::NONE,
+    );
+    crate::repl::input::handle_input(&mut repl, tab_key).unwrap();
+    let completed = repl.prompt.input().to_string();
+    assert_eq!(completed, "/help");
+}
+
+#[test]
+fn test_tab_complete_no_match() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/zzzzz".to_string());
+    let tab_key = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Tab,
+        crossterm::event::KeyModifiers::NONE,
+    );
+    crate::repl::input::handle_input(&mut repl, tab_key).unwrap();
+    // Should remain unchanged — no matching command
+    assert_eq!(repl.prompt.input(), "/zzzzz");
+}
+
+#[test]
+fn test_tab_complete_empty_input_shows_commands() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("".to_string());
+    let tab_key = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Tab,
+        crossterm::event::KeyModifiers::NONE,
+    );
+    crate::repl::input::handle_input(&mut repl, tab_key).unwrap();
+    // Should complete to some command (first in sorted order)
+    let completed = repl.prompt.input().to_string();
+    assert!(completed.starts_with('/'));
+}
+
+#[test]
+fn test_tab_complete_suggestions_populated() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/h".to_string());
+    let tab_key = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Tab,
+        crossterm::event::KeyModifiers::NONE,
+    );
+    crate::repl::input::handle_input(&mut repl, tab_key).unwrap();
+    // Suggestions should contain matching commands
+    let suggestions = &repl.state.completion_suggestions;
+    assert!(!suggestions.is_empty());
+    assert!(suggestions.iter().all(|s| s.starts_with("/h")));
+}
+
+#[test]
+fn test_tab_complete_suggestions_cleared_on_type() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/h".to_string());
+    let tab_key = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Tab,
+        crossterm::event::KeyModifiers::NONE,
+    );
+    crate::repl::input::handle_input(&mut repl, tab_key).unwrap();
+    assert!(!repl.state.completion_suggestions.is_empty());
+
+    // Now type a character — suggestions should clear
+    let char_key = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('x'),
+        crossterm::event::KeyModifiers::NONE,
+    );
+    crate::repl::input::handle_input(&mut repl, char_key).unwrap();
+    assert!(repl.state.completion_suggestions.is_empty());
+}
+
+#[test]
+fn test_tab_complete_suggestions_cleared_on_backspace() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/h".to_string());
+    let tab_key = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Tab,
+        crossterm::event::KeyModifiers::NONE,
+    );
+    crate::repl::input::handle_input(&mut repl, tab_key).unwrap();
+    assert!(!repl.state.completion_suggestions.is_empty());
+
+    let bs_key = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Backspace,
+        crossterm::event::KeyModifiers::NONE,
+    );
+    crate::repl::input::handle_input(&mut repl, bs_key).unwrap();
+    assert!(repl.state.completion_suggestions.is_empty());
+}
+
+#[test]
+fn test_tab_complete_cycles_through_matches() {
+    let mut repl = Repl::new().unwrap();
+    // Type `/` to get into command mode
+    repl.prompt.set_input("/".to_string());
+    let tab_key = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Tab,
+        crossterm::event::KeyModifiers::NONE,
+    );
+    let first = {
+        crate::repl::input::handle_input(&mut repl, tab_key).unwrap();
+        repl.prompt.input().to_string()
+    };
+    let second = {
+        crate::repl::input::handle_input(&mut repl, tab_key).unwrap();
+        repl.prompt.input().to_string()
+    };
+    // After cycling through all candidates, it should come back to the first
+    // At minimum, first and second should be valid commands
+    assert!(first.starts_with('/'));
+    assert!(second.starts_with('/'));
+}
+
+// ── File Path Completion Tests ────────────────────────────────────
+
+#[test]
+fn test_complete_file_path_etc_passwd() {
+    let candidates = crate::repl::input::complete_file_path("/etc/pass");
+    assert!(!candidates.is_empty());
+    assert!(candidates.iter().any(|c| c.contains("passwd")));
+}
+
+#[test]
+fn test_complete_file_path_tmp() {
+    let candidates = crate::repl::input::complete_file_path("/tmp/");
+    // /tmp exists and should have entries or at least not error
+    // Even if empty, it should return an empty vec, not panic
+    assert!(candidates.len() <= 20);
+}
+
+#[test]
+fn test_complete_file_path_nonexistent() {
+    let candidates = crate::repl::input::complete_file_path("/nonexistent/path/xyz");
+    assert!(candidates.is_empty());
+}
+
+#[test]
+fn test_complete_file_path_relative() {
+    let candidates = crate::repl::input::complete_file_path("./Cargo");
+    assert!(!candidates.is_empty());
+    assert!(candidates.iter().any(|c| c.contains("Cargo")));
+}
+
+#[test]
+fn test_complete_file_path_tilde() {
+    let candidates = crate::repl::input::complete_file_path("~/");
+    // Home directory should exist and have entries
+    assert!(!candidates.is_empty());
+}
+
+#[test]
+fn test_complete_file_path_directories_get_slash() {
+    let candidates = crate::repl::input::complete_file_path("/et");
+    assert!(!candidates.is_empty());
+    assert!(candidates.iter().any(|c| c.ends_with('/')));
+}
+
+// ── looks_like_path Tests ────────────────────────────────────────
+
+#[test]
+fn test_looks_like_path_absolute() {
+    assert!(crate::repl::input::looks_like_path("/home/user"));
+}
+
+#[test]
+fn test_looks_like_path_relative_dot() {
+    assert!(crate::repl::input::looks_like_path("./src/main.rs"));
+}
+
+#[test]
+fn test_looks_like_path_parent_dot() {
+    assert!(crate::repl::input::looks_like_path("../lib"));
+}
+
+#[test]
+fn test_looks_like_path_tilde() {
+    assert!(crate::repl::input::looks_like_path("~/docs"));
+}
+
+#[test]
+fn test_looks_like_path_with_subdir() {
+    assert!(crate::repl::input::looks_like_path("src/main.rs"));
+}
+
+#[test]
+fn test_looks_like_path_not_path() {
+    assert!(!crate::repl::input::looks_like_path("hello"));
+    assert!(!crate::repl::input::looks_like_path(""));
+    assert!(!crate::repl::input::looks_like_path("some-argument"));
+}
+
+// ── Prompt Widget Tests ──────────────────────────────────────────
+
+#[test]
+fn test_prompt_widget_input() {
+    let mut prompt = crate::widgets::PromptWidget::new();
+    assert!(prompt.input().is_empty());
+
+    prompt.add_char('h');
+    prompt.add_char('i');
+    assert_eq!(prompt.input(), "hi");
+
+    prompt.backspace();
+    assert_eq!(prompt.input(), "h");
+
+    prompt.clear();
+    assert!(prompt.input().is_empty());
+}
+
+#[test]
+fn test_prompt_widget_set_input() {
+    let mut prompt = crate::widgets::PromptWidget::new();
+    prompt.set_input("hello world".to_string());
+    assert_eq!(prompt.input(), "hello world");
+}
+
+#[test]
+fn test_prompt_widget_cursor_movement() {
+    let mut prompt = crate::widgets::PromptWidget::new();
+    prompt.set_input("abc".to_string());
+    // Cursor should be at end (3)
+    prompt.cursor_left();
+    prompt.cursor_left();
+    // Insert 'X' at position 1
+    prompt.add_char('X');
+    assert_eq!(prompt.input(), "aXbc");
+}
+
+#[test]
+fn test_prompt_widget_newline() {
+    let mut prompt = crate::widgets::PromptWidget::new();
+    prompt.set_input("hello".to_string());
+    prompt.insert_newline();
+    prompt.add_char('w');
+    prompt.add_char('o');
+    prompt.add_char('r');
+    prompt.add_char('l');
+    prompt.add_char('d');
+    assert!(prompt.input().contains('\n'));
+}
+
+// ── Command History Tests (additional) ────────────────────────────
+
+#[test]
+fn test_command_history_max_size() {
+    let mut repl = Repl::new().unwrap();
+    for i in 0..20 {
+        repl.command_history.push(&format!("cmd{i}"));
+    }
+    // History has max size of 1000, so all 20 should be present
+    assert_eq!(repl.command_history.len(), 20);
+}
+
+#[test]
+fn test_command_history_navigate_past_end() {
+    let mut repl = Repl::new().unwrap();
+    repl.command_history.push("a");
+    repl.command_history.push("b");
+
+    // Navigate to oldest
+    let _ = repl.command_history.up();
+    let _ = repl.command_history.up();
+    // Going further up stays at oldest entry (returns same entry, not None)
+    assert_eq!(repl.command_history.up(), Some("a"));
+}
+
+#[test]
+fn test_command_history_reset_cursor() {
+    let mut repl = Repl::new().unwrap();
+    repl.command_history.push("a");
+    repl.command_history.push("b");
+
+    let _ = repl.command_history.up();
+    let _ = repl.command_history.up();
+    repl.command_history.reset_cursor();
+
+    // After reset, we should be able to navigate again from the end
+    assert_eq!(repl.command_history.up(), Some("b"));
+}
+
+// ── REPL Clear Command ──────────────────────────────────────────
+
+#[test]
+fn test_repl_clear_command() {
+    let mut repl = Repl::new().unwrap();
+    // submit_input adds the "/clear" user message first (len becomes 1),
+    // then handle_clear sees len == 1 (not > 1), so it clears directly
+    // and adds "Chat cleared." system message.
+    assert!(repl.chat.is_empty());
+
+    repl.prompt.set_input("/clear".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    // After clear: original messages removed, "Chat cleared." added
+    assert!(repl.chat.len() >= 1);
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Chat cleared"));
+}
+
+// ── ReplState Completion Suggestions ──────────────────────────────
+
+#[test]
+fn test_repl_state_completion_suggestions_default() {
+    let state = ReplState::default();
+    assert!(state.completion_suggestions.is_empty());
 }
 
 // ── UiAdapter Tests ────────────────────────────────────────────────
