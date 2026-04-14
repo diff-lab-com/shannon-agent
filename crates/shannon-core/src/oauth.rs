@@ -91,7 +91,9 @@ pub struct OAuthClient {
 }
 
 impl OAuthClient {
-    /// Create a new OAuth client.
+    /// Create a new OAuth client using the builder pattern.
+    ///
+    /// Use [`OAuthClient::builder`] for a more ergonomic construction API.
     pub fn new(
         id: &str,
         name: &str,
@@ -113,28 +115,112 @@ impl OAuthClient {
         }
     }
 
-    /// Create a new OAuth client with predefined scopes.
-    #[allow(clippy::too_many_arguments)]
-    pub fn with_scopes(
-        id: &str,
-        name: &str,
-        client_id: &str,
-        client_secret: &str,
-        auth_url: &str,
-        token_url: &str,
-        redirect_url: &str,
-        scopes: Vec<String>,
-    ) -> Self {
-        Self {
-            id: id.to_string(),
-            name: name.to_string(),
-            client_id: client_id.to_string(),
-            client_secret: client_secret.to_string(),
-            auth_url: auth_url.to_string(),
-            token_url: token_url.to_string(),
-            redirect_url: redirect_url.to_string(),
-            scopes,
-        }
+    /// Create a new builder for constructing an OAuth client.
+    pub fn builder() -> OAuthClientBuilder {
+        OAuthClientBuilder::default()
+    }
+}
+
+/// Builder for constructing [`OAuthClient`] instances.
+///
+/// # Example
+///
+/// ```ignore
+/// use shannon_core::oauth::OAuthClient;
+///
+/// let client = OAuthClient::builder()
+///     .id("github")
+///     .name("GitHub")
+///     .client_id("gh_client_123")
+///     .client_secret("gh_secret_456")
+///     .auth_url("https://github.com/login/oauth/authorize")
+///     .token_url("https://github.com/login/oauth/access_token")
+///     .redirect_url("http://localhost:8080/callback")
+///     .scopes(vec!["read:user".to_string(), "repo".to_string()])
+///     .build()
+///     .unwrap();
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct OAuthClientBuilder {
+    id: Option<String>,
+    name: Option<String>,
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    auth_url: Option<String>,
+    token_url: Option<String>,
+    redirect_url: Option<String>,
+    scopes: Vec<String>,
+}
+
+impl OAuthClientBuilder {
+    /// Set the unique client identifier.
+    pub fn id(mut self, id: impl Into<String>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    /// Set the human-readable client name.
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Set the OAuth client ID issued by the provider.
+    pub fn client_id(mut self, client_id: impl Into<String>) -> Self {
+        self.client_id = Some(client_id.into());
+        self
+    }
+
+    /// Set the OAuth client secret issued by the provider.
+    pub fn client_secret(mut self, client_secret: impl Into<String>) -> Self {
+        self.client_secret = Some(client_secret.into());
+        self
+    }
+
+    /// Set the provider's authorization endpoint URL.
+    pub fn auth_url(mut self, auth_url: impl Into<String>) -> Self {
+        self.auth_url = Some(auth_url.into());
+        self
+    }
+
+    /// Set the provider's token endpoint URL.
+    pub fn token_url(mut self, token_url: impl Into<String>) -> Self {
+        self.token_url = Some(token_url.into());
+        self
+    }
+
+    /// Set the registered redirect URI.
+    pub fn redirect_url(mut self, redirect_url: impl Into<String>) -> Self {
+        self.redirect_url = Some(redirect_url.into());
+        self
+    }
+
+    /// Set the OAuth scopes.
+    pub fn scopes(mut self, scopes: Vec<String>) -> Self {
+        self.scopes = scopes;
+        self
+    }
+
+    /// Build the OAuthClient, returning an error if any required field is missing.
+    pub fn build(self) -> Result<OAuthClient, OAuthError> {
+        let id = self.id.ok_or_else(|| OAuthError::MissingField("id".into()))?;
+        let name = self.name.ok_or_else(|| OAuthError::MissingField("name".into()))?;
+        let client_id = self.client_id.ok_or_else(|| OAuthError::MissingField("client_id".into()))?;
+        let client_secret = self.client_secret.ok_or_else(|| OAuthError::MissingField("client_secret".into()))?;
+        let auth_url = self.auth_url.ok_or_else(|| OAuthError::MissingField("auth_url".into()))?;
+        let token_url = self.token_url.ok_or_else(|| OAuthError::MissingField("token_url".into()))?;
+        let redirect_url = self.redirect_url.ok_or_else(|| OAuthError::MissingField("redirect_url".into()))?;
+
+        Ok(OAuthClient {
+            id,
+            name,
+            client_id,
+            client_secret,
+            auth_url,
+            token_url,
+            redirect_url,
+            scopes: self.scopes,
+        })
     }
 }
 
@@ -333,6 +419,8 @@ impl OAuthService {
     // -----------------------------------------------------------------------
 
     /// Register a new OAuth client.
+    ///
+    /// Convenience wrapper; prefer [`OAuthClient::builder`] + [`Self::register_client_struct`].
     #[allow(clippy::too_many_arguments)]
     pub fn register_client(
         &mut self,
@@ -344,13 +432,29 @@ impl OAuthService {
         token_url: &str,
         redirect_url: &str,
     ) -> Result<&OAuthClient, OAuthError> {
-        if self.clients.contains_key(id) {
-            return Err(OAuthError::ClientAlreadyExists(id.to_string()));
-        }
+        let client = OAuthClient::builder()
+            .id(id)
+            .name(name)
+            .client_id(client_id)
+            .client_secret(client_secret)
+            .auth_url(auth_url)
+            .token_url(token_url)
+            .redirect_url(redirect_url)
+            .build()?;
+        self.register_client_struct(client)
+    }
 
-        let client = OAuthClient::new(id, name, client_id, client_secret, auth_url, token_url, redirect_url);
-        self.clients.insert(id.to_string(), client);
-        Ok(self.clients.get(id).expect("just inserted client should exist"))
+    /// Register an OAuth client built via [`OAuthClient::builder`].
+    pub fn register_client_struct(
+        &mut self,
+        client: OAuthClient,
+    ) -> Result<&OAuthClient, OAuthError> {
+        if self.clients.contains_key(&client.id) {
+            return Err(OAuthError::ClientAlreadyExists(client.id.clone()));
+        }
+        let id = client.id.clone();
+        self.clients.insert(id.clone(), client);
+        Ok(self.clients.get(&id).expect("just inserted client should exist"))
     }
 
     /// List all registered client IDs.
@@ -871,16 +975,17 @@ mod tests {
 
     #[test]
     fn test_oauth_client_serialization() {
-        let client = OAuthClient::with_scopes(
-            "test",
-            "Test Provider",
-            "cid",
-            "csec",
-            "https://auth.com/authorize",
-            "https://auth.com/token",
-            "http://localhost/cb",
-            vec!["read".to_string(), "write".to_string()],
-        );
+        let client = OAuthClient::builder()
+            .id("test")
+            .name("Test Provider")
+            .client_id("cid")
+            .client_secret("csec")
+            .auth_url("https://auth.com/authorize")
+            .token_url("https://auth.com/token")
+            .redirect_url("http://localhost/cb")
+            .scopes(vec!["read".to_string(), "write".to_string()])
+            .build()
+            .unwrap();
 
         let json = serde_json::to_string(&client).unwrap();
         let deserialized: OAuthClient = serde_json::from_str(&json).unwrap();

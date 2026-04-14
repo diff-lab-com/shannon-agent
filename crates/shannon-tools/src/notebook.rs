@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+use std::fmt;
 use std::fs;
 use std::path::Path;
 
@@ -59,16 +60,16 @@ pub enum CellSource {
     Multiple(Vec<String>),
 }
 
-impl CellSource {
-    /// Convert to single string
-    #[allow(clippy::inherent_to_string)]
-    pub fn to_string(&self) -> String {
+impl fmt::Display for CellSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CellSource::Single(s) => s.clone(),
-            CellSource::Multiple(lines) => lines.join("\n"),
+            CellSource::Single(s) => write!(f, "{s}"),
+            CellSource::Multiple(lines) => write!(f, "{}", lines.join("\n")),
         }
     }
+}
 
+impl CellSource {
     /// Create from string
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
