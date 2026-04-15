@@ -305,6 +305,7 @@ pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String>
         "review" => &["HEAD~1", "main...HEAD"],
         "local-models" | "local" => &[],
         "diff" => &["--staged", "--stat", "--overview", "--word-diff", "-w", "HEAD~1", "main...HEAD"],
+        "ci" | "gh-actions" => &["status", "runs", "workflows", "view", "trigger", "help"],
         "history" => &["--export"],
         "export" | "save" => &["--format json", "--format markdown"],
         _ => &[],

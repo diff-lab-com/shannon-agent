@@ -1741,3 +1741,90 @@ fn test_format_change_bar() {
     let bar_del = super::commands::format_change_bar(0, 10);
     assert!(bar_del.chars().all(|c| c == '-'));
 }
+
+// ── /ci Command Tests ──────────────────────────────────────────────
+
+#[test]
+fn test_repl_ci_status() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/ci".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    // Will show either runs or a message about gh not installed
+    assert!(!last_msg.is_empty());
+}
+
+#[test]
+fn test_repl_ci_status_subcommand() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/ci status".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(!last_msg.is_empty());
+}
+
+#[test]
+fn test_repl_ci_help() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/ci help".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("/ci status"));
+    assert!(last_msg.contains("/ci runs"));
+    assert!(last_msg.contains("/ci workflows"));
+    assert!(last_msg.contains("/ci view"));
+    assert!(last_msg.contains("/ci trigger"));
+}
+
+#[test]
+fn test_repl_ci_view_no_args() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/ci view".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Usage: /ci view"));
+}
+
+#[test]
+fn test_repl_ci_trigger_no_args() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/ci trigger".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Usage: /ci trigger"));
+}
+
+#[test]
+fn test_repl_ci_in_help() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/help".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("/ci"));
+}
+
+#[test]
+fn test_repl_ci_alias_gh_actions() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/gh-actions".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(!last_msg.is_empty());
+}
+
+#[test]
+fn test_repl_ci_tab_completion() {
+    let args = crate::repl::input::complete_command_args("ci", "");
+    assert!(args.contains(&"status".to_string()));
+    assert!(args.contains(&"runs".to_string()));
+    assert!(args.contains(&"workflows".to_string()));
+    assert!(args.contains(&"view".to_string()));
+    assert!(args.contains(&"trigger".to_string()));
+}
+
+#[test]
+fn test_repl_ci_tab_completion_prefix() {
+    let args = crate::repl::input::complete_command_args("ci", "st");
+    assert!(args.contains(&"status".to_string()));
+    assert!(!args.contains(&"workflows".to_string()));
+}

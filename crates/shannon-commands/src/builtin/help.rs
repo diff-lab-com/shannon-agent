@@ -692,6 +692,18 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("Use to check which local model servers (Ollama, LM Studio) are running and what models are available")
             .with_related(vec!["model", "config"])
         ),
+        "ci" => Some(
+            CommandHelpEntry::new(
+                "ci".to_string(),
+                "View GitHub Actions workflows, runs, and trigger workflows".to_string(),
+                HelpCategory::Skills,
+            )
+            .with_aliases(vec!["gh-actions"])
+            .with_arg_hint("[status|runs|workflows|view|trigger|help]")
+            .with_examples(vec!["/ci", "/ci runs 20", "/ci workflows", "/ci view 12345", "/ci trigger build"])
+            .with_when_to_use("Use to check CI status, view workflow runs, or trigger workflows via GitHub CLI")
+            .with_related(vec!["diff", "review"])
+        ),
         _ => None,
     }
 }
@@ -736,6 +748,7 @@ pub fn all_help_entries() -> Vec<CommandHelpEntry> {
         get_command_help("web-search").unwrap(),
         get_command_help("review").unwrap(),
         get_command_help("local-models").unwrap(),
+        get_command_help("ci").unwrap(),
     ]
 }
 

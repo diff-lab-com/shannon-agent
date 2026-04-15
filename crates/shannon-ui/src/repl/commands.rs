@@ -59,7 +59,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
     let is_plugin_command = repl.plugin_manager.get_plugin_commands()
         .iter().any(|c| c.name == cmd_name);
     // Commands handled in the match block but not in the global registry
-    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local"];
+    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions"];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
     if command_exists || is_plugin_command || is_repl_command {
@@ -92,6 +92,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "web-search" | "websearch" | "search-web" => handle_web_search(repl, args)?,
             "review" => handle_review(repl, args)?,
             "local-models" | "local" => handle_local_models(repl)?,
+            "ci" | "gh-actions" => handle_ci(repl, args)?,
             _ => handle_other_command(repl, cmd_name, args)?,
         }
         Ok(())
@@ -1949,6 +1950,161 @@ fn handle_local_models(repl: &mut Repl) -> Result<()> {
     output.push_str(&format!("\nCurrent model: {}\n", repl.state.model.as_deref().unwrap_or("not set")));
 
     repl.chat.add_message(ChatRole::System, output);
+    Ok(())
+}
+
+fn handle_ci(repl: &mut Repl, args: &str) -> Result<()> {
+    // Check if gh CLI is available
+    let gh_check = std::process::Command::new("gh")
+        .arg("--version")
+        .output();
+
+    if gh_check.is_err() {
+        repl.chat.add_message(ChatRole::System,
+            "GitHub CLI (gh) is not installed.\nInstall it from: https://cli.github.com/".to_string());
+        return Ok(());
+    }
+
+    let parts: Vec<&str> = args.splitn(2, ' ').collect();
+    let subcommand = parts.first().copied().unwrap_or("");
+
+    match subcommand {
+        "" | "status" => {
+            // Show recent workflow runs
+            let output = std::process::Command::new("gh")
+                .args(["run", "list", "--limit", "10"])
+                .current_dir(&repl.state.working_directory)
+                .output();
+
+            match output {
+                Ok(result) => {
+                    let stdout = String::from_utf8_lossy(&result.stdout);
+                    let stderr = String::from_utf8_lossy(&result.stderr);
+                    if !stderr.is_empty() && stdout.is_empty() {
+                        repl.chat.add_message(ChatRole::System, format!("CI error: {stderr}"));
+                    } else if stdout.is_empty() {
+                        repl.chat.add_message(ChatRole::System, "No workflow runs found.".to_string());
+                    } else {
+                        repl.chat.add_message(ChatRole::System, format!("Recent workflow runs:\n{stdout}"));
+                    }
+                }
+                Err(e) => {
+                    repl.chat.add_message(ChatRole::System, format!("Failed to query CI: {e}"));
+                }
+            }
+        }
+        "runs" => {
+            let limit = parts.get(1).and_then(|s| s.parse::<usize>().ok()).unwrap_or(10);
+            let output = std::process::Command::new("gh")
+                .args(["run", "list", "--limit", &limit.to_string()])
+                .current_dir(&repl.state.working_directory)
+                .output();
+
+            match output {
+                Ok(result) => {
+                    let stdout = String::from_utf8_lossy(&result.stdout);
+                    let stderr = String::from_utf8_lossy(&result.stderr);
+                    if !stderr.is_empty() && stdout.is_empty() {
+                        repl.chat.add_message(ChatRole::System, format!("CI error: {stderr}"));
+                    } else {
+                        repl.chat.add_message(ChatRole::System, format!("Workflow runs (limit: {limit}):\n{stdout}"));
+                    }
+                }
+                Err(e) => {
+                    repl.chat.add_message(ChatRole::System, format!("Failed to list runs: {e}"));
+                }
+            }
+        }
+        "workflows" => {
+            let output = std::process::Command::new("gh")
+                .args(["workflow", "list"])
+                .current_dir(&repl.state.working_directory)
+                .output();
+
+            match output {
+                Ok(result) => {
+                    let stdout = String::from_utf8_lossy(&result.stdout);
+                    let stderr = String::from_utf8_lossy(&result.stderr);
+                    if !stderr.is_empty() && stdout.is_empty() {
+                        repl.chat.add_message(ChatRole::System, format!("CI error: {stderr}"));
+                    } else {
+                        repl.chat.add_message(ChatRole::System, format!("Workflows:\n{stdout}"));
+                    }
+                }
+                Err(e) => {
+                    repl.chat.add_message(ChatRole::System, format!("Failed to list workflows: {e}"));
+                }
+            }
+        }
+        "view" => {
+            let run_id = parts.get(1).copied().unwrap_or("");
+            if run_id.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Usage: /ci view <run-id>".to_string());
+                return Ok(());
+            }
+            let output = std::process::Command::new("gh")
+                .args(["run", "view", run_id])
+                .current_dir(&repl.state.working_directory)
+                .output();
+
+            match output {
+                Ok(result) => {
+                    let stdout = String::from_utf8_lossy(&result.stdout);
+                    let stderr = String::from_utf8_lossy(&result.stderr);
+                    if !stderr.is_empty() && stdout.is_empty() {
+                        repl.chat.add_message(ChatRole::System, format!("CI error: {stderr}"));
+                    } else {
+                        repl.chat.add_message(ChatRole::System, format!("Run details:\n{stdout}"));
+                    }
+                }
+                Err(e) => {
+                    repl.chat.add_message(ChatRole::System, format!("Failed to view run: {e}"));
+                }
+            }
+        }
+        "trigger" => {
+            let workflow = parts.get(1).copied().unwrap_or("");
+            if workflow.is_empty() {
+                repl.chat.add_message(ChatRole::System,
+                    "Usage: /ci trigger <workflow-name>\nUse /ci workflows to see available workflows.".to_string());
+                return Ok(());
+            }
+            let output = std::process::Command::new("gh")
+                .args(["workflow", "run", workflow])
+                .current_dir(&repl.state.working_directory)
+                .output();
+
+            match output {
+                Ok(result) => {
+                    let stderr = String::from_utf8_lossy(&result.stderr);
+                    if result.status.success() {
+                        repl.chat.add_message(ChatRole::System,
+                            format!("Workflow '{workflow}' triggered successfully."));
+                    } else {
+                        repl.chat.add_message(ChatRole::System,
+                            format!("Failed to trigger workflow: {stderr}"));
+                    }
+                }
+                Err(e) => {
+                    repl.chat.add_message(ChatRole::System, format!("Failed to trigger workflow: {e}"));
+                }
+            }
+        }
+        "help" | _ => {
+            repl.chat.add_message(ChatRole::System, "\
+CI/GitHub Actions Commands:
+  /ci            — Show recent workflow runs (default: 10)
+  /ci status     — Same as above
+  /ci runs [N]   — List recent N workflow runs
+  /ci workflows  — List all workflows
+  /ci view <id>  — View details of a specific run
+  /ci trigger <name> — Trigger a workflow
+  /ci help       — Show this help
+
+Requires GitHub CLI (gh) to be installed.".to_string());
+        }
+    }
+
     Ok(())
 }
 
