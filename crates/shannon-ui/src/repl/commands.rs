@@ -968,14 +968,22 @@ fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
         1
     } else if let Ok(n) = trimmed.parse::<usize>() {
         if n == 0 {
+            // Remove the "/rewind 0" command message added by submit_input
+            repl.chat.pop_last();
             repl.chat.add_message(ChatRole::System, "Usage: /rewind [number-of-turns]".to_string());
             return Ok(());
         }
         n
     } else {
+        // Remove the "/rewind <invalid>" command message added by submit_input
+        repl.chat.pop_last();
         repl.chat.add_message(ChatRole::System, "Usage: /rewind [number-of-turns]".to_string());
         return Ok(());
     };
+
+    // Remove the "/rewind" command message added by submit_input
+    // so it doesn't interfere with turn counting
+    repl.chat.pop_last();
 
     // Show what we're about to rewind
     let before_count = repl.chat.len();

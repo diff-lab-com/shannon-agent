@@ -2850,10 +2850,10 @@ fn test_rewind_then_rewind_again() {
     super::commands::submit_input(&mut repl).unwrap();
     assert_eq!(repl.chat.len(), 5); // Q1+A1+Q2+A2 + system rewind msg
 
-    // Second rewind: remove Q2+A2
+    // Second rewind: remove Q2+A2 (first system msg also removed since it's past cutoff)
     repl.prompt.set_input("/rewind".to_string());
     super::commands::submit_input(&mut repl).unwrap();
-    // Q1+A1 + 2 system rewind msgs = 4
-    assert_eq!(repl.chat.len(), 4);
+    // Q1+A1 + second system rewind msg = 3 (first system msg was in truncated range)
+    assert_eq!(repl.chat.len(), 3);
     assert_eq!(repl.chat.get_message(0).unwrap().content, "Q1");
 }

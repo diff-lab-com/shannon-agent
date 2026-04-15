@@ -392,6 +392,11 @@ impl ChatWidget {
         self.messages.back()
     }
 
+    /// Remove and return the last message
+    pub fn pop_last(&mut self) -> Option<ChatMessage> {
+        self.messages.pop_back()
+    }
+
     /// Get the number of messages
     pub fn message_count(&self) -> usize {
         self.messages.len()
