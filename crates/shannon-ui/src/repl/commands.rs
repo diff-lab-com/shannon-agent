@@ -1076,7 +1076,7 @@ fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
                 let mut current_file = String::new();
                 for line in stdout.lines() {
                     if let Some(rest) = line.strip_prefix("diff --git a/") {
-                        if let Some(name) = rest.splitn(2, ' ').next() {
+                        if let Some(name) = rest.split(' ').next() {
                             current_file = name.to_string();
                         }
                     } else if line.starts_with('+') && !line.starts_with("+++") {
@@ -1441,7 +1441,7 @@ fn handle_cost(repl: &mut Repl, args: &str) -> Result<()> {
 }
 
 fn handle_plan(repl: &mut Repl, args: &str) -> Result<()> {
-    let parts: Vec<&str> = args.trim().split_whitespace().collect();
+    let parts: Vec<&str> = args.split_whitespace().collect();
 
     match parts.first().copied().unwrap_or("") {
         "" | "status" => {
@@ -1500,7 +1500,7 @@ fn handle_plan(repl: &mut Repl, args: &str) -> Result<()> {
             repl.state.plan = super::PlanState::default();
             repl.state.status = "Ready".to_string();
             repl.chat.add_message(ChatRole::System,
-                format!("Plan '{}' completed and cleared.", desc));
+                format!("Plan '{desc}' completed and cleared."));
         }
         "help" => {
             repl.chat.add_message(ChatRole::System,
@@ -1529,8 +1529,7 @@ fn handle_plan(repl: &mut Repl, args: &str) -> Result<()> {
             };
             repl.state.status = "Plan mode — review plan".to_string();
             let msg = format!(
-                "Plan created: {}\n\n{}\n\nUse /plan approve to approve, /plan reject to discard, or /plan help for more options.",
-                description, plan_content
+                "Plan created: {description}\n\n{plan_content}\n\nUse /plan approve to approve, /plan reject to discard, or /plan help for more options."
             );
             repl.chat.add_message(ChatRole::System, msg);
         }
@@ -1575,38 +1574,35 @@ pub(crate) fn extract_plan_steps(description: &str) -> Vec<String> {
         steps.push("Verify test coverage meets threshold".to_string());
     }
 
-    if lower.contains("add") || lower.contains("implement") || lower.contains("feature") {
-        if steps.is_empty() {
+    if (lower.contains("add") || lower.contains("implement") || lower.contains("feature"))
+        && steps.is_empty() {
             steps.push("Analyze requirements and design interface".to_string());
             steps.push("Implement core functionality".to_string());
             steps.push("Add error handling and input validation".to_string());
             steps.push("Write tests for new functionality".to_string());
             steps.push("Update documentation".to_string());
         }
-    }
 
-    if lower.contains("fix") || lower.contains("bug") {
-        if steps.is_empty() {
+    if (lower.contains("fix") || lower.contains("bug"))
+        && steps.is_empty() {
             steps.push("Reproduce the issue and understand root cause".to_string());
             steps.push("Implement fix with minimal changes".to_string());
             steps.push("Add regression test".to_string());
             steps.push("Verify fix resolves the issue".to_string());
         }
-    }
 
-    if lower.contains("migrate") || lower.contains("upgrade") {
-        if steps.is_empty() {
+    if (lower.contains("migrate") || lower.contains("upgrade"))
+        && steps.is_empty() {
             steps.push("Review migration/upgrade guide and breaking changes".to_string());
             steps.push("Update dependencies".to_string());
             steps.push("Adapt code to new API surface".to_string());
             steps.push("Run tests and fix any failures".to_string());
             steps.push("Verify functionality end-to-end".to_string());
         }
-    }
 
     // Default fallback
     if steps.is_empty() {
-        steps.push(format!("Understand requirements: {}", description));
+        steps.push(format!("Understand requirements: {description}"));
         steps.push("Design solution approach".to_string());
         steps.push("Implement the solution".to_string());
         steps.push("Test and verify the implementation".to_string());
@@ -1618,7 +1614,7 @@ pub(crate) fn extract_plan_steps(description: &str) -> Vec<String> {
 fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
     use shannon_core::permissions::RiskLevel;
 
-    let parts: Vec<&str> = args.trim().split_whitespace().collect();
+    let parts: Vec<&str> = args.split_whitespace().collect();
 
     // Subcommand dispatch
     match parts.first().copied().unwrap_or("") {
@@ -1642,8 +1638,7 @@ fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
                         let deny_count = policy.deny_patterns.len();
                         let confirm_count = policy.confirmation_patterns.len();
                         report.push_str(&format!(
-                            "    {}: {} risk, {} deny patterns, {} confirm patterns\n",
-                            name, risk, deny_count, confirm_count
+                            "    {name}: {risk} risk, {deny_count} deny patterns, {confirm_count} confirm patterns\n"
                         ));
                     }
 
@@ -1684,7 +1679,7 @@ fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
                     perms.allow_tool(tool);
                 }
             }
-            repl.chat.add_message(ChatRole::System, format!("Tool '{}' is now always allowed.", tool));
+            repl.chat.add_message(ChatRole::System, format!("Tool '{tool}' is now always allowed."));
         }
         "deny" => {
             if parts.len() < 2 {
@@ -1697,7 +1692,7 @@ fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
                     perms.deny_tool(tool);
                 }
             }
-            repl.chat.add_message(ChatRole::System, format!("Tool '{}' is now always denied.", tool));
+            repl.chat.add_message(ChatRole::System, format!("Tool '{tool}' is now always denied."));
         }
         "reset" => {
             if let Some(ref engine) = repl.query_engine {
