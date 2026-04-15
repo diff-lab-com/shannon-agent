@@ -385,12 +385,26 @@ pub enum ContentBlock {
     },
 }
 
-/// Image source for image blocks
+/// Image source for image blocks (Anthropic format).
+///
+/// Serialized as: `{ "type": "base64", "media_type": "image/png", "data": "..." }`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageSource {
     #[serde(rename = "type")]
+    pub source_type: String,
     pub media_type: String,
     pub data: String,
+}
+
+impl ImageSource {
+    /// Create a new base64-encoded image source.
+    pub fn base64(media_type: impl Into<String>, data: impl Into<String>) -> Self {
+        Self {
+            source_type: "base64".to_string(),
+            media_type: media_type.into(),
+            data: data.into(),
+        }
+    }
 }
 
 /// Tool result content
@@ -520,4 +534,54 @@ pub struct MessageDeltaDelta {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_sequence: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_image_source_base64_constructor() {
+        let src = ImageSource::base64("image/png", "abc123");
+        assert_eq!(src.source_type, "base64");
+        assert_eq!(src.media_type, "image/png");
+        assert_eq!(src.data, "abc123");
+    }
+
+    #[test]
+    fn test_image_source_serialization() {
+        let src = ImageSource::base64("image/png", "abc123");
+        let json = serde_json::to_string(&src).unwrap();
+        assert!(json.contains(r#""type":"base64""#));
+        assert!(json.contains(r#""media_type":"image/png""#));
+        assert!(json.contains(r#""data":"abc123""#));
+    }
+
+    #[test]
+    fn test_content_block_image_serialization() {
+        let block = ContentBlock::Image {
+            source: ImageSource::base64("image/jpeg", "/9j/test"),
+        };
+        let json = serde_json::to_string(&block).unwrap();
+        assert!(json.contains(r#""type":"image""#));
+        assert!(json.contains(r#""source""#));
+        assert!(json.contains(r#""media_type":"image/jpeg""#));
+    }
+
+    #[test]
+    fn test_message_with_image_blocks() {
+        let msg = Message {
+            role: "user".to_string(),
+            content: MessageContent::Blocks(vec![
+                ContentBlock::Text { text: "Describe this".to_string() },
+                ContentBlock::Image {
+                    source: ImageSource::base64("image/png", "iVBOR"),
+                },
+            ]),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"text""#));
+        assert!(json.contains(r#""type":"image""#));
+        assert!(json.contains(r#""type":"base64""#));
+    }
 }

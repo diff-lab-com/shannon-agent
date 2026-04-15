@@ -632,10 +632,7 @@ fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
     let blocks = vec![
         ContentBlock::Text { text: prompt },
         ContentBlock::Image {
-            source: ImageSource {
-                media_type: media_type.to_string(),
-                data: base64_data,
-            },
+            source: ImageSource::base64(media_type, base64_data),
         },
     ];
 

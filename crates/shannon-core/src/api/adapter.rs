@@ -196,6 +196,34 @@ fn convert_message_for_openai(msg: &Message) -> Value {
                     "tool_calls": tool_calls
                 })
             } else {
+                // Check for image blocks — OpenAI uses a different content format
+                let has_images = blocks.iter().any(|b| matches!(b, ContentBlock::Image { .. }));
+
+                if has_images {
+                    // Build OpenAI vision content array
+                    let content_parts: Vec<Value> = blocks
+                        .iter()
+                        .filter_map(|b| match b {
+                            ContentBlock::Text { text } => Some(json!({
+                                "type": "text",
+                                "text": text
+                            })),
+                            ContentBlock::Image { source } => {
+                                let data_url = format!("data:{};base64,{}", source.media_type, source.data);
+                                Some(json!({
+                                    "type": "image_url",
+                                    "image_url": { "url": data_url }
+                                }))
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    return json!({
+                        "role": msg.role,
+                        "content": content_parts
+                    });
+                }
+
                 // Regular content blocks — extract text
                 let text: String = blocks
                     .iter()
@@ -1288,5 +1316,85 @@ mod tests {
             }
             _ => panic!("Expected index 1"),
         }
+    }
+
+    // -- Image block handling --
+
+    #[test]
+    fn test_anthropic_image_block_serialization() {
+        use crate::api::types::{ImageSource, MessageContent};
+        let req = MessageRequest {
+            model: "claude-3-5-sonnet".to_string(),
+            max_tokens: 1024,
+            system: None,
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::Text { text: "What is this?".to_string() },
+                    ContentBlock::Image {
+                        source: ImageSource::base64("image/png", "iVBOR..."),
+                    },
+                ]),
+            }],
+            tools: None,
+            stream: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+        };
+
+        let val = serialize_request(&req, &LlmProvider::Anthropic);
+        let messages = val["messages"].as_array().unwrap();
+        let content = messages[0]["content"].as_array().unwrap();
+
+        // Text block
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "What is this?");
+
+        // Image block with proper Anthropic format
+        assert_eq!(content[1]["type"], "image");
+        let source = &content[1]["source"];
+        assert_eq!(source["type"], "base64");
+        assert_eq!(source["media_type"], "image/png");
+        assert_eq!(source["data"], "iVBOR...");
+    }
+
+    #[test]
+    fn test_openai_image_block_conversion() {
+        use crate::api::types::{ImageSource, MessageContent};
+        let req = MessageRequest {
+            model: "gpt-4o".to_string(),
+            max_tokens: 1024,
+            system: None,
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::Text { text: "Describe this".to_string() },
+                    ContentBlock::Image {
+                        source: ImageSource::base64("image/jpeg", "/9j/4AAQ"),
+                    },
+                ]),
+            }],
+            tools: None,
+            stream: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+        };
+
+        let val = serialize_openai_request(&req);
+        let messages = val["messages"].as_array().unwrap();
+        let content = messages[0]["content"].as_array().unwrap();
+
+        // Text part
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "Describe this");
+
+        // Image URL part (OpenAI vision format)
+        assert_eq!(content[1]["type"], "image_url");
+        let url = content[1]["image_url"]["url"].as_str().unwrap();
+        assert!(url.starts_with("data:image/jpeg;base64,/9j/4AAQ"));
     }
 }
