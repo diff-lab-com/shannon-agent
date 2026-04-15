@@ -1550,3 +1550,124 @@ fn test_repl_state_status_variants() {
         assert_eq!(state.status, *status);
     }
 }
+
+// ── /web-search Command Tests ─────────────────────────────────────
+
+#[test]
+fn test_repl_web_search_no_args() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/web-search".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Usage: /web-search"));
+}
+
+#[test]
+fn test_repl_websearch_alias_no_args() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/websearch".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Usage: /web-search"));
+}
+
+#[test]
+fn test_repl_web_search_with_query() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/web-search Rust async".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    // Will either show results or an error about missing API key
+    assert!(
+        last_msg.contains("Web search results")
+        || last_msg.contains("Web search failed")
+        || last_msg.contains("SHANNON_SEARCH_API_KEY")
+    );
+}
+
+#[test]
+fn test_repl_web_search_in_help() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/help".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("/web-search"));
+}
+
+#[test]
+fn test_repl_web_search_tab_completion() {
+    let args = crate::repl::input::complete_command_args("web-search", "");
+    // No subcommand args, but function should return empty vec (not error)
+    assert!(args.is_empty());
+}
+
+// ── /review Command Tests ─────────────────────────────────────────
+
+#[test]
+fn test_repl_review_no_changes() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/review".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Code Review"));
+}
+
+#[test]
+fn test_repl_review_in_help() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/help".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("/review"));
+}
+
+#[test]
+fn test_repl_review_tab_completion() {
+    let args = crate::repl::input::complete_command_args("review", "");
+    assert!(args.contains(&"HEAD~1".to_string()));
+    assert!(args.iter().any(|a| a.contains("main...HEAD")));
+}
+
+#[test]
+fn test_repl_review_tab_completion_prefix() {
+    let args = crate::repl::input::complete_command_args("review", "HE");
+    assert!(args.contains(&"HEAD~1".to_string()));
+    assert!(!args.iter().any(|a| a.contains("main")));
+}
+
+// ── /local-models Command Tests ───────────────────────────────────
+
+#[test]
+fn test_repl_local_models() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/local-models".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Local Model Detection"));
+    assert!(last_msg.contains("Ollama"));
+    assert!(last_msg.contains("LM Studio"));
+}
+
+#[test]
+fn test_repl_local_alias() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/local".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Local Model Detection"));
+}
+
+#[test]
+fn test_repl_local_models_in_help() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/help".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("/local-models"));
+}
+
+#[test]
+fn test_repl_local_models_tab_completion() {
+    let args = crate::repl::input::complete_command_args("local-models", "");
+    assert!(args.is_empty());
+}

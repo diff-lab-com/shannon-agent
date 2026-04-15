@@ -59,7 +59,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
     let is_plugin_command = repl.plugin_manager.get_plugin_commands()
         .iter().any(|c| c.name == cmd_name);
     // Commands handled in the match block but not in the global registry
-    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "compact", "cost", "permissions", "perms", "perm", "plan"];
+    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local"];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
     if command_exists || is_plugin_command || is_repl_command {
@@ -89,6 +89,9 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "plan" => handle_plan(repl, args)?,
             "team" => handle_team(repl, args)?,
             "branch" | "fork" => handle_branch(repl, args)?,
+            "web-search" | "websearch" | "search-web" => handle_web_search(repl, args)?,
+            "review" => handle_review(repl, args)?,
+            "local-models" | "local" => handle_local_models(repl)?,
             _ => handle_other_command(repl, cmd_name, args)?,
         }
         Ok(())
@@ -1618,6 +1621,230 @@ fn handle_doctor(repl: &mut Repl, _args: &str) -> Result<()> {
     let results = run_all_checks();
     let report = format_doctor_report(&results);
     repl.chat.add_message(ChatRole::System, report);
+    Ok(())
+}
+
+fn handle_web_search(repl: &mut Repl, args: &str) -> Result<()> {
+    let query = args.trim();
+    if query.is_empty() {
+        repl.chat.add_message(ChatRole::System,
+            "Usage: /web-search <query>\nSearches the web using Tavily API. Set SHANNON_SEARCH_API_KEY to configure.".to_string());
+        return Ok(());
+    }
+
+    let Some(ref engine) = repl.query_engine else {
+        repl.chat.add_message(ChatRole::System, "No query engine available.".to_string());
+        return Ok(());
+    };
+
+    let input = serde_json::json!({
+        "query": query,
+        "max_results": 5,
+        "search_depth": "basic"
+    });
+
+    match repl.runtime.block_on(engine.tools().execute("WebSearch", input)) {
+        Ok(result) => {
+            let mut output = format!("Web search results for: {query}\n\n");
+            if let Some(results) = result.metadata.get("results").and_then(|r| r.as_array()) {
+                for (i, item) in results.iter().enumerate() {
+                    let title = item.get("title").and_then(|t| t.as_str()).unwrap_or("Untitled");
+                    let url = item.get("url").and_then(|u| u.as_str()).unwrap_or("");
+                    let snippet = item.get("snippet").and_then(|s| s.as_str()).unwrap_or("");
+                    output.push_str(&format!("{}. **{}**\n   {}\n   {}\n\n", i + 1, title, url, snippet));
+                }
+                if results.is_empty() {
+                    output.push_str("No results found.");
+                }
+            } else {
+                output.push_str(&result.content);
+            }
+            repl.chat.add_message(ChatRole::System, output);
+        }
+        Err(e) => {
+            repl.chat.add_message(ChatRole::System, format!("Web search failed: {e}\nSet SHANNON_SEARCH_API_KEY for web search capability."));
+        }
+    }
+    Ok(())
+}
+
+fn handle_review(repl: &mut Repl, args: &str) -> Result<()> {
+    let target = args.trim();
+
+    // Get the diff to review
+    let diff_output = if target.is_empty() {
+        std::process::Command::new("git")
+            .args(["diff", "--stat"])
+            .current_dir(&repl.state.working_directory)
+            .output()
+    } else {
+        std::process::Command::new("git")
+            .args(["diff", target])
+            .current_dir(&repl.state.working_directory)
+            .output()
+    };
+
+    let mut review = String::from("Code Review\n\n");
+
+    match diff_output {
+        Ok(result) => {
+            let stdout = String::from_utf8_lossy(&result.stdout);
+            let stderr = String::from_utf8_lossy(&result.stderr);
+
+            if !stderr.is_empty() && stdout.is_empty() {
+                review.push_str(&format!("Git error: {stderr}"));
+            } else if stdout.is_empty() {
+                review.push_str("No uncommitted changes to review.\n");
+                review.push_str("Usage: /review [diff target]\n");
+                review.push_str("Examples: /review, /review HEAD~1, /review main...HEAD");
+            } else {
+                review.push_str("Changes found:\n```\n");
+                review.push_str(&stdout);
+                review.push_str("\n```\n\n");
+
+                // Get full diff for analysis (truncated)
+                let full_diff = std::process::Command::new("git")
+                    .args(["diff"])
+                    .current_dir(&repl.state.working_directory)
+                    .output();
+
+                if let Ok(diff_result) = full_diff {
+                    let diff_text = String::from_utf8_lossy(&diff_result.stdout);
+                    let files: Vec<&str> = diff_text.lines().filter(|l| l.starts_with("diff --git")).collect();
+                    let additions = diff_text.lines().filter(|l| l.starts_with('+') && !l.starts_with("+++")).count();
+                    let deletions = diff_text.lines().filter(|l| l.starts_with('-') && !l.starts_with("---")).count();
+
+                    review.push_str(&format!("Summary: {} files changed, +{}/-{} lines\n\n", files.len(), additions, deletions));
+
+                    // Basic automated checks
+                    let mut findings = Vec::new();
+
+                    // Check for potential secrets
+                    if diff_text.contains("API_KEY") || diff_text.contains("api_key") || diff_text.contains("password") {
+                        findings.push("[WARN] Potential secrets detected — review for accidental credential exposure");
+                    }
+
+                    // Check for large diffs
+                    if additions + deletions > 500 {
+                        findings.push("[WARN] Large diff — consider splitting into smaller changes");
+                    }
+
+                    // Check for TODO/FIXME
+                    if diff_text.lines().filter(|l| l.starts_with('+')).any(|l| l.contains("TODO") || l.contains("FIXME")) {
+                        findings.push("[INFO] New TODO/FIXME comments added");
+                    }
+
+                    // Check for test changes
+                    let has_test_changes = diff_text.lines()
+                        .filter(|l| l.starts_with("diff --git"))
+                        .any(|l| l.contains("test") || l.contains("spec"));
+                    if has_test_changes {
+                        findings.push("[PASS] Test changes detected");
+                    } else if additions + deletions > 50 {
+                        findings.push("[WARN] No test changes — consider adding tests for new code");
+                    }
+
+                    if findings.is_empty() {
+                        review.push_str("Automated checks: No issues detected.\n");
+                    } else {
+                        review.push_str("Automated findings:\n");
+                        for finding in &findings {
+                            review.push_str(&format!("  {finding}\n"));
+                        }
+                    }
+
+                    review.push_str("\nTo get AI-powered review, ask in the chat after these changes.");
+                }
+            }
+        }
+        Err(e) => {
+            review.push_str(&format!("Failed to run git diff: {e}"));
+        }
+    }
+
+    repl.chat.add_message(ChatRole::System, review);
+    Ok(())
+}
+
+fn handle_local_models(repl: &mut Repl) -> Result<()> {
+    let mut output = String::from("Local Model Detection\n\n");
+
+    // Check Ollama
+    let ollama_check = std::process::Command::new("curl")
+        .args(["-s", "--connect-timeout", "3", "http://localhost:11434/api/tags"])
+        .output();
+
+    match ollama_check {
+        Ok(result) => {
+            let stdout = String::from_utf8_lossy(&result.stdout);
+            if stdout.is_empty() || !result.status.success() {
+                output.push_str("Ollama: not running (localhost:11434 unreachable)\n");
+            } else {
+                output.push_str("Ollama: running at localhost:11434\n");
+                // Parse model list
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
+                    if let Some(models) = json.get("models").and_then(|m| m.as_array()) {
+                        if models.is_empty() {
+                            output.push_str("  No models installed\n");
+                        } else {
+                            output.push_str(&format!("  Available models ({}):\n", models.len()));
+                            for model in models {
+                                let name = model.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
+                                let size = model.get("size").and_then(|s| s.as_u64()).map(|b| format!("{:.1} GB", b as f64 / 1e9)).unwrap_or_default();
+                                output.push_str(&format!("    - {name} ({size})\n"));
+                            }
+                        }
+                    }
+                } else {
+                    output.push_str("  Could not parse model list\n");
+                }
+            }
+        }
+        Err(_) => {
+            output.push_str("Ollama: not detected (curl not available or host unreachable)\n");
+        }
+    }
+
+    // Check LM Studio
+    let lmstudio_check = std::process::Command::new("curl")
+        .args(["-s", "--connect-timeout", "3", "http://localhost:1234/v1/models"])
+        .output();
+
+    match lmstudio_check {
+        Ok(result) => {
+            let stdout = String::from_utf8_lossy(&result.stdout);
+            if stdout.is_empty() || !result.status.success() {
+                output.push_str("\nLM Studio: not running (localhost:1234 unreachable)\n");
+            } else {
+                output.push_str("\nLM Studio: running at localhost:1234\n");
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
+                    if let Some(models) = json.get("data").and_then(|m| m.as_array()) {
+                        if models.is_empty() {
+                            output.push_str("  No models loaded\n");
+                        } else {
+                            output.push_str(&format!("  Loaded models ({}):\n", models.len()));
+                            for model in models {
+                                let id = model.get("id").and_then(|i| i.as_str()).unwrap_or("unknown");
+                                output.push_str(&format!("    - {id}\n"));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(_) => {
+            output.push_str("\nLM Studio: not detected\n");
+        }
+    }
+
+    // Suggest usage
+    output.push_str("\nTo use a local model:\n");
+    output.push_str("  /model ollama/llama3\n");
+    output.push_str("  /model ollama/mistral\n");
+    output.push_str("  /model lmstudio/<model-id>\n");
+    output.push_str(&format!("\nCurrent model: {}\n", repl.state.model.as_deref().unwrap_or("not set")));
+
+    repl.chat.add_message(ChatRole::System, output);
     Ok(())
 }
 

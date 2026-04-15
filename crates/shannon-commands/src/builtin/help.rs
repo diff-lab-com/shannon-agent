@@ -658,6 +658,40 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("Use to get suggested fixes for diagnostics and available refactorings for a code range")
             .with_related(vec!["hover", "rename_symbol"])
         ),
+        "web-search" => Some(
+            CommandHelpEntry::new(
+                "web-search".to_string(),
+                "Search the web using Tavily API".to_string(),
+                HelpCategory::Skills,
+            )
+            .with_aliases(vec!["websearch", "search-web"])
+            .with_arg_hint("<query>")
+            .with_examples(vec!["/web-search Rust async best practices", "/web-search latest TypeScript features"])
+            .with_when_to_use("Use to search the web for current information, documentation, or solutions")
+            .with_related(vec!["review"])
+        ),
+        "review" => Some(
+            CommandHelpEntry::new(
+                "review".to_string(),
+                "Review code changes with automated analysis".to_string(),
+                HelpCategory::Review,
+            )
+            .with_arg_hint("[diff target]")
+            .with_examples(vec!["/review", "/review HEAD~1", "/review main...HEAD"])
+            .with_when_to_use("Use to review staged/uncommitted changes or compare against a specific target for secrets, size, and test coverage")
+            .with_related(vec!["diff", "status"])
+        ),
+        "local-models" => Some(
+            CommandHelpEntry::new(
+                "local-models".to_string(),
+                "Detect and list locally available AI models".to_string(),
+                HelpCategory::System,
+            )
+            .with_aliases(vec!["local"])
+            .with_examples(vec!["/local-models"])
+            .with_when_to_use("Use to check which local model servers (Ollama, LM Studio) are running and what models are available")
+            .with_related(vec!["model", "config"])
+        ),
         _ => None,
     }
 }
@@ -699,6 +733,9 @@ pub fn all_help_entries() -> Vec<CommandHelpEntry> {
         get_command_help("workspace_symbol").unwrap(),
         get_command_help("rename_symbol").unwrap(),
         get_command_help("code_actions").unwrap(),
+        get_command_help("web-search").unwrap(),
+        get_command_help("review").unwrap(),
+        get_command_help("local-models").unwrap(),
     ]
 }
 
