@@ -59,7 +59,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
     let is_plugin_command = repl.plugin_manager.get_plugin_commands()
         .iter().any(|c| c.name == cmd_name);
     // Commands handled in the match block but not in the global registry
-    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "compact", "cost"];
+    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "compact", "cost", "permissions", "perms", "perm"];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
     if command_exists || is_plugin_command || is_repl_command {
@@ -85,6 +85,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "doctor" | "check" | "diagnostics" => handle_doctor(repl, args)?,
             "compact" => handle_compact(repl, args)?,
             "cost" => handle_cost(repl, args)?,
+            "permissions" | "perms" | "perm" => handle_permissions(repl, args)?,
             "team" => handle_team(repl, args)?,
             "branch" | "fork" => handle_branch(repl, args)?,
             _ => handle_other_command(repl, cmd_name, args)?,
@@ -1327,6 +1328,112 @@ fn handle_cost(repl: &mut Repl, args: &str) -> Result<()> {
     }
 
     repl.chat.add_message(ChatRole::System, report);
+    Ok(())
+}
+
+fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
+    use shannon_core::permissions::RiskLevel;
+
+    let parts: Vec<&str> = args.trim().split_whitespace().collect();
+
+    // Subcommand dispatch
+    match parts.first().copied().unwrap_or("") {
+        "" | "status" => {
+            let mut report = String::from("Permission Status:\n");
+
+            if let Some(ref engine) = repl.query_engine {
+                if let Ok(perms) = engine.permissions().read() {
+                    // Tool policies
+                    report.push_str(&format!("  Registered policies: {}\n", perms.tool_policies().len()));
+                    let mut policies: Vec<_> = perms.tool_policies().iter().collect();
+                    policies.sort_by_key(|(name, _)| name.as_str());
+                    for (name, policy) in &policies {
+                        let risk = match policy.default_risk_level {
+                            RiskLevel::Safe => "Safe",
+                            RiskLevel::Low => "Low",
+                            RiskLevel::Medium => "Medium",
+                            RiskLevel::High => "High",
+                            RiskLevel::Critical => "Critical",
+                        };
+                        let deny_count = policy.deny_patterns.len();
+                        let confirm_count = policy.confirmation_patterns.len();
+                        report.push_str(&format!(
+                            "    {}: {} risk, {} deny patterns, {} confirm patterns\n",
+                            name, risk, deny_count, confirm_count
+                        ));
+                    }
+
+                    // Always-allowed tools
+                    let allowed = perms.memory().always_allowed_tools();
+                    if !allowed.is_empty() {
+                        let mut tools: Vec<&str> = allowed.iter().map(|s| s.as_str()).collect();
+                        tools.sort();
+                        report.push_str(&format!("  Always allowed: {}\n", tools.join(", ")));
+                    }
+
+                    // Always-denied tools
+                    let denied = perms.memory().always_denied_tools();
+                    if !denied.is_empty() {
+                        let mut tools: Vec<&str> = denied.iter().map(|s| s.as_str()).collect();
+                        tools.sort();
+                        report.push_str(&format!("  Always denied: {}\n", tools.join(", ")));
+                    }
+
+                    if allowed.is_empty() && denied.is_empty() {
+                        report.push_str("  No tool-level overrides (using defaults)\n");
+                    }
+                }
+            } else {
+                report.push_str("  No query engine available.\n");
+            }
+
+            repl.chat.add_message(ChatRole::System, report);
+        }
+        "allow" => {
+            if parts.len() < 2 {
+                repl.chat.add_message(ChatRole::System, "Usage: /permissions allow <tool_name>".to_string());
+                return Ok(());
+            }
+            let tool = parts[1];
+            if let Some(ref engine) = repl.query_engine {
+                if let Ok(mut perms) = engine.permissions().write() {
+                    perms.allow_tool(tool);
+                }
+            }
+            repl.chat.add_message(ChatRole::System, format!("Tool '{}' is now always allowed.", tool));
+        }
+        "deny" => {
+            if parts.len() < 2 {
+                repl.chat.add_message(ChatRole::System, "Usage: /permissions deny <tool_name>".to_string());
+                return Ok(());
+            }
+            let tool = parts[1];
+            if let Some(ref engine) = repl.query_engine {
+                if let Ok(mut perms) = engine.permissions().write() {
+                    perms.deny_tool(tool);
+                }
+            }
+            repl.chat.add_message(ChatRole::System, format!("Tool '{}' is now always denied.", tool));
+        }
+        "reset" => {
+            if let Some(ref engine) = repl.query_engine {
+                if let Ok(mut perms) = engine.permissions().write() {
+                    perms.reset_memory();
+                }
+            }
+            repl.chat.add_message(ChatRole::System, "Permission memory cleared. All tool overrides removed.".to_string());
+        }
+        "help" | _ => {
+            repl.chat.add_message(ChatRole::System,
+                "Permission Commands:\n\
+                 /permissions status — Show current permission policies and overrides\n\
+                 /permissions allow <tool> — Always allow a tool without prompting\n\
+                 /permissions deny <tool> — Always deny a tool\n\
+                 /permissions reset — Clear all permission overrides\n\
+                 /permissions help — Show this help".to_string());
+        }
+    }
+
     Ok(())
 }
 

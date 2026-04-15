@@ -295,6 +295,7 @@ pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String>
         "doctor" | "check" | "diagnostics" => &[],
         "compact" => &["status", "truncate", "micro", "group"],
         "cost" => &[],
+        "permissions" | "perms" | "perm" => &["status", "allow", "deny", "reset", "help"],
         "config" => &["list", "get", "set", "reset", "help"],
         "credentials" | "creds" | "cred" => &["list", "store", "get", "delete", "count", "help"],
         "worktree" => &["enter", "exit", "status"],

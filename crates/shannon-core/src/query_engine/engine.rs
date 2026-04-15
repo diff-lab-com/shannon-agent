@@ -914,6 +914,11 @@ impl QueryEngine {
     pub fn cost_tracker(&self) -> &Arc<RwLock<CostTracker>> {
         &self.cost_tracker
     }
+
+    /// Get a reference to the permission manager for reading/adjusting permissions.
+    pub fn permissions(&self) -> &Arc<RwLock<PermissionManager>> {
+        &self.permissions
+    }
 }
 
 /// Helper function to save conversation to disk

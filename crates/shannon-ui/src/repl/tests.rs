@@ -1086,6 +1086,183 @@ fn test_repl_team_shutdown_without_create() {
     assert!(last_msg.contains("No active team") || last_msg.contains("shutdown"));
 }
 
+// ── /permissions Command Tests ────────────────────────────────────
+
+#[test]
+fn test_repl_permissions_status() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/permissions".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Permission Status"));
+    assert!(last_msg.contains("Registered policies"));
+}
+
+#[test]
+fn test_repl_permissions_status_subcommand() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/permissions status".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Permission Status"));
+}
+
+#[test]
+fn test_repl_permissions_allow_tool() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/permissions allow Bash".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("always allowed"));
+    assert!(last_msg.contains("Bash"));
+
+    // Verify it shows in status
+    repl.prompt.set_input("/permissions status".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let status_msg = &repl.chat.last_message().unwrap().content;
+    assert!(status_msg.contains("Always allowed"));
+    assert!(status_msg.contains("Bash"));
+}
+
+#[test]
+fn test_repl_permissions_deny_tool() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/permissions deny FileWrite".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("always denied"));
+    assert!(last_msg.contains("FileWrite"));
+
+    // Verify it shows in status
+    repl.prompt.set_input("/permissions status".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let status_msg = &repl.chat.last_message().unwrap().content;
+    assert!(status_msg.contains("Always denied"));
+    assert!(status_msg.contains("FileWrite"));
+}
+
+#[test]
+fn test_repl_permissions_allow_no_tool() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/permissions allow".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Usage: /permissions allow"));
+}
+
+#[test]
+fn test_repl_permissions_deny_no_tool() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/permissions deny".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Usage: /permissions deny"));
+}
+
+#[test]
+fn test_repl_permissions_reset() {
+    let mut repl = Repl::new().unwrap();
+    // Allow a tool first
+    repl.prompt.set_input("/permissions allow Bash".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+
+    // Reset
+    repl.prompt.set_input("/permissions reset".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("cleared") || last_msg.contains("removed"));
+
+    // Verify status shows no overrides
+    repl.prompt.set_input("/permissions status".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let status_msg = &repl.chat.last_message().unwrap().content;
+    assert!(status_msg.contains("No tool-level overrides"));
+}
+
+#[test]
+fn test_repl_permissions_help() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/permissions help".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("/permissions status"));
+    assert!(last_msg.contains("/permissions allow"));
+    assert!(last_msg.contains("/permissions deny"));
+    assert!(last_msg.contains("/permissions reset"));
+}
+
+#[test]
+fn test_repl_permissions_in_help() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/help".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("/permissions"));
+}
+
+#[test]
+fn test_repl_permissions_alias_perms() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/perms".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Permission Status"));
+}
+
+#[test]
+fn test_repl_permissions_alias_perm() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/perm".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Permission Status"));
+}
+
+#[test]
+fn test_repl_permissions_tab_completion() {
+    let args = crate::repl::input::complete_command_args("permissions", "");
+    assert!(args.contains(&"status".to_string()));
+    assert!(args.contains(&"allow".to_string()));
+    assert!(args.contains(&"deny".to_string()));
+    assert!(args.contains(&"reset".to_string()));
+}
+
+#[test]
+fn test_repl_permissions_tab_completion_prefix() {
+    let args = crate::repl::input::complete_command_args("permissions", "st");
+    assert!(args.contains(&"status".to_string()));
+    assert!(!args.contains(&"allow".to_string()));
+}
+
+#[test]
+fn test_repl_permissions_shows_policies() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/permissions status".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    // Default policies should be registered
+    assert!(msg.contains("Bash"));
+    assert!(msg.contains("FileEdit") || msg.contains("FileWrite") || msg.contains("Read"));
+}
+
+#[test]
+fn test_repl_permissions_allow_then_deny_same_tool() {
+    let mut repl = Repl::new().unwrap();
+    // Allow then deny the same tool
+    repl.prompt.set_input("/permissions allow Bash".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    repl.prompt.set_input("/permissions deny Bash".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+
+    // Should show in denied, not allowed
+    repl.prompt.set_input("/permissions status".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("Always denied"));
+    assert!(msg.contains("Bash"));
+    assert!(!msg.contains("Always allowed"));
+}
+
 // ── Completion Highlight Index Tests ────────────────────────────────
 
 #[test]

@@ -511,6 +511,18 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("Use to create and manage multi-agent teams for parallel task execution")
             .with_related(vec!["worktree"])
         ),
+        "permissions" => Some(
+            CommandHelpEntry::new(
+                "permissions".to_string(),
+                "View and manage tool permissions".to_string(),
+                HelpCategory::System,
+            )
+            .with_aliases(vec!["perms", "perm"])
+            .with_arg_hint("[status|allow <tool>|deny <tool>|reset]")
+            .with_examples(vec!["/permissions", "/permissions status", "/permissions allow Bash", "/permissions deny FileWrite", "/permissions reset"])
+            .with_when_to_use("Use to view current permission policies, allow or deny tools without prompting, or reset overrides")
+            .with_related(vec!["config", "doctor"])
+        ),
         "branch" => Some(
             CommandHelpEntry::new(
                 "branch".to_string(),
@@ -663,6 +675,7 @@ pub fn all_help_entries() -> Vec<CommandHelpEntry> {
         get_command_help("compact").unwrap(),
         get_command_help("cost").unwrap(),
         get_command_help("team").unwrap(),
+        get_command_help("permissions").unwrap(),
         get_command_help("branch").unwrap(),
         get_command_help("credentials").unwrap(),
         get_command_help("browse").unwrap(),

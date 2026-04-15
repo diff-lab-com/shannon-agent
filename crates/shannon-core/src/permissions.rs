@@ -265,6 +265,28 @@ impl PermissionMemory {
     pub fn clear_session(&mut self, session_id: uuid::Uuid) {
         self.session_choices.remove(&session_id);
     }
+
+    /// Allow a tool globally (always allowed without prompting)
+    pub fn allow_tool(&mut self, tool_name: &str) {
+        self.always_allowed.insert(tool_name.to_string());
+        self.always_denied.remove(tool_name);
+    }
+
+    /// Deny a tool globally (always denied)
+    pub fn deny_tool(&mut self, tool_name: &str) {
+        self.always_denied.insert(tool_name.to_string());
+        self.always_allowed.remove(tool_name);
+    }
+
+    /// Get all always-allowed tools
+    pub fn always_allowed_tools(&self) -> &HashSet<String> {
+        &self.always_allowed
+    }
+
+    /// Get all always-denied tools
+    pub fn always_denied_tools(&self) -> &HashSet<String> {
+        &self.always_denied
+    }
 }
 
 impl Default for PermissionMemory {
@@ -486,6 +508,41 @@ impl PermissionManager {
         perms
     }
 
+    /// Get all registered tool policies
+    pub fn tool_policies(&self) -> &HashMap<String, ToolPermissionPolicy> {
+        &self.tool_policies
+    }
+
+    /// Get all tool-level permission requirements
+    pub fn tool_permissions(&self) -> &HashMap<String, Permission> {
+        &self.tool_permissions
+    }
+
+    /// Get a reference to the permission memory
+    pub fn memory(&self) -> &PermissionMemory {
+        &self.memory
+    }
+
+    /// Get a mutable reference to the permission memory
+    pub fn memory_mut(&mut self) -> &mut PermissionMemory {
+        &mut self.memory
+    }
+
+    /// Allow a tool globally (always allowed without prompting)
+    pub fn allow_tool(&mut self, tool_name: &str) {
+        self.memory.allow_tool(tool_name);
+    }
+
+    /// Deny a tool globally (always denied)
+    pub fn deny_tool(&mut self, tool_name: &str) {
+        self.memory.deny_tool(tool_name);
+    }
+
+    /// Reset all permission memory (allowed/denied tools)
+    pub fn reset_memory(&mut self) {
+        self.memory = PermissionMemory::new();
+    }
+
     /// Create a permission prompt for a tool execution
     pub fn create_permission_prompt(
         &self,
@@ -558,16 +615,6 @@ impl PermissionManager {
                 Ok(())
             }
         }
-    }
-
-    /// Get the permission memory (for persistence)
-    pub fn memory(&self) -> &PermissionMemory {
-        &self.memory
-    }
-
-    /// Get mutable permission memory (for loading persisted state)
-    pub fn memory_mut(&mut self) -> &mut PermissionMemory {
-        &mut self.memory
     }
 
     /// Helper to format tool input summary
