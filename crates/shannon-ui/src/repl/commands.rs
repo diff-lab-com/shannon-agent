@@ -59,7 +59,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
     let is_plugin_command = repl.plugin_manager.get_plugin_commands()
         .iter().any(|c| c.name == cmd_name);
     // Commands handled in the match block but not in the global registry
-    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "notify", "create-pr", "patch", "sandbox", "find", "grep", "conv-search"];
+    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "notify", "create-pr", "patch", "sandbox", "find", "grep", "conv-search"];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
     if command_exists || is_plugin_command || is_repl_command {
@@ -89,6 +89,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "permissions" | "perms" | "perm" => handle_permissions(repl, args)?,
             "plan" => handle_plan(repl, args)?,
             "team" => handle_team(repl, args)?,
+            "agents" => handle_agents(repl, args)?,
             "branch" | "fork" => handle_branch(repl, args)?,
             "web-search" | "websearch" | "search-web" => handle_web_search(repl, args)?,
             "review" => handle_review(repl, args)?,
@@ -1831,6 +1832,176 @@ fn handle_team(repl: &mut Repl, args: &str) -> Result<()> {
         }
         _ => {
             repl.chat.add_message(ChatRole::System, format!("Unknown subcommand: {subcommand}. Use /team help."));
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_agents(repl: &mut Repl, args: &str) -> Result<()> {
+    use shannon_agents::{AgentCoordinator, CoordinatorConfig, SubAgentRegistry, AgentConfig};
+
+    let parts: Vec<&str> = args.splitn(3, ' ').collect();
+    let subcommand = parts.first().copied().unwrap_or("help");
+
+    // Lazily initialize agent registry if needed
+    fn ensure_registry(repl: &mut Repl) {
+        if repl.agent_registry.is_none() {
+            let config = CoordinatorConfig::default();
+            let coordinator = repl.runtime.block_on(AgentCoordinator::new(config))
+                .expect("failed to create agent coordinator");
+            repl.agent_registry = Some(std::sync::Arc::new(SubAgentRegistry::new(
+                std::sync::Arc::new(coordinator),
+            )));
+        }
+    }
+
+    match subcommand {
+        "help" | "" => {
+            repl.chat.add_message(ChatRole::System, "\
+/agents spawn <name> <prompt>  — Spawn a background agent
+/agents list                   — List all agents and status
+/agents status <name>          — Show agent details
+/agents message <name> <text>  — Send message to agent
+/agents kill <name>            — Kill a running agent
+/agents run-bg <name> <task>   — Run task in background with notification".to_string());
+        }
+        "spawn" => {
+            let name = parts.get(1).copied().unwrap_or("");
+            let prompt = parts.get(2).copied().unwrap_or("");
+            if name.is_empty() || prompt.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Usage: /agents spawn <name> <system-prompt>".to_string());
+                return Ok(());
+            }
+            ensure_registry(repl);
+            let registry = repl.agent_registry.as_ref().unwrap().clone();
+            let config = AgentConfig {
+                name: name.to_string(),
+                system_prompt: prompt.to_string(),
+                ..Default::default()
+            };
+            match repl.runtime.block_on(registry.spawn(config)) {
+                Ok(agent) => {
+                    repl.chat.add_message(ChatRole::System, format!(
+                        "Agent '{}' spawned (id: {}, status: {})",
+                        agent.name, agent.id, agent.status
+                    ));
+                }
+                Err(e) => {
+                    repl.chat.add_message(ChatRole::System, format!("Failed to spawn agent: {e}"));
+                }
+            }
+        }
+        "list" => {
+            ensure_registry(repl);
+            let registry = repl.agent_registry.as_ref().unwrap().clone();
+            let agents = repl.runtime.block_on(registry.list_agents());
+            if agents.is_empty() {
+                repl.chat.add_message(ChatRole::System, "No agents spawned yet.".to_string());
+            } else {
+                let mut out = format!("Agents ({}):\n", agents.len());
+                for a in &agents {
+                    out.push_str(&format!(
+                        "  {} [{}] model={} turns={}/{}{}\n",
+                        a.name, a.status, a.config.model,
+                        a.turns_used, a.config.max_turns,
+                        a.team.as_ref().map(|t| format!(" team={t}")).unwrap_or_default(),
+                    ));
+                }
+                repl.chat.add_message(ChatRole::System, out);
+            }
+        }
+        "status" => {
+            let name = parts.get(1).copied().unwrap_or("");
+            if name.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Usage: /agents status <name>".to_string());
+                return Ok(());
+            }
+            ensure_registry(repl);
+            let registry = repl.agent_registry.as_ref().unwrap().clone();
+            match repl.runtime.block_on(registry.get_agent(name)) {
+                Some(agent) => {
+                    repl.chat.add_message(ChatRole::System, format!(
+                        "Agent: {}\n  ID: {}\n  Status: {}\n  Model: {}\n  Turns: {}/{}\n  Team: {}\n  Created: {}{}",
+                        agent.name, agent.id, agent.status, agent.config.model,
+                        agent.turns_used, agent.config.max_turns,
+                        agent.team.as_deref().unwrap_or("none"),
+                        agent.created_at.to_rfc3339(),
+                        agent.last_output.as_ref().map(|o| format!("\n  Last output: {}", if o.len() > 200 { &o[..200] } else { o })).unwrap_or_default(),
+                    ));
+                }
+                None => {
+                    repl.chat.add_message(ChatRole::System, format!("Agent '{name}' not found."));
+                }
+            }
+        }
+        "message" => {
+            let name = parts.get(1).copied().unwrap_or("");
+            let msg = parts.get(2).copied().unwrap_or("");
+            if name.is_empty() || msg.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Usage: /agents message <name> <text>".to_string());
+                return Ok(());
+            }
+            ensure_registry(repl);
+            let registry = repl.agent_registry.as_ref().unwrap().clone();
+            match repl.runtime.block_on(registry.send_message("repl", name, serde_json::json!(msg))) {
+                Ok(responses) => {
+                    let mut out = format!("Message sent to '{name}', {} response(s):\n", responses.len());
+                    for r in responses {
+                        let content = match &r.content {
+                            shannon_agents::MessageContent::Text(t) => t.clone(),
+                            shannon_agents::MessageContent::Structured(v) => v.to_string(),
+                            shannon_agents::MessageContent::Protocol(p) => format!("{p:?}"),
+                        };
+                        out.push_str(&format!("  [{}] {}\n", r.from, content));
+                    }
+                    repl.chat.add_message(ChatRole::System, out);
+                }
+                Err(e) => {
+                    repl.chat.add_message(ChatRole::System, format!("Failed to send message: {e}"));
+                }
+            }
+        }
+        "kill" => {
+            let name = parts.get(1).copied().unwrap_or("");
+            if name.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Usage: /agents kill <name>".to_string());
+                return Ok(());
+            }
+            ensure_registry(repl);
+            let registry = repl.agent_registry.as_ref().unwrap().clone();
+            match repl.runtime.block_on(registry.get_agent(name)) {
+                Some(mut agent) => {
+                    agent.mark_failed("killed by user".to_string());
+                    repl.chat.add_message(ChatRole::System, format!("Agent '{name}' killed."));
+                }
+                None => {
+                    repl.chat.add_message(ChatRole::System, format!("Agent '{name}' not found."));
+                }
+            }
+        }
+        "run-bg" => {
+            use shannon_agents::{MultiAgentSpawner, SpawnAgentConfig, MultiAgentConfig};
+
+            let name = parts.get(1).copied().unwrap_or("");
+            let task = parts.get(2).copied().unwrap_or("");
+            if name.is_empty() || task.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Usage: /agents run-bg <name> <task>".to_string());
+                return Ok(());
+            }
+            let agent_config = SpawnAgentConfig::new(name.to_string(), task.to_string());
+            let config = MultiAgentConfig::new(vec![agent_config]);
+
+            repl.chat.add_message(ChatRole::System, format!("Running agent '{name}'..."));
+            let result = repl.runtime.block_on(MultiAgentSpawner::spawn(config));
+            let status = if result.all_succeeded() { "completed" } else { "failed" };
+            repl.chat.add_message(ChatRole::System, format!(
+                "Agent '{}' {} in {:.1}s",
+                name, status, result.total_duration.as_secs_f64(),
+            ));
+        }
+        _ => {
+            repl.chat.add_message(ChatRole::System, format!("Unknown subcommand: {subcommand}. Use /agents help."));
         }
     }
 

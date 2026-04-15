@@ -673,6 +673,17 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("Use to create and manage multi-agent teams for parallel task execution")
             .with_related(vec!["worktree"])
         ),
+        "agents" => Some(
+            CommandHelpEntry::new(
+                "agents".to_string(),
+                "Manage background agents — spawn, list, message, and run tasks".to_string(),
+                HelpCategory::Skills,
+            )
+            .with_arg_hint("[spawn|list|status|message|kill|run-bg]")
+            .with_examples(vec!["/agents spawn worker You are a helper", "/agents list", "/agents status worker", "/agents message worker hello", "/agents run-bg worker Fix the tests", "/agents kill worker"])
+            .with_when_to_use("Use to spawn and manage individual background agents, send messages, and run tasks asynchronously")
+            .with_related(vec!["team", "worktree"])
+        ),
         "permissions" => Some(
             CommandHelpEntry::new(
                 "permissions".to_string(),

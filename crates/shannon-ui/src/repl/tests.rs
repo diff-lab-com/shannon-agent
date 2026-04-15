@@ -2427,3 +2427,92 @@ fn test_repl_find_in_help() {
     let help_text = &repl.chat.last_message().unwrap().content;
     assert!(help_text.contains("find"), "/help should list find command");
 }
+
+// ---- /agents command tests ----
+
+#[test]
+fn test_repl_agents_help() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/agents".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("spawn") || msg.contains("list"), "should show agents usage");
+}
+
+#[test]
+fn test_repl_agents_spawn() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/agents spawn test-agent You are a helper".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("spawned"), "should confirm agent spawned");
+}
+
+#[test]
+fn test_repl_agents_list() {
+    let mut repl = Repl::new().unwrap();
+    // First spawn an agent
+    repl.prompt.set_input("/agents spawn list-test helper agent".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    // Then list
+    repl.prompt.set_input("/agents list".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("list-test"), "should list spawned agent");
+}
+
+#[test]
+fn test_repl_agents_status() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/agents spawn status-check test agent".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    repl.prompt.set_input("/agents status status-check".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("status-check"), "should show agent details");
+}
+
+#[test]
+fn test_repl_agents_status_not_found() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/agents status nonexistent".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("not found"), "should report agent not found");
+}
+
+#[test]
+fn test_repl_agents_kill() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/agents spawn killme test agent".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    repl.prompt.set_input("/agents kill killme".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("killed"), "should confirm agent killed");
+}
+
+#[test]
+fn test_repl_agents_run_bg() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/agents run-bg bg-worker do some work".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    // Check last two messages for completion
+    let count = repl.chat.message_count();
+    let found = (0..count.min(2)).rev().any(|i| {
+        repl.chat.get_message(i)
+            .map(|m| m.content.contains("completed") || m.content.contains("Running agent"))
+            .unwrap_or(false)
+    });
+    assert!(found, "should report agent result");
+}
+
+#[test]
+fn test_repl_agents_in_help() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/agents help".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("spawn"), "agents help should list spawn subcommand");
+    assert!(msg.contains("list"), "agents help should list list subcommand");
+}

@@ -211,6 +211,8 @@ pub struct Repl {
     pub(crate) vim_handler: VimHandler,
     /// Multi-agent team coordinator (lazy-initialized on /team create)
     pub(crate) team_coordinator: Option<shannon_agents::AgentCoordinator>,
+    /// Sub-agent registry for background agent management
+    pub(crate) agent_registry: Option<std::sync::Arc<shannon_agents::SubAgentRegistry>>,
     /// Checkpoint manager for undo/revert operations
     pub(crate) checkpoint_manager: shannon_core::CheckpointManager,
     /// Desktop notification dispatcher
@@ -395,6 +397,7 @@ impl Repl {
             plugin_manager,
             vim_handler: VimHandler::new(),
             team_coordinator: None,
+            agent_registry: None,
             checkpoint_manager: shannon_core::CheckpointManager::new(),
             notifier: {
                 let mut n = shannon_core::notifier::Notifier::new();
