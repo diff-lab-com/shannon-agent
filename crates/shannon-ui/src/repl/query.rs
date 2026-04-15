@@ -252,6 +252,28 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
             })?;
 
             if query_finished { break; }
+
+            // Check for cancel key (Escape or Ctrl+C) during streaming
+            if crossterm::event::poll(std::time::Duration::ZERO).unwrap_or(false) {
+                if let Ok(crossterm::event::Event::Key(key)) = crossterm::event::read() {
+                    let is_cancel = matches!(key.code,
+                        crossterm::event::KeyCode::Esc
+                    ) || (key.code == crossterm::event::KeyCode::Char('c')
+                        && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL));
+
+                    if is_cancel {
+                        query_handle.abort();
+                        if let Ok(mut buf) = streaming_buffer.lock() {
+                            buf.push_str("\n\n⚠️ Cancelled by user.");
+                        }
+                        if let Ok(mut s) = streaming_status.lock() {
+                            *s = "Cancelled".to_string();
+                        }
+                        break;
+                    }
+                }
+            }
+
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
     }
@@ -261,6 +283,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
     let query_result = repl.runtime.block_on(async {
         match query_handle.await {
             Ok(result) => result,
+            Err(e) if e.is_cancelled() => Err("cancelled".to_string()),
             Err(_) => Err("Query task panicked".to_string()),
         }
     });
@@ -294,6 +317,8 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
             };
         }
         Err(e) => {
+            let is_cancelled = e == "cancelled";
+
             let mut new_engine = shannon_core::query_engine::QueryEngine::with_defaults(
                 shannon_core::api::LlmClient::new(shannon_core::api::LlmClientConfig::default()),
                 shannon_core::tools::ToolRegistry::new(),
@@ -303,13 +328,19 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
             new_engine.add_user_message(input.to_string());
             repl.query_engine = Some(new_engine);
 
-            repl.chat.update_message(assistant_msg_index, format!("❌ Error: {e}"));
+            if is_cancelled {
+                let current = streaming_buffer.lock().map(|g| g.clone()).unwrap_or_default();
+                repl.chat.update_message(assistant_msg_index, current);
+                repl.state.status = "Ready".to_string();
+            } else {
+                repl.chat.update_message(assistant_msg_index, format!("❌ Error: {e}"));
 
-            let err_lower = e.to_lowercase();
-            if err_lower.contains("api key") || err_lower.contains("api_key") {
-                repl.show_input_dialog("API Key Required", "Enter your API key...", "set_api_key");
-            } else if err_lower.contains("authentication") || err_lower.contains("unauthorized") || err_lower.contains("forbidden") {
-                repl.show_alert_dialog("Query Error", &e.to_string(), true);
+                let err_lower = e.to_lowercase();
+                if err_lower.contains("api key") || err_lower.contains("api_key") {
+                    repl.show_input_dialog("API Key Required", "Enter your API key...", "set_api_key");
+                } else if err_lower.contains("authentication") || err_lower.contains("unauthorized") || err_lower.contains("forbidden") {
+                    repl.show_alert_dialog("Query Error", &e.to_string(), true);
+                }
             }
 
             repl.state.status = "Ready".to_string();
