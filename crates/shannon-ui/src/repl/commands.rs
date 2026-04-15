@@ -59,7 +59,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
     let is_plugin_command = repl.plugin_manager.get_plugin_commands()
         .iter().any(|c| c.name == cmd_name);
     // Commands handled in the match block but not in the global registry
-    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "notify", "create-pr", "patch", "sandbox", "find", "grep", "conv-search"];
+    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "route", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "notify", "create-pr", "patch", "sandbox", "find", "grep", "conv-search"];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
     if command_exists || is_plugin_command || is_repl_command {
@@ -90,6 +90,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "plan" => handle_plan(repl, args)?,
             "team" => handle_team(repl, args)?,
             "agents" => handle_agents(repl, args)?,
+            "route" => handle_route(repl, args)?,
             "branch" | "fork" => handle_branch(repl, args)?,
             "web-search" | "websearch" | "search-web" => handle_web_search(repl, args)?,
             "review" => handle_review(repl, args)?,
@@ -2002,6 +2003,104 @@ fn handle_agents(repl: &mut Repl, args: &str) -> Result<()> {
         }
         _ => {
             repl.chat.add_message(ChatRole::System, format!("Unknown subcommand: {subcommand}. Use /agents help."));
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_route(repl: &mut Repl, args: &str) -> Result<()> {
+    let parts: Vec<&str> = args.splitn(3, ' ').collect();
+    let subcommand = parts.first().copied().unwrap_or("help");
+
+    match subcommand {
+        "help" | "" => {
+            repl.chat.add_message(ChatRole::System, "\
+/route add <pattern> <model>   — Add a routing rule (pattern is case-insensitive substring match)
+/route remove <pattern>        — Remove a routing rule
+/route list                    — Show all routing rules
+/route clear                   — Remove all routing rules
+/route test <query>            — Test which model a query would route to
+
+Patterns match against the start of your query. Examples:
+  /route add explain claude-haiku-4-5     — 'explain ...' queries use haiku
+  /route add refactor claude-opus-4-6     — 'refactor ...' queries use opus
+  /route add test claude-sonnet-4-6       — 'test ...' queries use sonnet".to_string());
+        }
+        "add" => {
+            let pattern = parts.get(1).copied().unwrap_or("");
+            let model = parts.get(2).copied().unwrap_or("");
+            if pattern.is_empty() || model.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Usage: /route add <pattern> <model>".to_string());
+                return Ok(());
+            }
+            // Remove existing rule with same pattern if it exists
+            repl.model_routes.retain(|(p, _)| p.to_lowercase() != pattern.to_lowercase());
+            repl.model_routes.push((pattern.to_lowercase(), model.to_string()));
+            repl.chat.add_message(ChatRole::System, format!(
+                "Route added: queries starting with '{}' → {}",
+                pattern, model,
+            ));
+        }
+        "remove" => {
+            let pattern = parts.get(1).copied().unwrap_or("");
+            if pattern.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Usage: /route remove <pattern>".to_string());
+                return Ok(());
+            }
+            let before = repl.model_routes.len();
+            repl.model_routes.retain(|(p, _)| p.to_lowercase() != pattern.to_lowercase());
+            let removed = before - repl.model_routes.len();
+            if removed > 0 {
+                repl.chat.add_message(ChatRole::System, format!("Removed {removed} route(s) for pattern '{pattern}'."));
+            } else {
+                repl.chat.add_message(ChatRole::System, format!("No route found for pattern '{pattern}'."));
+            }
+        }
+        "list" => {
+            if repl.model_routes.is_empty() {
+                repl.chat.add_message(ChatRole::System, "No routing rules configured. Use /route add <pattern> <model>.".to_string());
+            } else {
+                let mut out = format!("Routing rules ({}):\n", repl.model_routes.len());
+                for (pattern, model) in &repl.model_routes {
+                    out.push_str(&format!("  '{}' → {}\n", pattern, model));
+                }
+                repl.chat.add_message(ChatRole::System, out);
+            }
+        }
+        "clear" => {
+            let count = repl.model_routes.len();
+            repl.model_routes.clear();
+            repl.chat.add_message(ChatRole::System, format!("Cleared {count} routing rule(s)."));
+        }
+        "test" => {
+            let query = parts.get(1..).map(|s| s.join(" ")).unwrap_or_default();
+            if query.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Usage: /route test <query text>".to_string());
+                return Ok(());
+            }
+            let query_lower = query.to_lowercase();
+            let matched = repl.model_routes.iter().find(|(pattern, _)| {
+                query_lower.starts_with(pattern)
+            });
+            match matched {
+                Some((pattern, model)) => {
+                    repl.chat.add_message(ChatRole::System, format!(
+                        "Query '{}' matches pattern '{}' → would use model: {}",
+                        query, pattern, model,
+                    ));
+                }
+                None => {
+                    let current = repl.state.model.as_deref().unwrap_or("default");
+                    repl.chat.add_message(ChatRole::System, format!(
+                        "Query '{}' matches no routing rules → would use default model: {}",
+                        query, current,
+                    ));
+                }
+            }
+        }
+        _ => {
+            repl.chat.add_message(ChatRole::System, format!("Unknown subcommand: {subcommand}. Use /route help."));
         }
     }
 

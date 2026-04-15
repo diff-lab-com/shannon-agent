@@ -42,7 +42,16 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
             timestamp: chrono::Utc::now(),
             tools_allowed: true,
             max_tokens: Some(4096),
-            model: repl.state.model.clone().unwrap_or_else(|| "claude-3-5-sonnet".to_string()),
+            model: {
+                // Check model routing rules first
+                let input_lower = input.to_lowercase();
+                let routed = repl.model_routes.iter().find(|(pattern, _)| {
+                    input_lower.starts_with(pattern)
+                });
+                routed.map(|(_, m)| m.clone())
+                    .or_else(|| repl.state.model.clone())
+                    .unwrap_or_else(|| "claude-3-5-sonnet".to_string())
+            },
             temperature: None,
             top_p: None,
         },

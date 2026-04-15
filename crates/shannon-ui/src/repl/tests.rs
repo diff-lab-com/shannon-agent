@@ -2516,3 +2516,91 @@ fn test_repl_agents_in_help() {
     assert!(msg.contains("spawn"), "agents help should list spawn subcommand");
     assert!(msg.contains("list"), "agents help should list list subcommand");
 }
+
+// ---- /route command tests ----
+
+#[test]
+fn test_repl_route_help() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/route".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("add"), "route help should show add");
+    assert!(msg.contains("list"), "route help should show list");
+}
+
+#[test]
+fn test_repl_route_add_and_list() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/route add explain claude-haiku-4-5".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("Route added"), "should confirm route added");
+
+    repl.prompt.set_input("/route list".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("explain"), "list should show pattern");
+    assert!(msg.contains("claude-haiku-4-5"), "list should show model");
+}
+
+#[test]
+fn test_repl_route_remove() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/route add test claude-sonnet-4-6".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    repl.prompt.set_input("/route remove test".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("Removed"), "should confirm removal");
+
+    repl.prompt.set_input("/route list".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("No routing rules"), "should have no rules after remove");
+}
+
+#[test]
+fn test_repl_route_clear() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/route add a model-a".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    repl.prompt.set_input("/route add b model-b".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    repl.prompt.set_input("/route clear".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("Cleared 2"), "should clear both rules");
+}
+
+#[test]
+fn test_repl_route_test_match() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/route add refactor claude-opus-4-6".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    repl.prompt.set_input("/route test refactor the auth module".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("claude-opus-4-6"), "should match and show the model");
+}
+
+#[test]
+fn test_repl_route_test_no_match() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/route test hello world".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("no routing rules") || msg.contains("matches no routing"), "should report no match");
+}
+
+#[test]
+fn test_repl_route_routing_state() {
+    let mut repl = Repl::new().unwrap();
+    // Add a route directly to state
+    repl.prompt.set_input("/route add debug claude-haiku-4-5".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    // Verify the state has the route
+    assert_eq!(repl.model_routes.len(), 1);
+    assert_eq!(repl.model_routes[0].0, "debug");
+    assert_eq!(repl.model_routes[0].1, "claude-haiku-4-5");
+}

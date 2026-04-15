@@ -213,6 +213,8 @@ pub struct Repl {
     pub(crate) team_coordinator: Option<shannon_agents::AgentCoordinator>,
     /// Sub-agent registry for background agent management
     pub(crate) agent_registry: Option<std::sync::Arc<shannon_agents::SubAgentRegistry>>,
+    /// Model routing rules: (pattern, model_name) pairs
+    pub(crate) model_routes: Vec<(String, String)>,
     /// Checkpoint manager for undo/revert operations
     pub(crate) checkpoint_manager: shannon_core::CheckpointManager,
     /// Desktop notification dispatcher
@@ -398,6 +400,7 @@ impl Repl {
             vim_handler: VimHandler::new(),
             team_coordinator: None,
             agent_registry: None,
+            model_routes: Vec::new(),
             checkpoint_manager: shannon_core::CheckpointManager::new(),
             notifier: {
                 let mut n = shannon_core::notifier::Notifier::new();

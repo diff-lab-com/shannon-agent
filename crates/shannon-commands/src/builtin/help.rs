@@ -684,6 +684,17 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("Use to spawn and manage individual background agents, send messages, and run tasks asynchronously")
             .with_related(vec!["team", "worktree"])
         ),
+        "route" => Some(
+            CommandHelpEntry::new(
+                "route".to_string(),
+                "Multi-model routing — map query patterns to specific models".to_string(),
+                HelpCategory::Skills,
+            )
+            .with_arg_hint("[add|remove|list|clear|test]")
+            .with_examples(vec!["/route add explain claude-haiku-4-5", "/route add refactor claude-opus-4-6", "/route list", "/route test explain this function", "/route remove explain", "/route clear"])
+            .with_when_to_use("Use to automatically route queries to different models based on keywords, optimizing cost and quality")
+            .with_related(vec!["model", "config"])
+        ),
         "permissions" => Some(
             CommandHelpEntry::new(
                 "permissions".to_string(),
