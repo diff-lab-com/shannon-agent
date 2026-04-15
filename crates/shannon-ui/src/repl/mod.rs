@@ -418,7 +418,8 @@ impl Repl {
     pub fn run(&mut self) -> Result<()> {
         // Check for interactive terminal
         if !atty::is(atty::Stream::Stdout) || !atty::is(atty::Stream::Stdin) {
-            return Err("shannon repl requires an interactive terminal (TTY). Redirecting input/output is not supported.".into());
+            // Stdin pipe mode: read input and process as a single query
+            return self.run_pipe_mode();
         }
 
         // Setup terminal
@@ -537,6 +538,40 @@ impl Repl {
     /// Get mutable reference to the REPL state
     pub fn state_mut(&mut self) -> &mut ReplState {
         &mut self.state
+    }
+
+    /// Run in pipe mode: read stdin, process as a single query, output result.
+    fn run_pipe_mode(&mut self) -> Result<()> {
+        use std::io::Read;
+        let mut input = String::new();
+        std::io::stdin().read_to_string(&mut input)?;
+        let input = input.trim().to_string();
+
+        if input.is_empty() {
+            return Err("No input provided on stdin.".into());
+        }
+
+        // Process the input as a query (no TUI needed)
+        self.chat.add_message(ChatRole::User, input.clone());
+
+        if input.starts_with('/') {
+            // Handle commands in pipe mode
+            commands::submit_input(self)?;
+            // Output last system/assistant message
+            if let Some(msg) = self.chat.last_message() {
+                println!("{}", msg.content);
+            }
+        } else {
+            // Process as AI query
+            query::handle_query(self, &input)?;
+            // Output the assistant response
+            if let Some(msg) = self.chat.last_message() {
+                if msg.role == ChatRole::Assistant {
+                    println!("{}", msg.content);
+                }
+            }
+        }
+        Ok(())
     }
 }
 

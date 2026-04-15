@@ -337,6 +337,13 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
             } else {
                 "Ready".to_string()
             };
+
+            // Desktop notification on query completion
+            super::commands::notify_query_complete(
+                &repl.notifier,
+                repl.notifications_enabled,
+                &repl.state.status,
+            );
         }
         Err(e) => {
             let is_cancelled = e == "cancelled";

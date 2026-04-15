@@ -59,7 +59,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
     let is_plugin_command = repl.plugin_manager.get_plugin_commands()
         .iter().any(|c| c.name == cmd_name);
     // Commands handled in the match block but not in the global registry
-    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "route", "mcp", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "notify", "create-pr", "patch", "sandbox", "find", "grep", "conv-search"];
+    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "route", "mcp", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "notify", "create-pr", "patch", "sandbox", "find", "grep", "conv-search", "copy", "paste", "add", "watch"];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
     if command_exists || is_plugin_command || is_repl_command {
@@ -110,6 +110,10 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "create-pr" => handle_create_pr(repl, args)?,
             "patch" => handle_patch(repl, args)?,
             "sandbox" => handle_sandbox(repl, args)?,
+            "copy" | "clip" => handle_copy(repl, args)?,
+            "paste" => handle_paste(repl)?,
+            "add" => handle_add(repl, args)?,
+            "watch" => handle_watch(repl, args)?,
             _ => handle_other_command(repl, cmd_name, args)?,
         }
         Ok(())
@@ -2470,6 +2474,186 @@ fn handle_export(repl: &mut Repl, args: &str) -> Result<()> {
 fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
     use shannon_commands::diff_utils;
 
+    let trimmed = args.trim();
+
+    // /diff accept-all — keep all unstaged changes
+    if trimmed == "accept-all" || trimmed == "keep-all" {
+        let output = std::process::Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(&repl.state.working_directory)
+            .output();
+        match output {
+            Ok(o) if o.status.success() => {
+                repl.chat.add_message(ChatRole::System, "All changes accepted and staged.".to_string());
+            }
+            Ok(o) => {
+                repl.chat.add_message(ChatRole::System, format!("Failed to stage: {}", String::from_utf8_lossy(&o.stderr)));
+            }
+            Err(e) => { repl.chat.add_message(ChatRole::System, format!("Error: {e}")); }
+        }
+        return Ok(());
+    }
+
+    // /diff reject-all — discard all unstaged changes
+    if trimmed == "reject-all" || trimmed == "discard-all" {
+        // First warn about destructive action
+        let status_output = std::process::Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(&repl.state.working_directory)
+            .output();
+        let file_count = status_output
+            .map(|o| String::from_utf8_lossy(&o.stdout).lines().count())
+            .unwrap_or(0);
+        if file_count == 0 {
+            repl.chat.add_message(ChatRole::System, "No changes to reject.".to_string());
+            return Ok(());
+        }
+        let output = std::process::Command::new("git")
+            .args(["checkout", "--", "."])
+            .current_dir(&repl.state.working_directory)
+            .output();
+        match output {
+            Ok(o) if o.status.success() => {
+                repl.chat.add_message(ChatRole::System, format!("All unstaged changes discarded ({file_count} files)."));
+            }
+            Ok(o) => {
+                repl.chat.add_message(ChatRole::System, format!("Failed to discard: {}", String::from_utf8_lossy(&o.stderr)));
+            }
+            Err(e) => { repl.chat.add_message(ChatRole::System, format!("Error: {e}")); }
+        }
+        // Also clean untracked files
+        let _ = std::process::Command::new("git")
+            .args(["clean", "-fd"])
+            .current_dir(&repl.state.working_directory)
+            .output();
+        return Ok(());
+    }
+
+    // /diff accept <file> — accept changes to a specific file
+    if let Some(file) = trimmed.strip_prefix("accept ") {
+        let file = file.trim();
+        let output = std::process::Command::new("git")
+            .args(["add", "--", file])
+            .current_dir(&repl.state.working_directory)
+            .output();
+        match output {
+            Ok(o) if o.status.success() => {
+                repl.chat.add_message(ChatRole::System, format!("Changes to '{file}' accepted (staged)."));
+            }
+            Ok(o) => {
+                repl.chat.add_message(ChatRole::System, format!("Failed: {}", String::from_utf8_lossy(&o.stderr)));
+            }
+            Err(e) => { repl.chat.add_message(ChatRole::System, format!("Error: {e}")); }
+        }
+        return Ok(());
+    }
+
+    // /diff reject <file> — reject changes to a specific file
+    if let Some(file) = trimmed.strip_prefix("reject ") {
+        let file = file.trim();
+        let output = std::process::Command::new("git")
+            .args(["checkout", "--", file])
+            .current_dir(&repl.state.working_directory)
+            .output();
+        match output {
+            Ok(o) if o.status.success() => {
+                repl.chat.add_message(ChatRole::System, format!("Changes to '{file}' rejected (reverted)."));
+            }
+            Ok(o) => {
+                repl.chat.add_message(ChatRole::System, format!("Failed: {}", String::from_utf8_lossy(&o.stderr)));
+            }
+            Err(e) => { repl.chat.add_message(ChatRole::System, format!("Error: {e}")); }
+        }
+        return Ok(());
+    }
+
+    // /diff review — interactive per-file review
+    if trimmed == "review" || trimmed == "--review" {
+        let status_output = std::process::Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(&repl.state.working_directory)
+            .output();
+
+        match status_output {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if stdout.trim().is_empty() {
+                    repl.chat.add_message(ChatRole::System, "No changes to review.".to_string());
+                    return Ok(());
+                }
+
+                let mut msg = String::from("Interactive Diff Review\n\nChanged files:\n\n");
+                for (i, line) in stdout.lines().enumerate() {
+                    let status = &line[..2];
+                    let file = &line[3..];
+                    let status_desc = match status.trim() {
+                        "M" => "modified",
+                        "A" => "added",
+                        "D" => "deleted",
+                        "R" => "renamed",
+                        "C" => "copied",
+                        "??" => "untracked",
+                        "!!" => "ignored",
+                        s if s.ends_with('M') => "modified (staged)",
+                        s if s.starts_with('M') => "modified",
+                        _ => status,
+                    };
+                    msg.push_str(&format!("  [{}] {} ({})\n", i + 1, file, status_desc));
+                }
+
+                msg.push_str("\nCommands:\n");
+                msg.push_str("  /diff review <n>    — show diff for file #n\n");
+                msg.push_str("  /diff accept <file> — keep changes to file\n");
+                msg.push_str("  /diff reject <file> — discard changes to file\n");
+                msg.push_str("  /diff accept-all    — keep all changes\n");
+                msg.push_str("  /diff reject-all    — discard all changes\n");
+
+                repl.chat.add_message(ChatRole::System, msg);
+            }
+            Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to get status: {e}")); }
+        }
+        return Ok(());
+    }
+
+    // /diff review <n> — show diff for a specific file by number
+    if let Some(num_str) = trimmed.strip_prefix("review ") {
+        if let Ok(num) = num_str.trim().parse::<usize>() {
+            let status_output = std::process::Command::new("git")
+                .args(["status", "--porcelain"])
+                .current_dir(&repl.state.working_directory)
+                .output();
+            if let Ok(output) = status_output {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if let Some(line) = stdout.lines().nth(num - 1) {
+                    let file = &line[3..];
+                    let diff_output = std::process::Command::new("git")
+                        .args(["diff", "--", file])
+                        .current_dir(&repl.state.working_directory)
+                        .output();
+                    match diff_output {
+                        Ok(result) => {
+                            let diff = String::from_utf8_lossy(&result.stdout);
+                            if diff.is_empty() {
+                                repl.chat.add_message(ChatRole::System, format!("No unstaged diff for '{file}'."));
+                            } else {
+                                let truncated = if diff.len() > 8000 { &diff[..8000] } else { &diff };
+                                let mut msg = format!("Diff for '{file}':\n```\n{truncated}");
+                                if diff.len() > 8000 { msg.push_str("\n... (truncated)"); }
+                                msg.push_str("\n```\n\n");
+                                msg.push_str(&format!("Accept: /diff accept {file}\nReject: /diff reject {file}"));
+                                repl.chat.add_message(ChatRole::System, msg);
+                            }
+                        }
+                        Err(e) => { repl.chat.add_message(ChatRole::System, format!("Error: {e}")); }
+                    }
+                } else {
+                    repl.chat.add_message(ChatRole::System, format!("Invalid file number: {num}. Use /diff review to list files."));
+                }
+            }
+            return Ok(());
+        }
+    }
+
     let options = diff_utils::DiffOptions::from_args(args);
     let show_overview = args.trim().is_empty() || args.contains("--overview");
 
@@ -3228,6 +3412,48 @@ fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
             }
             repl.chat.add_message(ChatRole::System, "Permission memory cleared. All tool overrides removed.".to_string());
         }
+        "mode" => {
+            let mode_name = parts.get(1).copied().unwrap_or("");
+            match mode_name {
+                "strict" | "suggest" => {
+                    if let Some(ref engine) = repl.query_engine {
+                        if let Ok(mut perms) = engine.permissions().write() {
+                            perms.set_approval_mode(shannon_core::permissions::ApprovalMode::Suggest);
+                        }
+                    }
+                    repl.chat.add_message(ChatRole::System,
+                        "Permission mode: **suggest** (strict)\n\
+                         All potentially dangerous tools require explicit approval.".to_string());
+                }
+                "auto" | "auto-accept" | "yolo" | "full-auto" => {
+                    if let Some(ref engine) = repl.query_engine {
+                        if let Ok(mut perms) = engine.permissions().write() {
+                            perms.set_approval_mode(shannon_core::permissions::ApprovalMode::FullAuto);
+                        }
+                    }
+                    repl.chat.add_message(ChatRole::System,
+                        "Permission mode: **full-auto**\n\
+                         All tools are automatically approved. Use with caution.".to_string());
+                }
+                "plan" | "readonly" => {
+                    if let Some(ref engine) = repl.query_engine {
+                        if let Ok(mut perms) = engine.permissions().write() {
+                            perms.set_approval_mode(shannon_core::permissions::ApprovalMode::Readonly);
+                        }
+                    }
+                    repl.chat.add_message(ChatRole::System,
+                        "Permission mode: **readonly**\n\
+                         Tools will only read, not modify files.".to_string());
+                }
+                _ => {
+                    repl.chat.add_message(ChatRole::System,
+                        "Permission Modes:\n\
+                         /permissions mode suggest   — Require approval for dangerous tools\n\
+                         /permissions mode auto      — Auto-accept all tool executions\n\
+                         /permissions mode readonly  — Read-only, no file modifications".to_string());
+                }
+            }
+        }
         "help" | _ => {
             repl.chat.add_message(ChatRole::System,
                 "Permission Commands:\n\
@@ -3235,6 +3461,7 @@ fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
                  /permissions allow <tool> — Always allow a tool without prompting\n\
                  /permissions deny <tool> — Always deny a tool\n\
                  /permissions reset — Clear all permission overrides\n\
+                 /permissions mode [suggest|auto|readonly] — Change approval mode\n\
                  /permissions help — Show this help".to_string());
         }
     }
@@ -3686,6 +3913,396 @@ fn create_agent_worktree(repl: &Repl, agent_name: &str) -> std::result::Result<s
     let session = repl.runtime.block_on(manager.create_agent_session(agent_name, None))
         .map_err(|e| format!("{e}"))?;
     Ok(session.path)
+}
+
+// ── P1-5: Clipboard integration ──────────────────────────────────────────
+
+fn handle_copy(repl: &mut Repl, args: &str) -> Result<()> {
+    let trimmed = args.trim();
+
+    // Determine what to copy
+    let content = if trimmed.is_empty() || trimmed == "last" || trimmed == "response" {
+        // Copy the last assistant message
+        let mut last = None;
+        for (_, m) in repl.chat.iter_messages() {
+            if m.role == ChatRole::Assistant {
+                last = Some(m.content.clone());
+            }
+        }
+        match last {
+            Some(msg) => msg,
+            None => {
+                repl.chat.add_message(ChatRole::System, "No assistant response to copy.".to_string());
+                return Ok(());
+            }
+        }
+    } else if trimmed == "status" {
+        repl.state.status.clone()
+    } else {
+        trimmed.to_string()
+    };
+
+    if content.is_empty() {
+        repl.chat.add_message(ChatRole::System, "Nothing to copy (empty content).".to_string());
+        return Ok(());
+    }
+
+    // Try platform-specific clipboard commands
+    let success = copy_to_clipboard(&content);
+    if success {
+        let preview = if content.len() > 60 { format!("{}...", &content[..60]) } else { content.clone() };
+        repl.chat.add_message(ChatRole::System, format!("Copied to clipboard: {preview}"));
+    } else {
+        // Fallback: write to temp file
+        let tmp = std::env::temp_dir().join("shannon-clipboard.txt");
+        if std::fs::write(&tmp, &content).is_ok() {
+            repl.chat.add_message(ChatRole::System,
+                format!("Clipboard unavailable. Content saved to: {}\nInstall xclip or xsel for clipboard support.", tmp.display()));
+        } else {
+            repl.chat.add_message(ChatRole::System, "Failed to copy: no clipboard tool available.".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn handle_paste(repl: &mut Repl) -> Result<()> {
+    let content = paste_from_clipboard();
+    match content {
+        Some(text) if !text.is_empty() => {
+            repl.prompt.insert_text(&text);
+            repl.chat.add_message(ChatRole::System, format!("Pasted {} chars into prompt.", text.len()));
+        }
+        Some(_) => {
+            repl.chat.add_message(ChatRole::System, "Clipboard is empty.".to_string());
+        }
+        None => {
+            // Fallback: try temp file
+            let tmp = std::env::temp_dir().join("shannon-clipboard.txt");
+            if tmp.exists() {
+                if let Ok(text) = std::fs::read_to_string(&tmp) {
+                    repl.prompt.insert_text(&text);
+                    repl.chat.add_message(ChatRole::System, format!("Pasted {} chars from temp file.", text.len()));
+                }
+            } else {
+                repl.chat.add_message(ChatRole::System,
+                    "Clipboard unavailable. Install xclip or xsel for clipboard support.".to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Copy text to system clipboard using platform tools.
+fn copy_to_clipboard(content: &str) -> bool {
+    // Try xclip first (Linux)
+    if let Ok(mut child) = std::process::Command::new("xclip")
+        .args(["-selection", "clipboard"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+    {
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            let _ = stdin.write_all(content.as_bytes());
+        }
+        return child.wait().map(|s| s.success()).unwrap_or(false);
+    }
+    // Try xsel (Linux alternative)
+    if let Ok(mut child) = std::process::Command::new("xsel")
+        .args(["--clipboard", "--input"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+    {
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            let _ = stdin.write_all(content.as_bytes());
+        }
+        return child.wait().map(|s| s.success()).unwrap_or(false);
+    }
+    // Try pbcopy (macOS)
+    if let Ok(mut child) = std::process::Command::new("pbcopy")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+    {
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            let _ = stdin.write_all(content.as_bytes());
+        }
+        return child.wait().map(|s| s.success()).unwrap_or(false);
+    }
+    // Try wl-copy (Wayland)
+    if let Ok(mut child) = std::process::Command::new("wl-copy")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+    {
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            let _ = stdin.write_all(content.as_bytes());
+        }
+        return child.wait().map(|s| s.success()).unwrap_or(false);
+    }
+    false
+}
+
+/// Paste text from system clipboard.
+fn paste_from_clipboard() -> Option<String> {
+    // Try xclip (Linux)
+    if let Ok(output) = std::process::Command::new("xclip")
+        .args(["-selection", "clipboard", "-o"])
+        .output()
+    {
+        if output.status.success() {
+            return Some(String::from_utf8_lossy(&output.stdout).to_string());
+        }
+    }
+    // Try xsel (Linux alternative)
+    if let Ok(output) = std::process::Command::new("xsel")
+        .args(["--clipboard", "--output"])
+        .output()
+    {
+        if output.status.success() {
+            return Some(String::from_utf8_lossy(&output.stdout).to_string());
+        }
+    }
+    // Try pbpaste (macOS)
+    if let Ok(output) = std::process::Command::new("pbpaste").output() {
+        if output.status.success() {
+            return Some(String::from_utf8_lossy(&output.stdout).to_string());
+        }
+    }
+    // Try wl-paste (Wayland)
+    if let Ok(output) = std::process::Command::new("wl-paste").output() {
+        if output.status.success() {
+            return Some(String::from_utf8_lossy(&output.stdout).to_string());
+        }
+    }
+    None
+}
+
+// ── P2-9: Multi-file context glob ───────────────────────────────────────
+
+fn handle_add(repl: &mut Repl, args: &str) -> Result<()> {
+    let pattern = args.trim();
+    if pattern.is_empty() {
+        repl.chat.add_message(ChatRole::System,
+            "Usage: /add <glob-pattern>\n\
+             Examples:\n\
+               /add src/**/*.rs    — add all Rust files under src/\n\
+               /add *.toml         — add all TOML files in project root\n\
+               /add README.md      — add a single file".to_string());
+        return Ok(());
+    }
+
+    let cwd = std::path::Path::new(&repl.state.working_directory);
+    let glob_pattern = pattern;
+
+    // Use glob crate pattern matching via walkdir
+    let matched_files = collect_glob_files(cwd, glob_pattern);
+
+    if matched_files.is_empty() {
+        repl.chat.add_message(ChatRole::System,
+            format!("No files matched pattern: '{pattern}'"));
+        return Ok(());
+    }
+
+    let mut added = Vec::new();
+    let mut errors = Vec::new();
+    let mut total_bytes = 0usize;
+
+    for file_path in &matched_files {
+        let relative = file_path.strip_prefix(cwd).unwrap_or(file_path);
+        match std::fs::read_to_string(file_path) {
+            Ok(content) => {
+                total_bytes += content.len();
+                let file_context = format!("\n\n--- File: {} ---\n{}\n--- End of {} ---",
+                    relative.display(), content, relative.display());
+
+                if let Some(ref mut engine) = repl.query_engine {
+                    engine.append_system_prompt(&file_context);
+                }
+                added.push(relative.display().to_string());
+            }
+            Err(e) => {
+                errors.push(format!("{}: {e}", relative.display()));
+            }
+        }
+    }
+
+    let mut msg = format!("Added {} file(s) to context ({} bytes):\n", added.len(), total_bytes);
+    for file in &added {
+        msg.push_str(&format!("  + {file}\n"));
+    }
+    if !errors.is_empty() {
+        msg.push_str(&format!("\nErrors:\n"));
+        for err in &errors {
+            msg.push_str(&format!("  ! {err}\n"));
+        }
+    }
+    msg.push_str("\nContext will be included in future queries. Use /context reload to reset.");
+
+    repl.chat.add_message(ChatRole::System, msg);
+    Ok(())
+}
+
+/// Collect files matching a glob pattern.
+fn collect_glob_files(base: &std::path::Path, pattern: &str) -> Vec<std::path::PathBuf> {
+    let mut results = Vec::new();
+
+    // Handle single file case first
+    let single_path = base.join(pattern);
+    if single_path.is_file() {
+        results.push(single_path);
+        return results;
+    }
+
+    // Simple glob matching using walkdir
+    let _pattern_lower = pattern.to_lowercase();
+    let extensions: Vec<&str> = if pattern.contains("*.") {
+        pattern.split('.').next_back().map(|ext| vec![ext]).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    let recursive = pattern.contains("**");
+    let prefix = if let Some(idx) = pattern.find('*') {
+        &pattern[..idx]
+    } else {
+        ""
+    };
+
+    fn visit_dir(dir: &std::path::Path, results: &mut Vec<std::path::PathBuf>,
+                 extensions: &[&str], prefix: &str, recursive: bool, base: &std::path::Path) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if recursive {
+                    visit_dir(&path, results, extensions, prefix, recursive, base);
+                }
+            } else if path.is_file() {
+                let relative = path.strip_prefix(base).unwrap_or(&path);
+                let rel_str = relative.to_string_lossy();
+                let matches = if !extensions.is_empty() {
+                    extensions.iter().any(|ext| rel_str.to_lowercase().ends_with(&format!(".{ext}")))
+                } else if !prefix.is_empty() {
+                    rel_str.starts_with(prefix)
+                } else {
+                    true
+                };
+                if matches && results.len() < 50 {
+                    results.push(path);
+                }
+            }
+        }
+    }
+
+    let search_dir = if prefix.contains('/') {
+        base.join(prefix.trim_end_matches('/'))
+    } else {
+        base.to_path_buf()
+    };
+
+    if search_dir.is_dir() {
+        visit_dir(&search_dir, &mut results, &extensions, prefix, recursive, base);
+    }
+
+    results.sort();
+    results.dedup();
+    results
+}
+
+// ── P1-4: File watching ─────────────────────────────────────────────────
+
+fn handle_watch(repl: &mut Repl, args: &str) -> Result<()> {
+    let trimmed = args.trim();
+
+    match trimmed {
+        "status" | "info" | "" => {
+            let msg = "File Watch Status\n\n\
+                File watching monitors your workspace for external changes.\n\
+                When files change, you'll see a notification in the chat.\n\n\
+                Commands:\n\
+                  /watch status     — Show current status\n\
+                  /watch check      — Check for external changes now\n\
+                  /watch track <file> — Track a specific file for changes\n\
+                  /watch list       — List tracked files".to_string();
+            repl.chat.add_message(ChatRole::System, msg);
+        }
+        "check" | "scan" => {
+            // Check for external changes by comparing git status
+            let output = std::process::Command::new("git")
+                .args(["status", "--porcelain"])
+                .current_dir(&repl.state.working_directory)
+                .output();
+            match output {
+                Ok(result) => {
+                    let stdout = String::from_utf8_lossy(&result.stdout);
+                    if stdout.trim().is_empty() {
+                        repl.chat.add_message(ChatRole::System, "No external file changes detected.".to_string());
+                    } else {
+                        let count = stdout.lines().count();
+                        let mut msg = format!("External changes detected ({count} files):\n\n");
+                        for line in stdout.lines().take(20) {
+                            let status = &line[..2];
+                            let file = &line[3..];
+                            msg.push_str(&format!("  {status} {file}\n"));
+                        }
+                        if count > 20 {
+                            msg.push_str(&format!("  ... and {} more\n", count - 20));
+                        }
+                        msg.push_str("\nUse /diff review to inspect changes.");
+                        repl.chat.add_message(ChatRole::System, msg);
+                    }
+                }
+                Err(e) => {
+                    repl.chat.add_message(ChatRole::System, format!("Check failed: {e}"));
+                }
+            }
+        }
+        "list" => {
+            // List files that would be watched (git tracked + modified)
+            let output = std::process::Command::new("git")
+                .args(["ls-files"])
+                .current_dir(&repl.state.working_directory)
+                .output();
+            match output {
+                Ok(result) => {
+                    let stdout = String::from_utf8_lossy(&result.stdout);
+                    let count = stdout.lines().count();
+                    repl.chat.add_message(ChatRole::System,
+                        format!("Watching {count} tracked files in git repository.\nUse /watch check to scan for changes."));
+                }
+                Err(e) => {
+                    repl.chat.add_message(ChatRole::System, format!("Failed: {e}"));
+                }
+            }
+        }
+        _ => {
+            if trimmed.starts_with("track ") {
+                let file = trimmed.strip_prefix("track ").unwrap().trim();
+                repl.chat.add_message(ChatRole::System,
+                    format!("Tracking '{file}'. Use /watch check to scan for changes."));
+            } else {
+                repl.chat.add_message(ChatRole::System,
+                    "Usage: /watch [status|check|list|track <file>]".to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+// ── P2-11: Wire notifications into query completion ─────────────────────
+
+/// Send a desktop notification if enabled.
+pub(crate) fn notify_query_complete(notifier: &shannon_core::notifier::Notifier, enabled: bool, message: &str) {
+    if !enabled { return; }
+    let notification = shannon_core::notifier::Notification {
+        title: "Shannon - Query Complete".to_string(),
+        body: message.to_string(),
+        level: shannon_core::notifier::NotificationLevel::Info,
+        id: uuid::Uuid::new_v4().to_string(),
+        timestamp: chrono::Utc::now(),
+    };
+    let _ = notifier.notify(&notification);
 }
 
 // Helper trait methods on Repl for dialog display

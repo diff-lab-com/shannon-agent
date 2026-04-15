@@ -295,13 +295,13 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
         "diff" => Some(
             CommandHelpEntry::new(
                 "diff".to_string(),
-                "Show git diff of changes".to_string(),
+                "Show git diff of changes, with interactive review mode".to_string(),
                 HelpCategory::Git,
             )
-            .with_arg_hint("[options]")
-            .with_examples(vec!["/diff", "/diff HEAD~1", "/diff main...HEAD"])
-            .with_when_to_use("To see what has changed in the repository")
-            .with_related(vec!["status", "commit"])
+            .with_arg_hint("[options | review [n] | accept <file> | reject <file> | accept-all | reject-all]")
+            .with_examples(vec!["/diff", "/diff HEAD~1", "/diff review", "/diff review 2", "/diff accept src/main.rs", "/diff reject-all"])
+            .with_when_to_use("To see what has changed, or interactively review/accept/reject individual file changes")
+            .with_related(vec!["status", "commit", "undo"])
         ),
         "search" => Some(
             CommandHelpEntry::new(
@@ -898,6 +898,50 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_examples(vec!["/ci", "/ci runs 20", "/ci workflows", "/ci view 12345", "/ci trigger build"])
             .with_when_to_use("Use to check CI status, view workflow runs, or trigger workflows via GitHub CLI")
             .with_related(vec!["diff", "review"])
+        ),
+        "copy" => Some(
+            CommandHelpEntry::new(
+                "copy".to_string(),
+                "Copy content to system clipboard".to_string(),
+                HelpCategory::Ui,
+            )
+            .with_aliases(vec!["clip"])
+            .with_arg_hint("[last|response|status|<text>]")
+            .with_examples(vec!["/copy", "/copy last", "/copy status", "/copy some text here"])
+            .with_when_to_use("Use to copy the last AI response or custom text to your system clipboard")
+            .with_related(vec!["paste", "export"])
+        ),
+        "paste" => Some(
+            CommandHelpEntry::new(
+                "paste".to_string(),
+                "Paste clipboard content into the input prompt".to_string(),
+                HelpCategory::Ui,
+            )
+            .with_examples(vec!["/paste"])
+            .with_when_to_use("Use to paste content from your system clipboard directly into the prompt")
+            .with_related(vec!["copy"])
+        ),
+        "add" => Some(
+            CommandHelpEntry::new(
+                "add".to_string(),
+                "Add files to conversation context using glob patterns".to_string(),
+                HelpCategory::Files,
+            )
+            .with_arg_hint("<glob-pattern>")
+            .with_examples(vec!["/add src/**/*.rs", "/add *.toml", "/add README.md"])
+            .with_when_to_use("Use to include file contents in the AI context for better code understanding")
+            .with_related(vec!["context", "diff"])
+        ),
+        "watch" => Some(
+            CommandHelpEntry::new(
+                "watch".to_string(),
+                "Monitor workspace for external file changes".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("[status|check|list|track <file>]")
+            .with_examples(vec!["/watch", "/watch check", "/watch list"])
+            .with_when_to_use("Use to detect external file changes made outside of Shannon")
+            .with_related(vec!["diff", "status"])
         ),
         _ => None,
     }
