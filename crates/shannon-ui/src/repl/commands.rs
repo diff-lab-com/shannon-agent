@@ -59,7 +59,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
     let is_plugin_command = repl.plugin_manager.get_plugin_commands()
         .iter().any(|c| c.name == cmd_name);
     // Commands handled in the match block but not in the global registry
-    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "compact", "cost", "permissions", "perms", "perm"];
+    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "compact", "cost", "permissions", "perms", "perm", "plan"];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
     if command_exists || is_plugin_command || is_repl_command {
@@ -86,6 +86,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "compact" => handle_compact(repl, args)?,
             "cost" => handle_cost(repl, args)?,
             "permissions" | "perms" | "perm" => handle_permissions(repl, args)?,
+            "plan" => handle_plan(repl, args)?,
             "team" => handle_team(repl, args)?,
             "branch" | "fork" => handle_branch(repl, args)?,
             _ => handle_other_command(repl, cmd_name, args)?,
@@ -1329,6 +1330,181 @@ fn handle_cost(repl: &mut Repl, args: &str) -> Result<()> {
 
     repl.chat.add_message(ChatRole::System, report);
     Ok(())
+}
+
+fn handle_plan(repl: &mut Repl, args: &str) -> Result<()> {
+    let parts: Vec<&str> = args.trim().split_whitespace().collect();
+
+    match parts.first().copied().unwrap_or("") {
+        "" | "status" => {
+            let plan = &repl.state.plan;
+            if !plan.active {
+                repl.chat.add_message(ChatRole::System,
+                    "No active plan. Use /plan <description> to create one.".to_string());
+                return Ok(());
+            }
+            let status = if plan.approved { "Approved" } else { "Pending review" };
+            let mut msg = format!(
+                "Plan: {}\nStatus: {}\n\n{}",
+                plan.description, status, plan.content
+            );
+            if plan.approved {
+                msg.push_str("\n\nPlan approved — implementation can proceed.");
+            } else {
+                msg.push_str("\n\nUse /plan approve to approve, /plan reject to discard.");
+            }
+            repl.chat.add_message(ChatRole::System, msg);
+        }
+        "approve" => {
+            if !repl.state.plan.active {
+                repl.chat.add_message(ChatRole::System, "No active plan to approve.".to_string());
+                return Ok(());
+            }
+            repl.state.plan.approved = true;
+            repl.state.status = "Plan approved".to_string();
+            // Save plan to disk
+            let plan_dir = std::path::Path::new(&repl.state.working_directory)
+                .join(".claude").join("plans");
+            let _ = std::fs::create_dir_all(&plan_dir);
+            let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+            let plan_file = plan_dir.join(format!("plan_{timestamp}.md"));
+            let content = format!("# Plan: {}\n\n{}", repl.state.plan.description, repl.state.plan.content);
+            let _ = std::fs::write(&plan_file, content);
+            repl.chat.add_message(ChatRole::System,
+                format!("Plan approved and saved. You can now proceed with implementation.\nSaved to: {}",
+                    plan_file.display()));
+        }
+        "reject" => {
+            if !repl.state.plan.active {
+                repl.chat.add_message(ChatRole::System, "No active plan to reject.".to_string());
+                return Ok(());
+            }
+            repl.state.plan = super::PlanState::default();
+            repl.state.status = "Ready".to_string();
+            repl.chat.add_message(ChatRole::System, "Plan rejected and cleared.".to_string());
+        }
+        "done" => {
+            if !repl.state.plan.active {
+                repl.chat.add_message(ChatRole::System, "No active plan.".to_string());
+                return Ok(());
+            }
+            let desc = repl.state.plan.description.clone();
+            repl.state.plan = super::PlanState::default();
+            repl.state.status = "Ready".to_string();
+            repl.chat.add_message(ChatRole::System,
+                format!("Plan '{}' completed and cleared.", desc));
+        }
+        "help" => {
+            repl.chat.add_message(ChatRole::System,
+                "Plan Commands:\n\
+                 /plan <description> — Create a new plan from a description\n\
+                 /plan status — Show current plan\n\
+                 /plan approve — Approve the current plan\n\
+                 /plan reject — Reject and discard the current plan\n\
+                 /plan done — Mark plan as completed\n\
+                 /plan help — Show this help".to_string());
+        }
+        // Treat anything else as a plan description
+        _ => {
+            let description = args.trim().to_string();
+            if description.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Usage: /plan <description>".to_string());
+                return Ok(());
+            }
+            // Generate a structured plan
+            let plan_content = generate_plan(&description);
+            repl.state.plan = super::PlanState {
+                active: true,
+                content: plan_content.clone(),
+                description: description.clone(),
+                approved: false,
+            };
+            repl.state.status = "Plan mode — review plan".to_string();
+            let msg = format!(
+                "Plan created: {}\n\n{}\n\nUse /plan approve to approve, /plan reject to discard, or /plan help for more options.",
+                description, plan_content
+            );
+            repl.chat.add_message(ChatRole::System, msg);
+        }
+    }
+
+    Ok(())
+}
+
+/// Generate a structured plan from a description
+fn generate_plan(description: &str) -> String {
+    let steps = extract_plan_steps(description);
+    let mut plan = String::from("## Implementation Steps\n\n");
+    for (i, step) in steps.iter().enumerate() {
+        plan.push_str(&format!("{}. {}\n", i + 1, step));
+    }
+    plan.push_str("\n## Acceptance Criteria\n\n");
+    plan.push_str("- All steps completed successfully\n");
+    plan.push_str("- Tests pass for new functionality\n");
+    plan.push_str("- No regressions in existing tests\n");
+    plan
+}
+
+/// Extract plan steps from a description using heuristic keyword detection
+pub(crate) fn extract_plan_steps(description: &str) -> Vec<String> {
+    let mut steps = Vec::new();
+
+    // Detect common patterns and generate appropriate steps
+    let lower = description.to_lowercase();
+
+    if lower.contains("refactor") || lower.contains("restructure") {
+        steps.push("Analyze current architecture and identify components to refactor".to_string());
+        steps.push("Design new structure with clear separation of concerns".to_string());
+        steps.push("Implement refactoring incrementally, keeping tests green".to_string());
+        steps.push("Update all references and imports".to_string());
+        steps.push("Run full test suite to verify no regressions".to_string());
+    }
+
+    if lower.contains("test") || lower.contains("coverage") {
+        steps.push("Identify untested code paths and edge cases".to_string());
+        steps.push("Write unit tests for core logic".to_string());
+        steps.push("Write integration tests for component interactions".to_string());
+        steps.push("Verify test coverage meets threshold".to_string());
+    }
+
+    if lower.contains("add") || lower.contains("implement") || lower.contains("feature") {
+        if steps.is_empty() {
+            steps.push("Analyze requirements and design interface".to_string());
+            steps.push("Implement core functionality".to_string());
+            steps.push("Add error handling and input validation".to_string());
+            steps.push("Write tests for new functionality".to_string());
+            steps.push("Update documentation".to_string());
+        }
+    }
+
+    if lower.contains("fix") || lower.contains("bug") {
+        if steps.is_empty() {
+            steps.push("Reproduce the issue and understand root cause".to_string());
+            steps.push("Implement fix with minimal changes".to_string());
+            steps.push("Add regression test".to_string());
+            steps.push("Verify fix resolves the issue".to_string());
+        }
+    }
+
+    if lower.contains("migrate") || lower.contains("upgrade") {
+        if steps.is_empty() {
+            steps.push("Review migration/upgrade guide and breaking changes".to_string());
+            steps.push("Update dependencies".to_string());
+            steps.push("Adapt code to new API surface".to_string());
+            steps.push("Run tests and fix any failures".to_string());
+            steps.push("Verify functionality end-to-end".to_string());
+        }
+    }
+
+    // Default fallback
+    if steps.is_empty() {
+        steps.push(format!("Understand requirements: {}", description));
+        steps.push("Design solution approach".to_string());
+        steps.push("Implement the solution".to_string());
+        steps.push("Test and verify the implementation".to_string());
+    }
+
+    steps
 }
 
 fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {

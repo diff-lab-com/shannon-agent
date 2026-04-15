@@ -1263,6 +1263,206 @@ fn test_repl_permissions_allow_then_deny_same_tool() {
     assert!(!msg.contains("Always allowed"));
 }
 
+// ── /plan Command Tests ──────────────────────────────────────────────
+
+#[test]
+fn test_repl_plan_create() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/plan add user authentication".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Plan created"));
+    assert!(last_msg.contains("user authentication"));
+    assert!(last_msg.contains("Implementation Steps"));
+    assert!(repl.state.plan.active);
+    assert!(!repl.state.plan.approved);
+    assert_eq!(repl.state.plan.description, "add user authentication");
+}
+
+#[test]
+fn test_repl_plan_status_no_plan() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/plan status".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("No active plan"));
+}
+
+#[test]
+fn test_repl_plan_status_with_plan() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/plan fix login bug".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    repl.prompt.set_input("/plan status".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Plan:"));
+    assert!(last_msg.contains("login bug"));
+    assert!(last_msg.contains("Pending review"));
+    assert!(last_msg.contains("Implementation Steps"));
+}
+
+#[test]
+fn test_repl_plan_approve() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/plan refactor database layer".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    repl.prompt.set_input("/plan approve".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("approved"));
+    assert!(repl.state.plan.approved);
+    assert!(repl.state.plan.active);
+}
+
+#[test]
+fn test_repl_plan_approve_no_plan() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/plan approve".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("No active plan"));
+}
+
+#[test]
+fn test_repl_plan_reject() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/plan add caching".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    assert!(repl.state.plan.active);
+    repl.prompt.set_input("/plan reject".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("rejected"));
+    assert!(!repl.state.plan.active);
+    assert_eq!(repl.state.status, "Ready");
+}
+
+#[test]
+fn test_repl_plan_reject_no_plan() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/plan reject".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("No active plan"));
+}
+
+#[test]
+fn test_repl_plan_done() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/plan implement feature X".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    repl.prompt.set_input("/plan done".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("completed"));
+    assert!(!repl.state.plan.active);
+    assert_eq!(repl.state.status, "Ready");
+}
+
+#[test]
+fn test_repl_plan_done_no_plan() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/plan done".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("No active plan"));
+}
+
+#[test]
+fn test_repl_plan_help() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/plan help".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("/plan <description>"));
+    assert!(last_msg.contains("/plan status"));
+    assert!(last_msg.contains("/plan approve"));
+    assert!(last_msg.contains("/plan reject"));
+    assert!(last_msg.contains("/plan done"));
+}
+
+#[test]
+fn test_repl_plan_in_help() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/help".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("/plan"));
+}
+
+#[test]
+fn test_repl_plan_tab_completion() {
+    let args = crate::repl::input::complete_command_args("plan", "");
+    assert!(args.contains(&"status".to_string()));
+    assert!(args.contains(&"approve".to_string()));
+    assert!(args.contains(&"reject".to_string()));
+    assert!(args.contains(&"done".to_string()));
+}
+
+#[test]
+fn test_repl_plan_tab_completion_prefix() {
+    let args = crate::repl::input::complete_command_args("plan", "ap");
+    assert!(args.contains(&"approve".to_string()));
+    assert!(!args.contains(&"reject".to_string()));
+}
+
+#[test]
+fn test_repl_plan_generate_steps_for_feature() {
+    let steps = super::commands::extract_plan_steps("add user authentication feature");
+    assert!(!steps.is_empty());
+    // Should have implementation-related steps
+    assert!(steps.iter().any(|s| s.to_lowercase().contains("implement") || s.to_lowercase().contains("design")));
+}
+
+#[test]
+fn test_repl_plan_generate_steps_for_bug() {
+    let steps = super::commands::extract_plan_steps("fix the login bug");
+    assert!(!steps.is_empty());
+    assert!(steps.iter().any(|s| s.to_lowercase().contains("reproduce") || s.to_lowercase().contains("root cause")));
+    assert!(steps.iter().any(|s| s.to_lowercase().contains("regression")));
+}
+
+#[test]
+fn test_repl_plan_generate_steps_for_refactor() {
+    let steps = super::commands::extract_plan_steps("refactor the database layer");
+    assert!(!steps.is_empty());
+    assert!(steps.iter().any(|s| s.to_lowercase().contains("architecture") || s.to_lowercase().contains("refactor")));
+}
+
+#[test]
+fn test_repl_plan_generate_steps_for_test() {
+    let steps = super::commands::extract_plan_steps("add tests for coverage");
+    assert!(!steps.is_empty());
+    assert!(steps.iter().any(|s| s.to_lowercase().contains("test")));
+}
+
+#[test]
+fn test_repl_plan_generate_steps_default() {
+    let steps = super::commands::extract_plan_steps("do something unusual");
+    assert!(!steps.is_empty());
+    // Should have default steps
+    assert!(steps.iter().any(|s| s.contains("do something unusual")));
+}
+
+#[test]
+fn test_repl_plan_no_input() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/plan".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("No active plan") || last_msg.contains("Usage"));
+}
+
+#[test]
+fn test_repl_plan_state_default() {
+    let state = super::PlanState::default();
+    assert!(!state.active);
+    assert!(!state.approved);
+    assert!(state.content.is_empty());
+    assert!(state.description.is_empty());
+}
+
 // ── Completion Highlight Index Tests ────────────────────────────────
 
 #[test]

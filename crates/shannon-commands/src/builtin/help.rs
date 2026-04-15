@@ -523,6 +523,17 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("Use to view current permission policies, allow or deny tools without prompting, or reset overrides")
             .with_related(vec!["config", "doctor"])
         ),
+        "plan" => Some(
+            CommandHelpEntry::new(
+                "plan".to_string(),
+                "Plan mode — create, review, and approve implementation plans".to_string(),
+                HelpCategory::Skills,
+            )
+            .with_arg_hint("[<description>|status|approve|reject|done]")
+            .with_examples(vec!["/plan add user authentication", "/plan refactor database layer", "/plan fix login bug", "/plan status", "/plan approve", "/plan reject", "/plan done"])
+            .with_when_to_use("Use to plan complex tasks before implementation, review the steps, and approve before proceeding")
+            .with_related(vec!["team", "worktree"])
+        ),
         "branch" => Some(
             CommandHelpEntry::new(
                 "branch".to_string(),
@@ -676,6 +687,7 @@ pub fn all_help_entries() -> Vec<CommandHelpEntry> {
         get_command_help("cost").unwrap(),
         get_command_help("team").unwrap(),
         get_command_help("permissions").unwrap(),
+        get_command_help("plan").unwrap(),
         get_command_help("branch").unwrap(),
         get_command_help("credentials").unwrap(),
         get_command_help("browse").unwrap(),

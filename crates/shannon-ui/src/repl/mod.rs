@@ -97,6 +97,21 @@ pub struct ReplState {
     pub completion_suggestions: Vec<String>,
     /// Index of the currently highlighted completion suggestion
     pub completion_suggestion_index: usize,
+    /// Plan mode state
+    pub plan: PlanState,
+}
+
+/// State for plan mode
+#[derive(Debug, Clone, Default)]
+pub struct PlanState {
+    /// Whether plan mode is active
+    pub active: bool,
+    /// The plan content (markdown steps)
+    pub content: String,
+    /// Plan description (what user wants to accomplish)
+    pub description: String,
+    /// Whether the plan has been approved
+    pub approved: bool,
 }
 
 impl Default for ReplState {
@@ -132,6 +147,7 @@ impl Default for ReplState {
             multi_select: None,
             completion_suggestions: Vec::new(),
             completion_suggestion_index: 0,
+            plan: PlanState::default(),
         }
     }
 }
