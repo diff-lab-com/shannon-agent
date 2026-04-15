@@ -1262,4 +1262,132 @@ mod tests {
         assert!(result.is_ok());
         assert!(!result.unwrap());
     }
+
+    // ── Rewind Conversation Tests ────────────────────────────────────
+
+    #[test]
+    fn test_rewind_conversation_single_turn() {
+        let mut engine = create_test_engine();
+        engine.add_user_message("Hello".to_string());
+        engine.add_assistant_message(vec![crate::api::ContentBlock::Text {
+            text: "Hi there".to_string(),
+        }]);
+        engine.add_user_message("How are you?".to_string());
+        engine.add_assistant_message(vec![crate::api::ContentBlock::Text {
+            text: "Fine".to_string(),
+        }]);
+        assert_eq!(engine.conversation.messages.len(), 4);
+        assert_eq!(engine.conversation.turn_count, 0); // turn_count not auto-incremented in test
+
+        let removed = engine.rewind_conversation(1);
+        assert_eq!(removed, 2);
+        assert_eq!(engine.conversation.messages.len(), 2);
+        assert_eq!(engine.conversation.messages[0].role, "user");
+    }
+
+    #[test]
+    fn test_rewind_conversation_multiple_turns() {
+        let mut engine = create_test_engine();
+        engine.add_user_message("Q1".to_string());
+        engine.add_assistant_message(vec![crate::api::ContentBlock::Text {
+            text: "A1".to_string(),
+        }]);
+        engine.add_user_message("Q2".to_string());
+        engine.add_assistant_message(vec![crate::api::ContentBlock::Text {
+            text: "A2".to_string(),
+        }]);
+        engine.add_user_message("Q3".to_string());
+        engine.add_assistant_message(vec![crate::api::ContentBlock::Text {
+            text: "A3".to_string(),
+        }]);
+        assert_eq!(engine.conversation.messages.len(), 6);
+
+        let removed = engine.rewind_conversation(2);
+        assert_eq!(removed, 4);
+        assert_eq!(engine.conversation.messages.len(), 2);
+    }
+
+    #[test]
+    fn test_rewind_conversation_all() {
+        let mut engine = create_test_engine();
+        engine.add_user_message("Q1".to_string());
+        engine.add_assistant_message(vec![crate::api::ContentBlock::Text {
+            text: "A1".to_string(),
+        }]);
+
+        let removed = engine.rewind_conversation(5);
+        assert_eq!(removed, 2);
+        assert!(engine.conversation.messages.is_empty());
+    }
+
+    #[test]
+    fn test_rewind_conversation_empty() {
+        let mut engine = create_test_engine();
+        let removed = engine.rewind_conversation(1);
+        assert_eq!(removed, 0);
+        assert!(engine.conversation.messages.is_empty());
+    }
+
+    #[test]
+    fn test_rewind_conversation_zero() {
+        let mut engine = create_test_engine();
+        engine.add_user_message("Q1".to_string());
+        let removed = engine.rewind_conversation(0);
+        assert_eq!(removed, 0);
+        assert_eq!(engine.conversation.messages.len(), 1);
+    }
+
+    #[test]
+    fn test_rewind_conversation_with_tool_messages() {
+        let mut engine = create_test_engine();
+        engine.add_user_message("Run tests".to_string());
+        // Simulate tool result as assistant messages
+        engine.add_assistant_message(vec![crate::api::ContentBlock::Text {
+            text: "I'll run the tests".to_string(),
+        }]);
+        engine.add_assistant_message(vec![crate::api::ContentBlock::Text {
+            text: "All tests passed".to_string(),
+        }]);
+        engine.add_user_message("Now commit".to_string());
+        engine.add_assistant_message(vec![crate::api::ContentBlock::Text {
+            text: "Committed".to_string(),
+        }]);
+        // Total: 5 messages (1 user + 2 asst + 1 user + 1 asst)
+        assert_eq!(engine.conversation.messages.len(), 5);
+
+        // Rewind 1 turn removes "Now commit" + "Committed" = 2 messages
+        let removed = engine.rewind_conversation(1);
+        assert_eq!(removed, 2);
+        assert_eq!(engine.conversation.messages.len(), 3);
+
+        // Rewind 1 more turn removes "Run tests" + 2 assistant messages = 3
+        let removed = engine.rewind_conversation(1);
+        assert_eq!(removed, 3);
+        assert!(engine.conversation.messages.is_empty());
+    }
+
+    #[test]
+    fn test_rewind_conversation_no_user_messages() {
+        let mut engine = create_test_engine();
+        // Only assistant messages, no user message to anchor a turn
+        engine.add_assistant_message(vec![crate::api::ContentBlock::Text {
+            text: "Hello".to_string(),
+        }]);
+        engine.add_assistant_message(vec![crate::api::ContentBlock::Text {
+            text: "World".to_string(),
+        }]);
+
+        let removed = engine.rewind_conversation(1);
+        assert_eq!(removed, 0);
+        assert_eq!(engine.conversation.messages.len(), 2);
+    }
+
+    fn create_test_engine() -> QueryEngine {
+        let client = create_test_client();
+        let tools = ToolRegistry::new();
+        let permissions = PermissionManager::new();
+        let state = StateManager::new();
+        let config = QueryEngineConfig::default();
+        QueryEngine::new(client, tools, permissions, state, config)
+    }
 }

@@ -2673,3 +2673,187 @@ fn test_repl_mcp_path() {
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("mcp.json"), "should show config path");
 }
+
+// ── /rewind Integration Tests ────────────────────────────────────────
+
+#[test]
+fn test_rewind_command_default() {
+    let mut repl = Repl::new().unwrap();
+    // Add some conversation
+    repl.chat.add_message(ChatRole::User, "Hello".to_string());
+    repl.chat.add_message(ChatRole::Assistant, "Hi".to_string());
+    repl.chat.add_message(ChatRole::User, "How are you?".to_string());
+    repl.chat.add_message(ChatRole::Assistant, "Fine".to_string());
+    assert_eq!(repl.chat.len(), 4);
+
+    // Also add to engine
+    if let Some(ref mut engine) = repl.query_engine {
+        engine.add_user_message("Hello".to_string());
+        engine.add_assistant_message(vec![shannon_core::api::ContentBlock::Text {
+            text: "Hi".to_string(),
+        }]);
+        engine.add_user_message("How are you?".to_string());
+        engine.add_assistant_message(vec![shannon_core::api::ContentBlock::Text {
+            text: "Fine".to_string(),
+        }]);
+    }
+
+    repl.prompt.set_input("/rewind".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+
+    // System message added + 2 original messages remain
+    assert_eq!(repl.chat.len(), 3); // 2 original + 1 system msg about rewind
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Rewound 1 turn(s)"));
+    assert!(last_msg.contains("removed 2 messages"));
+
+    // Engine also rewound
+    if let Some(ref engine) = repl.query_engine {
+        assert_eq!(engine.conversation_history().len(), 2);
+    }
+}
+
+#[test]
+fn test_rewind_command_multiple_turns() {
+    let mut repl = Repl::new().unwrap();
+    repl.chat.add_message(ChatRole::User, "Q1".to_string());
+    repl.chat.add_message(ChatRole::Assistant, "A1".to_string());
+    repl.chat.add_message(ChatRole::User, "Q2".to_string());
+    repl.chat.add_message(ChatRole::Assistant, "A2".to_string());
+    repl.chat.add_message(ChatRole::User, "Q3".to_string());
+    repl.chat.add_message(ChatRole::Assistant, "A3".to_string());
+
+    repl.prompt.set_input("/rewind 2".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+
+    // 2 original msgs remain + 1 system msg
+    assert_eq!(repl.chat.len(), 3);
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Rewound 2 turn(s)"));
+    assert!(last_msg.contains("removed 4 messages"));
+    assert!(last_msg.contains("6 → 2 remaining"));
+}
+
+#[test]
+fn test_rewind_command_empty_chat() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/rewind".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("No conversation turns to rewind"));
+}
+
+#[test]
+fn test_rewind_command_zero() {
+    let mut repl = Repl::new().unwrap();
+    repl.chat.add_message(ChatRole::User, "Q1".to_string());
+    repl.prompt.set_input("/rewind 0".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Usage: /rewind"));
+}
+
+#[test]
+fn test_rewind_command_invalid_arg() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/rewind abc".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Usage: /rewind"));
+}
+
+#[test]
+fn test_rewind_preserves_earlier_messages() {
+    let mut repl = Repl::new().unwrap();
+    repl.chat.add_message(ChatRole::System, "Welcome".to_string());
+    repl.chat.add_message(ChatRole::User, "First Q".to_string());
+    repl.chat.add_message(ChatRole::Assistant, "First A".to_string());
+    repl.chat.add_message(ChatRole::User, "Second Q".to_string());
+    repl.chat.add_message(ChatRole::Assistant, "Second A".to_string());
+
+    repl.prompt.set_input("/rewind".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+
+    // System + First Q + First A + system rewind msg = 4
+    assert_eq!(repl.chat.len(), 4);
+    assert_eq!(repl.chat.get_message(0).unwrap().role, ChatRole::System);
+    assert_eq!(repl.chat.get_message(0).unwrap().content, "Welcome");
+    assert_eq!(repl.chat.get_message(1).unwrap().content, "First Q");
+}
+
+#[test]
+fn test_rewind_then_continue_conversation() {
+    let mut repl = Repl::new().unwrap();
+    // Simulate a conversation that went wrong
+    repl.chat.add_message(ChatRole::User, "Bad question".to_string());
+    repl.chat.add_message(ChatRole::Assistant, "Bad answer".to_string());
+
+    // Rewind the bad exchange
+    repl.prompt.set_input("/rewind".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    assert_eq!(repl.chat.len(), 1); // Only the system rewind msg
+
+    // Add new conversation
+    repl.chat.add_message(ChatRole::User, "Good question".to_string());
+    repl.chat.add_message(ChatRole::Assistant, "Good answer".to_string());
+    assert_eq!(repl.chat.len(), 3); // rewind msg + new Q + new A
+    assert_eq!(repl.chat.get_message(1).unwrap().content, "Good question");
+}
+
+#[test]
+fn test_rewind_syncs_engine_history() {
+    let mut repl = Repl::new().unwrap();
+
+    // Add messages to both chat widget and engine
+    if let Some(ref mut engine) = repl.query_engine {
+        engine.add_user_message("Q1".to_string());
+        engine.add_assistant_message(vec![shannon_core::api::ContentBlock::Text {
+            text: "A1".to_string(),
+        }]);
+        engine.add_user_message("Q2".to_string());
+        engine.add_assistant_message(vec![shannon_core::api::ContentBlock::Text {
+            text: "A2".to_string(),
+        }]);
+    }
+    repl.chat.add_message(ChatRole::User, "Q1".to_string());
+    repl.chat.add_message(ChatRole::Assistant, "A1".to_string());
+    repl.chat.add_message(ChatRole::User, "Q2".to_string());
+    repl.chat.add_message(ChatRole::Assistant, "A2".to_string());
+
+    // Rewind 1 turn
+    repl.prompt.set_input("/rewind".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+
+    // Verify engine also has 2 messages (Q1 + A1)
+    if let Some(ref engine) = repl.query_engine {
+        let history = engine.conversation_history();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].role, "user");
+    }
+}
+
+#[test]
+fn test_rewind_then_rewind_again() {
+    let mut repl = Repl::new().unwrap();
+    repl.chat.add_message(ChatRole::User, "Q1".to_string());
+    repl.chat.add_message(ChatRole::Assistant, "A1".to_string());
+    repl.chat.add_message(ChatRole::User, "Q2".to_string());
+    repl.chat.add_message(ChatRole::Assistant, "A2".to_string());
+    repl.chat.add_message(ChatRole::User, "Q3".to_string());
+    repl.chat.add_message(ChatRole::Assistant, "A3".to_string());
+
+    // First rewind: remove Q3+A3
+    repl.prompt.set_input("/rewind".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    assert_eq!(repl.chat.len(), 5); // Q1+A1+Q2+A2 + system rewind msg
+
+    // Second rewind: remove Q2+A2
+    repl.prompt.set_input("/rewind".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    // Q1+A1 + 2 system rewind msgs = 4
+    assert_eq!(repl.chat.len(), 4);
+    assert_eq!(repl.chat.get_message(0).unwrap().content, "Q1");
+}

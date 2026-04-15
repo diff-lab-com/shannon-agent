@@ -932,4 +932,142 @@ mod tests {
 
         assert_eq!(chat.messages[idx].content, "Step 5 complete");
     }
+
+    // ── Rewind Tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_rewind_single_turn() {
+        let mut chat = ChatWidget::new(100);
+        chat.add_message(ChatRole::User, "Hello".to_string());
+        chat.add_message(ChatRole::Assistant, "Hi there".to_string());
+        chat.add_message(ChatRole::User, "How are you?".to_string());
+        chat.add_message(ChatRole::Assistant, "I'm fine".to_string());
+        assert_eq!(chat.len(), 4);
+
+        let removed = chat.rewind(1);
+        assert_eq!(removed, 2); // last user + assistant
+        assert_eq!(chat.len(), 2);
+        assert_eq!(chat.get_message(0).unwrap().content, "Hello");
+        assert_eq!(chat.get_message(1).unwrap().content, "Hi there");
+    }
+
+    #[test]
+    fn test_rewind_multiple_turns() {
+        let mut chat = ChatWidget::new(100);
+        chat.add_message(ChatRole::User, "Q1".to_string());
+        chat.add_message(ChatRole::Assistant, "A1".to_string());
+        chat.add_message(ChatRole::User, "Q2".to_string());
+        chat.add_message(ChatRole::Assistant, "A2".to_string());
+        chat.add_message(ChatRole::User, "Q3".to_string());
+        chat.add_message(ChatRole::Assistant, "A3".to_string());
+        assert_eq!(chat.len(), 6);
+
+        let removed = chat.rewind(2);
+        assert_eq!(removed, 4); // Q2+A2+Q3+A3
+        assert_eq!(chat.len(), 2);
+        assert_eq!(chat.get_message(0).unwrap().content, "Q1");
+    }
+
+    #[test]
+    fn test_rewind_all_turns() {
+        let mut chat = ChatWidget::new(100);
+        chat.add_message(ChatRole::User, "Q1".to_string());
+        chat.add_message(ChatRole::Assistant, "A1".to_string());
+        assert_eq!(chat.len(), 2);
+
+        let removed = chat.rewind(1);
+        assert_eq!(removed, 2);
+        assert!(chat.is_empty());
+    }
+
+    #[test]
+    fn test_rewind_with_tool_messages() {
+        let mut chat = ChatWidget::new(100);
+        chat.add_message(ChatRole::User, "Run tests".to_string());
+        chat.add_message(ChatRole::Tool, "bash: cargo test".to_string());
+        chat.add_message(ChatRole::Tool, "output: all passed".to_string());
+        chat.add_message(ChatRole::Assistant, "Tests passed".to_string());
+        chat.add_message(ChatRole::User, "Now commit".to_string());
+        chat.add_message(ChatRole::Assistant, "Done".to_string());
+        assert_eq!(chat.len(), 6);
+
+        // Rewind 1 turn removes "Now commit" + "Done"
+        let removed = chat.rewind(1);
+        assert_eq!(removed, 2);
+        assert_eq!(chat.len(), 4);
+
+        // Rewind 1 more turn removes "Run tests" + all tool + assistant
+        let removed = chat.rewind(1);
+        assert_eq!(removed, 4);
+        assert!(chat.is_empty());
+    }
+
+    #[test]
+    fn test_rewind_with_system_messages() {
+        let mut chat = ChatWidget::new(100);
+        chat.add_message(ChatRole::System, "Session started".to_string());
+        chat.add_message(ChatRole::User, "Q1".to_string());
+        chat.add_message(ChatRole::Assistant, "A1".to_string());
+        assert_eq!(chat.len(), 3);
+
+        // Rewind 1 turn: system message stays, user+assistant removed
+        let removed = chat.rewind(1);
+        assert_eq!(removed, 2); // User + Assistant only
+        assert_eq!(chat.len(), 1);
+        assert_eq!(chat.get_message(0).unwrap().role, ChatRole::System);
+    }
+
+    #[test]
+    fn test_rewind_empty_chat() {
+        let mut chat = ChatWidget::new(100);
+        let removed = chat.rewind(1);
+        assert_eq!(removed, 0);
+        assert!(chat.is_empty());
+    }
+
+    #[test]
+    fn test_rewind_zero_turns() {
+        let mut chat = ChatWidget::new(100);
+        chat.add_message(ChatRole::User, "Q1".to_string());
+        let removed = chat.rewind(0);
+        assert_eq!(removed, 0);
+        assert_eq!(chat.len(), 1);
+    }
+
+    #[test]
+    fn test_rewind_more_than_available() {
+        let mut chat = ChatWidget::new(100);
+        chat.add_message(ChatRole::User, "Q1".to_string());
+        chat.add_message(ChatRole::Assistant, "A1".to_string());
+
+        // Ask for 5 turns when only 1 exists
+        let removed = chat.rewind(5);
+        assert_eq!(removed, 2);
+        assert!(chat.is_empty());
+    }
+
+    #[test]
+    fn test_rewind_no_user_messages() {
+        let mut chat = ChatWidget::new(100);
+        chat.add_message(ChatRole::System, "System msg".to_string());
+        chat.add_message(ChatRole::Assistant, "Assistant msg".to_string());
+
+        let removed = chat.rewind(1);
+        assert_eq!(removed, 0); // No user messages to anchor a turn
+        assert_eq!(chat.len(), 2);
+    }
+
+    #[test]
+    fn test_rewind_fixes_scroll_offset() {
+        let mut chat = ChatWidget::new(100);
+        chat.add_message(ChatRole::User, "Q1".to_string());
+        chat.add_message(ChatRole::Assistant, "A1".to_string());
+        chat.add_message(ChatRole::User, "Q2".to_string());
+        chat.add_message(ChatRole::Assistant, "A2".to_string());
+        // scroll_offset should be 3 (last message index)
+
+        chat.rewind(1);
+        // scroll_offset should be updated to 1 (new last message)
+        assert_eq!(chat.scroll_offset, 1);
+    }
 }
