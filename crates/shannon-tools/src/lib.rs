@@ -79,9 +79,13 @@ pub use cron::{CronTool, CronCreateInput, CronCreateOutput, CronDeleteInput, Cro
 pub use plan_mode::{PlanModeState, EnterPlanModeTool, ExitPlanModeTool, new_plan_mode_state, is_plan_mode_active};
 pub use lsp::{
     GoToDefinitionTool, FindReferencesTool, HoverTool, DocumentSymbolTool,
+    WorkspaceSymbolTool, RenameSymbolTool, CodeActionsTool,
     LspPosition, LspRange, LspLocation, HoverResult, DocumentSymbolItem,
     GoToDefinitionInput, FindReferencesInput, HoverInput, DocumentSymbolInput,
     GoToDefinitionOutput, FindReferencesOutput, HoverOutput, DocumentSymbolOutput,
+    WorkspaceSymbolInput, WorkspaceSymbolOutput, WorkspaceSymbolItem,
+    RenameSymbolInput, RenameSymbolOutput,
+    CodeActionsInput, CodeActionsOutput, CodeActionItem,
     detect_language_id,
 };
 pub use lsp_diagnostics::{
@@ -190,6 +194,9 @@ pub fn register_default_tools(registry: &mut ToolRegistry) -> Result<(), Box<dyn
     registry.register(Box::new(FindReferencesTool::new()))?;
     registry.register(Box::new(HoverTool::new()))?;
     registry.register(Box::new(DocumentSymbolTool::new()))?;
+    registry.register(Box::new(WorkspaceSymbolTool::new()))?;
+    registry.register(Box::new(RenameSymbolTool::new()))?;
+    registry.register(Box::new(CodeActionsTool::new()))?;
 
     // ── Interactive ────────────────────────────────────────────────────
     registry.register(Box::new(AskUserQuestionTool::with_terminal_handler()))?;

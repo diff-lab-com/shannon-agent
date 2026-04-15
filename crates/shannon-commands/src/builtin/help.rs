@@ -510,6 +510,18 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("Use to create and manage multi-agent teams for parallel task execution")
             .with_related(vec!["worktree"])
         ),
+        "branch" => Some(
+            CommandHelpEntry::new(
+                "branch".to_string(),
+                "Create a branch from an existing session".to_string(),
+                HelpCategory::Ui,
+            )
+            .with_aliases(vec!["fork"])
+            .with_arg_hint("<session-id-or-number> [message-index]")
+            .with_examples(vec!["/branch 1", "/branch abc-123-uuid 4", "/branch 2 10"])
+            .with_when_to_use("Use to fork a conversation from a specific point, creating a new independent session")
+            .with_related(vec!["sessions", "resume"])
+        ),
         "credentials" => Some(
             CommandHelpEntry::new(
                 "credentials".to_string(),
@@ -545,6 +557,83 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("Use to enable or disable specific tools for the current session")
             .with_related(vec!["config"])
         ),
+        "go_to_definition" => Some(
+            CommandHelpEntry::new(
+                "go_to_definition".to_string(),
+                "Find where a symbol is defined using LSP".to_string(),
+                HelpCategory::Review,
+            )
+            .with_arg_hint("<file> <line> <character>")
+            .with_examples(vec!["/go_to_definition src/main.rs 10 5"])
+            .with_when_to_use("Use to navigate to the definition of a symbol at a position in a file")
+            .with_related(vec!["find_references", "hover"])
+        ),
+        "find_references" => Some(
+            CommandHelpEntry::new(
+                "find_references".to_string(),
+                "Find all references to a symbol using LSP".to_string(),
+                HelpCategory::Review,
+            )
+            .with_arg_hint("<file> <line> <character>")
+            .with_examples(vec!["/find_references src/main.rs 10 5"])
+            .with_when_to_use("Use to find all usages of a symbol across the codebase")
+            .with_related(vec!["go_to_definition", "rename_symbol"])
+        ),
+        "hover" => Some(
+            CommandHelpEntry::new(
+                "hover".to_string(),
+                "Get type info and docs for a symbol using LSP".to_string(),
+                HelpCategory::Review,
+            )
+            .with_arg_hint("<file> <line> <character>")
+            .with_examples(vec!["/hover src/main.rs 10 5"])
+            .with_when_to_use("Use to see type signatures, doc comments, and contextual info for a symbol")
+            .with_related(vec!["go_to_definition", "document_symbol"])
+        ),
+        "document_symbol" => Some(
+            CommandHelpEntry::new(
+                "document_symbol".to_string(),
+                "List all symbols in a file using LSP".to_string(),
+                HelpCategory::Review,
+            )
+            .with_arg_hint("<file>")
+            .with_examples(vec!["/document_symbol src/main.rs"])
+            .with_when_to_use("Use to get a hierarchical view of functions, classes, and other symbols in a file")
+            .with_related(vec!["hover", "workspace_symbol"])
+        ),
+        "workspace_symbol" => Some(
+            CommandHelpEntry::new(
+                "workspace_symbol".to_string(),
+                "Search for symbols across the workspace using LSP".to_string(),
+                HelpCategory::Review,
+            )
+            .with_arg_hint("<query>")
+            .with_examples(vec!["/workspace_symbol MyStruct", "/workspace_symbol parse_"])
+            .with_when_to_use("Use to find functions, classes, structs matching a query pattern across all project files")
+            .with_related(vec!["document_symbol", "find_references"])
+        ),
+        "rename_symbol" => Some(
+            CommandHelpEntry::new(
+                "rename_symbol".to_string(),
+                "Rename a symbol across the codebase using LSP".to_string(),
+                HelpCategory::Review,
+            )
+            .with_arg_hint("<file> <line> <character> <new_name>")
+            .with_examples(vec!["/rename_symbol src/main.rs 10 5 new_name"])
+            .with_when_to_use("Use to safely rename a variable, function, class, or other symbol across the entire project")
+            .with_related(vec!["find_references", "go_to_definition"])
+        ),
+        "code_actions" => Some(
+            CommandHelpEntry::new(
+                "code_actions".to_string(),
+                "Get available quick fixes and refactorings using LSP".to_string(),
+                HelpCategory::Review,
+            )
+            .with_arg_hint("<file> <start_line> <start_char> <end_line> <end_char>")
+            .with_examples(vec!["/code_actions src/main.rs 10 0 10 20"])
+            .with_when_to_use("Use to get suggested fixes for diagnostics and available refactorings for a code range")
+            .with_related(vec!["hover", "rename_symbol"])
+        ),
         _ => None,
     }
 }
@@ -573,9 +662,17 @@ pub fn all_help_entries() -> Vec<CommandHelpEntry> {
         get_command_help("compact").unwrap(),
         get_command_help("cost").unwrap(),
         get_command_help("team").unwrap(),
+        get_command_help("branch").unwrap(),
         get_command_help("credentials").unwrap(),
         get_command_help("browse").unwrap(),
         get_command_help("tools").unwrap(),
+        get_command_help("go_to_definition").unwrap(),
+        get_command_help("find_references").unwrap(),
+        get_command_help("hover").unwrap(),
+        get_command_help("document_symbol").unwrap(),
+        get_command_help("workspace_symbol").unwrap(),
+        get_command_help("rename_symbol").unwrap(),
+        get_command_help("code_actions").unwrap(),
     ]
 }
 

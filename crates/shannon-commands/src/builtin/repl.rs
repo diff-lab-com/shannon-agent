@@ -214,6 +214,34 @@ pub fn worktree_command() -> Command {
     })
 }
 
+/// /branch command - Create a branch from an existing session
+pub fn branch_command() -> Command {
+    Command::Local(LocalCommand {
+        base: CommandBase {
+            name: "branch".to_string(),
+            aliases: vec!["fork".to_string()],
+            description: "Create a branch from an existing session".to_string(),
+            has_user_specified_description: false,
+            availability: vec![CommandAvailability::All],
+            source: CommandSource::Builtin,
+            is_enabled: true,
+            is_hidden: false,
+            argument_hint: Some("<session-id-or-number> [message-index]".to_string()),
+            when_to_use: Some(
+                "Use to fork a conversation from a specific point, creating a new session".to_string(),
+            ),
+            version: Some("0.1.0".to_string()),
+            disable_model_invocation: false,
+            user_invocable: true,
+            is_workflow: false,
+            immediate: false,
+            is_sensitive: false,
+            user_facing_name: None,
+        },
+        supports_non_interactive: false,
+    })
+}
+
 /// Get all REPL-specific commands
 pub fn all_commands() -> Vec<Command> {
     vec![
@@ -225,6 +253,7 @@ pub fn all_commands() -> Vec<Command> {
         resume_command(),
         history_command(),
         worktree_command(),
+        branch_command(),
     ]
 }
 
@@ -257,6 +286,6 @@ mod tests {
     #[test]
     fn test_all_commands_count() {
         let cmds = all_commands();
-        assert_eq!(cmds.len(), 8);
+        assert_eq!(cmds.len(), 9);
     }
 }

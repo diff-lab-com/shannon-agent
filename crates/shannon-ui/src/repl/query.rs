@@ -190,7 +190,8 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
             let current_status = streaming_status.lock().map(|g| g.clone()).unwrap_or_default();
 
             if current_text.len() != last_rendered_len {
-                repl.chat.update_message(assistant_msg_index, current_text.clone());
+                let rendered = repl.output_renderer.render_streaming(&current_text);
+                repl.chat.update_message(assistant_msg_index, rendered);
                 last_rendered_len = current_text.len();
             }
 

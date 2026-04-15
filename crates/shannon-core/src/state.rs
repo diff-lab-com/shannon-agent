@@ -97,6 +97,11 @@ pub struct SessionPersistMetadata {
     pub turn_count: usize,
     /// Optional title / summary provided by the caller.
     pub title: Option<String>,
+    /// UUID of the parent session if this is a branch, or `None` for a root session.
+    pub parent_session_id: Option<Uuid>,
+    /// Index in the parent session's message list where this branch diverged.
+    /// Only meaningful when `parent_session_id` is `Some`.
+    pub branch_point_message_index: Option<usize>,
 }
 
 impl Default for SessionPersistMetadata {
@@ -110,6 +115,8 @@ impl Default for SessionPersistMetadata {
             total_output_tokens: 0,
             turn_count: 0,
             title: None,
+            parent_session_id: None,
+            branch_point_message_index: None,
         }
     }
 }
@@ -178,6 +185,10 @@ pub struct SessionInfo {
     pub turn_count: usize,
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
+    /// UUID of the parent session if this is a branch.
+    pub parent_session_id: Option<Uuid>,
+    /// Message index where this branch diverged from the parent.
+    pub branch_point_message_index: Option<usize>,
 }
 
 // ============================================================================
@@ -444,6 +455,8 @@ impl StateManager {
                 turn_count: data.metadata.turn_count,
                 total_input_tokens: data.metadata.total_input_tokens,
                 total_output_tokens: data.metadata.total_output_tokens,
+                parent_session_id: data.metadata.parent_session_id,
+                branch_point_message_index: data.metadata.branch_point_message_index,
             });
         }
 
@@ -465,6 +478,71 @@ impl StateManager {
 
         fs::remove_file(&path)?;
         Ok(true)
+    }
+
+    /// Create a branch from an existing session.
+    ///
+    /// Loads the parent session, copies messages up to (but not including)
+    /// `branch_point` into a new session, and saves it to disk. The new
+    /// session's metadata records the parent ID and branch point for
+    /// traceability.
+    ///
+    /// Returns the newly created `SessionData`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StateError::SessionNotFound`] if the parent does not exist.
+    pub fn create_branch(
+        &self,
+        parent_session_id: &Uuid,
+        branch_point: usize,
+        title: Option<String>,
+    ) -> Result<SessionData, StateError> {
+        let parent = self
+            .load_session(parent_session_id)?
+            .ok_or(StateError::SessionNotFound(*parent_session_id))?;
+
+        // Truncate messages at the branch point
+        let branched_messages: Vec<Message> = parent
+            .messages
+            .into_iter()
+            .take(branch_point)
+            .collect();
+
+        let new_id = Uuid::new_v4();
+        let now = chrono::Utc::now();
+        let turn_count = branched_messages.iter().filter(|m| m.role == "user").count();
+
+        let metadata = SessionPersistMetadata {
+            model: parent.metadata.model.clone(),
+            created_at: now,
+            updated_at: now,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            turn_count,
+            title,
+            parent_session_id: Some(*parent_session_id),
+            branch_point_message_index: Some(branch_point),
+        };
+
+        let session_data = SessionData {
+            session_id: new_id,
+            metadata: metadata.clone(),
+            messages: branched_messages,
+        };
+
+        self.save_session(&new_id, &session_data.messages, &metadata)?;
+
+        Ok(session_data)
+    }
+
+    /// List all sessions that are branches of the given parent session.
+    pub fn list_branches(&self, parent_session_id: &Uuid) -> Result<Vec<SessionInfo>, StateError> {
+        let all = self.list_persisted_sessions()?;
+        Ok(all
+            .into_iter()
+            .filter(|info| info.parent_session_id == Some(*parent_session_id))
+            .collect())
     }
 
     // ----------------------------------------------------------------
@@ -844,6 +922,151 @@ mod tests {
         let dir = default_sessions_dir();
         assert!(dir.to_string_lossy().contains(".shannon"));
         assert!(dir.to_string_lossy().contains("sessions"));
+    }
+
+    // -- Session branching tests --
+
+    #[test]
+    fn test_create_branch_full_conversation() {
+        let manager = test_manager();
+        let parent_id = Uuid::new_v4();
+        let messages = make_messages(); // 3 messages: user, assistant, user
+        manager
+            .save_session(&parent_id, &messages, &make_metadata("model"))
+            .unwrap();
+
+        let branch = manager.create_branch(&parent_id, 3, None).unwrap();
+
+        // Branch should have all 3 messages
+        assert_eq!(branch.messages.len(), 3);
+        assert_ne!(branch.session_id, parent_id);
+        assert_eq!(branch.metadata.parent_session_id, Some(parent_id));
+        assert_eq!(branch.metadata.branch_point_message_index, Some(3));
+        assert_eq!(branch.metadata.model, "model");
+        assert_eq!(branch.metadata.turn_count, 2); // 2 user messages
+    }
+
+    #[test]
+    fn test_create_branch_partial_conversation() {
+        let manager = test_manager();
+        let parent_id = Uuid::new_v4();
+        let messages = make_messages(); // 3 messages
+        manager
+            .save_session(&parent_id, &messages, &make_metadata("model"))
+            .unwrap();
+
+        // Branch at message index 1 (keep only first message)
+        let branch = manager.create_branch(&parent_id, 1, Some("Partial branch".to_string())).unwrap();
+
+        assert_eq!(branch.messages.len(), 1);
+        assert_eq!(branch.metadata.title, Some("Partial branch".to_string()));
+        assert_eq!(branch.metadata.turn_count, 1); // 1 user message
+        assert_eq!(branch.metadata.parent_session_id, Some(parent_id));
+        assert_eq!(branch.metadata.branch_point_message_index, Some(1));
+    }
+
+    #[test]
+    fn test_create_branch_saves_to_disk() {
+        let manager = test_manager();
+        let parent_id = Uuid::new_v4();
+        manager
+            .save_session(&parent_id, &make_messages(), &make_metadata("model"))
+            .unwrap();
+
+        let branch = manager.create_branch(&parent_id, 2, None).unwrap();
+
+        // Verify the branch was saved and can be loaded
+        let loaded = manager.load_session(&branch.session_id).unwrap().unwrap();
+        assert_eq!(loaded.messages.len(), 2);
+        assert_eq!(loaded.metadata.parent_session_id, Some(parent_id));
+        assert_eq!(loaded.metadata.branch_point_message_index, Some(2));
+    }
+
+    #[test]
+    fn test_create_branch_parent_not_found() {
+        let manager = test_manager();
+        let result = manager.create_branch(&Uuid::new_v4(), 1, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_branch_empty_conversation() {
+        let manager = test_manager();
+        let parent_id = Uuid::new_v4();
+        manager
+            .save_session(&parent_id, &[], &make_metadata("model"))
+            .unwrap();
+
+        let branch = manager.create_branch(&parent_id, 0, None).unwrap();
+        assert!(branch.messages.is_empty());
+        assert_eq!(branch.metadata.turn_count, 0);
+    }
+
+    #[test]
+    fn test_list_branches() {
+        let manager = test_manager();
+        let parent_id = Uuid::new_v4();
+        manager
+            .save_session(&parent_id, &make_messages(), &make_metadata("model"))
+            .unwrap();
+
+        // Create two branches
+        let branch1 = manager.create_branch(&parent_id, 1, Some("Branch 1".to_string())).unwrap();
+        let branch2 = manager.create_branch(&parent_id, 2, Some("Branch 2".to_string())).unwrap();
+
+        // Also save an unrelated session
+        let other_id = Uuid::new_v4();
+        manager
+            .save_session(&other_id, &make_messages(), &make_metadata("other"))
+            .unwrap();
+
+        let branches = manager.list_branches(&parent_id).unwrap();
+        assert_eq!(branches.len(), 2);
+
+        let branch_ids: Vec<Uuid> = branches.iter().map(|b| b.session_id).collect();
+        assert!(branch_ids.contains(&branch1.session_id));
+        assert!(branch_ids.contains(&branch2.session_id));
+        assert!(!branch_ids.contains(&other_id));
+    }
+
+    #[test]
+    fn test_list_branches_empty() {
+        let manager = test_manager();
+        let parent_id = Uuid::new_v4();
+        manager
+            .save_session(&parent_id, &make_messages(), &make_metadata("model"))
+            .unwrap();
+
+        let branches = manager.list_branches(&parent_id).unwrap();
+        assert!(branches.is_empty());
+    }
+
+    #[test]
+    fn test_session_info_has_branch_fields() {
+        let manager = test_manager();
+        let parent_id = Uuid::new_v4();
+        manager
+            .save_session(&parent_id, &make_messages(), &make_metadata("model"))
+            .unwrap();
+
+        let _branch = manager.create_branch(&parent_id, 2, Some("Info test".to_string())).unwrap();
+
+        let sessions = manager.list_persisted_sessions().unwrap();
+        let branch_info = sessions.iter().find(|s| s.parent_session_id == Some(parent_id)).unwrap();
+        assert_eq!(branch_info.branch_point_message_index, Some(2));
+        assert_eq!(branch_info.title, Some("Info test".to_string()));
+    }
+
+    #[test]
+    fn test_branch_metadata_serialization() {
+        let mut metadata = make_metadata("model");
+        metadata.parent_session_id = Some(Uuid::new_v4());
+        metadata.branch_point_message_index = Some(5);
+
+        let json = serde_json::to_string(&metadata).unwrap();
+        let back: SessionPersistMetadata = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.parent_session_id, metadata.parent_session_id);
+        assert_eq!(back.branch_point_message_index, Some(5));
     }
 
     // ── Concurrent DashMap Access Tests ───────────────────────────────

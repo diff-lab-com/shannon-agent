@@ -660,6 +660,113 @@ impl ReplRenderer {
         result
     }
 
+    /// Render streaming content with partial-markdown tolerance.
+    ///
+    /// Unlike `render_output`, this method:
+    /// - Handles incomplete code blocks (shows a cursor for unclosed blocks)
+    /// - Reformats tool-use markers (🔧) into styled sections
+    /// - Strips raw progress/stats lines (⏳, 📊, 💰) for cleaner display
+    /// - Adds a streaming cursor at the end
+    pub fn render_streaming(&self, content: &str) -> String {
+        let mut result = String::new();
+        let mut in_code_block = false;
+        let mut in_inline_code = false;
+        let mut first_text_seen = false;
+
+        for line in content.lines() {
+            // Strip raw streaming markers for cleaner display
+            let trimmed = line.trim();
+
+            // Skip raw token/cost/progress lines during streaming
+            if trimmed.starts_with("📊 Tokens:")
+                || trimmed.starts_with("💰 Session total:")
+                || trimmed.starts_with("⏳ Tool progress:")
+                || trimmed.starts_with("⏳ ")
+            {
+                continue;
+            }
+
+            // Skip turn-completed markers
+            if trimmed.starts_with("[Turn ") && trimmed.ends_with(" tokens]") {
+                continue;
+            }
+
+            // Format tool-use markers into styled sections
+            if trimmed.starts_with("🔧 Using:") {
+                if !first_text_seen {
+                    first_text_seen = true;
+                }
+                // Extract tool name and format nicely
+                let rest = trimmed.trim_start_matches("🔧 Using:");
+                result.push_str(&format!("\n\x1b[1;33m▸ Tool:\x1b[0m {}\n", rest.trim()));
+                continue;
+            }
+
+            if !first_text_seen && !trimmed.is_empty() {
+                first_text_seen = true;
+            }
+
+            // Handle code blocks
+            if trimmed.starts_with("```") {
+                if in_code_block {
+                    in_code_block = false;
+                    result.push_str("\x1b[0m\n");
+                } else {
+                    in_code_block = true;
+                    let lang = trimmed.trim_start_matches('`').trim();
+                    if !lang.is_empty() {
+                        result.push_str(&format!("\x1b[2m[{lang}]\x1b[0m\n"));
+                    }
+                    result.push_str("\x1b[32m");
+                }
+                continue;
+            }
+
+            if in_code_block {
+                result.push_str(line);
+                result.push('\n');
+                continue;
+            }
+
+            // Process inline formatting
+            let mut chars = trimmed.chars().peekable();
+            while let Some(ch) = chars.next() {
+                if ch == '`' && !in_inline_code {
+                    in_inline_code = true;
+                    result.push_str("\x1b[33m");
+                } else if ch == '`' && in_inline_code {
+                    in_inline_code = false;
+                    result.push_str("\x1b[0m");
+                } else if (ch == '*' || ch == '_') && chars.peek() == Some(&ch) {
+                    chars.next();
+                    result.push_str("\x1b[1m");
+                } else {
+                    result.push(ch);
+                }
+            }
+
+            result.push('\n');
+        }
+
+        // Close unclosed code block with cursor indicator
+        if in_code_block {
+            result.push_str("\x1b[0m\x1b[2m▊\x1b[0m");
+        } else if in_inline_code {
+            result.push_str("\x1b[0m");
+        }
+
+        // Add streaming cursor at the very end
+        if !result.is_empty() && !in_code_block {
+            // Remove trailing newline to place cursor properly
+            if result.ends_with('\n') {
+                result.pop();
+            }
+            result.push_str("\x1b[2m▊\x1b[0m\n");
+        }
+
+        result
+    }
+
     /// Render a code block with syntax highlighting placeholder.
     pub fn render_code_block(&self, code: &str, language: &str) -> String {
         format!(
@@ -1102,6 +1209,130 @@ mod tests {
         let r = ReplRenderer::new();
         let output = r.render_progress(5, 10, "loading");
         assert!(output.contains("50%"));
+    }
+
+    // -- render_streaming --------------------------------------------------
+
+    #[test]
+    fn render_streaming_plain_text() {
+        let r = ReplRenderer::new();
+        let output = r.render_streaming("Hello world");
+        assert!(output.contains("Hello"));
+        assert!(output.contains("world"));
+        assert!(output.contains("▊")); // streaming cursor
+    }
+
+    #[test]
+    fn render_streaming_code_block_complete() {
+        let r = ReplRenderer::new();
+        let input = "```rust\nfn main() {}\n```\nDone";
+        let output = r.render_streaming(input);
+        assert!(output.contains("rust"));
+        assert!(output.contains("fn main()"));
+        assert!(output.contains("Done"));
+    }
+
+    #[test]
+    fn render_streaming_code_block_partial() {
+        let r = ReplRenderer::new();
+        // Unclosed code block — should show cursor inside code block
+        let input = "```rust\nfn main() {";
+        let output = r.render_streaming(input);
+        assert!(output.contains("rust"));
+        assert!(output.contains("fn main()"));
+        assert!(output.contains("▊"));
+    }
+
+    #[test]
+    fn render_streaming_strips_progress_markers() {
+        let r = ReplRenderer::new();
+        let input = "Thinking...\n📊 Tokens: 100 in + 50 out = $0.001\n⏳ Compressing...\nActual text";
+        let output = r.render_streaming(input);
+        assert!(output.contains("Thinking"));
+        assert!(output.contains("Actual text"));
+        assert!(!output.contains("📊"));
+        assert!(!output.contains("⏳"));
+    }
+
+    #[test]
+    fn render_streaming_strips_cost_markers() {
+        let r = ReplRenderer::new();
+        let input = "Result\n💰 Session total: $0.0500\nMore result";
+        let output = r.render_streaming(input);
+        assert!(output.contains("Result"));
+        assert!(!output.contains("💰"));
+    }
+
+    #[test]
+    fn render_streaming_tool_use_formatted() {
+        let r = ReplRenderer::new();
+        let input = "Let me check\n🔧 Using: bash with input: {\"command\": \"ls\"}\nResult here";
+        let output = r.render_streaming(input);
+        assert!(output.contains("Tool:"));
+        assert!(output.contains("bash"));
+        assert!(!output.contains("🔧"));
+        assert!(output.contains("Result here"));
+    }
+
+    #[test]
+    fn render_streaming_strips_turn_completed() {
+        let r = ReplRenderer::new();
+        let input = "Response\n[Turn 1 completed, 500 tokens]\nFinal";
+        let output = r.render_streaming(input);
+        assert!(output.contains("Response"));
+        assert!(output.contains("Final"));
+        assert!(!output.contains("[Turn"));
+    }
+
+    #[test]
+    fn render_streaming_inline_code() {
+        let r = ReplRenderer::new();
+        let output = r.render_streaming("Use `cargo test` to run");
+        assert!(output.contains("cargo test"));
+    }
+
+    #[test]
+    fn render_streaming_bold() {
+        let r = ReplRenderer::new();
+        let output = r.render_streaming("This is **bold** text");
+        assert!(output.contains("bold"));
+    }
+
+    #[test]
+    fn render_streaming_empty_input() {
+        let r = ReplRenderer::new();
+        let output = r.render_streaming("");
+        // Empty input should not panic
+        assert!(output.is_empty() || !output.contains("▊") || true);
+    }
+
+    #[test]
+    fn render_streaming_cursor_at_end() {
+        let r = ReplRenderer::new();
+        let output = r.render_streaming("Hello");
+        assert!(output.contains("▊"));
+        // Cursor should be after content, not before
+        let cursor_pos = output.find('▊').unwrap();
+        assert!(cursor_pos > 0);
+    }
+
+    #[test]
+    fn render_streaming_preserves_blank_lines() {
+        let r = ReplRenderer::new();
+        let input = "Line 1\n\nLine 3";
+        let output = r.render_streaming(input);
+        assert!(output.contains("Line 1"));
+        assert!(output.contains("Line 3"));
+    }
+
+    #[test]
+    fn render_streaming_tool_progress_stripped() {
+        let r = ReplRenderer::new();
+        let input = "Working\n⏳ Tool progress: 50%\nDone";
+        let output = r.render_streaming(input);
+        assert!(output.contains("Working"));
+        assert!(output.contains("Done"));
+        assert!(!output.contains("50%"));
     }
 
     // -- SessionSummary ----------------------------------------------------

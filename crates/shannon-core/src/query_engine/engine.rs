@@ -70,6 +70,15 @@ pub struct QueryEngine {
     pub(crate) memory: Option<Arc<std::sync::RwLock<MemoryStore>>>,
     /// Session ID for conversation persistence
     pub(crate) session_id: Uuid,
+    /// Hook manager for lifecycle events (pre/post tool use, session start/end)
+    pub(crate) hook_manager: Arc<tokio::sync::RwLock<crate::hooks::HookManager>>,
+}
+
+/// Helper to create a loaded HookManager
+fn hook_mgr() -> crate::hooks::HookManager {
+    let mut mgr = crate::hooks::HookManager::new();
+    let _ = mgr.load();
+    mgr
 }
 
 impl QueryEngine {
@@ -93,6 +102,7 @@ impl QueryEngine {
             cost_tracker: Arc::new(RwLock::new(CostTracker::new(model))),
             memory: None,
             session_id,
+            hook_manager: Arc::new(tokio::sync::RwLock::new(hook_mgr())),
         }
     }
 
@@ -115,6 +125,7 @@ impl QueryEngine {
             cost_tracker: Arc::new(RwLock::new(CostTracker::new(model))),
             memory: None,
             session_id,
+            hook_manager: Arc::new(tokio::sync::RwLock::new(hook_mgr())),
         }
     }
 
@@ -141,6 +152,7 @@ impl QueryEngine {
             cost_tracker: Arc::new(RwLock::new(CostTracker::new(model))),
             memory: None,
             session_id,
+            hook_manager: Arc::new(tokio::sync::RwLock::new(hook_mgr())),
         }
     }
 
@@ -258,6 +270,7 @@ impl QueryEngine {
         let state_for_save = self.state.clone();
         let session_id_for_save = self.session_id;
         let cost_tracker = self.cost_tracker.clone();
+        let hook_manager = self.hook_manager.clone();
 
         // Search for relevant memories to augment the system prompt
         let memory_entries = if let Some(ref mem_store) = self.memory {
@@ -300,6 +313,15 @@ impl QueryEngine {
         tokio::spawn(async move {
             // Prevent OS sleep during long-running queries (drops on exit)
             let _sleep_guard = crate::prevent_sleep::PreventSleepGuard::new();
+
+            // Fire UserPromptSubmit hook
+            {
+                let prompt_event = crate::hooks::HookEvent::UserPromptSubmit {
+                    prompt: user_message.clone(),
+                };
+                let hm = hook_manager.read().await;
+                let _ = hm.run_hooks(&prompt_event).await;
+            }
 
             // Create a new client for this task, preserving provider from original config
             let client_config = crate::api::LlmClientConfig {
@@ -677,13 +699,64 @@ impl QueryEngine {
                                                         }
                                                     });
 
+                                                    // Run PreToolUse hooks
+                                                    let hook_event = crate::hooks::HookEvent::PreToolUse {
+                                                        tool_name: tool_name.clone(),
+                                                        input: tool_input.clone(),
+                                                    };
+                                                    let pre_hook_decision = {
+                                                        let hm = hook_manager.read().await;
+                                                        match hm.run_hooks(&hook_event).await {
+                                                            Ok(results) => crate::hooks::HookManager::resolve_results(&results),
+                                                            Err(e) => {
+                                                                tracing::warn!("PreToolUse hook error: {e}");
+                                                                crate::hooks::HookDecision::Allow
+                                                            }
+                                                        }
+                                                    };
+
+                                                    let effective_input = match &pre_hook_decision {
+                                                        crate::hooks::HookDecision::Deny { reason } => {
+                                                            progress_handle.abort();
+                                                            let error_msg = format!("Hook denied: {reason}");
+                                                            let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                query_id,
+                                                                tool_use_id: tool_id.clone(),
+                                                                tool_name,
+                                                                result: error_msg.clone(),
+                                                                is_error: true,
+                                                            }));
+                                                            tool_results.push((tool_id, error_msg));
+                                                            continue;
+                                                        }
+                                                        crate::hooks::HookDecision::Modify { modified_input, .. } => {
+                                                            modified_input.clone().unwrap_or(tool_input.clone())
+                                                        }
+                                                        crate::hooks::HookDecision::Allow => tool_input.clone(),
+                                                    };
+
                                                     let result = tools
-                                                        .execute(&tool_name, tool_input.clone())
+                                                        .execute(&tool_name, effective_input.clone())
                                                         .await;
 
                                                     // Abort the progress timer now that
                                                     // the tool has finished.
                                                     progress_handle.abort();
+
+                                                    // Run PostToolUse hooks
+                                                    {
+                                                        let output_val = match &result {
+                                                            Ok(o) => serde_json::Value::String(o.content.clone()),
+                                                            Err(e) => serde_json::Value::String(format!("Error: {e}")),
+                                                        };
+                                                        let post_event = crate::hooks::HookEvent::PostToolUse {
+                                                            tool_name: tool_name.clone(),
+                                                            input: effective_input,
+                                                            output: output_val,
+                                                        };
+                                                        let hm = hook_manager.read().await;
+                                                        let _ = hm.run_hooks(&post_event).await;
+                                                    }
 
                                                     match result {
                                                         Ok(output) => {

@@ -86,6 +86,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "compact" => handle_compact(repl, args)?,
             "cost" => handle_cost(repl)?,
             "team" => handle_team(repl, args)?,
+            "branch" | "fork" => handle_branch(repl, args)?,
             _ => handle_other_command(repl, cmd_name, args)?,
         }
         Ok(())
@@ -412,6 +413,95 @@ fn handle_resume(repl: &mut Repl, args: &str) -> Result<()> {
         }
         Err(e) => {
             repl.chat.add_message(ChatRole::System, format!("Error loading session: {e}"));
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_branch(repl: &mut Repl, args: &str) -> Result<()> {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    if parts.is_empty() {
+        repl.chat.add_message(
+            ChatRole::System,
+            "Usage: /branch <session-id-or-number> [message-index]\nUse /sessions to see available sessions.".to_string(),
+        );
+        return Ok(());
+    }
+
+    // Resolve session ID
+    let session_id = if let Ok(uuid) = uuid::Uuid::parse_str(parts[0]) {
+        uuid
+    } else if let Ok(num) = parts[0].parse::<usize>() {
+        if num == 0 || num > repl.last_session_list.len() {
+            repl.chat.add_message(
+                ChatRole::System,
+                format!("Invalid session number: {num}. Use /sessions to see available sessions."),
+            );
+            return Ok(());
+        }
+        repl.last_session_list[num - 1].session_id
+    } else {
+        repl.chat.add_message(
+            ChatRole::System,
+            format!("Invalid session identifier: {}. Use a number from /sessions or a UUID.", parts[0]),
+        );
+        return Ok(());
+    };
+
+    // Load parent to get message count for default branch point
+    let parent_data = match repl.state_manager.load_session(&session_id) {
+        Ok(Some(data)) => data,
+        Ok(None) => {
+            repl.chat.add_message(ChatRole::System, format!("Session not found: {session_id}"));
+            return Ok(());
+        }
+        Err(e) => {
+            repl.chat.add_message(ChatRole::System, format!("Error loading session: {e}"));
+            return Ok(());
+        }
+    };
+
+    let total_messages = parent_data.messages.len();
+
+    // Parse optional branch point (defaults to end of conversation)
+    let branch_point = if parts.len() > 1 {
+        match parts[1].parse::<usize>() {
+            Ok(idx) if idx <= total_messages => idx,
+            Ok(idx) => {
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("Branch point {idx} is out of range. Session has {total_messages} messages."),
+                );
+                return Ok(());
+            }
+            Err(_) => {
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("Invalid branch point: {}. Must be a number.", parts[1]),
+                );
+                return Ok(());
+            }
+        }
+    } else {
+        total_messages
+    };
+
+    // Create the branch
+    match repl.state_manager.create_branch(&session_id, branch_point, None) {
+        Ok(branch_data) => {
+            let title = parent_data.metadata.title.as_deref().unwrap_or("Untitled");
+            let branch_id = branch_data.session_id;
+            repl.chat.add_message(
+                ChatRole::System,
+                format!(
+                    "Created branch from \"{}\" at message {}/{}\nNew session: {branch_id}\nMessages copied: {}\nUse /resume {branch_id} to work on this branch",
+                    title, branch_point, total_messages, branch_data.messages.len(),
+                ),
+            );
+        }
+        Err(e) => {
+            repl.chat.add_message(ChatRole::System, format!("Error creating branch: {e}"));
         }
     }
 

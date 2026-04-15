@@ -1609,6 +1609,8 @@ mod conversation_export_tests {
             total_output_tokens: 30,
             turn_count,
             title: Some(title.to_string()),
+            parent_session_id: None,
+            branch_point_message_index: None,
         }
     }
 
@@ -1683,6 +1685,8 @@ mod conversation_export_tests {
             total_output_tokens: 800,
             turn_count: 5,
             title: Some("Metadata Test".to_string()),
+            parent_session_id: None,
+            branch_point_message_index: None,
         };
 
         // Build metadata summary
@@ -1733,6 +1737,8 @@ mod conversation_export_tests {
             total_output_tokens: 50,
             turn_count: 3,
             title: Some("Round-trip test".to_string()),
+            parent_session_id: None,
+            branch_point_message_index: None,
         };
 
         // Save
@@ -1774,6 +1780,8 @@ mod conversation_export_tests {
                 total_output_tokens: 5 * (i + 1) as u64,
                 turn_count: i + 1,
                 title: Some(format!("Session {i}")),
+                parent_session_id: None,
+                branch_point_message_index: None,
             };
             state_manager.save_session(&sid, &[], &metadata).unwrap();
             saved_ids.push(sid);
