@@ -596,6 +596,17 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("Use to undo file changes made by AI tools. Checkpoints are created automatically before file modifications.")
             .with_related(vec!["diff", "status"])
         ),
+        "rewind" => Some(
+            CommandHelpEntry::new(
+                "rewind".to_string(),
+                "Remove the last N conversation turns from context".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("[number-of-turns]")
+            .with_examples(vec!["/rewind", "/rewind 3"])
+            .with_when_to_use("Use to remove the last AI exchange(s) from the conversation history. Unlike /undo (which reverts files), /rewind removes messages so the AI forgets previous context.")
+            .with_related(vec!["undo", "compact", "clear"])
+        ),
         "notify" => Some(
             CommandHelpEntry::new(
                 "notify".to_string(),
@@ -1019,6 +1030,7 @@ pub fn all_help_entries() -> Vec<CommandHelpEntry> {
         get_command_help("mode").unwrap(),
         get_command_help("context").unwrap(),
         get_command_help("undo").unwrap(),
+        get_command_help("rewind").unwrap(),
         get_command_help("notify").unwrap(),
         get_command_help("create-pr").unwrap(),
         get_command_help("patch").unwrap(),

@@ -247,6 +247,40 @@ impl QueryEngine {
         self.conversation.messages.clone()
     }
 
+    /// Rewind the conversation by removing the last `n` user turns.
+    ///
+    /// A turn starts with a user message and includes all subsequent non-user
+    /// messages until the next user message. Returns the number of messages removed.
+    /// Decrements `turn_count` by the number of turns rewound.
+    pub fn rewind_conversation(&mut self, turns: usize) -> usize {
+        if turns == 0 || self.conversation.messages.is_empty() {
+            return 0;
+        }
+
+        let mut turns_found = 0;
+        let mut cutoff = self.conversation.messages.len();
+
+        for i in (0..self.conversation.messages.len()).rev() {
+            if self.conversation.messages[i].role == "user" {
+                turns_found += 1;
+                cutoff = i;
+                if turns_found >= turns {
+                    break;
+                }
+            }
+        }
+
+        if turns_found == 0 {
+            return 0;
+        }
+
+        let removed = self.conversation.messages.len() - cutoff;
+        self.conversation.messages.truncate(cutoff);
+        self.conversation.turn_count = self.conversation.turn_count.saturating_sub(turns_found);
+
+        removed
+    }
+
     /// Clear the conversation history
     pub fn clear_conversation(&mut self) {
         self.conversation = ConversationState::default();

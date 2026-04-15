@@ -59,7 +59,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
     let is_plugin_command = repl.plugin_manager.get_plugin_commands()
         .iter().any(|c| c.name == cmd_name);
     // Commands handled in the match block but not in the global registry
-    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "route", "mcp", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "notify", "create-pr", "patch", "sandbox", "find", "grep", "conv-search", "copy", "paste", "add", "watch", "bind", "project"];
+    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "route", "mcp", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "rewind", "notify", "create-pr", "patch", "sandbox", "find", "grep", "conv-search", "copy", "paste", "add", "watch", "bind", "project"];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
     if command_exists || is_plugin_command || is_repl_command {
@@ -106,6 +106,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "mode" => handle_mode(repl, args)?,
             "context" => handle_context(repl, args)?,
             "undo" => handle_undo(repl, args)?,
+            "rewind" => handle_rewind(repl, args)?,
             "notify" => handle_notify(repl, args)?,
             "create-pr" => handle_create_pr(repl, args)?,
             "patch" => handle_patch(repl, args)?,
@@ -956,6 +957,52 @@ fn handle_undo(repl: &mut Repl, args: &str) -> Result<()> {
         ChatRole::System,
         "Usage: /undo [list|<number>]".to_string(),
     );
+    Ok(())
+}
+
+fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
+    let trimmed = args.trim();
+
+    // Parse number of turns (default: 1)
+    let turns = if trimmed.is_empty() {
+        1
+    } else if let Ok(n) = trimmed.parse::<usize>() {
+        if n == 0 {
+            repl.chat.add_message(ChatRole::System, "Usage: /rewind [number-of-turns]".to_string());
+            return Ok(());
+        }
+        n
+    } else {
+        repl.chat.add_message(ChatRole::System, "Usage: /rewind [number-of-turns]".to_string());
+        return Ok(());
+    };
+
+    // Show what we're about to rewind
+    let before_count = repl.chat.len();
+
+    // Rewind the UI chat
+    let removed = repl.chat.rewind(turns);
+    let after_count = repl.chat.len();
+
+    // Rewind the engine conversation history to keep them in sync
+    if let Some(ref mut engine) = repl.query_engine {
+        engine.rewind_conversation(turns);
+    }
+
+    if removed > 0 {
+        repl.chat.add_message(
+            ChatRole::System,
+            format!(
+                "Rewound {turns} turn(s): removed {removed} messages ({before_count} → {after_count} remaining)."
+            ),
+        );
+    } else {
+        repl.chat.add_message(
+            ChatRole::System,
+            "No conversation turns to rewind.".to_string(),
+        );
+    }
+
     Ok(())
 }
 

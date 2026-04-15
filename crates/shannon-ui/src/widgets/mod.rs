@@ -401,6 +401,47 @@ impl ChatWidget {
     pub fn iter_messages(&self) -> impl Iterator<Item = (usize, &ChatMessage)> {
         self.messages.iter().enumerate()
     }
+
+    /// Rewind the conversation by removing the last `n` turns.
+    ///
+    /// A "turn" starts with a User message and includes all subsequent
+    /// non-User messages (Assistant, Tool, System) until the next User
+    /// message. Returns the number of messages actually removed.
+    pub fn rewind(&mut self, turns: usize) -> usize {
+        if turns == 0 || self.messages.is_empty() {
+            return 0;
+        }
+
+        // Walk backwards to find where each turn starts
+        let mut turns_found = 0;
+        let mut cutoff = self.messages.len(); // exclusive upper bound
+
+        for i in (0..self.messages.len()).rev() {
+            if self.messages[i].role == ChatRole::User {
+                turns_found += 1;
+                cutoff = i;
+                if turns_found >= turns {
+                    break;
+                }
+            }
+        }
+
+        if turns_found == 0 {
+            return 0;
+        }
+
+        let removed = self.messages.len() - cutoff;
+        self.messages.truncate(cutoff);
+
+        // Fix scroll offset
+        if !self.messages.is_empty() {
+            self.scroll_offset = self.messages.len() - 1;
+        } else {
+            self.scroll_offset = 0;
+        }
+
+        removed
+    }
 }
 
 /// Input prompt widget (multi-line enabled)
