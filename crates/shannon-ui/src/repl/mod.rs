@@ -208,6 +208,12 @@ pub struct Repl {
     pub(crate) vim_handler: VimHandler,
     /// Multi-agent team coordinator (lazy-initialized on /team create)
     pub(crate) team_coordinator: Option<shannon_agents::AgentCoordinator>,
+    /// Checkpoint manager for undo/revert operations
+    pub(crate) checkpoint_manager: shannon_core::CheckpointManager,
+    /// Desktop notification dispatcher
+    pub(crate) notifier: shannon_core::notifier::Notifier,
+    /// Whether desktop notifications are enabled
+    pub(crate) notifications_enabled: bool,
 }
 
 /// State for tab completion cycling
@@ -333,8 +339,11 @@ impl Repl {
             base_engine.with_memory(mem_store)
         };
 
-        // Auto-load project instructions (CLAUDE.md, AGENTS.md, GEMINI.md)
-        if let Some(instructions) = shannon_core::project_instructions::load_from_cwd() {
+        // Auto-load project instructions (CLAUDE.md, AGENTS.md, GEMINI.md) + git context
+        if let Some(instructions) = std::env::current_dir()
+            .ok()
+            .and_then(|dir| shannon_core::project_instructions::load_full_context(&dir))
+        {
             query_engine.append_system_prompt(&instructions.content);
         }
 
@@ -383,6 +392,16 @@ impl Repl {
             plugin_manager,
             vim_handler: VimHandler::new(),
             team_coordinator: None,
+            checkpoint_manager: shannon_core::CheckpointManager::new(),
+            notifier: {
+                let mut n = shannon_core::notifier::Notifier::new();
+                // Add desktop notifier if available
+                if shannon_core::notifier::DesktopNotifier::is_available() {
+                    n.add_handler(Box::new(shannon_core::notifier::DesktopNotifier::new()));
+                }
+                n
+            },
+            notifications_enabled: false, // Disabled by default; enable via /notify
         })
     }
 

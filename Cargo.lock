@@ -2422,6 +2422,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "atty",
+ "base64",
  "chrono",
  "crossterm",
  "dirs 5.0.1",

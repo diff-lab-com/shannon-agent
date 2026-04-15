@@ -178,6 +178,11 @@ impl QueryEngine {
         self
     }
 
+    /// Access the memory store, if configured.
+    pub fn memory(&self) -> Option<&Arc<std::sync::RwLock<MemoryStore>>> {
+        self.memory.as_ref()
+    }
+
     /// Get the current session ID
     pub fn session_id(&self) -> Uuid {
         self.session_id
@@ -215,6 +220,15 @@ impl QueryEngine {
         self.conversation.messages.push(crate::api::Message {
             role: "user".to_string(),
             content: MessageContent::Text(content),
+        });
+    }
+
+    /// Add a user message with content blocks (e.g., text + image)
+    pub fn add_user_message_blocks(&mut self, blocks: Vec<crate::api::ContentBlock>) {
+        use crate::api::MessageContent;
+        self.conversation.messages.push(crate::api::Message {
+            role: "user".to_string(),
+            content: MessageContent::Blocks(blocks),
         });
     }
 
@@ -297,6 +311,21 @@ impl QueryEngine {
                 ));
             }
             Some(prompt)
+        };
+
+        // Smart context: auto-include relevant files based on query
+        let smart_context = {
+            let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            crate::smart_context::find_relevant_context(&user_message, &working_dir)
+        };
+        let system_prompt = match (system_prompt, crate::smart_context::format_context_for_prompt(&smart_context)) {
+            (Some(mut prompt), Some(ctx)) => {
+                prompt.push_str("\n\n");
+                prompt.push_str(&ctx);
+                Some(prompt)
+            }
+            (None, Some(ctx)) => Some(ctx),
+            (prompt, None) => prompt,
         };
 
         // Clone existing conversation to preserve multi-turn context
@@ -523,6 +552,36 @@ impl QueryEngine {
                                             // Update shared cost tracker
                                             if let Ok(mut tracker) = cost_tracker.write() {
                                                 tracker.record_usage(&client_model, input_tokens, output_tokens);
+
+                                                // Budget enforcement: check if limit exceeded
+                                                if tracker.is_budget_exceeded() {
+                                                    let limit = tracker.budget_limit_usd.unwrap_or(0.0);
+                                                    let total = tracker.total_cost();
+                                                    let _ = tx.send(Ok(QueryEvent::Progress {
+                                                        query_id,
+                                                        message: format!(
+                                                            "Budget limit reached (${limit:.2}). Stopping. (spent: ${total:.4})"
+                                                        ),
+                                                    }));
+                                                    // Break out of the loop by setting turn to max
+                                                    turn = config.max_turns;
+                                                    break;
+                                                }
+
+                                                // Budget warning at 80% usage
+                                                if let Some(ratio) = tracker.budget_usage_ratio() {
+                                                    if ratio >= 0.8 && ratio < 0.81 {
+                                                        let limit = tracker.budget_limit_usd.unwrap_or(0.0);
+                                                        let total = tracker.total_cost();
+                                                        let _ = tx.send(Ok(QueryEvent::Progress {
+                                                            query_id,
+                                                            message: format!(
+                                                                "Budget warning: ${total:.4} / ${limit:.2} ({:.0}%)",
+                                                                ratio * 100.0
+                                                            ),
+                                                        }));
+                                                    }
+                                                }
                                             }
 
                                             let _ = tx.send(Ok(QueryEvent::Usage {
@@ -533,7 +592,9 @@ impl QueryEngine {
                                             }));
 
                                             if !tool_inputs.is_empty() {
-                                                // Execute tools
+                                                // Phase 1: Check permissions and hooks (sequential — may need user input)
+                                                let mut approved_tools: Vec<(String, String, serde_json::Value)> = Vec::new();
+
                                                 for (tool_id, tool_name, tool_input) in
                                                     tool_inputs.drain(..)
                                                 {
@@ -556,7 +617,6 @@ impl QueryEngine {
 
                                                     match permission_result {
                                                         Err(_) => {
-                                                            // Denied by classifier
                                                             let error_msg = format!(
                                                                 "Tool denied by classifier: {tool_name}"
                                                             );
@@ -572,7 +632,7 @@ impl QueryEngine {
                                                         }
                                                         Ok(None) => {
                                                             // Auto-allowed (low risk or always-allowed)
-                                                            // Fall through to execute
+                                                            // Fall through to check hooks
                                                         }
                                                         Ok(Some(prompt)) => {
                                                             // Check if already denied
@@ -667,38 +727,6 @@ impl QueryEngine {
                                                         }
                                                     }
 
-                                                    // Spawn a timer that emits periodic
-                                                    // progress events for long-running
-                                                    // tools (>2s).
-                                                    let progress_tx = tx.clone();
-                                                    let tool_name_clone = tool_name.clone();
-                                                    let tool_id_clone = tool_id.clone();
-                                                    let progress_handle = tokio::spawn(async move {
-                                                        let mut elapsed = 0u64;
-                                                        loop {
-                                                            tokio::time::sleep(
-                                                                tokio::time::Duration::from_secs(2),
-                                                            )
-                                                            .await;
-                                                            elapsed += 2;
-                                                            let progress =
-                                                                (elapsed as f32 / 30.0).min(0.95);
-                                                            let _ = progress_tx.send(Ok(
-                                                                QueryEvent::ToolProgress {
-                                                                    query_id,
-                                                                    tool_use_id: tool_id_clone
-                                                                        .clone(),
-                                                                    tool_name: tool_name_clone
-                                                                        .clone(),
-                                                                    progress,
-                                                                    message: format!(
-                                                                        "Running for {elapsed}s..."
-                                                                    ),
-                                                                },
-                                                            ));
-                                                        }
-                                                    });
-
                                                     // Run PreToolUse hooks
                                                     let hook_event = crate::hooks::HookEvent::PreToolUse {
                                                         tool_name: tool_name.clone(),
@@ -717,7 +745,6 @@ impl QueryEngine {
 
                                                     let effective_input = match &pre_hook_decision {
                                                         crate::hooks::HookDecision::Deny { reason } => {
-                                                            progress_handle.abort();
                                                             let error_msg = format!("Hook denied: {reason}");
                                                             let _ = tx.send(Ok(QueryEvent::ToolUseResult {
                                                                 query_id,
@@ -735,52 +762,124 @@ impl QueryEngine {
                                                         crate::hooks::HookDecision::Allow => tool_input.clone(),
                                                     };
 
-                                                    let result = tools
-                                                        .execute(&tool_name, effective_input.clone())
-                                                        .await;
+                                                    approved_tools.push((tool_id, tool_name, effective_input));
+                                                }
 
-                                                    // Abort the progress timer now that
-                                                    // the tool has finished.
-                                                    progress_handle.abort();
-
-                                                    // Run PostToolUse hooks
-                                                    {
-                                                        let output_val = match &result {
-                                                            Ok(o) => serde_json::Value::String(o.content.clone()),
-                                                            Err(e) => serde_json::Value::String(format!("Error: {e}")),
-                                                        };
-                                                        let post_event = crate::hooks::HookEvent::PostToolUse {
-                                                            tool_name: tool_name.clone(),
-                                                            input: effective_input,
-                                                            output: output_val,
-                                                        };
-                                                        let hm = hook_manager.read().await;
-                                                        let _ = hm.run_hooks(&post_event).await;
+                                                // Phase 2: Execute approved tools (parallel when multiple)
+                                                if approved_tools.len() > 1 {
+                                                    let mut exec_handles = Vec::new();
+                                                    for (tool_id, tool_name, effective_input) in approved_tools {
+                                                        let tools_exec = tools.clone();
+                                                        let exec_name = tool_name.clone();
+                                                        let exec_input = effective_input.clone();
+                                                        let handle = tokio::spawn(async move {
+                                                            (tool_id, tool_name, effective_input, tools_exec.execute(&exec_name, exec_input).await)
+                                                        });
+                                                        exec_handles.push(handle);
                                                     }
 
-                                                    match result {
-                                                        Ok(output) => {
-                                                            let _ = tx.send(Ok(QueryEvent::ToolUseResult {
-                                                                query_id,
-                                                                tool_use_id: tool_id.clone(),
-                                                                tool_name,
-                                                                result: output.content.clone(),
-                                                                is_error: false,
-                                                            }));
-                                                            tool_results
-                                                                .push((tool_id, output.content.clone()));
+                                                    for handle in exec_handles {
+                                                        match handle.await {
+                                                            Ok((tool_id, tool_name, effective_input, result)) => {
+                                                                // Run PostToolUse hooks
+                                                                {
+                                                                    let output_val = match &result {
+                                                                        Ok(o) => serde_json::Value::String(o.content.clone()),
+                                                                        Err(e) => serde_json::Value::String(format!("Error: {e}")),
+                                                                    };
+                                                                    let post_event = crate::hooks::HookEvent::PostToolUse {
+                                                                        tool_name: tool_name.clone(),
+                                                                        input: effective_input,
+                                                                        output: output_val,
+                                                                    };
+                                                                    let hm = hook_manager.read().await;
+                                                                    let _ = hm.run_hooks(&post_event).await;
+                                                                }
+
+                                                                match result {
+                                                                    Ok(output) => {
+                                                                        let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                            query_id,
+                                                                            tool_use_id: tool_id.clone(),
+                                                                            tool_name,
+                                                                            result: output.content.clone(),
+                                                                            is_error: false,
+                                                                        }));
+                                                                        tool_results
+                                                                            .push((tool_id, output.content.clone()));
+                                                                    }
+                                                                    Err(e) => {
+                                                                        let error_msg =
+                                                                            format!("Tool error: {e}");
+                                                                        let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                            query_id,
+                                                                            tool_use_id: tool_id.clone(),
+                                                                            tool_name,
+                                                                            result: error_msg.clone(),
+                                                                            is_error: true,
+                                                                        }));
+                                                                        tool_results.push((tool_id, error_msg));
+                                                                    }
+                                                                }
+                                                            }
+                                                            Err(e) => {
+                                                                let error_msg = format!("Task join error: {e}");
+                                                                let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                    query_id,
+                                                                    tool_use_id: String::new(),
+                                                                    tool_name: String::new(),
+                                                                    result: error_msg.clone(),
+                                                                    is_error: true,
+                                                                }));
+                                                            }
                                                         }
-                                                        Err(e) => {
-                                                            let error_msg =
-                                                                format!("Tool error: {e}");
-                                                            let _ = tx.send(Ok(QueryEvent::ToolUseResult {
-                                                                query_id,
-                                                                tool_use_id: tool_id.clone(),
-                                                                tool_name,
-                                                                result: error_msg.clone(),
-                                                                is_error: true,
-                                                            }));
-                                                            tool_results.push((tool_id, error_msg));
+                                                    }
+                                                } else {
+                                                    // Single tool: execute directly (no spawn overhead)
+                                                    for (tool_id, tool_name, effective_input) in approved_tools {
+                                                        let result = tools
+                                                            .execute(&tool_name, effective_input.clone())
+                                                            .await;
+
+                                                        // Run PostToolUse hooks
+                                                        {
+                                                            let output_val = match &result {
+                                                                Ok(o) => serde_json::Value::String(o.content.clone()),
+                                                                Err(e) => serde_json::Value::String(format!("Error: {e}")),
+                                                            };
+                                                            let post_event = crate::hooks::HookEvent::PostToolUse {
+                                                                tool_name: tool_name.clone(),
+                                                                input: effective_input,
+                                                                output: output_val,
+                                                            };
+                                                            let hm = hook_manager.read().await;
+                                                            let _ = hm.run_hooks(&post_event).await;
+                                                        }
+
+                                                        match result {
+                                                            Ok(output) => {
+                                                                let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                    query_id,
+                                                                    tool_use_id: tool_id.clone(),
+                                                                    tool_name,
+                                                                    result: output.content.clone(),
+                                                                    is_error: false,
+                                                                }));
+                                                                tool_results
+                                                                    .push((tool_id, output.content.clone()));
+                                                            }
+                                                            Err(e) => {
+                                                                let error_msg =
+                                                                    format!("Tool error: {e}");
+                                                                let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                    query_id,
+                                                                    tool_use_id: tool_id.clone(),
+                                                                    tool_name,
+                                                                    result: error_msg.clone(),
+                                                                    is_error: true,
+                                                                }));
+                                                                tool_results.push((tool_id, error_msg));
+                                                            }
                                                         }
                                                     }
                                                 }

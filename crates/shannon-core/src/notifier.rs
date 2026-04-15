@@ -350,6 +350,136 @@ impl Default for Notifier {
 }
 
 // ============================================================================
+// DesktopNotifier — OS-level desktop notifications
+// ============================================================================
+
+/// Sends OS-level desktop notifications using platform-native tools.
+///
+/// - Linux: `notify-send` (libnotify)
+/// - macOS: `osascript` (AppleScript)
+/// - Windows: PowerShell toast notifications
+pub struct DesktopNotifier {
+    name: String,
+}
+
+impl DesktopNotifier {
+    /// Create a new `DesktopNotifier`.
+    pub fn new() -> Self {
+        Self {
+            name: "desktop".to_string(),
+        }
+    }
+
+    /// Check if desktop notifications are likely available on this platform.
+    pub fn is_available() -> bool {
+        cfg!(target_os = "linux") || cfg!(target_os = "macos") || cfg!(target_os = "windows")
+    }
+
+    fn send_linux(&self, notification: &Notification) -> Result<(), NotifierError> {
+        let icon = match notification.level {
+            NotificationLevel::Info => "dialog-information",
+            NotificationLevel::Success => "dialog-information",
+            NotificationLevel::Warning => "dialog-warning",
+            NotificationLevel::Error => "dialog-error",
+        };
+        let urgency = match notification.level {
+            NotificationLevel::Info | NotificationLevel::Success => "normal",
+            NotificationLevel::Warning => "normal",
+            NotificationLevel::Error => "critical",
+        };
+        std::process::Command::new("notify-send")
+            .args([
+                "-i", icon,
+                "-u", urgency,
+                "-t", "5000",
+                &notification.title,
+                &notification.body,
+            ])
+            .output()
+            .map_err(|e| NotifierError::HandlerFailed {
+                name: self.name.clone(),
+                reason: format!("notify-send failed: {e}"),
+            })?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    fn send_macos(&self, notification: &Notification) -> Result<(), NotifierError> {
+        // Escape double quotes in body for AppleScript
+        let escaped_body = notification.body.replace('"', "\\\"");
+        let escaped_title = notification.title.replace('"', "\\\"");
+        let script = format!(
+            "display notification \"{escaped_body}\" with title \"{escaped_title}\""
+        );
+        std::process::Command::new("osascript")
+            .args(["-e", &script])
+            .output()
+            .map_err(|e| NotifierError::HandlerFailed {
+                name: self.name.clone(),
+                reason: format!("osascript failed: {e}"),
+            })?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    fn send_windows(&self, notification: &Notification) -> Result<(), NotifierError> {
+        // PowerShell toast notification
+        let escaped_body = notification.body.replace('\'', "''");
+        let escaped_title = notification.title.replace('\'', "''");
+        let ps_script = format!(
+            "[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms'); \
+             $n = New-Object System.Windows.Forms.NotifyIcon; \
+             $n.Icon = [System.Drawing.SystemIcons]::Information; \
+             $n.Visible = $true; \
+             $n.ShowBalloonTip(5000, '{escaped_title}', '{escaped_body}', 'Info')"
+        );
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &ps_script])
+            .output()
+            .map_err(|e| NotifierError::HandlerFailed {
+                name: self.name.clone(),
+                reason: format!("powershell notification failed: {e}"),
+            })?;
+        Ok(())
+    }
+}
+
+impl Default for DesktopNotifier {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NotificationHandler for DesktopNotifier {
+    fn send(&self, notification: &Notification) -> Result<(), NotifierError> {
+        #[cfg(target_os = "linux")]
+        {
+            self.send_linux(notification)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            self.send_macos(notification)
+        }
+        #[cfg(target_os = "windows")]
+        {
+            self.send_windows(notification)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+        {
+            let _ = notification;
+            Err(NotifierError::HandlerFailed {
+                name: self.name.clone(),
+                reason: "Desktop notifications not supported on this platform".to_string(),
+            })
+        }
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 

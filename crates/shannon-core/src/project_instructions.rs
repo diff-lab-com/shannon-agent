@@ -80,6 +80,90 @@ pub fn load_from_cwd() -> Option<ProjectInstructions> {
         .and_then(|dir| load_from_directory(&dir))
 }
 
+/// Gather git context (branch, recent commits, status summary) as a string.
+/// Returns None if not in a git repo or git is unavailable.
+pub fn git_context(dir: &Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(dir)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let mut ctx = String::from("## Git Context\n\n");
+
+    // Current branch
+    if let Ok(branch_out) = std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(dir)
+        .output()
+    {
+        if branch_out.status.success() {
+            let branch = String::from_utf8_lossy(&branch_out.stdout).trim().to_string();
+            if !branch.is_empty() {
+                ctx.push_str(&format!("Branch: {branch}\n"));
+            }
+        }
+    }
+
+    // Recent commits (last 5)
+    if let Ok(log_out) = std::process::Command::new("git")
+        .args(["log", "--oneline", "-5"])
+        .current_dir(dir)
+        .output()
+    {
+        if log_out.status.success() {
+            let log = String::from_utf8_lossy(&log_out.stdout).trim().to_string();
+            if !log.is_empty() {
+                ctx.push_str(&format!("Recent commits:\n{log}\n"));
+            }
+        }
+    }
+
+    // Status summary
+    if let Ok(status_out) = std::process::Command::new("git")
+        .args(["status", "--short"])
+        .current_dir(dir)
+        .output()
+    {
+        if status_out.status.success() {
+            let status = String::from_utf8_lossy(&status_out.stdout).trim().to_string();
+            if !status.is_empty() {
+                let count = status.lines().count();
+                ctx.push_str(&format!("Working tree: {count} changed file(s)\n"));
+            } else {
+                ctx.push_str("Working tree: clean\n");
+            }
+        }
+    }
+
+    Some(ctx)
+}
+
+/// Load full project context: instruction files + git context.
+/// Returns None only if nothing at all is available.
+pub fn load_full_context(dir: &Path) -> Option<ProjectInstructions> {
+    let instructions = load_from_directory(dir);
+    let git_ctx = git_context(dir);
+
+    match (instructions, git_ctx) {
+        (None, None) => None,
+        (Some(instr), None) => Some(instr),
+        (None, Some(git)) => Some(ProjectInstructions {
+            content: format!("# Project Context\n\n{git}"),
+            loaded_files: vec!["git context".to_string()],
+        }),
+        (Some(mut instr), Some(git)) => {
+            instr.content.push_str(&git);
+            instr.loaded_files.push("git context".to_string());
+            Some(instr)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,6 +236,64 @@ mod tests {
         assert!(result.is_some());
         assert!(result.unwrap().content.contains("Parent project rules"));
 
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_git_context_in_repo() {
+        // This test runs in the shannon-code repo itself, so git context should work
+        let cwd = std::env::current_dir().unwrap();
+        let ctx = git_context(&cwd);
+        // We're in a git repo, so should get Some
+        assert!(ctx.is_some(), "Should get git context in a git repo");
+        let ctx = ctx.unwrap();
+        assert!(ctx.contains("Branch"), "Should contain branch info");
+        assert!(ctx.contains("Recent commits"), "Should contain recent commits");
+    }
+
+    #[test]
+    fn test_git_context_not_repo() {
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        let ctx = git_context(&tmp);
+        assert!(ctx.is_none(), "Should return None for non-git directory");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_load_full_context_with_git() {
+        // Running in shannon-code repo: both instructions and git context should load
+        let cwd = std::env::current_dir().unwrap();
+        let result = load_full_context(&cwd);
+        assert!(result.is_some(), "Should load full context in shannon-code repo");
+        let instr = result.unwrap();
+        // Should have either CLAUDE.md or git context (or both)
+        assert!(
+            instr.loaded_files.contains(&"CLAUDE.md".to_string())
+                || instr.loaded_files.contains(&"git context".to_string()),
+            "Should load at least one source"
+        );
+    }
+
+    #[test]
+    fn test_load_full_context_nothing() {
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        let result = load_full_context(&tmp);
+        assert!(result.is_none(), "Should return None when nothing to load");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_load_full_context_instructions_only() {
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(tmp.join("CLAUDE.md"), "# Test instructions").unwrap();
+        let result = load_full_context(&tmp);
+        assert!(result.is_some(), "Should load instructions even without git");
+        let instr = result.unwrap();
+        assert!(instr.content.contains("Test instructions"));
+        assert!(instr.loaded_files.contains(&"CLAUDE.md".to_string()));
         let _ = fs::remove_dir_all(&tmp);
     }
 }

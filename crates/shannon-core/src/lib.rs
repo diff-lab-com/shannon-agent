@@ -30,6 +30,8 @@ pub mod query_engine;
 pub mod tools;
 pub mod plugin_tool;
 pub mod mcp_tool_adapter;
+pub mod checkpoint;
+pub mod smart_context;
 pub mod permissions;
 pub mod state;
 pub mod api;
@@ -87,7 +89,8 @@ pub mod ui_adapter;
 // Re-export key types for convenience
 pub use query_engine::{QueryEngine, QueryContext, QueryEvent};
 pub use tools::{Tool, ToolInfo, ToolRegistry, ToolOutput, ToolResult};
-pub use permissions::{PermissionManager, Permission, PermissionLevel};
+pub use permissions::{PermissionManager, Permission, PermissionLevel, ApprovalMode};
+pub use checkpoint::{CheckpointManager, Checkpoint};
 pub use state::{
     StateManager, SessionState, SessionData, SessionInfo, SessionPersistMetadata,
 };

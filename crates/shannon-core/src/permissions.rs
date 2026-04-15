@@ -20,7 +20,7 @@ pub enum PermissionError {
 }
 
 /// Risk level of a tool operation
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum RiskLevel {
     /// Safe operation (e.g., read-only)
     Safe = 0,
@@ -43,6 +43,76 @@ pub enum PermissionChoice {
     AllowOnce,
     /// Always allow this tool
     AlwaysAllow,
+}
+
+/// Approval policy mode controlling how tool execution is authorized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum ApprovalMode {
+    /// Ask for confirmation on every tool execution.
+    Suggest,
+    /// Auto-approve file operations (edit, write); ask for bash and other risky tools.
+    #[default]
+    AutoEdit,
+    /// Auto-approve everything except critical-risk operations.
+    FullAuto,
+    /// Only allow read operations — no writes, no bash.
+    Readonly,
+}
+
+impl std::fmt::Display for ApprovalMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Suggest => write!(f, "suggest"),
+            Self::AutoEdit => write!(f, "auto-edit"),
+            Self::FullAuto => write!(f, "full-auto"),
+            Self::Readonly => write!(f, "readonly"),
+        }
+    }
+}
+
+impl ApprovalMode {
+    /// Parse from string (case-insensitive).
+    pub fn from_str_ci(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "suggest" | "ask" => Some(Self::Suggest),
+            "auto-edit" | "auto_edit" | "auto" => Some(Self::AutoEdit),
+            "full-auto" | "full_auto" | "fullauto" => Some(Self::FullAuto),
+            "readonly" | "read-only" | "read_only" => Some(Self::Readonly),
+            _ => None,
+        }
+    }
+
+    /// Returns all variant names for display.
+    pub fn all_names() -> &'static [&'static str] {
+        &["suggest", "auto-edit", "full-auto", "readonly"]
+    }
+
+    /// Description of this mode for help text.
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::Suggest => "Ask for confirmation on every tool call",
+            Self::AutoEdit => "Auto-approve file edits; ask for bash/other risky tools",
+            Self::FullAuto => "Auto-approve everything except critical operations",
+            Self::Readonly => "Only allow read operations — no writes, no bash",
+        }
+    }
+
+    /// Whether a tool should be auto-approved under this mode.
+    pub fn should_auto_approve(&self, tool_name: &str, risk_level: RiskLevel) -> bool {
+        match self {
+            Self::Suggest => false,
+            Self::AutoEdit => {
+                // Auto-approve file operations; ask for everything else
+                let is_file_tool = matches!(
+                    tool_name,
+                    "edit" | "write" | "create_file" | "replace" | "file_edit"
+                );
+                is_file_tool && risk_level <= RiskLevel::Medium
+            }
+            Self::FullAuto => risk_level < RiskLevel::Critical,
+            Self::Readonly => false, // handled at a higher level
+        }
+    }
 }
 
 /// A prompt requesting user permission for a tool operation
@@ -351,6 +421,9 @@ pub struct PermissionManager {
 
     /// Reusable permission classifier (avoids recompiling regex patterns per call)
     classifier: crate::permission_classifier::PermissionClassifier,
+
+    /// Current approval policy mode
+    approval_mode: ApprovalMode,
 }
 
 impl PermissionManager {
@@ -363,6 +436,7 @@ impl PermissionManager {
             tool_policies: HashMap::new(),
             memory: PermissionMemory::new(),
             classifier: crate::permission_classifier::PermissionClassifier::new(),
+            approval_mode: ApprovalMode::default(),
         };
 
         // Register default tool policies for common tools
@@ -543,6 +617,16 @@ impl PermissionManager {
         self.memory = PermissionMemory::new();
     }
 
+    /// Get the current approval mode.
+    pub fn approval_mode(&self) -> ApprovalMode {
+        self.approval_mode
+    }
+
+    /// Set the approval mode.
+    pub fn set_approval_mode(&mut self, mode: ApprovalMode) {
+        self.approval_mode = mode;
+    }
+
     /// Create a permission prompt for a tool execution
     pub fn create_permission_prompt(
         &self,
@@ -673,7 +757,65 @@ impl PermissionManager {
         tool_name: &str,
         tool_input: &serde_json::Value,
     ) -> Result<Option<PermissionPrompt>, PermissionError> {
-        // First, run the classifier (reuses pre-compiled regex patterns)
+        // --- Approval mode overrides ---
+        match self.approval_mode {
+            ApprovalMode::Readonly => {
+                // Only allow read-only tools
+                let is_read_tool = matches!(
+                    tool_name,
+                    "read" | "search" | "grep" | "glob" | "list_directory"
+                        | "file_info" | "git_log" | "git_diff" | "git_status"
+                        | "web_search" | "web_fetch" | "lsp_hover" | "lsp_definition"
+                        | "lsp_references" | "lsp_diagnostics"
+                );
+                if is_read_tool {
+                    return Ok(None);
+                }
+                return Err(PermissionError::Denied(format!(
+                    "Readonly mode: {tool_name} is not a read operation"
+                )));
+            }
+            ApprovalMode::Suggest => {
+                // Always prompt unless always-allowed in memory
+                if self.memory.is_always_allowed(session_id, tool_name) {
+                    return Ok(None);
+                }
+                // Fall through to classifier for risk level and prompt creation
+            }
+            ApprovalMode::AutoEdit | ApprovalMode::FullAuto => {
+                // Run classifier first to get risk level
+                let result = self.classifier.classify(tool_name, tool_input);
+                let risk = convert_classifier_risk(result.risk_level);
+
+                // Check memory for always-allowed
+                if self.memory.is_always_allowed(session_id, tool_name) {
+                    return Ok(None);
+                }
+
+                // If the mode says auto-approve, do it
+                if self.approval_mode.should_auto_approve(tool_name, risk) {
+                    return Ok(None);
+                }
+
+                // Denied by classifier
+                if result.decision == crate::permission_classifier::RuleDecision::Deny {
+                    return Err(PermissionError::Denied(format!(
+                        "Operation denied by classifier: {} (risk: {})",
+                        result.reason, result.risk_level
+                    )));
+                }
+
+                // Otherwise prompt
+                return self.create_permission_prompt_with_risk(
+                    tool_name,
+                    tool_input,
+                    session_id,
+                    risk,
+                );
+            }
+        }
+
+        // --- Default classifier logic (Suggest mode path) ---
         let result = self.classifier.classify(tool_name, tool_input);
 
         match result.decision {
@@ -684,26 +826,13 @@ impl PermissionManager {
                 )))
             }
             crate::permission_classifier::RuleDecision::Allow => {
-                // Auto-allow for low-risk operations
-                if matches!(
-                    result.risk_level,
-                    crate::permission_classifier::RiskLevel::None
-                        | crate::permission_classifier::RiskLevel::Low
-                ) {
-                    // Check if already always-allowed
-                    if self.memory.is_always_allowed(session_id, tool_name) {
-                        return Ok(None);
-                    }
-                    Ok(None) // Low-risk, auto-allow
-                } else {
-                    // Higher risk but classifier said allow — still prompt
-                    self.create_permission_prompt_with_risk(
-                        tool_name,
-                        tool_input,
-                        session_id,
-                        convert_classifier_risk(result.risk_level),
-                    )
-                }
+                // For suggest mode, always prompt
+                self.create_permission_prompt_with_risk(
+                    tool_name,
+                    tool_input,
+                    session_id,
+                    convert_classifier_risk(result.risk_level),
+                )
             }
             crate::permission_classifier::RuleDecision::Ask => {
                 // Always prompt the user
@@ -1278,5 +1407,86 @@ mod tests {
             sid,
         ).unwrap();
         assert_eq!(prompt.risk_level, RiskLevel::Critical);
+    }
+
+    // --- ApprovalMode tests ---
+
+    #[test]
+    fn test_approval_mode_default() {
+        assert_eq!(ApprovalMode::default(), ApprovalMode::AutoEdit);
+    }
+
+    #[test]
+    fn test_approval_mode_display() {
+        assert_eq!(ApprovalMode::Suggest.to_string(), "suggest");
+        assert_eq!(ApprovalMode::AutoEdit.to_string(), "auto-edit");
+        assert_eq!(ApprovalMode::FullAuto.to_string(), "full-auto");
+        assert_eq!(ApprovalMode::Readonly.to_string(), "readonly");
+    }
+
+    #[test]
+    fn test_approval_mode_from_str() {
+        assert_eq!(ApprovalMode::from_str_ci("suggest"), Some(ApprovalMode::Suggest));
+        assert_eq!(ApprovalMode::from_str_ci("ask"), Some(ApprovalMode::Suggest));
+        assert_eq!(ApprovalMode::from_str_ci("auto-edit"), Some(ApprovalMode::AutoEdit));
+        assert_eq!(ApprovalMode::from_str_ci("auto"), Some(ApprovalMode::AutoEdit));
+        assert_eq!(ApprovalMode::from_str_ci("full-auto"), Some(ApprovalMode::FullAuto));
+        assert_eq!(ApprovalMode::from_str_ci("readonly"), Some(ApprovalMode::Readonly));
+        assert_eq!(ApprovalMode::from_str_ci("invalid"), None);
+    }
+
+    #[test]
+    fn test_approval_mode_auto_approve_suggest() {
+        let mode = ApprovalMode::Suggest;
+        assert!(!mode.should_auto_approve("edit", RiskLevel::Low));
+        assert!(!mode.should_auto_approve("bash", RiskLevel::Low));
+    }
+
+    #[test]
+    fn test_approval_mode_auto_approve_auto_edit() {
+        let mode = ApprovalMode::AutoEdit;
+        // File tools should be auto-approved at medium risk or below
+        assert!(mode.should_auto_approve("edit", RiskLevel::Low));
+        assert!(mode.should_auto_approve("write", RiskLevel::Medium));
+        // Bash should not be auto-approved
+        assert!(!mode.should_auto_approve("bash", RiskLevel::Low));
+        // High risk file tools should not be auto-approved
+        assert!(!mode.should_auto_approve("edit", RiskLevel::High));
+    }
+
+    #[test]
+    fn test_approval_mode_auto_approve_full_auto() {
+        let mode = ApprovalMode::FullAuto;
+        assert!(mode.should_auto_approve("edit", RiskLevel::Low));
+        assert!(mode.should_auto_approve("bash", RiskLevel::Medium));
+        assert!(mode.should_auto_approve("bash", RiskLevel::High));
+        // Only critical is blocked
+        assert!(!mode.should_auto_approve("bash", RiskLevel::Critical));
+    }
+
+    #[test]
+    fn test_set_and_get_approval_mode() {
+        let mut mgr = PermissionManager::new();
+        assert_eq!(mgr.approval_mode(), ApprovalMode::AutoEdit);
+        mgr.set_approval_mode(ApprovalMode::FullAuto);
+        assert_eq!(mgr.approval_mode(), ApprovalMode::FullAuto);
+        mgr.set_approval_mode(ApprovalMode::Readonly);
+        assert_eq!(mgr.approval_mode(), ApprovalMode::Readonly);
+    }
+
+    #[test]
+    fn test_readonly_mode_blocks_writes() {
+        let mut mgr = PermissionManager::new();
+        mgr.set_approval_mode(ApprovalMode::Readonly);
+        let sid = Uuid::new_v4();
+
+        // Read tools should be allowed
+        let result = mgr.classify_and_check(sid, "read", &serde_json::json!({"path": "/tmp/test"}));
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none()); // auto-allowed
+
+        // Write tools should be denied
+        let result = mgr.classify_and_check(sid, "bash", &serde_json::json!({"command": "ls"}));
+        assert!(result.is_err());
     }
 }

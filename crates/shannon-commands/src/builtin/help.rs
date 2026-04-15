@@ -478,6 +478,141 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("Use to diagnose issues with your Shannon Code installation and environment")
             .with_related(vec!["config", "debug"])
         ),
+        "hooks" => Some(
+            CommandHelpEntry::new(
+                "hooks".to_string(),
+                "View and manage lifecycle hooks (PreToolUse, PostToolUse, etc.)".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("[reload|path]")
+            .with_examples(vec!["/hooks", "/hooks reload", "/hooks path"])
+            .with_when_to_use("Use to inspect configured shell hooks or reload hook configuration after editing hooks.json")
+            .with_related(vec!["config", "permissions"])
+        ),
+        "remember" => Some(
+            CommandHelpEntry::new(
+                "remember".to_string(),
+                "Save a memory for future sessions".to_string(),
+                HelpCategory::System,
+            )
+            .with_aliases(vec!["mem", "memo"])
+            .with_arg_hint("<text to remember>")
+            .with_examples(vec!["/remember Always use tabs not spaces in this project", "/remember The API endpoint is /v2/graphql"])
+            .with_when_to_use("Use to save important context, preferences, or decisions that should persist across sessions")
+            .with_related(vec!["recall", "forget", "memory"])
+        ),
+        "recall" => Some(
+            CommandHelpEntry::new(
+                "recall".to_string(),
+                "Search and retrieve saved memories".to_string(),
+                HelpCategory::System,
+            )
+            .with_aliases(vec!["search-memory"])
+            .with_arg_hint("[query]")
+            .with_examples(vec!["/recall", "/recall API endpoint", "/recall tabs"])
+            .with_when_to_use("Use to find previously saved memories. Without a query, lists all memories for the current project")
+            .with_related(vec!["remember", "forget", "memory"])
+        ),
+        "forget" => Some(
+            CommandHelpEntry::new(
+                "forget".to_string(),
+                "Delete a saved memory by ID prefix".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("<memory-id-prefix>")
+            .with_examples(vec!["/forget abc12345"])
+            .with_when_to_use("Use to remove a memory you no longer need. Use /recall first to find the ID")
+            .with_related(vec!["remember", "recall", "memory"])
+        ),
+        "memory" => Some(
+            CommandHelpEntry::new(
+                "memory".to_string(),
+                "Memory store stats and maintenance".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("[stats|cleanup]")
+            .with_examples(vec!["/memory", "/memory cleanup"])
+            .with_when_to_use("Use to see memory store statistics or run cleanup to remove stale entries")
+            .with_related(vec!["remember", "recall", "forget"])
+        ),
+        "image" => Some(
+            CommandHelpEntry::new(
+                "image".to_string(),
+                "Attach an image file for the AI to analyze".to_string(),
+                HelpCategory::System,
+            )
+            .with_aliases(vec!["img", "screenshot"])
+            .with_arg_hint("<file-path> [prompt]")
+            .with_examples(vec!["/image screenshot.png", "/image diagram.png Explain this architecture", "/img ~/photos/error.jpg What went wrong?"])
+            .with_when_to_use("Use to share a screenshot, diagram, or photo with the AI for visual analysis")
+            .with_related(vec!["pdf"])
+        ),
+        "mode" => Some(
+            CommandHelpEntry::new(
+                "mode".to_string(),
+                "View or change the approval policy mode for tool execution".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("[suggest|auto-edit|full-auto|readonly]")
+            .with_examples(vec!["/mode", "/mode auto-edit", "/mode full-auto", "/mode readonly"])
+            .with_when_to_use("Use to control how tools are approved: suggest asks every time, auto-edit auto-approves file edits, full-auto approves everything, readonly blocks writes")
+            .with_related(vec!["permissions", "config"])
+        ),
+        "context" => Some(
+            CommandHelpEntry::new(
+                "context".to_string(),
+                "Show or reload project context (CLAUDE.md, git info)".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("[reload]")
+            .with_examples(vec!["/context", "/context reload"])
+            .with_when_to_use("Use to see what project context is loaded or to reload after changes to CLAUDE.md")
+            .with_related(vec!["mode", "init"])
+        ),
+        "undo" => Some(
+            CommandHelpEntry::new(
+                "undo".to_string(),
+                "Revert file changes using git checkpoints".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("[list|<number>]")
+            .with_examples(vec!["/undo", "/undo list", "/undo 2"])
+            .with_when_to_use("Use to undo file changes made by AI tools. Checkpoints are created automatically before file modifications.")
+            .with_related(vec!["diff", "status"])
+        ),
+        "notify" => Some(
+            CommandHelpEntry::new(
+                "notify".to_string(),
+                "Toggle desktop notifications for query completion".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("[on|off|test]")
+            .with_examples(vec!["/notify", "/notify on", "/notify off", "/notify test"])
+            .with_when_to_use("Use to enable OS desktop notifications when long-running queries finish")
+            .with_related(vec!["mode", "cost"])
+        ),
+        "create-pr" => Some(
+            CommandHelpEntry::new(
+                "create-pr".to_string(),
+                "Create a GitHub pull request from current branch".to_string(),
+                HelpCategory::Git,
+            )
+            .with_arg_hint("[<title>] [--draft] [--base <branch>] [--web]")
+            .with_examples(vec!["/create-pr", "/create-pr fix login bug", "/create-pr --draft", "/create-pr --base develop"])
+            .with_when_to_use("Use when ready to create a PR from your current feature branch")
+            .with_related(vec!["status", "diff", "branch"])
+        ),
+        "patch" => Some(
+            CommandHelpEntry::new(
+                "patch".to_string(),
+                "Search/replace with diff preview before applying".to_string(),
+                HelpCategory::Files,
+            )
+            .with_arg_hint("<file> <search> --- <replace> [--apply] [--all]")
+            .with_examples(vec!["/patch src/main.rs old_fn --- new_fn", "/patch --apply src/lib.rs foo --- bar", "/patch --all config.rs old_val --- new_val"])
+            .with_when_to_use("Use to preview and apply targeted text replacements in files")
+            .with_related(vec!["edit", "diff", "undo"])
+        ),
         "compact" => Some(
             CommandHelpEntry::new(
                 "compact".to_string(),
@@ -749,6 +884,18 @@ pub fn all_help_entries() -> Vec<CommandHelpEntry> {
         get_command_help("review").unwrap(),
         get_command_help("local-models").unwrap(),
         get_command_help("ci").unwrap(),
+        get_command_help("hooks").unwrap(),
+        get_command_help("remember").unwrap(),
+        get_command_help("recall").unwrap(),
+        get_command_help("forget").unwrap(),
+        get_command_help("memory").unwrap(),
+        get_command_help("image").unwrap(),
+        get_command_help("mode").unwrap(),
+        get_command_help("context").unwrap(),
+        get_command_help("undo").unwrap(),
+        get_command_help("notify").unwrap(),
+        get_command_help("create-pr").unwrap(),
+        get_command_help("patch").unwrap(),
     ]
 }
 

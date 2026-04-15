@@ -59,7 +59,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
     let is_plugin_command = repl.plugin_manager.get_plugin_commands()
         .iter().any(|c| c.name == cmd_name);
     // Commands handled in the match block but not in the global registry
-    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions"];
+    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "notify", "create-pr", "patch"];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
     if command_exists || is_plugin_command || is_repl_command {
@@ -93,6 +93,18 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "review" => handle_review(repl, args)?,
             "local-models" | "local" => handle_local_models(repl)?,
             "ci" | "gh-actions" => handle_ci(repl, args)?,
+            "hooks" => handle_hooks(repl, args)?,
+            "remember" | "mem" | "memo" => handle_remember(repl, args)?,
+            "recall" | "search-memory" => handle_recall(repl, args)?,
+            "forget" => handle_forget(repl, args)?,
+            "memory" => handle_memory(repl, args)?,
+            "image" | "img" | "screenshot" => handle_image(repl, args)?,
+            "mode" => handle_mode(repl, args)?,
+            "context" => handle_context(repl, args)?,
+            "undo" => handle_undo(repl, args)?,
+            "notify" => handle_notify(repl, args)?,
+            "create-pr" => handle_create_pr(repl, args)?,
+            "patch" => handle_patch(repl, args)?,
             _ => handle_other_command(repl, cmd_name, args)?,
         }
         Ok(())
@@ -278,6 +290,928 @@ fn handle_config(repl: &mut Repl, args: &str) -> Result<()> {
     };
 
     repl.chat.add_message(ChatRole::System, output);
+    Ok(())
+}
+
+fn handle_hooks(repl: &mut Repl, args: &str) -> Result<()> {
+    use shannon_core::hooks::HookManager;
+
+    let mut mgr = HookManager::new();
+    if let Err(e) = mgr.load() {
+        repl.chat.add_message(
+            ChatRole::System,
+            format!("No hooks configured.\n\nConfig paths checked:\n  User: {}\n  Project: {}\n\nError: {e}\n\nCreate ~/.shannon/hooks.json or .shannon/hooks.json to configure hooks.",
+                mgr.user_config_path().display(),
+                mgr.project_config_path().display()),
+        );
+        return Ok(());
+    }
+
+    let subcmd = args.split_whitespace().next().unwrap_or("");
+
+    match subcmd {
+        "reload" | "refresh" => {
+            let mut mgr2 = HookManager::new();
+            match mgr2.load() {
+                Ok(()) => { repl.chat.add_message(ChatRole::System, "Hooks reloaded successfully.".to_string()); }
+                Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to reload hooks: {e}")); }
+            }
+            return Ok(());
+        }
+        "path" | "paths" => {
+            repl.chat.add_message(
+                ChatRole::System,
+                format!("Hook config paths:\n  User: {}\n  Project: {}",
+                    mgr.user_config_path().display(),
+                    mgr.project_config_path().display()),
+            );
+            return Ok(());
+        }
+        _ => {}
+    }
+
+    let hf = mgr.hooks_file();
+    let event_types = mgr.configured_event_types();
+
+    if event_types.is_empty() {
+        repl.chat.add_message(
+            ChatRole::System,
+            format!("No hooks configured.\n\nConfig paths:\n  User: {}\n  Project: {}",
+                mgr.user_config_path().display(),
+                mgr.project_config_path().display()),
+        );
+        return Ok(());
+    }
+
+    let mut output = String::from("Configured Hooks:\n\n");
+    for event_type in &event_types {
+        let key = format!("{event_type:?}");
+        output.push_str(&format!("  {key}:\n"));
+        if let Some(configs) = hf.hooks.get(&key) {
+            for (i, cfg) in configs.iter().enumerate() {
+                output.push_str(&format!("    [{}] matcher: \"{}\" ({} hook(s))\n",
+                    i + 1, cfg.matcher, cfg.hooks.len()));
+                for hook in &cfg.hooks {
+                    let blocking = if hook.blocking { "blocking" } else { "non-blocking" };
+                    let timeout = hook.timeout_duration();
+                    output.push_str(&format!("      command: {}\n", hook.command));
+                    output.push_str(&format!("      mode: {blocking}, timeout: {}s\n", timeout.as_secs()));
+                }
+            }
+        }
+    }
+
+    output.push_str(&format!("\nPaths: {} | {}",
+        mgr.user_config_path().display(),
+        mgr.project_config_path().display()));
+    output.push_str("\n\nUsage: /hooks [reload|path]");
+
+    repl.chat.add_message(ChatRole::System, output);
+    Ok(())
+}
+
+fn handle_remember(repl: &mut Repl, args: &str) -> Result<()> {
+    use shannon_core::{MemoryEntry, MemoryCategory};
+
+    let content = args.trim();
+    if content.is_empty() {
+        repl.chat.add_message(ChatRole::System, "Usage: /remember <text to remember>".to_string());
+        return Ok(());
+    }
+
+    let engine = match repl.query_engine.as_ref() {
+        Some(e) => e,
+        None => {
+            repl.chat.add_message(ChatRole::System, "Memory store not available.".to_string());
+            return Ok(());
+        }
+    };
+
+    let memory = match engine.memory() {
+        Some(m) => m,
+        None => {
+            repl.chat.add_message(ChatRole::System, "Memory store not configured.".to_string());
+            return Ok(());
+        }
+    };
+
+    let project = repl.state.working_directory.clone();
+    let mut store = memory.write().unwrap();
+    let entry = MemoryEntry::new(&project, MemoryCategory::Context, content);
+    let id = entry.id.clone();
+    let _ = store.add(entry);
+    if let Err(e) = store.save() {
+        repl.chat.add_message(ChatRole::System, format!("Failed to save memory: {e}"));
+        return Ok(());
+    }
+    drop(store);
+
+    repl.chat.add_message(ChatRole::System, format!("Remembered (id: {}...)", &id[..8]));
+    Ok(())
+}
+
+fn handle_recall(repl: &mut Repl, args: &str) -> Result<()> {
+    let engine = match repl.query_engine.as_ref() {
+        Some(e) => e,
+        None => {
+            repl.chat.add_message(ChatRole::System, "Memory store not available.".to_string());
+            return Ok(());
+        }
+    };
+
+    let memory = match engine.memory() {
+        Some(m) => m,
+        None => {
+            repl.chat.add_message(ChatRole::System, "Memory store not configured.".to_string());
+            return Ok(());
+        }
+    };
+
+    let store = memory.read().unwrap();
+    let project = repl.state.working_directory.clone();
+
+    let results = if args.trim().is_empty() {
+        store.project_memories(&project)
+    } else {
+        store.search(args.trim(), Some(&project))
+    };
+
+    if results.is_empty() {
+        repl.chat.add_message(ChatRole::System, "No memories found.".to_string());
+        return Ok(());
+    }
+
+    let mut output = format!("Found {} memory(ies):\n\n", results.len());
+    for entry in &results {
+        let preview = if entry.content.len() > 100 {
+            format!("{}...", &entry.content[..100])
+        } else {
+            entry.content.clone()
+        };
+        output.push_str(&format!("  [{}] {} (category: {})\n", &entry.id[..8], preview, entry.category));
+    }
+    output.push_str("\nUse /forget <id> to remove a memory.");
+    repl.chat.add_message(ChatRole::System, output);
+    Ok(())
+}
+
+fn handle_forget(repl: &mut Repl, args: &str) -> Result<()> {
+    let id_prefix = args.trim();
+    if id_prefix.is_empty() {
+        repl.chat.add_message(ChatRole::System, "Usage: /forget <memory-id-prefix>".to_string());
+        return Ok(());
+    }
+
+    let engine = match repl.query_engine.as_ref() {
+        Some(e) => e,
+        None => {
+            repl.chat.add_message(ChatRole::System, "Memory store not available.".to_string());
+            return Ok(());
+        }
+    };
+
+    let memory = match engine.memory() {
+        Some(m) => m,
+        None => {
+            repl.chat.add_message(ChatRole::System, "Memory store not configured.".to_string());
+            return Ok(());
+        }
+    };
+
+    let mut store = memory.write().unwrap();
+    // Find by prefix match
+    let found = store.project_memories(&repl.state.working_directory)
+        .into_iter()
+        .find(|e| e.id.starts_with(id_prefix));
+
+    match found {
+        Some(entry) => {
+            let display = &entry.id[..8.min(entry.id.len())];
+            match store.delete(&entry.id) {
+                Ok(true) => {
+                    let _ = store.save();
+                    repl.chat.add_message(ChatRole::System, format!("Forgot memory {display}..."));
+                }
+                Ok(false) => { repl.chat.add_message(ChatRole::System, "Memory not found.".to_string()); }
+                Err(e) => { repl.chat.add_message(ChatRole::System, format!("Error deleting memory: {e}")); }
+            }
+        }
+        None => { repl.chat.add_message(ChatRole::System, format!("No memory found matching '{id_prefix}'")); }
+    }
+    Ok(())
+}
+
+fn handle_memory(repl: &mut Repl, args: &str) -> Result<()> {
+    let subcmd = args.split_whitespace().next().unwrap_or("");
+
+    match subcmd {
+        "cleanup" | "clean" => {
+            let engine = match repl.query_engine.as_ref() {
+                Some(e) => e,
+                None => {
+                    repl.chat.add_message(ChatRole::System, "Memory store not available.".to_string());
+                    return Ok(());
+                }
+            };
+            let memory = match engine.memory() {
+                Some(m) => m,
+                None => {
+                    repl.chat.add_message(ChatRole::System, "Memory store not configured.".to_string());
+                    return Ok(());
+                }
+            };
+            let mut store = memory.write().unwrap();
+            let removed = store.cleanup(chrono::Duration::days(90), 500).unwrap_or(0);
+            repl.chat.add_message(ChatRole::System, format!("Cleanup complete: removed {removed} stale memories. {} remaining.", store.len()));
+        }
+        "stats" | "status" | _ => {
+            let engine = match repl.query_engine.as_ref() {
+                Some(e) => e,
+                None => {
+                    repl.chat.add_message(ChatRole::System, "Memory store not available.".to_string());
+                    return Ok(());
+                }
+            };
+            let memory = match engine.memory() {
+                Some(m) => m,
+                None => {
+                    repl.chat.add_message(ChatRole::System, "Memory store not configured.".to_string());
+                    return Ok(());
+                }
+            };
+            let store = memory.read().unwrap();
+            let project = repl.state.working_directory.clone();
+            let project_count = store.project_memories(&project).len();
+            let total = store.len();
+            repl.chat.add_message(ChatRole::System, format!(
+                "Memory Store:\n  Total entries: {total}\n  Current project: {project_count}\n\nCommands: /remember <text>, /recall [query], /forget <id>, /memory cleanup"));
+        }
+    }
+    Ok(())
+}
+
+fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
+    use base64::Engine;
+    use shannon_core::api::{ContentBlock, ImageSource};
+
+    let input = args.trim();
+    if input.is_empty() {
+        repl.chat.add_message(ChatRole::System,
+            "Usage: /image <path> [optional prompt]\n\nAttach an image file to the conversation. Supports PNG, JPG, GIF, WebP, BMP, SVG.".to_string());
+        return Ok(());
+    }
+
+    // Split path from optional prompt
+    let (path, prompt) = if input.starts_with('"') {
+        // Quoted path: "path with spaces" prompt
+        if let Some(end) = input[1..].find('"') {
+            let path = &input[1..end + 1];
+            let prompt = input[end + 2..].trim();
+            (path.to_string(), if prompt.is_empty() { "Describe this image.".to_string() } else { prompt.to_string() })
+        } else {
+            (input.to_string(), "Describe this image.".to_string())
+        }
+    } else {
+        let mut parts = input.splitn(2, ' ');
+        let path = parts.next().unwrap_or("").to_string();
+        let prompt = parts.next().map(|p| p.trim().to_string())
+            .unwrap_or_else(|| "Describe this image.".to_string());
+        (path, prompt)
+    };
+
+    // Expand ~ to home dir
+    let expanded_path = if path.starts_with("~/") {
+        if let Some(home) = dirs::home_dir() {
+            home.join(&path[2..]).to_string_lossy().to_string()
+        } else {
+            path.clone()
+        }
+    } else {
+        path.clone()
+    };
+
+    let file_path = std::path::Path::new(&expanded_path);
+    if !file_path.exists() {
+        repl.chat.add_message(ChatRole::System, format!("File not found: {path}"));
+        return Ok(());
+    }
+
+    let bytes = match std::fs::read(file_path) {
+        Ok(b) => b,
+        Err(e) => {
+            repl.chat.add_message(ChatRole::System, format!("Failed to read file: {e}"));
+            return Ok(());
+        }
+    };
+
+    // Detect media type from extension
+    let media_type = match file_path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase().as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        _ => {
+            repl.chat.add_message(ChatRole::System,
+                format!("Unsupported image format: {}. Supported: PNG, JPG, GIF, WebP, BMP, SVG", path));
+            return Ok(());
+        }
+    };
+
+    let engine = match repl.query_engine.as_mut() {
+        Some(e) => e,
+        None => {
+            repl.chat.add_message(ChatRole::System, "Query engine not available.".to_string());
+            return Ok(());
+        }
+    };
+
+    let base64_data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let blocks = vec![
+        ContentBlock::Text { text: prompt },
+        ContentBlock::Image {
+            source: ImageSource {
+                media_type: media_type.to_string(),
+                data: base64_data,
+            },
+        },
+    ];
+
+    engine.add_user_message_blocks(blocks);
+    repl.chat.add_message(ChatRole::User, format!("[Image attached: {}]", file_path.display()));
+    repl.chat.add_message(ChatRole::System, "Image sent to model. Processing...".to_string());
+
+    // Trigger query processing
+    super::query::handle_query(repl, &format!("Please analyze the image I just shared: {}", file_path.display()))?;
+    Ok(())
+}
+
+fn handle_mode(repl: &mut Repl, args: &str) -> Result<()> {
+    use shannon_core::permissions::ApprovalMode;
+
+    let trimmed = args.trim();
+
+    if trimmed.is_empty() {
+        // Show current mode and available options
+        let current = {
+            let query_engine = repl.query_engine.as_ref().expect("query engine missing");
+            let permissions = query_engine.permissions().read().expect("permissions rwlock poisoned");
+            permissions.approval_mode()
+        };
+        let mut msg = format!("Current approval mode: {current}\n\nAvailable modes:\n");
+        for name in ApprovalMode::all_names() {
+            let mode = ApprovalMode::from_str_ci(name).unwrap();
+            let marker = if mode == current { " *" } else { "" };
+            msg.push_str(&format!("  {name}{marker} — {}\n", mode.description()));
+        }
+        {
+            repl.chat.add_message(ChatRole::System, msg);
+        }
+        return Ok(());
+    }
+
+    match ApprovalMode::from_str_ci(trimmed) {
+        Some(mode) => {
+            let query_engine = repl.query_engine.as_ref().expect("query engine missing");
+            query_engine.permissions().write().expect("permissions rwlock poisoned").set_approval_mode(mode);
+            {
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("Approval mode set to: {mode}\n{}", mode.description()),
+                );
+            }
+            Ok(())
+        }
+        None => {
+            let valid = ApprovalMode::all_names().join(", ");
+            {
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("Unknown mode: '{trimmed}'. Valid modes: {valid}"),
+                );
+            }
+            Ok(())
+        }
+    }
+}
+
+fn handle_context(repl: &mut Repl, args: &str) -> Result<()> {
+    let trimmed = args.trim();
+
+    if trimmed == "reload" {
+        // Reload project context into the query engine
+        let cwd = std::env::current_dir().unwrap_or_default();
+        match shannon_core::project_instructions::load_full_context(&cwd) {
+            Some(instructions) => {
+                let query_engine = repl.query_engine.as_mut().expect("query engine missing");
+                query_engine.append_system_prompt(&instructions.content);
+                let files = instructions.loaded_files.join(", ");
+                {
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        format!("Project context reloaded. Loaded: {files}"),
+                    );
+                }
+            }
+            None => {
+                {
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        "No project context found (no CLAUDE.md/AGENTS.md/GEMINI.md and not in a git repo)".to_string(),
+                    );
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    // Show current project context info
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let mut msg = String::from("Project Context:\n\n");
+
+    // Check instruction files
+    let instruction_files = ["CLAUDE.md", "AGENTS.md", "GEMINI.md"];
+    let mut found_any = false;
+    for filename in &instruction_files {
+        let path = cwd.join(filename);
+        if path.is_file() {
+            found_any = true;
+            msg.push_str(&format!("  {filename}: found\n"));
+        } else {
+            msg.push_str(&format!("  {filename}: not found\n"));
+        }
+    }
+
+    // Check parent directories for instruction files
+    let mut current = cwd.parent();
+    while let Some(parent) = current {
+        for filename in &instruction_files {
+            if parent.join(filename).is_file() {
+                msg.push_str(&format!("  {filename}: found in {}\n", parent.display()));
+                found_any = true;
+            }
+        }
+        current = parent.parent();
+    }
+
+    // Git context
+    if let Some(git_ctx) = shannon_core::project_instructions::git_context(&cwd) {
+        msg.push_str(&format!("\n{git_ctx}"));
+        found_any = true;
+    } else {
+        msg.push_str("\nGit: not a git repository\n");
+    }
+
+    if !found_any {
+        msg.push_str("\nNo project context available. Create a CLAUDE.md file or initialize a git repo.");
+    }
+
+    msg.push_str("\nTip: Use /context reload to refresh the project context.");
+    {
+        repl.chat.add_message(ChatRole::System, msg);
+    }
+    Ok(())
+}
+
+fn handle_undo(repl: &mut Repl, args: &str) -> Result<()> {
+    let trimmed = args.trim();
+    let mgr = &repl.checkpoint_manager;
+
+    if !mgr.is_enabled() {
+        repl.chat.add_message(
+            ChatRole::System,
+            "Undo unavailable: not in a git repository.".to_string(),
+        );
+        return Ok(());
+    }
+
+    // /undo list — show checkpoints
+    if trimmed == "list" || trimmed == "ls" {
+        let checkpoints = mgr.list_checkpoints();
+        if checkpoints.is_empty() {
+            repl.chat.add_message(
+                ChatRole::System,
+                "No checkpoints available. Checkpoints are created before file-modifying operations.".to_string(),
+            );
+            return Ok(());
+        }
+        let mut msg = String::from("Checkpoints:\n\n");
+        for (i, cp) in checkpoints.iter().enumerate() {
+            let time = chrono::DateTime::from_timestamp(cp.timestamp, 0)
+                .map(|t| t.format("%H:%M:%S").to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            msg.push_str(&format!("  [{}] {} {} — {}\n", i, cp.short_hash, time, cp.description));
+        }
+        msg.push_str("\nUse /undo <number> to revert to a specific checkpoint.");
+        msg.push_str("\nUse /undo (no args) to revert the last checkpoint.");
+        repl.chat.add_message(ChatRole::System, msg);
+        return Ok(());
+    }
+
+    // /undo <number> — revert to specific checkpoint
+    if let Ok(index) = trimmed.parse::<usize>() {
+        match mgr.revert_to(index) {
+            Ok(cp) => {
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("Reverted to checkpoint [{}] ({})\n{}", index, cp.short_hash, cp.description),
+                );
+            }
+            Err(e) => {
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("Revert failed: {e}"),
+                );
+            }
+        }
+        return Ok(());
+    }
+
+    // /undo (no args) — revert last checkpoint
+    if trimmed.is_empty() {
+        match mgr.undo_last() {
+            Ok(cp) => {
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("Undid last checkpoint ({})\n{}", cp.short_hash, cp.description),
+                );
+            }
+            Err(e) => {
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("Undo failed: {e}. Use /undo list to see available checkpoints."),
+                );
+            }
+        }
+        return Ok(());
+    }
+
+    repl.chat.add_message(
+        ChatRole::System,
+        "Usage: /undo [list|<number>]".to_string(),
+    );
+    Ok(())
+}
+
+fn handle_notify(repl: &mut Repl, args: &str) -> Result<()> {
+    let trimmed = args.trim();
+
+    match trimmed {
+        "on" | "enable" | "true" | "yes" => {
+            repl.notifications_enabled = true;
+            repl.chat.add_message(
+                ChatRole::System,
+                "Desktop notifications enabled. You'll be notified when queries complete.".to_string(),
+            );
+        }
+        "off" | "disable" | "false" | "no" => {
+            repl.notifications_enabled = false;
+            repl.chat.add_message(
+                ChatRole::System,
+                "Desktop notifications disabled.".to_string(),
+            );
+        }
+        "test" => {
+            repl.notifier.info("Shannon", "Test notification!").ok();
+            repl.chat.add_message(
+                ChatRole::System,
+                "Test notification sent.".to_string(),
+            );
+        }
+        _ => {
+            let status = if repl.notifications_enabled { "enabled" } else { "disabled" };
+            repl.chat.add_message(
+                ChatRole::System,
+                format!(
+                    "Desktop notifications: {status}\n\n\
+                     Usage:\n  /notify on  — enable notifications\n  \
+                     /notify off — disable notifications\n  \
+                     /notify test — send a test notification"
+                ),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn handle_create_pr(repl: &mut Repl, args: &str) -> Result<()> {
+    let trimmed = args.trim();
+
+    // Show help
+    if trimmed == "help" || trimmed == "--help" || trimmed == "-h" {
+        repl.chat.add_message(ChatRole::System,
+            "Create a GitHub pull request\n\n\
+             Usage:\n  /create-pr            — interactive PR creation\n  \
+             /create-pr <title>     — create with custom title\n  \
+             /create-pr --draft     — create as draft PR\n  \
+             /create-pr --base X    — set target branch (default: main)\n  \
+             /create-pr --web       — open in browser to continue editing".to_string(),
+        );
+        return Ok(());
+    }
+
+    // Check if gh CLI is available
+    let gh_check = std::process::Command::new("gh")
+        .arg("--version")
+        .output();
+    if gh_check.is_err() {
+        repl.chat.add_message(ChatRole::System,
+            "GitHub CLI (gh) is not installed. Install it: https://cli.github.com".to_string(),
+        );
+        return Ok(());
+    }
+
+    // Check if we're in a git repo
+    let git_check = std::process::Command::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .current_dir(&repl.state.working_directory)
+        .output();
+    if git_check.is_err() || !git_check.unwrap().status.success() {
+        repl.chat.add_message(ChatRole::System, "Not inside a git repository.".to_string());
+        return Ok(());
+    }
+
+    // Get current branch
+    let branch_output = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(&repl.state.working_directory)
+        .output();
+    let current_branch = match branch_output {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        _ => {
+            repl.chat.add_message(ChatRole::System, "Failed to determine current branch.".to_string());
+            return Ok(());
+        }
+    };
+
+    // Determine base branch (main or master)
+    let base_branch = if trimmed.contains("--base") {
+        if let Some(idx) = trimmed.find("--base") {
+            let after = &trimmed[idx + 6..].trim_start();
+            after.split_whitespace().next().unwrap_or("main").to_string()
+        } else {
+            "main".to_string()
+        }
+    } else {
+        // Check if main or master exists
+        let main_check = std::process::Command::new("git")
+            .args(["rev-parse", "--verify", "main"])
+            .current_dir(&repl.state.working_directory)
+            .output();
+        if main_check.is_ok() && main_check.unwrap().status.success() {
+            "main".to_string()
+        } else {
+            "master".to_string()
+        }
+    };
+
+    // Don't create PR from the base branch itself
+    if current_branch == base_branch {
+        repl.chat.add_message(ChatRole::System,
+            format!("Currently on '{current_branch}'. Create a feature branch first:\n  git checkout -b my-feature"));
+        return Ok(());
+    }
+
+    // Get commits between base and HEAD
+    let log_output = std::process::Command::new("git")
+        .args(["log", &format!("{base_branch}..HEAD"), "--oneline"])
+        .current_dir(&repl.state.working_directory)
+        .output();
+    let commits = match log_output {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        Err(_) => String::new(),
+    };
+
+    if commits.is_empty() {
+        repl.chat.add_message(ChatRole::System,
+            format!("No commits found between {base_branch} and {current_branch}. Make some changes first."));
+        return Ok(());
+    }
+
+    // Generate PR title from first commit or custom args
+    let is_draft = trimmed.contains("--draft");
+    let open_web = trimmed.contains("--web");
+
+    let title = {
+        let non_flag_args: Vec<&str> = trimmed.split_whitespace()
+            .filter(|s| !s.starts_with('-'))
+            .collect();
+        if non_flag_args.is_empty() {
+            commits.lines().next()
+                .map(|line| line.split_once(' ').map(|(_, msg)| msg.to_string()).unwrap_or(line.to_string()))
+                .unwrap_or_else(|| format!("PR from {current_branch}"))
+        } else {
+            non_flag_args.join(" ")
+        }
+    };
+
+    // Build PR body from commits
+    let mut body = String::from("## Summary\n\n");
+    for line in commits.lines() {
+        body.push_str("- ");
+        body.push_str(line);
+        body.push('\n');
+    }
+
+    // Get diff stats for context
+    let diff_stat = std::process::Command::new("git")
+        .args(["diff", "--stat", &format!("{base_branch}...HEAD")])
+        .current_dir(&repl.state.working_directory)
+        .output();
+    if let Ok(out) = diff_stat {
+        let stat = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !stat.is_empty() {
+            body.push_str("\n## Changes\n\n```\n");
+            body.push_str(&stat);
+            body.push_str("\n```\n");
+        }
+    }
+
+    // Check for uncommitted changes and warn
+    let status_output = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&repl.state.working_directory)
+        .output();
+    if let Ok(out) = &status_output {
+        let changes = String::from_utf8_lossy(&out.stdout);
+        if !changes.trim().is_empty() {
+            body.push_str("\n> **Note:** This PR was created with uncommitted changes.\n");
+        }
+    }
+
+    // Push the branch first (if not already pushed)
+    let push_result = std::process::Command::new("git")
+        .args(["push", "-u", "origin", &current_branch])
+        .current_dir(&repl.state.working_directory)
+        .output();
+    match push_result {
+        Ok(out) if out.status.success() => {
+            let push_output = String::from_utf8_lossy(&out.stderr);
+            if !push_output.is_empty() {
+                tracing::debug!("Push output: {}", push_output);
+            }
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            // It's ok if already pushed (error contains "already up-to-date" or similar)
+            if !stderr.contains("up-to-date") && !stderr.contains("Everything up-to-date") {
+                repl.chat.add_message(ChatRole::System,
+                    format!("Failed to push branch: {stderr}"));
+                return Ok(());
+            }
+        }
+        Err(e) => {
+            repl.chat.add_message(ChatRole::System,
+                format!("Failed to push branch: {e}"));
+            return Ok(());
+        }
+    }
+
+    // Build gh pr create command
+    let mut gh_args = vec!["pr", "create", "--title", &title, "--body", &body, "--base", &base_branch];
+    if is_draft {
+        gh_args.push("--draft");
+    }
+    if open_web {
+        gh_args.push("--web");
+    }
+
+    let pr_result = std::process::Command::new("gh")
+        .args(&gh_args)
+        .current_dir(&repl.state.working_directory)
+        .output();
+
+    match pr_result {
+        Ok(out) if out.status.success() => {
+            let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let msg = if is_draft { "Draft PR created" } else { "PR created" };
+            repl.chat.add_message(ChatRole::System,
+                format!("{msg}: {url}\n\nBranch: {current_branch} → {base_branch}\nCommits:\n{commits}"));
+
+            // Send desktop notification if enabled
+            if repl.notifications_enabled {
+                let _ = repl.notifier.info("Shannon", &format!("{msg}: {url}"));
+            }
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if stderr.contains("already exists") {
+                // Find existing PR URL
+                let existing = std::process::Command::new("gh")
+                    .args(["pr", "view", &current_branch, "--json", "url"])
+                    .current_dir(&repl.state.working_directory)
+                    .output();
+                match existing {
+                    Ok(eout) if eout.status.success() => {
+                        let url: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&eout.stdout)).unwrap_or_default();
+                        let pr_url = url.get("url").and_then(|u| u.as_str()).unwrap_or("unknown");
+                        repl.chat.add_message(ChatRole::System,
+                            format!("PR already exists: {pr_url}\nBranch: {current_branch} → {base_branch}"));
+                    }
+                    _ => {
+                        repl.chat.add_message(ChatRole::System,
+                            format!("PR already exists for branch {current_branch}.\n{stderr}"));
+                    }
+                }
+            } else {
+                repl.chat.add_message(ChatRole::System,
+                    format!("Failed to create PR: {stderr}"));
+            }
+        }
+        Err(e) => {
+            repl.chat.add_message(ChatRole::System,
+                format!("Failed to run gh pr create: {e}"));
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_patch(repl: &mut Repl, args: &str) -> Result<()> {
+    let args = args.trim();
+
+    if args.is_empty() || args == "--help" || args == "help" {
+        repl.chat.add_message(ChatRole::System,
+            "Patch — search/replace with diff preview\n\n\
+             Usage:\n\
+               /patch <file> <search> --- <replace>          Preview change\n\
+               /patch --apply <file> <search> --- <replace>  Apply change\n\
+               /patch --all <file> <search> --- <replace>    Preview (replace all)\n\
+               /patch --apply --all <file> <search> --- <replace>  Apply all\n\n\
+             The preview shows the diff without modifying the file.\n\
+             Add --apply to write the change.".to_string());
+        return Ok(());
+    }
+
+    // Parse flags
+    let apply = args.contains("--apply");
+    let replace_all = args.contains("--all");
+    let cleaned = args.replace("--apply", "").replace("--all", "");
+    let cleaned = cleaned.trim();
+
+    // Split on --- separator
+    let parts: Vec<&str> = cleaned.splitn(2, "---").collect();
+    if parts.len() < 2 {
+        repl.chat.add_message(ChatRole::System,
+            "Usage: /patch <file> <search> --- <replace>\nUse --- to separate search and replace text.".to_string());
+        return Ok(());
+    }
+
+    // Parse file path and search text from the first part
+    let first_part = parts[0].trim();
+    let new_text = parts[1].trim().to_string();
+
+    // First word is the file path, rest is the search text
+    let mut words = first_part.splitn(2, char::is_whitespace);
+    let file_path = match words.next() {
+        Some(f) if !f.is_empty() => f.to_string(),
+        _ => {
+            repl.chat.add_message(ChatRole::System,
+                "Usage: /patch <file> <search> --- <replace>".to_string());
+            return Ok(());
+        }
+    };
+    let old_text = words.next().unwrap_or("").to_string();
+
+    if old_text.is_empty() {
+        repl.chat.add_message(ChatRole::System,
+            "Error: search text is empty.\nUsage: /patch <file> <search> --- <replace>".to_string());
+        return Ok(());
+    }
+
+    // Resolve to absolute path if relative
+    let abs_path = if std::path::Path::new(&file_path).is_absolute() {
+        file_path.clone()
+    } else {
+        format!("{}/{}", repl.state.working_directory.trim_end_matches('/'), file_path)
+    };
+
+    let Some(ref engine) = repl.query_engine else {
+        repl.chat.add_message(ChatRole::System, "No query engine available.".to_string());
+        return Ok(());
+    };
+
+    let input = serde_json::json!({
+        "file_path": abs_path,
+        "old_string": old_text,
+        "new_string": new_text,
+        "replace_all": replace_all,
+        "preview": !apply,
+    });
+
+    let tool_name = if apply { "Edit" } else { "Edit" };
+    match repl.runtime.block_on(engine.tools().execute(tool_name, input)) {
+        Ok(result) => {
+            let prefix = if apply { "Applied" } else { "Preview" };
+            let msg = format!("{prefix}: {}\n{}", file_path, result.content);
+            { repl.chat.add_message(ChatRole::System, msg); }
+        }
+        Err(e) => {
+            { repl.chat.add_message(ChatRole::System, format!("Patch failed: {e}")); }
+        }
+    }
+
     Ok(())
 }
 

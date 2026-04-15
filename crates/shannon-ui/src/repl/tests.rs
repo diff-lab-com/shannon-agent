@@ -1828,3 +1828,491 @@ fn test_repl_ci_tab_completion_prefix() {
     assert!(args.contains(&"status".to_string()));
     assert!(!args.contains(&"workflows".to_string()));
 }
+
+// ── /hooks Command Tests ──────────────────────────────────────────
+
+#[test]
+fn test_repl_hooks_command_no_config() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/hooks".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    assert!(!repl.chat.is_empty());
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    // Either shows configured hooks or "No hooks configured" message
+    assert!(last_msg.contains("hook") || last_msg.contains("Hook") || last_msg.contains("No hooks") || last_msg.contains("Config path"));
+}
+
+#[test]
+fn test_repl_hooks_path_subcommand() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/hooks path".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    assert!(!repl.chat.is_empty());
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("User:") || last_msg.contains("Project:") || last_msg.contains("path"));
+}
+
+#[test]
+fn test_repl_hooks_reload_subcommand() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/hooks reload".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    assert!(!repl.chat.is_empty());
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    // Reload either succeeds or shows error about missing config
+    assert!(last_msg.contains("reload") || last_msg.contains("Reload") || last_msg.contains("No hooks") || last_msg.contains("Failed"));
+}
+
+#[test]
+fn test_repl_hooks_in_help() {
+    use shannon_commands::help_utils;
+    let help_text = help_utils::generate_help(None);
+    assert!(help_text.contains("hooks"), "Help should list /hooks command");
+}
+
+#[test]
+fn test_repl_hooks_command_recognized() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/hooks".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    // Should not show "Unknown command" message
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(!last_msg.contains("Unknown command"), "/hooks should be a recognized command");
+}
+
+// ── /remember /recall /forget /memory Command Tests ───────────────
+
+#[test]
+fn test_repl_remember_no_args() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/remember".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Usage"), "/remember with no args should show usage");
+}
+
+#[test]
+fn test_repl_remember_saves_memory() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/remember Test memory for integration test".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Remembered") || last_msg.contains("store not"), "Should confirm memory saved or report missing store");
+}
+
+#[test]
+fn test_repl_recall_lists_memories() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/recall".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    // Either shows memories or says none found
+    assert!(last_msg.contains("memory") || last_msg.contains("Memory") || last_msg.contains("No memories") || last_msg.contains("store not"));
+}
+
+#[test]
+fn test_repl_recall_with_query() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/recall test query".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    assert!(!repl.chat.is_empty());
+}
+
+#[test]
+fn test_repl_forget_no_args() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/forget".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Usage"), "/forget with no args should show usage");
+}
+
+#[test]
+fn test_repl_forget_nonexistent() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/forget nonexistent123".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("No memory") || last_msg.contains("not found") || last_msg.contains("store not"));
+}
+
+#[test]
+fn test_repl_memory_stats() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/memory".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Memory") || last_msg.contains("Total") || last_msg.contains("store"));
+}
+
+#[test]
+fn test_repl_memory_commands_in_help() {
+    use shannon_commands::help_utils;
+    let help_text = help_utils::generate_help(None);
+    assert!(help_text.contains("remember"), "Help should list /remember");
+    assert!(help_text.contains("recall"), "Help should list /recall");
+    assert!(help_text.contains("forget"), "Help should list /forget");
+    assert!(help_text.contains("memory"), "Help should list /memory");
+}
+
+#[test]
+fn test_repl_remember_alias_mem() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/mem Alias test memory".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Remembered") || last_msg.contains("store not"), "/mem should work as alias");
+}
+
+// ── /image Command Tests ──────────────────────────────────────────
+
+#[test]
+fn test_repl_image_no_args() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/image".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Usage"), "/image with no args should show usage");
+}
+
+#[test]
+fn test_repl_image_nonexistent_file() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/image /nonexistent/path/fake.png".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("not found") || last_msg.contains("File not found"), "Should report missing file");
+}
+
+#[test]
+fn test_repl_image_with_real_png() {
+    // Create a minimal valid PNG file for testing
+    let tmp_dir = std::env::temp_dir().join("shannon_test_image");
+    let _ = std::fs::create_dir_all(&tmp_dir);
+    let png_path = tmp_dir.join("test.png");
+    // Minimal 1x1 pixel PNG
+    let minimal_png: [u8; 69] = [
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
+        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+        0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+        0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, // IDAT chunk
+        0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00,
+        0x00, 0x00, 0x02, 0x00, 0x01, 0xE2, 0x21, 0xBC,
+        0x33, // IEND
+        0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
+        0xAE, 0x42, 0x60, 0x82,
+    ];
+    let _ = std::fs::write(&png_path, &minimal_png[..]);
+
+    let mut repl = Repl::new().unwrap();
+    let input = format!("/image {} What is this?", png_path.display());
+    repl.prompt.set_input(input);
+    super::commands::submit_input(&mut repl).unwrap();
+    // Should at least not crash and should add a message
+    assert!(!repl.chat.is_empty());
+
+    // Cleanup
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+}
+
+#[test]
+fn test_repl_image_unsupported_format() {
+    let tmp_dir = std::env::temp_dir().join("shannon_test_image_unsupported");
+    let _ = std::fs::create_dir_all(&tmp_dir);
+    let txt_path = tmp_dir.join("test.tiff");
+    let _ = std::fs::write(&txt_path, b"fake image data");
+
+    let mut repl = Repl::new().unwrap();
+    let input = format!("/image {}", txt_path.display());
+    repl.prompt.set_input(input);
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Unsupported") || last_msg.contains("not found") || last_msg.contains("format"),
+        "Should report unsupported format");
+
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+}
+
+#[test]
+fn test_repl_image_in_help() {
+    use shannon_commands::help_utils;
+    let help_text = help_utils::generate_help(None);
+    assert!(help_text.contains("image"), "Help should list /image");
+}
+
+#[test]
+fn test_repl_img_alias() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/img".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Usage"), "/img should work as alias for /image");
+}
+
+// --- /mode command tests ---
+
+#[test]
+fn test_repl_mode_shows_current() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/mode".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Current approval mode"), "/mode should show current mode");
+    assert!(last_msg.contains("suggest"), "/mode should list available modes");
+    assert!(last_msg.contains("auto-edit"), "/mode should list auto-edit");
+    assert!(last_msg.contains("full-auto"), "/mode should list full-auto");
+    assert!(last_msg.contains("readonly"), "/mode should list readonly");
+}
+
+#[test]
+fn test_repl_mode_sets_mode() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/mode full-auto".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Approval mode set to"), "/mode <name> should confirm the change");
+    assert!(last_msg.contains("full-auto"), "should mention the new mode");
+
+    // Verify it persists by checking again
+    repl.prompt.set_input("/mode".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("full-auto *"), "full-auto should be marked as current");
+}
+
+#[test]
+fn test_repl_mode_invalid() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/mode invalid".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Unknown mode"), "/mode invalid should show error");
+    assert!(last_msg.contains("suggest"), "should list valid modes");
+}
+
+#[test]
+fn test_repl_mode_suggest_alias() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/mode ask".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("suggest"), "'ask' should map to 'suggest' mode");
+}
+
+#[test]
+fn test_repl_mode_in_help() {
+    use shannon_commands::help_utils;
+    let help_text = help_utils::generate_help(None);
+    assert!(help_text.contains("mode"), "Help should list /mode");
+}
+
+// --- /context command tests ---
+
+#[test]
+fn test_repl_context_shows_status() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/context".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    // Should at least show the context status header
+    assert!(
+        last_msg.contains("Project Context") || last_msg.contains("context"),
+        "/context should show context status"
+    );
+}
+
+#[test]
+fn test_repl_context_reload() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/context reload".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(
+        last_msg.contains("reload") || last_msg.contains("Context") || last_msg.contains("Loaded"),
+        "/context reload should confirm reload"
+    );
+}
+
+#[test]
+fn test_repl_context_in_help() {
+    use shannon_commands::help_utils;
+    let help_text = help_utils::generate_help(None);
+    assert!(help_text.contains("context"), "Help should list /context");
+}
+
+// --- /undo command tests ---
+
+#[test]
+fn test_repl_undo_no_checkpoints() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/undo".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(
+        last_msg.contains("No checkpoints") || last_msg.contains("Undo failed"),
+        "/undo with no checkpoints should show error"
+    );
+}
+
+#[test]
+fn test_repl_undo_list_empty() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/undo list".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(
+        last_msg.contains("No checkpoints"),
+        "/undo list with no checkpoints should say so"
+    );
+}
+
+#[test]
+fn test_repl_undo_invalid_index() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/undo 0".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(
+        last_msg.contains("Revert failed") || last_msg.contains("Invalid"),
+        "/undo 0 with no checkpoints should fail"
+    );
+}
+
+#[test]
+fn test_repl_undo_in_help() {
+    use shannon_commands::help_utils;
+    let help_text = help_utils::generate_help(None);
+    assert!(help_text.contains("undo"), "Help should list /undo");
+}
+
+#[test]
+fn test_repl_checkpoint_manager_enabled() {
+    let repl = Repl::new().unwrap();
+    // Running in a git repo, so should be enabled
+    assert!(repl.checkpoint_manager.is_enabled(), "checkpoint manager should be enabled in git repo");
+    assert!(repl.checkpoint_manager.is_empty(), "should start with no checkpoints");
+}
+
+#[test]
+fn test_repl_notify_shows_status() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/notify".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(
+        last_msg.contains("Notifications") || last_msg.contains("notifications"),
+        "/notify should show status, got: {last_msg}"
+    );
+}
+
+#[test]
+fn test_repl_notify_enable() {
+    let mut repl = Repl::new().unwrap();
+    assert!(!repl.notifications_enabled, "should start disabled");
+    repl.prompt.set_input("/notify on".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    assert!(repl.notifications_enabled, "/notify on should enable");
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("enabled"), "should confirm enabled");
+}
+
+#[test]
+fn test_repl_notify_disable() {
+    let mut repl = Repl::new().unwrap();
+    repl.notifications_enabled = true;
+    repl.prompt.set_input("/notify off".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    assert!(!repl.notifications_enabled, "/notify off should disable");
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("disabled"), "should confirm disabled");
+}
+
+#[test]
+fn test_repl_notify_in_help() {
+    use shannon_commands::help_utils;
+    let help_text = help_utils::generate_help(None);
+    assert!(help_text.contains("notify"), "Help should list /notify");
+}
+
+#[test]
+fn test_repl_create_pr_help() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/create-pr --help".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(
+        last_msg.contains("GitHub pull request") || last_msg.contains("create-pr"),
+        "/create-pr --help should show help, got: {last_msg}"
+    );
+}
+
+#[test]
+fn test_repl_create_pr_in_help() {
+    use shannon_commands::help_utils;
+    let help_text = help_utils::generate_help(None);
+    assert!(help_text.contains("create-pr"), "Help should list /create-pr");
+}
+
+#[test]
+fn test_repl_create_pr_help_flag() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/create-pr help".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(
+        last_msg.contains("--draft") || last_msg.contains("--base"),
+        "/create-pr help should show flags, got: {last_msg}"
+    );
+}
+
+// --- /patch command tests ---
+
+#[test]
+fn test_repl_patch_help() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/patch --help".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(
+        last_msg.contains("search/replace") && last_msg.contains("---"),
+        "/patch --help should show usage, got: {last_msg}"
+    );
+}
+
+#[test]
+fn test_repl_patch_no_separator() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/patch Cargo.toml old_text new_text".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(
+        last_msg.contains("---"),
+        "/patch without --- should show usage hint, got: {last_msg}"
+    );
+}
+
+#[test]
+fn test_repl_patch_empty_args() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/patch".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(
+        last_msg.contains("Patch") && last_msg.contains("---"),
+        "/patch with no args should show help, got: {last_msg}"
+    );
+}
+
+#[test]
+fn test_repl_patch_in_help() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/help".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let help_text = &repl.chat.last_message().unwrap().content;
+    assert!(
+        help_text.contains("patch"),
+        "/help output should list patch command, got partial: {}",
+        &help_text[..help_text.len().min(200)]
+    );
+}
