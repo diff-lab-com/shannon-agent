@@ -600,31 +600,53 @@ impl ReplRenderer {
     }
 
     /// Basic markdown rendering: bold, italic, code blocks, inline code.
+    ///
+    /// Code blocks with language hints are syntax-highlighted using syntect.
     pub fn render_markdown(&self, text: &str) -> String {
+        use std::sync::OnceLock;
+
+        static SYNTAX_RESOURCES: OnceLock<(
+            syntect::parsing::SyntaxSet,
+            syntect::highlighting::ThemeSet,
+        )> = OnceLock::new();
+
+        let (ss, ts) = SYNTAX_RESOURCES.get_or_init(|| {
+            (
+                syntect::parsing::SyntaxSet::load_defaults_newlines(),
+                syntect::highlighting::ThemeSet::load_defaults(),
+            )
+        });
+
         let mut result = String::new();
         let mut in_code_block = false;
+        let mut code_lang = String::new();
+        let mut code_buffer = String::new();
         let mut in_inline_code = false;
 
         for line in text.lines() {
             if line.trim_start().starts_with("```") {
                 if in_code_block {
+                    // Closing code block — highlight collected code with syntect
                     in_code_block = false;
-                    result.push_str("\x1b[0m\n");
+                    let highlighted = highlight_code_ansi(&code_buffer, &code_lang, ss, ts);
+                    result.push_str(&highlighted);
+                    code_buffer.clear();
+                    code_lang.clear();
                 } else {
+                    // Opening code block
                     in_code_block = true;
-                    // Extract language hint if present
                     let lang = line.trim_start().trim_start_matches('`').trim();
-                    if !lang.is_empty() {
-                        result.push_str(&format!("\x1b[2m[{lang}]\x1b[0m\n"));
+                    code_lang = lang.to_string();
+                    if !code_lang.is_empty() {
+                        result.push_str(&format!("\x1b[2m[{code_lang}]\x1b[0m\n"));
                     }
-                    result.push_str("\x1b[32m");
                 }
                 continue;
             }
 
             if in_code_block {
-                result.push_str(line);
-                result.push('\n');
+                code_buffer.push_str(line);
+                code_buffer.push('\n');
                 continue;
             }
 
@@ -638,11 +660,8 @@ impl ReplRenderer {
                     in_inline_code = false;
                     result.push_str("\x1b[0m");
                 } else if ch == '*' && chars.peek() == Some(&'*') {
-                    chars.next(); // consume second *
-                    result.push_str("\x1b[1m");
-                } else if ch == '*' && chars.peek() == Some(&'*') {
                     chars.next();
-                    result.push_str("\x1b[0m");
+                    result.push_str("\x1b[1m");
                 } else {
                     result.push(ch);
                 }
@@ -650,8 +669,10 @@ impl ReplRenderer {
             result.push('\n');
         }
 
+        // Handle unclosed code block at end of text
         if in_code_block {
-            result.push_str("\x1b[0m\n");
+            let highlighted = highlight_code_ansi(&code_buffer, &code_lang, ss, ts);
+            result.push_str(&highlighted);
         }
         if in_inline_code {
             result.push_str("\x1b[0m");
@@ -792,6 +813,50 @@ impl ReplRenderer {
         let bar: String = "#".repeat(filled) + &"-".repeat(20 - filled);
         format!("\r\x1b[36m[{bar}] {pct:>3}% {label}\x1b[0m")
     }
+}
+
+/// Highlight code using syntect and return ANSI-escaped string.
+fn highlight_code_ansi(
+    code: &str,
+    lang: &str,
+    ss: &syntect::parsing::SyntaxSet,
+    ts: &syntect::highlighting::ThemeSet,
+) -> String {
+    use syntect::easy::HighlightLines;
+    use syntect::util::as_24_bit_terminal_escaped;
+
+    if code.is_empty() {
+        return String::new();
+    }
+
+    let lang_lower = lang.trim().to_lowercase();
+
+    let syntax = ss
+        .find_syntax_by_token(&lang_lower)
+        .or_else(|| ss.find_syntax_by_extension(&lang_lower));
+
+    let Some(syntax) = syntax else {
+        // Fallback: plain green for unknown languages
+        return format!("\x1b[32m{code}\x1b[0m\n");
+    };
+
+    let theme = &ts.themes["InspiredGitHub"];
+    let mut highlighter = HighlightLines::new(syntax, theme);
+    let mut output = String::new();
+
+    for line_str in code.lines() {
+        match highlighter.highlight_line(line_str, ss) {
+            Ok(ranges) => {
+                output.push_str(&as_24_bit_terminal_escaped(&ranges, false));
+            }
+            Err(_) => {
+                output.push_str(line_str);
+            }
+        }
+        output.push('\n');
+    }
+
+    output
 }
 
 // ---------------------------------------------------------------------------
