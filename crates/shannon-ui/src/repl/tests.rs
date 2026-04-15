@@ -1671,3 +1671,73 @@ fn test_repl_local_models_tab_completion() {
     let args = crate::repl::input::complete_command_args("local-models", "");
     assert!(args.is_empty());
 }
+
+// ── Enhanced /diff Command Tests ──────────────────────────────────
+
+#[test]
+fn test_repl_diff_overview() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/diff".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Diff Overview"));
+    assert!(last_msg.contains("Unstaged"));
+    assert!(last_msg.contains("Staged"));
+}
+
+#[test]
+fn test_repl_diff_overview_flag() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/diff --overview".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Diff Overview"));
+}
+
+#[test]
+fn test_repl_diff_staged() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/diff --staged".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    // Should show either "No changes found" or a diff
+    assert!(!last_msg.is_empty());
+}
+
+#[test]
+fn test_repl_diff_stat() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/diff --stat".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(!last_msg.is_empty());
+}
+
+#[test]
+fn test_repl_diff_tab_completion() {
+    let args = crate::repl::input::complete_command_args("diff", "");
+    assert!(args.contains(&"--staged".to_string()));
+    assert!(args.contains(&"--stat".to_string()));
+    assert!(args.contains(&"--overview".to_string()));
+    assert!(args.contains(&"--word-diff".to_string()));
+}
+
+#[test]
+fn test_repl_diff_tab_completion_prefix() {
+    let args = crate::repl::input::complete_command_args("diff", "--st");
+    assert!(args.contains(&"--staged".to_string()));
+    assert!(args.contains(&"--stat".to_string()));
+}
+
+#[test]
+fn test_format_change_bar() {
+    let bar = super::commands::format_change_bar(5, 5);
+    assert!(bar.contains('+'));
+    assert!(bar.contains('-'));
+    // All additions
+    let bar_add = super::commands::format_change_bar(10, 0);
+    assert!(bar_add.chars().all(|c| c == '+'));
+    // All deletions
+    let bar_del = super::commands::format_change_bar(0, 10);
+    assert!(bar_del.chars().all(|c| c == '-'));
+}

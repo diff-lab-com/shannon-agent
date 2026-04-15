@@ -304,6 +304,7 @@ pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String>
         "web-search" | "websearch" | "search-web" => &[],
         "review" => &["HEAD~1", "main...HEAD"],
         "local-models" | "local" => &[],
+        "diff" => &["--staged", "--stat", "--overview", "--word-diff", "-w", "HEAD~1", "main...HEAD"],
         "history" => &["--export"],
         "export" | "save" => &["--format json", "--format markdown"],
         _ => &[],

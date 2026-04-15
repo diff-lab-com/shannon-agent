@@ -995,6 +995,55 @@ fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
     use shannon_commands::diff_utils;
 
     let options = diff_utils::DiffOptions::from_args(args);
+    let show_overview = args.trim().is_empty() || args.contains("--overview");
+
+    // When no args or --overview, show both staged and unstaged stats side-by-side
+    if show_overview && options.revision_range.is_none() {
+        let mut overview = String::from("Diff Overview\n\n");
+
+        // Unstaged changes
+        let unstaged = std::process::Command::new("git")
+            .args(["diff", "--stat"])
+            .current_dir(&repl.state.working_directory)
+            .output();
+        match unstaged {
+            Ok(result) => {
+                let stdout = String::from_utf8_lossy(&result.stdout);
+                if stdout.is_empty() {
+                    overview.push_str("Unstaged: no changes\n");
+                } else {
+                    overview.push_str("Unstaged changes:\n");
+                    overview.push_str(&format_file_diff_stats(&stdout));
+                    overview.push('\n');
+                }
+            }
+            Err(e) => overview.push_str(&format!("Unstaged: error ({e})\n")),
+        }
+
+        // Staged changes
+        let staged = std::process::Command::new("git")
+            .args(["diff", "--staged", "--stat"])
+            .current_dir(&repl.state.working_directory)
+            .output();
+        match staged {
+            Ok(result) => {
+                let stdout = String::from_utf8_lossy(&result.stdout);
+                if stdout.is_empty() {
+                    overview.push_str("Staged: no changes\n");
+                } else {
+                    overview.push_str("Staged changes:\n");
+                    overview.push_str(&format_file_diff_stats(&stdout));
+                    overview.push('\n');
+                }
+            }
+            Err(e) => overview.push_str(&format!("Staged: error ({e})\n")),
+        }
+
+        overview.push_str("Use /diff --staged, /diff HEAD~1, /diff --stat for detailed views");
+        repl.chat.add_message(ChatRole::System, overview);
+        return Ok(());
+    }
+
     let cmd_str = diff_utils::build_diff_command(&options);
 
     let cmd_parts: Vec<&str> = cmd_str.split_whitespace().collect();
@@ -1020,26 +1069,81 @@ fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
             } else {
                 let analyzer = diff_utils::DiffAnalyzer::new();
                 let analysis = analyzer.analyze(&stdout);
-                let files: Vec<&str> = stdout.lines().filter(|l| l.starts_with("diff --git")).collect();
+
+                // Per-file breakdown
+                let mut file_stats: Vec<(String, i32, i32)> = Vec::new();
+                let mut current_file = String::new();
+                for line in stdout.lines() {
+                    if let Some(rest) = line.strip_prefix("diff --git a/") {
+                        if let Some(name) = rest.splitn(2, ' ').next() {
+                            current_file = name.to_string();
+                        }
+                    } else if line.starts_with('+') && !line.starts_with("+++") {
+                        if let Some(entry) = file_stats.iter_mut().find(|(f, _, _)| f == &current_file) {
+                            entry.1 += 1;
+                        } else {
+                            file_stats.push((current_file.clone(), 1, 0));
+                        }
+                    } else if line.starts_with('-') && !line.starts_with("---") {
+                        if let Some(entry) = file_stats.iter_mut().find(|(f, _, _)| f == &current_file) {
+                            entry.2 += 1;
+                        } else {
+                            file_stats.push((current_file.clone(), 0, 1));
+                        }
+                    }
+                }
+
                 let total_lines = stdout.lines().count();
                 let category_summary = analysis.summary();
                 let test_flag = if analysis.has_test_changes() { " [has test changes]" } else { "" };
 
+                let mut report = format!(
+                    "Git diff ({} files, {} lines){test_flag}\nCategories: {category_summary}\n",
+                    file_stats.len(), total_lines,
+                );
+
+                // File-by-file summary
+                if !file_stats.is_empty() {
+                    report.push_str("\nFiles:\n");
+                    for (file, adds, dels) in &file_stats {
+                        let bar = format_change_bar(*adds, *dels);
+                        report.push_str(&format!("  {bar} {file} (+{adds}/-{dels})\n"));
+                    }
+                }
+
+                // Raw diff (truncated)
                 let raw_diff = if stdout.len() > 4000 {
                     format!("{}\n... (truncated)", &stdout[..4000])
                 } else {
                     stdout.to_string()
                 };
+                report.push_str(&format!("\n{raw_diff}"));
 
-                repl.chat.add_message(ChatRole::System, format!(
-                    "Git diff ({} files, {} lines){test_flag}\nCategories: {category_summary}\n\n{raw_diff}",
-                    files.len(), total_lines,
-                ));
+                repl.chat.add_message(ChatRole::System, report);
             }
         }
         Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to run git diff: {e}")); }
     }
     Ok(())
+}
+
+/// Format a visual change bar for a file.
+pub(crate) fn format_change_bar(additions: i32, deletions: i32) -> String {
+    let total = (additions + deletions).min(20) as usize;
+    let add_chars = (additions as f32 / (additions + deletions).max(1) as f32 * total as f32).round() as usize;
+    let del_chars = total - add_chars;
+    format!("{}{}", "+".repeat(add_chars), "-".repeat(del_chars))
+}
+
+/// Format diff --stat output into per-file lines.
+fn format_file_diff_stats(stat_output: &str) -> String {
+    let mut result = String::new();
+    for line in stat_output.lines() {
+        if line.starts_with(' ') || line.contains('|') {
+            result.push_str(&format!("  {line}\n"));
+        }
+    }
+    result
 }
 
 fn handle_search(repl: &mut Repl, args: &str) -> Result<()> {
