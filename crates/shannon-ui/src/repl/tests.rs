@@ -2604,3 +2604,72 @@ fn test_repl_route_routing_state() {
     assert_eq!(repl.model_routes[0].0, "debug");
     assert_eq!(repl.model_routes[0].1, "claude-haiku-4-5");
 }
+
+// ---- /mcp command tests ----
+
+#[test]
+fn test_repl_mcp_help() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/mcp".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("list"), "mcp help should show list");
+    assert!(msg.contains("add"), "mcp help should show add");
+}
+
+#[test]
+fn test_repl_mcp_add_and_list() {
+    let _ = std::fs::remove_dir_all(".shannon-test-mcp");
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/mcp add test-server /usr/bin/test-server".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("Added") || msg.contains("Updated"), "should confirm server added");
+
+    repl.prompt.set_input("/mcp list".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("test-server"), "list should show server name");
+}
+
+#[test]
+fn test_repl_mcp_show() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/mcp add my-server /usr/bin/echo hello".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    repl.prompt.set_input("/mcp show my-server".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("my-server"), "should show server name");
+    assert!(msg.contains("/usr/bin/echo"), "should show command");
+    assert!(msg.contains("hello"), "should show args");
+}
+
+#[test]
+fn test_repl_mcp_show_not_found() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/mcp show nonexistent".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("not found"), "should report server not found");
+}
+
+#[test]
+fn test_repl_mcp_remove() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/mcp add temp-server /usr/bin/true".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    repl.prompt.set_input("/mcp remove temp-server".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("Removed"), "should confirm removal");
+}
+
+#[test]
+fn test_repl_mcp_path() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/mcp path".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("mcp.json"), "should show config path");
+}

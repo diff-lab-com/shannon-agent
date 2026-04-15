@@ -695,6 +695,17 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("Use to automatically route queries to different models based on keywords, optimizing cost and quality")
             .with_related(vec!["model", "config"])
         ),
+        "mcp" => Some(
+            CommandHelpEntry::new(
+                "mcp".to_string(),
+                "Manage MCP server configurations — add, list, test servers".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("[list|add|remove|show|test|path]")
+            .with_examples(vec!["/mcp list", "/mcp add filesystem npx @modelcontextprotocol/server-filesystem /path", "/mcp show filesystem", "/mcp test filesystem", "/mcp remove filesystem"])
+            .with_when_to_use("Use to view and manage MCP server configurations stored in .shannon/mcp.json")
+            .with_related(vec!["config", "tools"])
+        ),
         "permissions" => Some(
             CommandHelpEntry::new(
                 "permissions".to_string(),

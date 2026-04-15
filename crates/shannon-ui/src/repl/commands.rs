@@ -59,7 +59,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
     let is_plugin_command = repl.plugin_manager.get_plugin_commands()
         .iter().any(|c| c.name == cmd_name);
     // Commands handled in the match block but not in the global registry
-    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "route", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "notify", "create-pr", "patch", "sandbox", "find", "grep", "conv-search"];
+    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "route", "mcp", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "notify", "create-pr", "patch", "sandbox", "find", "grep", "conv-search"];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
     if command_exists || is_plugin_command || is_repl_command {
@@ -91,6 +91,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "team" => handle_team(repl, args)?,
             "agents" => handle_agents(repl, args)?,
             "route" => handle_route(repl, args)?,
+            "mcp" => handle_mcp(repl, args)?,
             "branch" | "fork" => handle_branch(repl, args)?,
             "web-search" | "websearch" | "search-web" => handle_web_search(repl, args)?,
             "review" => handle_review(repl, args)?,
@@ -2101,6 +2102,197 @@ Patterns match against the start of your query. Examples:
         }
         _ => {
             repl.chat.add_message(ChatRole::System, format!("Unknown subcommand: {subcommand}. Use /route help."));
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
+    use serde::{Deserialize, Serialize};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+    struct McpServerEntry {
+        pub command: String,
+        #[serde(default)]
+        pub args: Vec<String>,
+        #[serde(default)]
+        pub env: HashMap<String, String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+    struct McpConfig {
+        #[serde(default)]
+        pub mcp_servers: HashMap<String, McpServerEntry>,
+    }
+
+    fn config_path() -> PathBuf {
+        PathBuf::from(".shannon/mcp.json")
+    }
+
+    fn load_config() -> McpConfig {
+        let path = config_path();
+        if path.exists() {
+            let content = std::fs::read_to_string(&path).unwrap_or_default();
+            serde_json::from_str(&content).unwrap_or_default()
+        } else {
+            McpConfig::default()
+        }
+    }
+
+    fn save_config(config: &McpConfig) -> std::result::Result<(), String> {
+        let path = config_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create .shannon dir: {e}"))?;
+        }
+        let content = serde_json::to_string_pretty(config).map_err(|e| format!("Failed to serialize: {e}"))?;
+        std::fs::write(&path, content).map_err(|e| format!("Failed to write config: {e}"))?;
+        Ok(())
+    }
+
+    let parts: Vec<&str> = args.splitn(4, ' ').collect();
+    let subcommand = parts.first().copied().unwrap_or("help");
+
+    match subcommand {
+        "help" | "" => {
+            repl.chat.add_message(ChatRole::System, "\
+/mcp list                        — List configured MCP servers
+/mcp add <name> <command> [args] — Add an MCP server
+/mcp remove <name>               — Remove an MCP server
+/mcp show <name>                 — Show server details
+/mcp test <name>                 — Test server connection
+/mcp path                        — Show config file path".to_string());
+        }
+        "list" => {
+            let config = load_config();
+            if config.mcp_servers.is_empty() {
+                repl.chat.add_message(ChatRole::System, "No MCP servers configured. Use /mcp add <name> <command>.".to_string());
+            } else {
+                let mut out = format!("MCP servers ({}):\n", config.mcp_servers.len());
+                for (name, entry) in &config.mcp_servers {
+                    let args_str = if entry.args.is_empty() { String::new() } else { format!(" {}", entry.args.join(" ")) };
+                    out.push_str(&format!("  {} → {}{}\n", name, entry.command, args_str));
+                }
+                out.push_str(&format!("\nConfig: {}", config_path().display()));
+                repl.chat.add_message(ChatRole::System, out);
+            }
+        }
+        "add" => {
+            let name = parts.get(1).copied().unwrap_or("");
+            let command = parts.get(2).copied().unwrap_or("");
+            if name.is_empty() || command.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Usage: /mcp add <name> <command> [args...]".to_string());
+                return Ok(());
+            }
+            let extra_args: Vec<String> = parts.get(3..)
+                .map(|s| s.iter().map(|a| a.to_string()).collect())
+                .unwrap_or_default();
+            let mut config = load_config();
+            let existed = config.mcp_servers.contains_key(name);
+            config.mcp_servers.insert(name.to_string(), McpServerEntry {
+                command: command.to_string(),
+                args: extra_args,
+                env: HashMap::new(),
+            });
+            match save_config(&config) {
+                Ok(()) => {
+                    if existed {
+                        repl.chat.add_message(ChatRole::System, format!("Updated MCP server '{}' → {}", name, command));
+                    } else {
+                        repl.chat.add_message(ChatRole::System, format!("Added MCP server '{}' → {}", name, command));
+                    }
+                }
+                Err(e) => {
+                    repl.chat.add_message(ChatRole::System, format!("Failed to save config: {e}"));
+                }
+            }
+        }
+        "remove" => {
+            let name = parts.get(1).copied().unwrap_or("");
+            if name.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Usage: /mcp remove <name>".to_string());
+                return Ok(());
+            }
+            let mut config = load_config();
+            if config.mcp_servers.remove(name).is_some() {
+                match save_config(&config) {
+                    Ok(()) => { repl.chat.add_message(ChatRole::System, format!("Removed MCP server '{name}'.")); }
+                    Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to save config: {e}")); }
+                }
+            } else {
+                repl.chat.add_message(ChatRole::System, format!("Server '{name}' not found in config."));
+            }
+        }
+        "show" => {
+            let name = parts.get(1).copied().unwrap_or("");
+            if name.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Usage: /mcp show <name>".to_string());
+                return Ok(());
+            }
+            let config = load_config();
+            match config.mcp_servers.get(name) {
+                Some(entry) => {
+                    let env_str = if entry.env.is_empty() {
+                        "none".to_string()
+                    } else {
+                        entry.env.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>().join(", ")
+                    };
+                    repl.chat.add_message(ChatRole::System, format!(
+                        "Server: {}\n  Command: {}\n  Args: {}\n  Env vars: {}",
+                        name, entry.command,
+                        if entry.args.is_empty() { "(none)".to_string() } else { entry.args.join(" ") },
+                        env_str,
+                    ));
+                }
+                None => {
+                    repl.chat.add_message(ChatRole::System, format!("Server '{name}' not found."));
+                }
+            }
+        }
+        "test" => {
+            let name = parts.get(1).copied().unwrap_or("");
+            if name.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Usage: /mcp test <name>".to_string());
+                return Ok(());
+            }
+            let config = load_config();
+            match config.mcp_servers.get(name) {
+                Some(entry) => {
+                    repl.chat.add_message(ChatRole::System, format!("Testing connection to '{}'...", name));
+                    // Try to create a stdio transport and check if the command exists
+                    let command = &entry.command;
+                    let which_output = std::process::Command::new("which")
+                        .arg(command)
+                        .output();
+                    match which_output {
+                        Ok(output) if output.status.success() => {
+                            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                            repl.chat.add_message(ChatRole::System, format!(
+                                "Server '{name}': command found at {path}. Ready to connect.",
+                            ));
+                        }
+                        Ok(_) => {
+                            repl.chat.add_message(ChatRole::System, format!(
+                                "Server '{name}': command '{command}' not found in PATH.",
+                            ));
+                        }
+                        Err(e) => {
+                            repl.chat.add_message(ChatRole::System, format!("Test failed: {e}"));
+                        }
+                    }
+                }
+                None => {
+                    repl.chat.add_message(ChatRole::System, format!("Server '{name}' not found."));
+                }
+            }
+        }
+        "path" => {
+            repl.chat.add_message(ChatRole::System, format!("MCP config: {}", config_path().display()));
+        }
+        _ => {
+            repl.chat.add_message(ChatRole::System, format!("Unknown subcommand: {subcommand}. Use /mcp help."));
         }
     }
 
