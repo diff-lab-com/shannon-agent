@@ -48,6 +48,19 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
         },
     };
 
+    // Estimate cost before sending
+    {
+        let model = context.metadata.model.as_str();
+        let max_tokens: u64 = context.metadata.max_tokens.unwrap_or(4096) as u64;
+        let history_chars: usize = repl.tools_invoked * 200 + repl.current_turn * 500;
+        let new_msg_chars = input.len();
+        let tracker = shannon_core::query_engine::CostTracker::new(model.to_string());
+        let estimate = tracker.estimate_query_cost(model, history_chars, new_msg_chars, max_tokens);
+        if estimate.estimated_cost_usd > 0.0 {
+            repl.state.status = format!("Cost estimate: {estimate}");
+        }
+    }
+
     // Shared state between the async query task and the main UI loop
     use std::sync::{Arc, Mutex};
     let streaming_buffer: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));

@@ -5,6 +5,35 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
+/// Pre-query cost estimate
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CostEstimate {
+    /// Estimated input tokens
+    pub estimated_input_tokens: u64,
+    /// Estimated output tokens (based on max_tokens)
+    pub estimated_output_tokens: u64,
+    /// Estimated cost for this query in USD
+    pub estimated_cost_usd: f64,
+    /// Session total before this query
+    pub session_total_usd: f64,
+    /// Projected session total after this query
+    pub projected_total_usd: f64,
+}
+
+impl std::fmt::Display for CostEstimate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Est: ~{}in+{}out tokens, ~${:.4} (session total: ${:.4}→${:.4})",
+            self.estimated_input_tokens,
+            self.estimated_output_tokens,
+            self.estimated_cost_usd,
+            self.session_total_usd,
+            self.projected_total_usd
+        )
+    }
+}
+
 /// Cost record for a single turn
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnCost {
@@ -153,6 +182,29 @@ impl CostTracker {
             "Model: {} | Input tokens: {} | Output tokens: {} | Total cost: ${:.6}",
             self.model_name, self.total_input_tokens, self.total_output_tokens, self.total_cost_usd
         )
+    }
+
+    /// Estimate the cost of a query before sending it.
+    ///
+    /// Uses a rough token estimation (~4 chars per token) on the conversation
+    /// history plus the new message, and assumes the model will use `max_tokens`
+    /// output tokens.
+    pub fn estimate_query_cost(
+        &self,
+        model: &str,
+        history_chars: usize,
+        new_message_chars: usize,
+        max_output_tokens: u64,
+    ) -> CostEstimate {
+        let estimated_input_tokens = ((history_chars + new_message_chars) as f64 / 4.0).ceil() as u64;
+        let estimated_cost = Self::calculate_cost(model, estimated_input_tokens, max_output_tokens);
+        CostEstimate {
+            estimated_input_tokens,
+            estimated_output_tokens: max_output_tokens,
+            estimated_cost_usd: estimated_cost,
+            session_total_usd: self.total_cost_usd,
+            projected_total_usd: self.total_cost_usd + estimated_cost,
+        }
     }
 
     /// Get a detailed cost report including per-model breakdown and budget status
@@ -609,5 +661,44 @@ mod tests {
         assert_eq!(back.turn, 1);
         assert_eq!(back.model, "claude-sonnet-4");
         assert_eq!(back.input_tokens, 1000);
+    }
+
+    // -- CostEstimate tests --
+
+    #[test]
+    fn test_cost_estimate_basic() {
+        let tracker = CostTracker::new("claude-3-5-sonnet".to_string());
+        let est = tracker.estimate_query_cost("claude-3-5-sonnet", 4000, 100, 4096);
+        // 4100 chars / 4 = ~1025 input tokens
+        assert_eq!(est.estimated_input_tokens, 1025);
+        assert_eq!(est.estimated_output_tokens, 4096);
+        assert!(est.estimated_cost_usd > 0.0);
+        assert_eq!(est.session_total_usd, 0.0);
+        assert_eq!(est.projected_total_usd, est.estimated_cost_usd);
+    }
+
+    #[test]
+    fn test_cost_estimate_with_existing_session() {
+        let mut tracker = CostTracker::new("claude-3-5-sonnet".to_string());
+        tracker.record_usage("claude-3-5-sonnet", 10000, 5000);
+        let est = tracker.estimate_query_cost("claude-3-5-sonnet", 2000, 200, 2048);
+        assert!(est.session_total_usd > 0.0);
+        assert!(est.projected_total_usd > est.session_total_usd);
+    }
+
+    #[test]
+    fn test_cost_estimate_display() {
+        let tracker = CostTracker::new("gpt-4o".to_string());
+        let est = tracker.estimate_query_cost("gpt-4o", 1000, 100, 2048);
+        let display = format!("{est}");
+        assert!(display.contains("tokens"));
+        assert!(display.contains('$'));
+    }
+
+    #[test]
+    fn test_cost_estimate_free_model() {
+        let tracker = CostTracker::new("llama3".to_string());
+        let est = tracker.estimate_query_cost("llama3", 1000, 100, 2048);
+        assert_eq!(est.estimated_cost_usd, 0.0);
     }
 }
