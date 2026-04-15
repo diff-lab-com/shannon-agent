@@ -391,6 +391,16 @@ impl ChatWidget {
     pub fn last_message(&self) -> Option<&ChatMessage> {
         self.messages.back()
     }
+
+    /// Get the number of messages
+    pub fn message_count(&self) -> usize {
+        self.messages.len()
+    }
+
+    /// Iterate all messages with their indices
+    pub fn iter_messages(&self) -> impl Iterator<Item = (usize, &ChatMessage)> {
+        self.messages.iter().enumerate()
+    }
 }
 
 /// Input prompt widget (multi-line enabled)

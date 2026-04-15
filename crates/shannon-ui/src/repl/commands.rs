@@ -59,7 +59,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
     let is_plugin_command = repl.plugin_manager.get_plugin_commands()
         .iter().any(|c| c.name == cmd_name);
     // Commands handled in the match block but not in the global registry
-    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "notify", "create-pr", "patch", "sandbox"];
+    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "notify", "create-pr", "patch", "sandbox", "find", "grep", "conv-search"];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
     if command_exists || is_plugin_command || is_repl_command {
@@ -79,6 +79,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "export" | "save" => handle_export(repl, args)?,
             "diff" => handle_diff(repl, args)?,
             "search" | "?" | "hist" | "history-search" => handle_search(repl, args)?,
+            "find" | "grep" | "conv-search" => handle_find(repl, args)?,
             "browse" | "files" => handle_browse(repl, args)?,
             "select-tools" | "tools" => handle_select_tools(repl)?,
             "debug" | "dbg" | "dev" => handle_debug(repl, args)?,
@@ -2177,6 +2178,57 @@ fn handle_search(repl: &mut Repl, args: &str) -> Result<()> {
     Ok(())
 }
 
+/// Search through conversation messages (not command history).
+fn handle_find(repl: &mut Repl, args: &str) -> Result<()> {
+    let query = args.trim();
+    if query.is_empty() {
+        repl.chat.add_message(ChatRole::System,
+            "Usage: /find <query>\n\nSearch through conversation messages. Shows matching messages with role and context.".to_string());
+        return Ok(());
+    }
+
+    let query_lower = query.to_lowercase();
+    let mut results = Vec::new();
+    let total = repl.chat.message_count();
+
+    for (idx, msg) in repl.chat.iter_messages() {
+        let content_lower = msg.content.to_lowercase();
+        if content_lower.contains(&query_lower) {
+            // Strip ANSI codes for display
+            let clean_content: String = msg.content.chars()
+                .filter(|c| !c.is_control())
+                .collect();
+            let preview = if clean_content.len() > 200 {
+                format!("{}...", &clean_content[..200])
+            } else {
+                clean_content
+            };
+            let role_str = match msg.role {
+                ChatRole::User => "user",
+                ChatRole::Assistant => "assistant",
+                ChatRole::System => "system",
+                ChatRole::Tool => "tool",
+            };
+            results.push(format!("[{idx}/{total}] ({role_str}) {preview}"));
+        }
+    }
+
+    let output = if results.is_empty() {
+        format!("No messages matching \"{query}\"")
+    } else {
+        let mut out = format!("Found {} result(s) for \"{query}\":\n", results.len());
+        for r in results.iter().take(20) {
+            out.push_str(&format!("{r}\n\n"));
+        }
+        if results.len() > 20 {
+            out.push_str(&format!("... and {} more results", results.len() - 20));
+        }
+        out
+    };
+
+    repl.chat.add_message(ChatRole::System, output);
+    Ok(())
+}
 fn handle_browse(repl: &mut Repl, args: &str) -> Result<()> {
     let path = if args.trim().is_empty() {
         repl.state.working_directory.clone()

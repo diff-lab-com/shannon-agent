@@ -320,6 +320,22 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("To find previously run commands matching a pattern")
             .with_related(vec!["history", "export"])
         ),
+        "find" => Some(
+            CommandHelpEntry::new(
+                "find".to_string(),
+                "Search through conversation messages (not command history)".to_string(),
+                HelpCategory::Ui,
+            )
+            .with_aliases(vec!["grep", "conv-search"])
+            .with_arg_hint("<query>")
+            .with_examples(vec![
+                "/find error",
+                "/find authentication",
+                "/find TODO",
+            ])
+            .with_when_to_use("To find past messages in the current conversation matching a keyword")
+            .with_related(vec!["search", "history"])
+        ),
         "export" => Some(
             CommandHelpEntry::new(
                 "export".to_string(),
