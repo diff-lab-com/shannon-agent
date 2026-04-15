@@ -943,6 +943,28 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("Use to detect external file changes made outside of Shannon")
             .with_related(vec!["diff", "status"])
         ),
+        "bind" => Some(
+            CommandHelpEntry::new(
+                "bind".to_string(),
+                "View and manage keyboard shortcuts".to_string(),
+                HelpCategory::Ui,
+            )
+            .with_arg_hint("[list|save|load]")
+            .with_examples(vec!["/bind", "/bind save", "/bind load"])
+            .with_when_to_use("Use to view available keyboard shortcuts or create a custom keybindings config file")
+            .with_related(vec!["mode", "vim"])
+        ),
+        "project" => Some(
+            CommandHelpEntry::new(
+                "project".to_string(),
+                "Show and manage project-level configuration".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("[status|init|model <name>|set <key> <value>]")
+            .with_examples(vec!["/project", "/project init", "/project model claude-3-5-sonnet", "/project set permissions full-auto"])
+            .with_when_to_use("Use to view project config, create .shannon.toml, or change project-level settings")
+            .with_related(vec!["config", "permissions", "model"])
+        ),
         _ => None,
     }
 }

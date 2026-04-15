@@ -59,7 +59,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
     let is_plugin_command = repl.plugin_manager.get_plugin_commands()
         .iter().any(|c| c.name == cmd_name);
     // Commands handled in the match block but not in the global registry
-    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "route", "mcp", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "notify", "create-pr", "patch", "sandbox", "find", "grep", "conv-search", "copy", "paste", "add", "watch"];
+    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "route", "mcp", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "notify", "create-pr", "patch", "sandbox", "find", "grep", "conv-search", "copy", "paste", "add", "watch", "bind", "project"];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
     if command_exists || is_plugin_command || is_repl_command {
@@ -114,6 +114,8 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "paste" => handle_paste(repl)?,
             "add" => handle_add(repl, args)?,
             "watch" => handle_watch(repl, args)?,
+            "bind" => handle_bind(repl, args)?,
+            "project" => handle_project(repl, args)?,
             _ => handle_other_command(repl, cmd_name, args)?,
         }
         Ok(())
@@ -4334,4 +4336,278 @@ impl Repl {
         self.state.active_dialog = Some(builder.build());
         self.state.pending_dialog_action = None;
     }
+}
+
+// ── P3-14: Custom keybindings ────────────────────────────────────────────
+
+fn default_keybindings() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("Enter", "Submit input / confirm dialog"),
+        ("Shift+Enter", "Insert newline"),
+        ("Tab", "Autocomplete / cycle suggestions"),
+        ("Ctrl+C", "Cancel current operation"),
+        ("Ctrl+P", "Open command palette"),
+        ("Ctrl+L", "Clear screen"),
+        ("Ctrl+R", "Search history"),
+        ("Up/Down", "Navigate history / move cursor (multiline)"),
+        ("Left/Right", "Move cursor"),
+        ("Home/End", "Move to start/end of line"),
+        ("Ctrl+U", "Clear input line"),
+        ("Ctrl+W", "Delete word backward"),
+        ("Ctrl+A", "Move to start of line"),
+        ("Ctrl+E", "Move to end of line"),
+        ("Ctrl+K", "Delete to end of line"),
+        ("Esc", "Cancel / dismiss dialog"),
+        ("Page Up/Down", "Scroll chat"),
+    ]
+}
+
+fn handle_bind(repl: &mut Repl, args: &str) -> Result<()> {
+    let trimmed = args.trim();
+
+    if trimmed.is_empty() || trimmed == "list" || trimmed == "show" {
+        let mut msg = "Keyboard Shortcuts\n\n".to_string();
+        msg.push_str("  Key              Action\n");
+        msg.push_str("  ──────────────── ─────────────────────────────────\n");
+        for (key, action) in default_keybindings() {
+            msg.push_str(&format!("  {:<16} {}\n", key, action));
+        }
+        msg.push_str("\nCustom keybindings can be set in ~/.shannon/keybindings.toml\n");
+        msg.push_str("Format: [[bind]]\n  key = \"Ctrl+J\"\n  action = \"submit\"\n");
+        repl.chat.add_message(ChatRole::System, msg);
+        return Ok(());
+    }
+
+    if trimmed == "save" {
+        let config_dir = dirs::home_dir()
+            .map(|h| h.join(".shannon"))
+            .unwrap_or_else(|| std::path::PathBuf::from(".shannon"));
+        let _ = std::fs::create_dir_all(&config_dir);
+        let kb_path = config_dir.join("keybindings.toml");
+
+        let mut toml_content = "# Shannon keybindings configuration\n".to_string();
+        toml_content.push_str("# Restart Shannon after modifying this file.\n\n");
+        for (key, action) in default_keybindings() {
+            toml_content.push_str(&format!("# {key}: {action}\n"));
+        }
+        toml_content.push_str("\n# Example custom binding:\n");
+        toml_content.push_str("# [[bind]]\n# key = \"Ctrl+J\"\n# action = \"submit\"\n");
+
+        match std::fs::write(&kb_path, &toml_content) {
+            Ok(()) => {
+                repl.chat.add_message(ChatRole::System,
+                    format!("Keybindings template saved to {}", kb_path.display()));
+            }
+            Err(e) => {
+                repl.chat.add_message(ChatRole::System,
+                    format!("Failed to save keybindings: {e}"));
+            }
+        }
+        return Ok(());
+    }
+
+    let kb_path = dirs::home_dir()
+        .map(|h| h.join(".shannon").join("keybindings.toml"))
+        .unwrap_or_else(|| std::path::PathBuf::from(".shannon/keybindings.toml"));
+
+    if trimmed == "load" || trimmed == "reload" {
+        if !kb_path.exists() {
+            repl.chat.add_message(ChatRole::System,
+                "No custom keybindings file found. Use /bind save to create one.".to_string());
+        } else {
+            match std::fs::read_to_string(&kb_path) {
+                Ok(content) => {
+                    let line_count = content.lines().filter(|l| l.starts_with("[[bind]]")).count();
+                    repl.chat.add_message(ChatRole::System,
+                        format!("Loaded keybindings config ({} custom binding(s) defined).\nKeybindings take effect on next restart.", line_count));
+                }
+                Err(e) => {
+                    repl.chat.add_message(ChatRole::System,
+                        format!("Failed to read keybindings: {e}"));
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    repl.chat.add_message(ChatRole::System,
+        "Usage: /bind [list|save|load]\n  /bind       — Show all keybindings\n  /bind save  — Save template to ~/.shannon/keybindings.toml\n  /bind load  — Reload custom keybindings".to_string());
+    Ok(())
+}
+
+// ── P3-15: Project-level config ──────────────────────────────────────────
+
+fn handle_project(repl: &mut Repl, args: &str) -> Result<()> {
+    let trimmed = args.trim();
+
+    if trimmed.is_empty() || trimmed == "status" || trimmed == "show" {
+        let cwd = &repl.state.working_directory;
+        let mut msg = format!("Project Configuration\n\n  Directory: {cwd}\n");
+
+        let config_files = [".shannon.toml", "CLAUDE.md", "AGENTS.md", "GEMINI.md", ".claude/settings.json"];
+        msg.push_str("\n  Config files:\n");
+        for file in &config_files {
+            let path = std::path::Path::new(cwd).join(file);
+            if path.exists() {
+                msg.push_str(&format!("    + {file} (found)\n"));
+            } else {
+                msg.push_str(&format!("    - {file}\n"));
+            }
+        }
+
+        if let Some(ref model) = repl.state.model {
+            msg.push_str(&format!("\n  Model: {model}"));
+        }
+
+        msg.push_str(&format!("\n  Sandbox: {:?}", repl.state.sandbox_mode));
+
+        if let Some(ref engine) = repl.query_engine {
+            let perms = engine.permissions();
+            let mode = perms.read().map(|p| p.approval_mode()).unwrap_or(shannon_core::permissions::ApprovalMode::Suggest);
+            msg.push_str(&format!("\n  Permission mode: {:?}", mode));
+        }
+
+        if repl.state.plan.active {
+            msg.push_str("\n  Plan mode: active");
+        }
+
+        msg.push_str(&format!("\n  Notifications: {}", if repl.notifications_enabled { "enabled" } else { "disabled" }));
+
+        let git_check = std::process::Command::new("git")
+            .args(["rev-parse", "--show-toplevel"])
+            .current_dir(cwd)
+            .output();
+        if let Ok(output) = git_check {
+            if output.status.success() {
+                let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                msg.push_str(&format!("\n  Git root: {root}"));
+            }
+        }
+
+        if let Some(ref engine) = repl.query_engine {
+            msg.push_str(&format!("\n  Tools loaded: {}", engine.tools().list().len()));
+        }
+
+        let plugin_count = repl.plugin_manager.get_plugin_commands().len();
+        if plugin_count > 0 {
+            msg.push_str(&format!("\n  Plugins: {plugin_count} loaded"));
+        }
+
+        repl.chat.add_message(ChatRole::System, msg);
+        return Ok(());
+    }
+
+    if trimmed == "init" {
+        let config_path = std::path::Path::new(&repl.state.working_directory).join(".shannon.toml");
+        if config_path.exists() {
+            repl.chat.add_message(ChatRole::System,
+                format!("Project config already exists: {}", config_path.display()));
+            return Ok(());
+        }
+
+        let template = "# Shannon project configuration\n\
+[project]\n\
+name = \"\"\n\
+description = \"\"\n\
+\n\
+[model]\n\
+default = \"claude-3-5-sonnet\"\n\
+\n\
+[tools]\n\
+allowed = []        # Empty = all tools allowed\n\
+denied = []         # Explicit deny list\n\
+\n\
+[sandbox]\n\
+mode = \"direct\"     # direct | docker\n\
+\n\
+[context]\n\
+auto_load = true    # Auto-load CLAUDE.md / AGENTS.md\n\
+max_files = 20      # Max files for /add glob\n\
+\n\
+[permissions]\n\
+mode = \"suggest\"    # suggest | auto-edit | full-auto | readonly\n\
+\n\
+[routes]\n\
+# Pattern-based model routing\n\
+# \"translate\" = \"claude-3-5-haiku\"\n\
+# \"review\" = \"claude-3-5-sonnet\"\n";
+
+        match std::fs::write(&config_path, template) {
+            Ok(()) => {
+                repl.chat.add_message(ChatRole::System,
+                    format!("Created project config: {}\nEdit it to customize Shannon for this project.", config_path.display()));
+            }
+            Err(e) => {
+                repl.chat.add_message(ChatRole::System,
+                    format!("Failed to create config: {e}"));
+            }
+        }
+        return Ok(());
+    }
+
+    if trimmed.starts_with("model ") {
+        let model = trimmed.strip_prefix("model ").unwrap().trim();
+        if model.is_empty() {
+            repl.chat.add_message(ChatRole::System,
+                format!("Current model: {}", repl.state.model.as_deref().unwrap_or("none")));
+        } else {
+            repl.state.model = Some(model.to_string());
+            repl.chat.add_message(ChatRole::System,
+                format!("Project model set to: {model}"));
+        }
+        return Ok(());
+    }
+
+    if trimmed.starts_with("set ") {
+        let rest = trimmed.strip_prefix("set ").unwrap().trim();
+        let parts: Vec<&str> = rest.splitn(2, ' ').collect();
+        if parts.len() < 2 {
+            repl.chat.add_message(ChatRole::System,
+                "Usage: /project set <key> <value>\nKeys: model, sandbox, permissions, notifications".to_string());
+            return Ok(());
+        }
+        let key = parts[0];
+        let value = parts[1];
+
+        match key {
+            "sandbox" => {
+                repl.state.sandbox_mode = shannon_tools::SandboxMode::from_str_loose(value);
+                repl.chat.add_message(ChatRole::System,
+                    format!("Sandbox mode set to: {:?}", repl.state.sandbox_mode));
+            }
+            "permissions" => {
+                let mode = match value {
+                    "auto-edit" => shannon_core::permissions::ApprovalMode::AutoEdit,
+                    "full-auto" => shannon_core::permissions::ApprovalMode::FullAuto,
+                    "readonly" => shannon_core::permissions::ApprovalMode::Readonly,
+                    _ => shannon_core::permissions::ApprovalMode::Suggest,
+                };
+                if let Some(ref engine) = repl.query_engine {
+                    if let Ok(mut perms) = engine.permissions().write() {
+                        perms.set_approval_mode(mode);
+                    }
+                }
+                repl.chat.add_message(ChatRole::System,
+                    format!("Permission mode set to: {value}"));
+            }
+            "notifications" => {
+                repl.notifications_enabled = value == "on" || value == "true" || value == "enabled";
+                repl.chat.add_message(ChatRole::System,
+                    format!("Notifications: {}", if repl.notifications_enabled { "enabled" } else { "disabled" }));
+            }
+            _ => {
+                repl.chat.add_message(ChatRole::System,
+                    format!("Unknown setting: {key}. Available: model, sandbox, permissions, notifications"));
+            }
+        }
+        return Ok(());
+    }
+
+    repl.chat.add_message(ChatRole::System,
+        "Usage: /project [status|init|model <name>|set <key> <value>]\n\
+         /project status  — Show current project config\n\
+         /project init    — Create .shannon.toml template\n\
+         /project model <name> — Set project model\n\
+         /project set <key> <value> — Set config value".to_string());
+    Ok(())
 }
