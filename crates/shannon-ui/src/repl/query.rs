@@ -78,6 +78,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
     let streaming_cost: Arc<Mutex<f64>> = Arc::new(Mutex::new(0.0));
     let streaming_progress: Arc<Mutex<f64>> = Arc::new(Mutex::new(0.0));
     let streaming_multi_progress: Arc<Mutex<Vec<(String, f64, ratatui::style::Color)>>> = Arc::new(Mutex::new(Vec::new()));
+    let streaming_tokens: Arc<Mutex<(u64, u64)>> = Arc::new(Mutex::new((0, 0))); // (input, output)
 
     let buffer_clone = streaming_buffer.clone();
     let status_clone = streaming_status.clone();
@@ -85,6 +86,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
     let cost_clone = streaming_cost.clone();
     let progress_clone = streaming_progress.clone();
     let multi_progress_clone = streaming_multi_progress.clone();
+    let tokens_clone = streaming_tokens.clone();
     let permission_tx = repl.permission_req_tx.clone();
 
     // Spawn the query processing in a separate thread
@@ -163,7 +165,11 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                     if let Ok(mut buf) = buffer_clone.lock() { *buf = response_text.clone(); }
                 }
                 Ok(QueryEvent::Usage { input_tokens, output_tokens, cost_usd, .. }) => {
-                    response_text.push_str(&format!("\n📊 Tokens: {input_tokens} in + {output_tokens} out = ${cost_usd:.4}"));
+                    if let Ok(mut t) = tokens_clone.lock() { *t = (input_tokens, output_tokens); }
+                    let total = input_tokens + output_tokens;
+                    let total_fmt = if total >= 1000 { format!("{:.1}k", total as f64 / 1000.0) } else { total.to_string() };
+                    progress_status = format!("Processing... ({} tokens, ${cost_usd:.4})", total_fmt);
+                    if let Ok(mut s) = status_clone.lock() { *s = progress_status.clone(); }
                 }
                 Ok(QueryEvent::Cost { total_cost_usd, input_tokens, output_tokens, .. }) => {
                     tokens_in_turn = input_tokens + output_tokens;
@@ -217,10 +223,20 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                 last_rendered_len = current_text.len();
             }
 
-            repl.state.status = current_status;
+            repl.state.status = current_status.clone();
 
             if let Ok(cost) = streaming_cost.lock().map(|g| *g) {
                 if cost > 0.0 { repl.state.total_cost_usd = cost; }
+            }
+
+            // Update token display in real-time during streaming (display only, accumulation happens at query end)
+            if let Ok((input, output)) = streaming_tokens.lock().map(|g| *g) {
+                if input > 0 || output > 0 {
+                    let total = input + output;
+                    let total_fmt = if total >= 1000 { format!("{:.1}k", total as f64 / 1000.0) } else { total.to_string() };
+                    let cost_fmt = if repl.state.total_cost_usd > 0.0 { format!(" | ${:.4}", repl.state.total_cost_usd) } else { String::new() };
+                    repl.state.status = format!("{} ({} tokens{})", current_status, total_fmt, cost_fmt);
+                }
             }
 
             if let Ok(progress_val) = streaming_progress.lock().map(|g| *g) {

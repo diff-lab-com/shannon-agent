@@ -568,8 +568,13 @@ fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
     let input = args.trim();
     if input.is_empty() {
         repl.chat.add_message(ChatRole::System,
-            "Usage: /image <path> [optional prompt]\n\nAttach an image file to the conversation. Supports PNG, JPG, GIF, WebP, BMP, SVG.".to_string());
+            "Usage: /image <path> [optional prompt]\n       /image paste [prompt]\n\nAttach an image file or paste from clipboard. Supports PNG, JPG, GIF, WebP, BMP, SVG.".to_string());
         return Ok(());
+    }
+
+    // Handle /image paste subcommand
+    if input.starts_with("paste") {
+        return handle_image_paste(repl, input[5..].trim());
     }
 
     // Split path from optional prompt
@@ -652,6 +657,98 @@ fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
 
     // Trigger query processing
     super::query::handle_query(repl, &format!("Please analyze the image I just shared: {}", file_path.display()))?;
+    Ok(())
+}
+
+/// Handle `/image paste` — read image from system clipboard.
+pub fn handle_image_paste_from_input(repl: &mut Repl) -> Result<()> {
+    handle_image_paste(repl, "Describe this image.")
+}
+
+fn handle_image_paste(repl: &mut Repl, prompt_args: &str) -> Result<()> {
+    use base64::Engine;
+    use shannon_core::api::{ContentBlock, ImageSource};
+
+    let prompt = if prompt_args.is_empty() {
+        "Describe this image.".to_string()
+    } else {
+        prompt_args.to_string()
+    };
+
+    // Try reading clipboard image via platform tools
+    let tmp_path = std::env::temp_dir().join("shannon_clipboard_paste.png");
+    let tmp_str = tmp_path.to_string_lossy().to_string();
+
+    let result = if cfg!(target_os = "macos") {
+        std::process::Command::new("pngpaste")
+            .arg(&tmp_str)
+            .output()
+    } else {
+        // Linux: try xclip first, then wl-paste for Wayland
+        let file = std::fs::File::create(&tmp_path);
+        match file {
+            Ok(f) => {
+                let xclip = std::process::Command::new("xclip")
+                    .args(["-selection", "clipboard", "-t", "image/png", "-o"])
+                    .stdout(std::process::Stdio::from(f))
+                    .output();
+                match xclip {
+                    Ok(o) if o.status.success() => Ok(o),
+                    _ => {
+                        // Fallback: wl-paste for Wayland
+                        let f2 = std::fs::File::create(&tmp_path);
+                        match f2 {
+                            Ok(f2) => std::process::Command::new("wl-paste")
+                                .args(["--type", "image/png"])
+                                .stdout(std::process::Stdio::from(f2))
+                                .output(),
+                            Err(e) => Err(e.into()),
+                        }
+                    }
+                }
+            }
+            Err(e) => Err(e.into()),
+        }
+    };
+
+    match result {
+        Ok(output) if output.status.success() && tmp_path.exists() => {
+            let bytes = std::fs::read(&tmp_path)?;
+            let _ = std::fs::remove_file(&tmp_path); // cleanup
+
+            if bytes.len() < 10 {
+                repl.chat.add_message(ChatRole::System,
+                    "Clipboard does not contain a valid image.".to_string());
+                return Ok(());
+            }
+
+            let base64_data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            let engine = match repl.query_engine.as_mut() {
+                Some(e) => e,
+                None => {
+                    repl.chat.add_message(ChatRole::System, "Query engine not available.".to_string());
+                    return Ok(());
+                }
+            };
+
+            let blocks = vec![
+                ContentBlock::Text { text: prompt },
+                ContentBlock::Image {
+                    source: ImageSource::base64("image/png", base64_data),
+                },
+            ];
+            engine.add_user_message_blocks(blocks);
+            repl.chat.add_message(ChatRole::User, "[Image pasted from clipboard]".to_string());
+            repl.chat.add_message(ChatRole::System, "Clipboard image sent. Processing...".to_string());
+
+            super::query::handle_query(repl, "Please analyze the image I just shared from my clipboard.")?;
+        }
+        _ => {
+            repl.chat.add_message(ChatRole::System,
+                "Failed to read image from clipboard.\n\
+                 Install xclip (X11) or wl-clipboard (Wayland) for Linux, or pngpaste for macOS.".to_string());
+        }
+    }
     Ok(())
 }
 

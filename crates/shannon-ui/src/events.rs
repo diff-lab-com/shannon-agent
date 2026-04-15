@@ -8,6 +8,8 @@ use std::time::Duration;
 pub enum Event {
     /// Keyboard input event
     Input(KeyEvent),
+    /// Bracketed paste event (multi-line text pasted from terminal)
+    Paste(String),
     /// Tick event for periodic updates
     Tick,
 }
@@ -35,6 +37,7 @@ impl EventHandler {
             if event::poll(self.tick_rate)? {
                 match event::read()? {
                     CrosstermEvent::Key(key) => return Ok(Some(Event::Input(key))),
+                    CrosstermEvent::Paste(content) => return Ok(Some(Event::Paste(content))),
                     // Consume ALL mouse events, not just one per tick
                     CrosstermEvent::Mouse(_) => {
                         // Continue draining without returning

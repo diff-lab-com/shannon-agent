@@ -42,7 +42,21 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         return handle_multi_select_input(repl, key);
     }
 
+    // If incremental search (Ctrl+R) is active, handle search keys
+    if repl.state.incremental_search_active {
+        return handle_incremental_search(repl, key);
+    }
+
     match key.code {
+        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            // Activate incremental reverse search
+            repl.state.incremental_search_active = true;
+            repl.state.incremental_search_query.clear();
+            repl.state.incremental_search_match_index = 0;
+            repl.state.incremental_search_saved_input = repl.prompt.input().to_string();
+            repl.state.status = "(reverse-i-search) ``: ".to_string();
+            Ok(())
+        }
         KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             open_command_palette(repl);
             Ok(())
@@ -53,6 +67,12 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             repl.running = false;
+            Ok(())
+        }
+        KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            // Ctrl+V: try clipboard image paste, fall back to text insert
+            // For image detection, delegate to /image paste
+            super::commands::handle_image_paste_from_input(repl)?;
             Ok(())
         }
         KeyCode::Enter => {
@@ -122,6 +142,76 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         }
         _ => Ok(()),
     }
+}
+
+/// Handle keys during incremental reverse search (Ctrl+R)
+fn handle_incremental_search(repl: &mut Repl, key: KeyEvent) -> Result<()> {
+    match key.code {
+        // Ctrl+R again: cycle to next older match
+        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let matches = repl.command_history.search_history(&repl.state.incremental_search_query);
+            if !matches.is_empty() {
+                let idx = repl.state.incremental_search_match_index;
+                let next_idx = if idx + 1 < matches.len() { idx + 1 } else { 0 };
+                repl.state.incremental_search_match_index = next_idx;
+                let matched = matches[next_idx].to_string();
+                repl.prompt.set_input(matched.clone());
+                repl.state.status = format!(
+                    "(reverse-i-search) `{}`: {}",
+                    repl.state.incremental_search_query, matched
+                );
+            }
+        }
+        // Enter: accept current match, exit search
+        KeyCode::Enter => {
+            repl.state.incremental_search_active = false;
+            repl.state.status = "Ready".to_string();
+        }
+        // Escape: cancel search, restore saved input
+        KeyCode::Esc => {
+            repl.prompt.set_input(repl.state.incremental_search_saved_input.clone());
+            repl.state.incremental_search_active = false;
+            repl.state.status = "Ready".to_string();
+        }
+        // Backspace: remove last char from search query
+        KeyCode::Backspace => {
+            repl.state.incremental_search_query.pop();
+            repl.state.incremental_search_match_index = 0;
+            let matches = repl.command_history.search_history(&repl.state.incremental_search_query);
+            if let Some(m) = matches.first() {
+                repl.prompt.set_input(m.to_string());
+                repl.state.status = format!(
+                    "(reverse-i-search) `{}`: {}",
+                    repl.state.incremental_search_query, m
+                );
+            } else {
+                repl.state.status = format!(
+                    "(reverse-i-search) `{}`: <no match>",
+                    repl.state.incremental_search_query
+                );
+            }
+        }
+        // Regular char: append to search query and find match
+        KeyCode::Char(c) => {
+            repl.state.incremental_search_query.push(c);
+            repl.state.incremental_search_match_index = 0;
+            let matches = repl.command_history.search_history(&repl.state.incremental_search_query);
+            if let Some(m) = matches.first() {
+                repl.prompt.set_input(m.to_string());
+                repl.state.status = format!(
+                    "(reverse-i-search) `{}`: {}",
+                    repl.state.incremental_search_query, m
+                );
+            } else {
+                repl.state.status = format!(
+                    "(reverse-i-search) `{}`: <no match>",
+                    repl.state.incremental_search_query
+                );
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Handle vim actions produced by the VimHandler

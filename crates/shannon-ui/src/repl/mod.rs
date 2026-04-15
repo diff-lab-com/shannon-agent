@@ -101,6 +101,14 @@ pub struct ReplState {
     pub plan: PlanState,
     /// Execution sandbox mode (direct or Docker isolation)
     pub sandbox_mode: shannon_tools::SandboxMode,
+    /// Whether incremental reverse search (Ctrl+R) is active
+    pub incremental_search_active: bool,
+    /// Current search query for incremental search
+    pub incremental_search_query: String,
+    /// Match index within search results
+    pub incremental_search_match_index: usize,
+    /// Input saved before entering incremental search (restored on cancel)
+    pub incremental_search_saved_input: String,
 }
 
 /// State for plan mode
@@ -151,6 +159,10 @@ impl Default for ReplState {
             completion_suggestion_index: 0,
             plan: PlanState::default(),
             sandbox_mode: shannon_tools::SandboxMode::Direct,
+            incremental_search_active: false,
+            incremental_search_query: String::new(),
+            incremental_search_match_index: 0,
+            incremental_search_saved_input: String::new(),
         }
     }
 }
@@ -426,6 +438,8 @@ impl Repl {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen)?;
+        // Enable bracketed paste mode for proper multi-line paste handling
+        execute!(stdout, crossterm::event::EnableBracketedPaste)?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
@@ -473,6 +487,10 @@ impl Repl {
         disable_raw_mode()?;
         execute!(
             terminal.backend_mut(),
+            crossterm::event::DisableBracketedPaste
+        )?;
+        execute!(
+            terminal.backend_mut(),
             LeaveAlternateScreen
         )?;
         terminal.show_cursor()?;
@@ -491,6 +509,11 @@ impl Repl {
                         format!("Input error: {e}")
                     );
                 }
+            }
+            crate::events::Event::Paste(content) => {
+                // Insert pasted text preserving newlines (bracketed paste)
+                self.prompt.insert_text(&content);
+                self.state.completion_suggestions.clear();
             }
             crate::events::Event::Tick => {
                 // Advance spinner animation during query processing

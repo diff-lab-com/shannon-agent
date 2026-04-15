@@ -1,17 +1,96 @@
 //! Tool output formatting for the REPL
 //!
 //! Provides smart content-type detection and formatted display for tool results,
-//! including diffs, JSON, file trees, tables, and errors.
+//! including diffs, JSON, file trees, tables, code blocks, and errors.
+
+use syntect::easy::HighlightLines;
+use syntect::parsing::SyntaxSet;
+use syntect::highlighting::{ThemeSet, Theme};
+use syntect::highlighting::FontStyle;
+use syntect::util::LinesWithEndings;
 
 /// ANSI color codes for terminal output
+#[allow(dead_code)]
 mod colors {
     pub const RED: &str = "\x1b[31m";
     pub const GREEN: &str = "\x1b[32m";
     pub const CYAN: &str = "\x1b[36m";
+    pub const YELLOW: &str = "\x1b[33m";
+    pub const MAGENTA: &str = "\x1b[35m";
+    pub const BLUE: &str = "\x1b[34m";
     pub const BOLD: &str = "\x1b[1m";
     pub const DIM: &str = "\x1b[2m";
     pub const RESET: &str = "\x1b[0m";
 }
+
+/// Lazy-initialized syntax highlighting state
+struct SyntaxHighlight {
+    syntax_set: SyntaxSet,
+    theme: Theme,
+}
+
+impl SyntaxHighlight {
+    fn new() -> Self {
+        let syntax_set = SyntaxSet::load_defaults_newlines();
+        let theme_set = ThemeSet::load_defaults();
+        // Use a dark theme that works well in terminal
+        let theme = theme_set.themes["base16-eighties.dark"].clone();
+        Self { syntax_set, theme }
+    }
+
+    fn highlight(&self, code: &str, lang: &str) -> String {
+        let syntax = self.syntax_set
+            .find_syntax_by_token(lang)
+            .or_else(|| self.syntax_set.find_syntax_by_extension(lang))
+            .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text());
+
+        let mut highlighter = HighlightLines::new(syntax, &self.theme);
+        let mut output = String::new();
+
+        for line in LinesWithEndings::from(code) {
+            let ranges = highlighter.highlight_line(line, &self.syntax_set).unwrap_or_default();
+            for (style, text) in ranges {
+                let ansi = style_to_ansi(&style);
+                output.push_str(&ansi);
+                output.push_str(text.trim_end_matches('\n'));
+                output.push_str(colors::RESET);
+            }
+            output.push('\n');
+        }
+        output
+    }
+}
+
+/// Convert a syntect style to ANSI escape sequence.
+fn style_to_ansi(style: &syntect::highlighting::Style) -> String {
+    let fg = style.foreground;
+    let mut parts = Vec::new();
+    // Map RGB to nearest ANSI 256-color
+    let ansi_color = rgb_to_ansi256(fg.r, fg.g, fg.b);
+    parts.push(format!("\x1b[38;5;{ansi_color}m"));
+    if style.font_style.contains(FontStyle::BOLD) {
+        parts.push(colors::BOLD.to_string());
+    }
+    parts.join("")
+}
+
+/// Approximate RGB to 256-color terminal index.
+fn rgb_to_ansi256(r: u8, g: u8, b: u8) -> u8 {
+    // Check if it's a greyscale
+    if r == g && g == b {
+        if r < 8 { return 16; }
+        if r > 248 { return 231; }
+        return ((r as u16 - 8) * 24 / 247) as u8 + 232;
+    }
+    // Map to 6x6x6 color cube
+    let ri = (r as u16 * 5 / 255) as u8;
+    let gi = (g as u16 * 5 / 255) as u8;
+    let bi = (b as u16 * 5 / 255) as u8;
+    16 + 36 * ri + 6 * gi + bi
+}
+
+use std::sync::LazyLock;
+static SYNTAX_HIGHLIGHT: LazyLock<SyntaxHighlight> = LazyLock::new(SyntaxHighlight::new);
 
 /// Maximum number of lines to show for pretty-printed JSON output
 const JSON_MAX_LINES: usize = 50;
@@ -41,6 +120,8 @@ pub fn format_tool_result(tool_name: &str, result: &str, is_error: bool) -> Stri
         format_file_tree(&truncated)
     } else if looks_like_table(&truncated) {
         format_table(&truncated)
+    } else if looks_like_code(&truncated) {
+        highlight_code_by_tool(&truncated, tool_name)
     } else {
         truncated
     }
@@ -63,6 +144,56 @@ fn truncate_result(result: &str) -> String {
 }
 
 // ── Detection functions ─────────────────────────────────────────────────
+
+/// Check if the content looks like source code (multi-line with code-like patterns).
+fn looks_like_code(s: &str) -> bool {
+    let lines: Vec<&str> = s.lines().take(10).collect();
+    if lines.len() < 2 {
+        return false;
+    }
+    // Heuristic: look for common code patterns
+    let code_indicators = [
+        ("fn ", "rust"),
+        ("let ", "rust"),
+        ("pub ", "rust"),
+        ("use ", "rust"),
+        ("impl ", "rust"),
+        ("function ", "javascript"),
+        ("const ", "javascript"),
+        ("import ", "javascript"),
+        ("class ", "typescript"),
+        ("def ", "python"),
+        ("from ", "python"),
+        ("if __name__", "python"),
+        ("package ", "java"),
+        ("#include", "cpp"),
+        ("func ", "go"),
+        ("    ", "indented"),
+    ];
+    let mut score = 0;
+    for line in &lines {
+        for (pattern, _) in &code_indicators {
+            if line.contains(pattern) {
+                score += 1;
+                break;
+            }
+        }
+    }
+    score * 2 >= lines.len()
+}
+
+/// Map tool name to a language identifier for syntax highlighting.
+fn highlight_code_by_tool(s: &str, tool_name: &str) -> String {
+    let lang = match tool_name {
+        "bash" | "sh" | "shell" | "run" | "execute" => "bash",
+        "read" | "cat" | "file" => "text",
+        "python" | "py" => "python",
+        "node" | "javascript" | "js" => "javascript",
+        "grep" | "search" => "text",
+        _ => "text",
+    };
+    SYNTAX_HIGHLIGHT.highlight(s, lang)
+}
 
 /// Check if the content looks like a unified diff.
 fn looks_like_diff(s: &str) -> bool {
@@ -155,7 +286,7 @@ fn format_diff(s: &str) -> String {
         .join("\n")
 }
 
-/// Pretty-print JSON with indentation, capped at 50 lines.
+/// Pretty-print JSON with indentation and syntax highlighting, capped at 50 lines.
 fn format_json(s: &str) -> String {
     let pretty = match serde_json::from_str::<serde_json::Value>(s) {
         Ok(value) => serde_json::to_string_pretty(&value).unwrap_or_else(|_| s.to_string()),
@@ -163,7 +294,7 @@ fn format_json(s: &str) -> String {
     };
 
     let lines: Vec<&str> = pretty.lines().collect();
-    if lines.len() <= JSON_MAX_LINES {
+    let capped = if lines.len() <= JSON_MAX_LINES {
         pretty
     } else {
         let mut output = lines[..JSON_MAX_LINES].join("\n");
@@ -174,7 +305,10 @@ fn format_json(s: &str) -> String {
             colors::RESET,
         ));
         output
-    }
+    };
+
+    // Apply JSON syntax highlighting
+    SYNTAX_HIGHLIGHT.highlight(&capped, "json")
 }
 
 /// Format a file list as a tree with drawing characters.
@@ -296,6 +430,25 @@ fn format_error(tool_name: &str, s: &str) -> String {
 mod tests {
     use super::*;
 
+    /// Strip ANSI escape sequences for test assertions.
+    fn strip_ansi(s: &str) -> String {
+        let mut result = String::with_capacity(s.len());
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' && chars.peek() == Some(&'[') {
+                chars.next(); // consume '['
+                // Skip all digits and semicolons until 'm'
+                while let Some(&next) = chars.peek() {
+                    chars.next();
+                    if next == 'm' { break; }
+                }
+            } else {
+                result.push(c);
+            }
+        }
+        result
+    }
+
     // ── Detection tests ──────────────────────────────────────────────
 
     #[test]
@@ -389,19 +542,21 @@ mod tests {
     fn test_format_json_pretty_print() {
         let json = r#"{"name":"test","value":42}"#;
         let formatted = format_json(json);
+        let plain = strip_ansi(&formatted);
         // Should be pretty-printed (contains newlines and indentation)
-        assert!(formatted.contains('\n'));
-        assert!(formatted.contains("  "));
-        assert!(formatted.contains("\"name\""));
-        assert!(formatted.contains("\"test\""));
+        assert!(plain.contains('\n'));
+        assert!(plain.contains("  "));
+        assert!(plain.contains("\"name\""));
+        assert!(plain.contains("\"test\""));
     }
 
     #[test]
     fn test_format_json_invalid_falls_back() {
         let invalid = "{not valid json}";
         let formatted = format_json(invalid);
-        // Should fall back to original text
-        assert_eq!(formatted, invalid);
+        let plain = strip_ansi(&formatted);
+        // Should fall back to original text (minus ANSI codes)
+        assert!(plain.contains(invalid));
     }
 
     #[test]
@@ -416,8 +571,9 @@ mod tests {
         }
         let large_json = serde_json::to_string(&serde_json::Value::Object(obj)).unwrap();
         let formatted = format_json(&large_json);
-        assert!(formatted.contains("... "));
-        assert!(formatted.contains("more lines"));
+        let plain = strip_ansi(&formatted);
+        assert!(plain.contains("... "));
+        assert!(plain.contains("more lines"));
     }
 
     #[test]
