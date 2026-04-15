@@ -56,7 +56,7 @@ pub mod mcp_auth;
 
 // Re-exports for convenience
 pub use file::{ReadTool, WriteTool, EditTool, GlobTool, FileOperation};
-pub use system::{SystemTool, ShellCommand, SleepTool, BashTool, PowerShellTool};
+pub use system::{SystemTool, ShellCommand, SleepTool, BashTool, PowerShellTool, DockerSandbox, DockerSandboxConfig, SandboxMode};
 pub use git::{GitBranchTool, GitDiffTool, GitLogTool, GitStashTool, GitSafetyTool};
 pub use web::{WebFetchTool, WebSearchTool, WebOperation};
 pub use agent::{AgentTool, AgentOperation};
@@ -125,7 +125,7 @@ pub use file::sandbox_adapter::{
     SandboxConfig as SandboxAdapterConfig,
 };
 pub use file::sandbox::{PathSandbox, SandboxConfig as PathSandboxConfig, SandboxError};
-pub use system::{SecurityLevel, SecurityAnalysis, analyze_command_security};
+pub use system::{SecurityLevel, SecurityAnalysis, CommandOutput, analyze_command_security};
 
 // Re-export from shannon_core
 pub use shannon_core::{

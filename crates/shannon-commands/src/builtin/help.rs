@@ -613,6 +613,17 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("Use to preview and apply targeted text replacements in files")
             .with_related(vec!["edit", "diff", "undo"])
         ),
+        "sandbox" => Some(
+            CommandHelpEntry::new(
+                "sandbox".to_string(),
+                "Execution sandbox for isolated shell command execution".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("[status|docker|direct|check]")
+            .with_examples(vec!["/sandbox", "/sandbox docker", "/sandbox direct", "/sandbox check"])
+            .with_when_to_use("Use to enable Docker isolation for shell commands or check sandbox status")
+            .with_related(vec!["doctor", "config", "permissions"])
+        ),
         "compact" => Some(
             CommandHelpEntry::new(
                 "compact".to_string(),
@@ -896,6 +907,7 @@ pub fn all_help_entries() -> Vec<CommandHelpEntry> {
         get_command_help("notify").unwrap(),
         get_command_help("create-pr").unwrap(),
         get_command_help("patch").unwrap(),
+        get_command_help("sandbox").unwrap(),
     ]
 }
 

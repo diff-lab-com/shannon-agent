@@ -59,7 +59,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
     let is_plugin_command = repl.plugin_manager.get_plugin_commands()
         .iter().any(|c| c.name == cmd_name);
     // Commands handled in the match block but not in the global registry
-    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "notify", "create-pr", "patch"];
+    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "notify", "create-pr", "patch", "sandbox"];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
     if command_exists || is_plugin_command || is_repl_command {
@@ -105,6 +105,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "notify" => handle_notify(repl, args)?,
             "create-pr" => handle_create_pr(repl, args)?,
             "patch" => handle_patch(repl, args)?,
+            "sandbox" => handle_sandbox(repl, args)?,
             _ => handle_other_command(repl, cmd_name, args)?,
         }
         Ok(())
@@ -1209,6 +1210,86 @@ fn handle_patch(repl: &mut Repl, args: &str) -> Result<()> {
         }
         Err(e) => {
             { repl.chat.add_message(ChatRole::System, format!("Patch failed: {e}")); }
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_sandbox(repl: &mut Repl, args: &str) -> Result<()> {
+    let args = args.trim();
+
+    if args.is_empty() || args == "--help" || args == "help" {
+        let docker_available = repl.runtime.block_on(
+            shannon_tools::DockerSandbox::is_available()
+        );
+        let status = if docker_available { "available" } else { "not installed/unavailable" };
+
+        repl.chat.add_message(ChatRole::System,
+            "Sandbox — execution isolation for shell commands\n\n\
+             Usage:\n\
+               /sandbox              Show current sandbox status\n\
+               /sandbox status       Show detailed sandbox info\n\
+               /sandbox docker       Enable Docker isolation\n\
+               /sandbox direct       Disable sandbox (run directly)\n\
+               /sandbox check        Check if Docker is available\n\n\
+             Docker: ".to_string() + status + "\n\n\
+             When Docker sandbox is enabled, all /bash tool commands\n\
+             run inside an isolated container with:\n\
+               - No network access (network=none)\n\
+               - Memory limit (512m)\n\
+               - CPU limit (1.0)\n\
+               - Read-only root filesystem\n\
+               - Workspace mounted at /workspace"
+        );
+        return Ok(());
+    }
+
+    match args {
+        "status" | "info" => {
+            let current = repl.state.sandbox_mode.clone();
+            let mode_str = match &current {
+                shannon_tools::SandboxMode::Direct => "direct (no sandbox)".to_string(),
+                shannon_tools::SandboxMode::Docker(cfg) => {
+                    format!("docker (image={}, network={}, memory={}, cpus={})",
+                        cfg.image,
+                        cfg.network,
+                        cfg.memory.as_deref().unwrap_or("unlimited"),
+                        cfg.cpus.as_deref().unwrap_or("unlimited"),
+                    )
+                }
+            };
+            repl.chat.add_message(ChatRole::System,
+                format!("Sandbox mode: {mode_str}"));
+        }
+        "docker" | "on" | "enable" => {
+            let config = shannon_tools::DockerSandboxConfig::default();
+            repl.state.sandbox_mode = shannon_tools::SandboxMode::Docker(config);
+            repl.chat.add_message(ChatRole::System,
+                "Docker sandbox enabled. Shell commands will run inside an isolated container.\n\
+                 Use /sandbox status for details, /sandbox direct to disable.".to_string());
+        }
+        "direct" | "off" | "disable" => {
+            repl.state.sandbox_mode = shannon_tools::SandboxMode::Direct;
+            repl.chat.add_message(ChatRole::System,
+                "Sandbox disabled. Shell commands will run directly on the host.".to_string());
+        }
+        "check" => {
+            let available = repl.runtime.block_on(
+                shannon_tools::DockerSandbox::is_available()
+            );
+            if available {
+                repl.chat.add_message(ChatRole::System,
+                    "Docker is available and running.".to_string());
+            } else {
+                repl.chat.add_message(ChatRole::System,
+                    "Docker is not available. Install Docker and ensure the daemon is running.".to_string());
+            }
+        }
+        _ => {
+            repl.chat.add_message(ChatRole::System,
+                format!("Unknown sandbox option: {args}\n\
+                 Use: /sandbox [status|docker|direct|check]"));
         }
     }
 

@@ -2316,3 +2316,67 @@ fn test_repl_patch_in_help() {
         &help_text[..help_text.len().min(200)]
     );
 }
+
+#[test]
+fn test_repl_sandbox_help() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/sandbox".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("Sandbox"), "should show sandbox help header");
+    assert!(msg.contains("docker"), "should mention docker option");
+    assert!(msg.contains("direct"), "should mention direct option");
+}
+
+#[test]
+fn test_repl_sandbox_status_direct() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/sandbox status".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("direct"), "default should be direct mode");
+}
+
+#[test]
+fn test_repl_sandbox_toggle_docker() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/sandbox docker".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("enabled"), "should confirm docker enabled");
+    assert!(matches!(repl.state.sandbox_mode, shannon_tools::SandboxMode::Docker(_)));
+}
+
+#[test]
+fn test_repl_sandbox_toggle_direct() {
+    let mut repl = Repl::new().unwrap();
+    // First enable docker
+    repl.state.sandbox_mode = shannon_tools::SandboxMode::Docker(shannon_tools::DockerSandboxConfig::default());
+    // Then disable
+    repl.prompt.set_input("/sandbox direct".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("disabled"), "should confirm sandbox disabled");
+    assert_eq!(repl.state.sandbox_mode, shannon_tools::SandboxMode::Direct);
+}
+
+#[test]
+fn test_repl_sandbox_unknown_option() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/sandbox foobar".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let msg = &repl.chat.last_message().unwrap().content;
+    assert!(msg.contains("Unknown"), "should report unknown option");
+}
+
+#[test]
+fn test_repl_sandbox_in_help() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/help".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let help_text = &repl.chat.last_message().unwrap().content;
+    assert!(
+        help_text.contains("sandbox"),
+        "/help output should list sandbox command"
+    );
+}

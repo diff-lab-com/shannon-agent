@@ -283,6 +283,220 @@ pub fn validate_path(path: &str, allowed_paths: &[String]) -> Result<(), String>
     Ok(())
 }
 
+/// Execution sandbox mode for command isolation
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum SandboxMode {
+    /// Direct execution on host (default)
+    Direct,
+    /// Docker container isolation
+    Docker(DockerSandboxConfig),
+}
+
+impl Default for SandboxMode {
+    fn default() -> Self {
+        Self::Direct
+    }
+}
+
+impl SandboxMode {
+    /// Parse from string (for env var / config)
+    pub fn from_str_loose(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "docker" => Self::Docker(DockerSandboxConfig::default()),
+            _ => Self::Direct,
+        }
+    }
+
+    /// Check if sandbox mode is Docker
+    pub fn is_docker(&self) -> bool {
+        matches!(self, SandboxMode::Docker(_))
+    }
+}
+
+/// Docker sandbox configuration
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DockerSandboxConfig {
+    /// Docker image to use
+    #[serde(default = "DockerSandboxConfig::default_image")]
+    pub image: String,
+    /// Working directory inside container
+    #[serde(default = "DockerSandboxConfig::default_workdir")]
+    pub workdir: String,
+    /// Network mode: "none", "bridge", "host"
+    #[serde(default = "DockerSandboxConfig::default_network")]
+    pub network: String,
+    /// Memory limit (e.g., "512m", "1g")
+    pub memory: Option<String>,
+    /// CPU limit (e.g., "1.0", "0.5")
+    pub cpus: Option<String>,
+    /// Read-only root filesystem
+    #[serde(default = "DockerSandboxConfig::default_readonly")]
+    pub readonly_root: bool,
+    /// Additional host paths to mount (host:container pairs)
+    #[serde(default)]
+    pub extra_mounts: Vec<String>,
+}
+
+impl DockerSandboxConfig {
+    fn default_image() -> String { "ubuntu:22.04".to_string() }
+    fn default_workdir() -> String { "/workspace".to_string() }
+    fn default_network() -> String { "none".to_string() }
+    fn default_readonly() -> bool { true }
+}
+
+impl Default for DockerSandboxConfig {
+    fn default() -> Self {
+        Self {
+            image: Self::default_image(),
+            workdir: Self::default_workdir(),
+            network: Self::default_network(),
+            memory: Some("512m".to_string()),
+            cpus: Some("1.0".to_string()),
+            readonly_root: Self::default_readonly(),
+            extra_mounts: Vec::new(),
+        }
+    }
+}
+
+/// Docker sandbox for isolated command execution
+pub struct DockerSandbox {
+    config: DockerSandboxConfig,
+}
+
+impl DockerSandbox {
+    /// Create a new Docker sandbox with the given configuration
+    pub fn new(config: DockerSandboxConfig) -> Self {
+        Self { config }
+    }
+
+    /// Check if Docker is available on the system
+    pub async fn is_available() -> bool {
+        let output = Command::new("docker")
+            .arg("info")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await;
+        match output {
+            Ok(o) => o.status.success(),
+            Err(_) => false,
+        }
+    }
+
+    /// Build the docker run argument list
+    fn build_args(
+        &self,
+        command: &str,
+        cwd: Option<&str>,
+        env: Option<&std::collections::HashMap<String, String>>,
+    ) -> Vec<String> {
+        let mut args = vec![
+            "run".to_string(),
+            "--rm".to_string(),
+        ];
+
+        // Mount workspace: resolve cwd or use current directory
+        let workspace = cwd.unwrap_or(".");
+        let abs_workspace = std::path::Path::new(workspace)
+            .canonicalize()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| workspace.to_string());
+
+        args.push("-v".to_string());
+        args.push(format!("{}:{}", abs_workspace, self.config.workdir));
+        args.push("-w".to_string());
+        args.push(self.config.workdir.clone());
+
+        // Network isolation
+        args.push("--network".to_string());
+        args.push(self.config.network.clone());
+
+        // Resource limits
+        if let Some(ref mem) = self.config.memory {
+            args.push("--memory".to_string());
+            args.push(mem.clone());
+        }
+        if let Some(ref cpus) = self.config.cpus {
+            args.push("--cpus".to_string());
+            args.push(cpus.clone());
+        }
+
+        // Read-only root filesystem
+        if self.config.readonly_root {
+            args.push("--read-only".to_string());
+            // /tmp needs to be writable for many commands
+            args.push("--tmpfs".to_string());
+            args.push("/tmp:rw,noexec,nosuid,size=100m".to_string());
+        }
+
+        // Extra mounts
+        for mount in &self.config.extra_mounts {
+            args.push("-v".to_string());
+            args.push(mount.clone());
+        }
+
+        // Environment variables
+        if let Some(env_vars) = env {
+            for (key, value) in env_vars {
+                args.push("-e".to_string());
+                args.push(format!("{}={}", key, value));
+            }
+        }
+
+        // Image and command
+        args.push(self.config.image.clone());
+        args.push("bash".to_string());
+        args.push("-c".to_string());
+        args.push(command.to_string());
+
+        args
+    }
+
+    /// Execute a command inside a Docker container
+    pub async fn execute(
+        &self,
+        command: &str,
+        cwd: Option<&str>,
+        env: Option<&std::collections::HashMap<String, String>>,
+        timeout_ms: Option<u64>,
+    ) -> Result<CommandOutput, std::io::Error> {
+        let docker_args = self.build_args(command, cwd, env);
+
+        let mut cmd = Command::new("docker");
+        cmd.args(&docker_args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let output = if let Some(timeout) = timeout_ms {
+            let duration = std::time::Duration::from_millis(timeout);
+            tokio::time::timeout(duration, cmd.output())
+                .await
+                .map_err(|_| std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("Docker command timed out after {timeout}ms"),
+                ))?
+                .map_err(|e| std::io::Error::other(format!("Docker execution failed: {e}")))?
+        } else {
+            cmd.output()
+                .await
+                .map_err(|e| std::io::Error::other(format!("Docker execution failed: {e}")))?
+        };
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let exit_code = output.status.code().unwrap_or(-1);
+        let success = output.status.success();
+
+        Ok(CommandOutput {
+            stdout,
+            stderr,
+            exit_code,
+            success,
+        })
+    }
+}
+
 /// Get a human-readable description of the risk level
 pub fn describe_risk_level(level: SecurityLevel) -> &'static str {
     match level {
@@ -353,6 +567,7 @@ pub struct CommandOutput {
 /// Bash tool implementation
 pub struct BashTool {
     description: String,
+    sandbox: Option<DockerSandbox>,
 }
 
 impl Default for BashTool {
@@ -365,6 +580,31 @@ impl BashTool {
     pub fn new() -> Self {
         Self {
             description: "Executes bash commands and returns output".to_string(),
+            sandbox: None,
+        }
+    }
+
+    /// Create a BashTool that routes commands through a Docker sandbox
+    pub fn with_docker_sandbox(config: DockerSandboxConfig) -> Self {
+        Self {
+            description: "Executes bash commands in Docker sandbox".to_string(),
+            sandbox: Some(DockerSandbox::new(config)),
+        }
+    }
+
+    /// Update the sandbox mode
+    pub fn set_sandbox(&mut self, mode: SandboxMode) {
+        match mode {
+            SandboxMode::Direct => self.sandbox = None,
+            SandboxMode::Docker(config) => self.sandbox = Some(DockerSandbox::new(config)),
+        }
+    }
+
+    /// Get the current sandbox mode
+    pub fn sandbox_mode(&self) -> SandboxMode {
+        match &self.sandbox {
+            None => SandboxMode::Direct,
+            Some(s) => SandboxMode::Docker(s.config.clone()),
         }
     }
 
@@ -498,14 +738,24 @@ impl Tool for BashTool {
             String::new()
         };
 
-        // Execute the command
-        let output_result = Self::execute_command(
-            &bash_input.command,
-            bash_input.cwd.as_deref(),
-            bash_input.env.as_ref(),
-            bash_input.timeout,
-        )
-        .await;
+        // Execute the command (through Docker sandbox if configured)
+        let output_result = if let Some(ref sandbox) = self.sandbox {
+            sandbox.execute(
+                &bash_input.command,
+                bash_input.cwd.as_deref(),
+                bash_input.env.as_ref(),
+                bash_input.timeout,
+            )
+            .await
+        } else {
+            Self::execute_command(
+                &bash_input.command,
+                bash_input.cwd.as_deref(),
+                bash_input.env.as_ref(),
+                bash_input.timeout,
+            )
+            .await
+        };
 
         let output = match output_result {
             Ok(output) => output,
@@ -831,5 +1081,188 @@ impl Tool for SleepTool {
                 map
             },
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── SandboxMode tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_sandbox_mode_default_is_direct() {
+        assert_eq!(SandboxMode::default(), SandboxMode::Direct);
+    }
+
+    #[test]
+    fn test_sandbox_mode_from_str_loose() {
+        assert!(SandboxMode::from_str_loose("docker").is_docker());
+        assert!(SandboxMode::from_str_loose("Docker").is_docker());
+        assert!(SandboxMode::from_str_loose("DOCKER").is_docker());
+        assert!(!SandboxMode::from_str_loose("direct").is_docker());
+        assert!(!SandboxMode::from_str_loose("none").is_docker());
+        assert!(!SandboxMode::from_str_loose("").is_docker());
+    }
+
+    // ── DockerSandboxConfig tests ──────────────────────────────────────
+
+    #[test]
+    fn test_docker_config_defaults() {
+        let config = DockerSandboxConfig::default();
+        assert_eq!(config.image, "ubuntu:22.04");
+        assert_eq!(config.workdir, "/workspace");
+        assert_eq!(config.network, "none");
+        assert_eq!(config.memory, Some("512m".to_string()));
+        assert_eq!(config.cpus, Some("1.0".to_string()));
+        assert!(config.readonly_root);
+        assert!(config.extra_mounts.is_empty());
+    }
+
+    #[test]
+    fn test_docker_config_custom() {
+        let config = DockerSandboxConfig {
+            image: "alpine:3.19".to_string(),
+            workdir: "/app".to_string(),
+            network: "bridge".to_string(),
+            memory: Some("1g".to_string()),
+            cpus: None,
+            readonly_root: false,
+            extra_mounts: vec!["/data:/data".to_string()],
+        };
+        assert_eq!(config.image, "alpine:3.19");
+        assert_eq!(config.workdir, "/app");
+        assert_eq!(config.network, "bridge");
+        assert!(config.cpus.is_none());
+        assert!(!config.readonly_root);
+        assert_eq!(config.extra_mounts.len(), 1);
+    }
+
+    #[test]
+    fn test_docker_config_serialization_roundtrip() {
+        let config = DockerSandboxConfig::default();
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: DockerSandboxConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(config, deserialized);
+    }
+
+    // ── SandboxMode serialization tests ────────────────────────────────
+
+    #[test]
+    fn test_sandbox_mode_serialization_direct() {
+        let mode = SandboxMode::Direct;
+        let json = serde_json::to_string(&mode).unwrap();
+        assert!(json.contains("\"mode\":\"direct\""));
+        let back: SandboxMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(mode, back);
+    }
+
+    #[test]
+    fn test_sandbox_mode_serialization_docker() {
+        let mode = SandboxMode::Docker(DockerSandboxConfig::default());
+        let json = serde_json::to_string(&mode).unwrap();
+        assert!(json.contains("\"mode\":\"docker\""));
+        let back: SandboxMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(mode, back);
+    }
+
+    // ── Docker args construction tests ─────────────────────────────────
+
+    #[test]
+    fn test_docker_build_args_basic() {
+        let config = DockerSandboxConfig::default();
+        let sandbox = DockerSandbox::new(config);
+        let args = sandbox.build_args("echo hello", None, None);
+
+        // Should start with run --rm
+        assert!(args.contains(&"run".to_string()));
+        assert!(args.contains(&"--rm".to_string()));
+        // Should have network=none
+        let net_idx = args.iter().position(|a| a == "--network").unwrap();
+        assert_eq!(args[net_idx + 1], "none");
+        // Should have --read-only
+        assert!(args.contains(&"--read-only".to_string()));
+        // Should mount workspace
+        assert!(args.contains(&"-v".to_string()));
+        assert!(args.iter().any(|a| a.contains(":/workspace")));
+        // Should have image
+        assert!(args.contains(&"ubuntu:22.04".to_string()));
+        // Command at end
+        assert_eq!(args.last(), Some(&"echo hello".to_string()));
+    }
+
+    #[test]
+    fn test_docker_build_args_with_env() {
+        let config = DockerSandboxConfig::default();
+        let sandbox = DockerSandbox::new(config);
+        let mut env = HashMap::new();
+        env.insert("FOO".to_string(), "bar".to_string());
+        let args = sandbox.build_args("env", None, Some(&env));
+
+        let env_idx = args.iter().position(|a| a == "FOO=bar").unwrap();
+        assert!(args[env_idx - 1] == "-e");
+    }
+
+    #[test]
+    fn test_docker_build_args_no_readonly() {
+        let config = DockerSandboxConfig {
+            readonly_root: false,
+            ..DockerSandboxConfig::default()
+        };
+        let sandbox = DockerSandbox::new(config);
+        let args = sandbox.build_args("ls", None, None);
+
+        assert!(!args.contains(&"--read-only".to_string()));
+        assert!(!args.iter().any(|a| a.starts_with("/tmp:")));
+    }
+
+    #[test]
+    fn test_docker_build_args_with_extra_mounts() {
+        let config = DockerSandboxConfig {
+            extra_mounts: vec!["/host/path:/container/path".to_string()],
+            ..DockerSandboxConfig::default()
+        };
+        let sandbox = DockerSandbox::new(config);
+        let args = sandbox.build_args("ls", None, None);
+
+        assert!(args.contains(&"/host/path:/container/path".to_string()));
+    }
+
+    // ── BashTool sandbox integration tests ─────────────────────────────
+
+    #[test]
+    fn test_bash_tool_default_no_sandbox() {
+        let tool = BashTool::new();
+        assert_eq!(tool.sandbox_mode(), SandboxMode::Direct);
+    }
+
+    #[test]
+    fn test_bash_tool_with_docker_sandbox() {
+        let tool = BashTool::with_docker_sandbox(DockerSandboxConfig::default());
+        assert!(tool.sandbox_mode().is_docker());
+    }
+
+    #[test]
+    fn test_bash_tool_set_sandbox() {
+        let mut tool = BashTool::new();
+        assert_eq!(tool.sandbox_mode(), SandboxMode::Direct);
+
+        tool.set_sandbox(SandboxMode::Docker(DockerSandboxConfig::default()));
+        assert!(tool.sandbox_mode().is_docker());
+
+        tool.set_sandbox(SandboxMode::Direct);
+        assert_eq!(tool.sandbox_mode(), SandboxMode::Direct);
+    }
+
+    // ── Security analysis unchanged by sandbox ─────────────────────────
+
+    #[test]
+    fn test_security_analysis_independent_of_sandbox() {
+        let analysis = analyze_command_security("rm -rf /");
+        assert!(analysis.is_destructive);
+        assert_eq!(analysis.risk_level, SecurityLevel::Critical);
+
+        let analysis2 = analyze_command_security("ls");
+        assert!(analysis2.is_read_only);
     }
 }

@@ -99,6 +99,8 @@ pub struct ReplState {
     pub completion_suggestion_index: usize,
     /// Plan mode state
     pub plan: PlanState,
+    /// Execution sandbox mode (direct or Docker isolation)
+    pub sandbox_mode: shannon_tools::SandboxMode,
 }
 
 /// State for plan mode
@@ -148,6 +150,7 @@ impl Default for ReplState {
             completion_suggestions: Vec::new(),
             completion_suggestion_index: 0,
             plan: PlanState::default(),
+            sandbox_mode: shannon_tools::SandboxMode::Direct,
         }
     }
 }
