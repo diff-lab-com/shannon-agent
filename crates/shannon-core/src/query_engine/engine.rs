@@ -909,6 +909,11 @@ impl QueryEngine {
     pub fn cost_summary(&self) -> String {
         self.cost_tracker.read().expect("cost_tracker rwlock poisoned").summary()
     }
+
+    /// Get a reference to the cost tracker for reading cost details.
+    pub fn cost_tracker(&self) -> &Arc<RwLock<CostTracker>> {
+        &self.cost_tracker
+    }
 }
 
 /// Helper function to save conversation to disk

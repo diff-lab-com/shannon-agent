@@ -5,13 +5,47 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-/// Cost tracker for API usage
+/// Cost record for a single turn
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TurnCost {
+    /// Turn number (1-based)
+    pub turn: usize,
+    /// Model used for this turn
+    pub model: String,
+    /// Input tokens consumed
+    pub input_tokens: u64,
+    /// Output tokens generated
+    pub output_tokens: u64,
+    /// Cost in USD for this turn
+    pub cost_usd: f64,
+}
+
+/// Accumulated cost for a specific model
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModelCostBreakdown {
+    /// Total input tokens for this model
+    pub input_tokens: u64,
+    /// Total output tokens for this model
+    pub output_tokens: u64,
+    /// Total cost in USD for this model
+    pub cost_usd: f64,
+    /// Number of turns using this model
+    pub turn_count: usize,
+}
+
+/// Cost tracker for API usage with turn-by-turn and per-model breakdown
 #[derive(Debug, Clone)]
 pub struct CostTracker {
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
     pub total_cost_usd: f64,
     pub model_name: String,
+    /// Per-turn cost records
+    turn_costs: Vec<TurnCost>,
+    /// Per-model accumulated costs
+    model_breakdowns: std::collections::HashMap<String, ModelCostBreakdown>,
+    /// Optional budget limit in USD
+    pub budget_limit_usd: Option<f64>,
 }
 
 impl CostTracker {
@@ -22,6 +56,9 @@ impl CostTracker {
             total_output_tokens: 0,
             total_cost_usd: 0.0,
             model_name: model,
+            turn_costs: Vec::new(),
+            model_breakdowns: std::collections::HashMap::new(),
+            budget_limit_usd: None,
         }
     }
 
@@ -48,16 +85,66 @@ impl CostTracker {
         input_cost + output_cost
     }
 
-    /// Record usage and update totals
+    /// Record usage and update totals with turn tracking
     pub fn record_usage(&mut self, model: &str, input_tokens: u64, output_tokens: u64) {
+        let cost = Self::calculate_cost(model, input_tokens, output_tokens);
         self.total_input_tokens += input_tokens;
         self.total_output_tokens += output_tokens;
-        self.total_cost_usd += Self::calculate_cost(model, input_tokens, output_tokens);
+        self.total_cost_usd += cost;
+
+        // Update per-model breakdown
+        let entry = self.model_breakdowns.entry(model.to_string())
+            .or_default();
+        entry.input_tokens += input_tokens;
+        entry.output_tokens += output_tokens;
+        entry.cost_usd += cost;
+        entry.turn_count += 1;
+    }
+
+    /// Record usage for a specific turn number
+    pub fn record_turn(&mut self, turn: usize, model: &str, input_tokens: u64, output_tokens: u64) {
+        let cost = Self::calculate_cost(model, input_tokens, output_tokens);
+        self.record_usage(model, input_tokens, output_tokens);
+        self.turn_costs.push(TurnCost {
+            turn,
+            model: model.to_string(),
+            input_tokens,
+            output_tokens,
+            cost_usd: cost,
+        });
     }
 
     /// Get the total cost in USD
     pub fn total_cost(&self) -> f64 {
         self.total_cost_usd
+    }
+
+    /// Set a budget limit in USD
+    pub fn set_budget(&mut self, limit: f64) {
+        self.budget_limit_usd = Some(limit);
+    }
+
+    /// Check if the budget has been exceeded
+    pub fn is_budget_exceeded(&self) -> bool {
+        self.budget_limit_usd
+            .map(|limit| self.total_cost_usd >= limit)
+            .unwrap_or(false)
+    }
+
+    /// Check if the budget usage is above a threshold (0.0-1.0)
+    pub fn budget_usage_ratio(&self) -> Option<f64> {
+        self.budget_limit_usd
+            .map(|limit| self.total_cost_usd / limit)
+    }
+
+    /// Get per-turn cost records
+    pub fn turn_costs(&self) -> &[TurnCost] {
+        &self.turn_costs
+    }
+
+    /// Get per-model cost breakdowns
+    pub fn model_breakdowns(&self) -> &std::collections::HashMap<String, ModelCostBreakdown> {
+        &self.model_breakdowns
     }
 
     /// Get a formatted summary of costs
@@ -66,6 +153,56 @@ impl CostTracker {
             "Model: {} | Input tokens: {} | Output tokens: {} | Total cost: ${:.6}",
             self.model_name, self.total_input_tokens, self.total_output_tokens, self.total_cost_usd
         )
+    }
+
+    /// Get a detailed cost report including per-model breakdown and budget status
+    pub fn detailed_report(&self) -> String {
+        let mut report = String::new();
+
+        // Header
+        report.push_str(&format!(
+            "Cost Summary:\n  Total: ${:.4} ({} input + {} output tokens)\n",
+            self.total_cost_usd, self.total_input_tokens, self.total_output_tokens,
+        ));
+
+        // Budget status
+        if let Some(limit) = self.budget_limit_usd {
+            let ratio = self.total_cost_usd / limit;
+            let status = if ratio >= 1.0 { "EXCEEDED" } else if ratio >= 0.8 { "WARNING" } else { "OK" };
+            report.push_str(&format!(
+                "  Budget: ${:.4} / ${:.2} ({:.0}% — {status})\n",
+                self.total_cost_usd, limit, ratio * 100.0,
+            ));
+        }
+
+        // Per-model breakdown
+        if self.model_breakdowns.len() > 1 {
+            report.push_str("  Per-model breakdown:\n");
+            let mut models: Vec<_> = self.model_breakdowns.iter().collect();
+            models.sort_by(|a, b| b.1.cost_usd.partial_cmp(&a.1.cost_usd).unwrap_or(std::cmp::Ordering::Equal));
+            for (model, breakdown) in &models {
+                report.push_str(&format!(
+                    "    {}: ${:.4} ({} turns, {} in + {} out)\n",
+                    model, breakdown.cost_usd, breakdown.turn_count,
+                    breakdown.input_tokens, breakdown.output_tokens,
+                ));
+            }
+        }
+
+        // Recent turns (last 5)
+        if !self.turn_costs.is_empty() {
+            let show = self.turn_costs.len().min(5);
+            let start = self.turn_costs.len() - show;
+            report.push_str(&format!("  Recent turns (last {show}):\n"));
+            for tc in &self.turn_costs[start..] {
+                report.push_str(&format!(
+                    "    Turn {}: ${:.4} ({} in + {} out, {})\n",
+                    tc.turn, tc.cost_usd, tc.input_tokens, tc.output_tokens, tc.model,
+                ));
+            }
+        }
+
+        report
     }
 }
 
@@ -265,4 +402,212 @@ pub struct ConversationStats {
     pub turn_count: usize,
     pub total_tokens: u64,
     pub total_cost: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cost_tracker_new() {
+        let tracker = CostTracker::new("claude-sonnet-4".to_string());
+        assert_eq!(tracker.model_name, "claude-sonnet-4");
+        assert_eq!(tracker.total_input_tokens, 0);
+        assert_eq!(tracker.total_output_tokens, 0);
+        assert_eq!(tracker.total_cost_usd, 0.0);
+        assert!(tracker.turn_costs().is_empty());
+        assert!(tracker.model_breakdowns().is_empty());
+        assert!(tracker.budget_limit_usd.is_none());
+    }
+
+    #[test]
+    fn test_cost_tracker_record_usage() {
+        let mut tracker = CostTracker::new("claude-sonnet-4".to_string());
+        tracker.record_usage("claude-sonnet-4", 1000, 500);
+        assert_eq!(tracker.total_input_tokens, 1000);
+        assert_eq!(tracker.total_output_tokens, 500);
+        assert!(tracker.total_cost_usd > 0.0);
+
+        // Per-model breakdown should be updated
+        let breakdown = tracker.model_breakdowns().get("claude-sonnet-4").unwrap();
+        assert_eq!(breakdown.input_tokens, 1000);
+        assert_eq!(breakdown.output_tokens, 500);
+        assert_eq!(breakdown.turn_count, 1);
+    }
+
+    #[test]
+    fn test_cost_tracker_record_turn() {
+        let mut tracker = CostTracker::new("claude-sonnet-4".to_string());
+        tracker.record_turn(1, "claude-sonnet-4", 1000, 500);
+        tracker.record_turn(2, "claude-sonnet-4", 2000, 1000);
+
+        assert_eq!(tracker.turn_costs().len(), 2);
+        assert_eq!(tracker.turn_costs()[0].turn, 1);
+        assert_eq!(tracker.turn_costs()[1].turn, 2);
+        assert_eq!(tracker.total_input_tokens, 3000);
+        assert_eq!(tracker.total_output_tokens, 1500);
+    }
+
+    #[test]
+    fn test_cost_tracker_multiple_models() {
+        let mut tracker = CostTracker::new("claude-sonnet-4".to_string());
+        tracker.record_turn(1, "claude-sonnet-4", 1000, 500);
+        tracker.record_turn(2, "gpt-4o", 2000, 1000);
+        tracker.record_turn(3, "claude-sonnet-4", 500, 250);
+
+        assert_eq!(tracker.model_breakdowns().len(), 2);
+
+        let sonnet = tracker.model_breakdowns().get("claude-sonnet-4").unwrap();
+        assert_eq!(sonnet.turn_count, 2);
+        assert_eq!(sonnet.input_tokens, 1500);
+
+        let gpt = tracker.model_breakdowns().get("gpt-4o").unwrap();
+        assert_eq!(gpt.turn_count, 1);
+        assert_eq!(gpt.input_tokens, 2000);
+    }
+
+    #[test]
+    fn test_cost_tracker_budget() {
+        let mut tracker = CostTracker::new("claude-sonnet-4".to_string());
+        assert!(!tracker.is_budget_exceeded());
+        assert!(tracker.budget_usage_ratio().is_none());
+
+        tracker.set_budget(1.0);
+        assert_eq!(tracker.budget_limit_usd, Some(1.0));
+        assert!(!tracker.is_budget_exceeded());
+        assert_eq!(tracker.budget_usage_ratio(), Some(0.0));
+
+        // Record enough usage to exceed budget
+        tracker.record_usage("claude-sonnet-4", 1_000_000, 500_000);
+        // Cost = (1M * 3.0 + 500K * 15.0) / 1M = 3.0 + 7.5 = 10.5
+        assert!(tracker.total_cost_usd > 1.0);
+        assert!(tracker.is_budget_exceeded());
+        assert!(tracker.budget_usage_ratio().unwrap() > 1.0);
+    }
+
+    #[test]
+    fn test_cost_tracker_detailed_report_single_model() {
+        let mut tracker = CostTracker::new("claude-sonnet-4".to_string());
+        tracker.record_turn(1, "claude-sonnet-4", 1000, 500);
+        let report = tracker.detailed_report();
+        assert!(report.contains("Cost Summary"));
+        assert!(report.contains("$"));
+        // Should not show per-model breakdown with single model
+        assert!(!report.contains("Per-model breakdown"));
+    }
+
+    #[test]
+    fn test_cost_tracker_detailed_report_multi_model() {
+        let mut tracker = CostTracker::new("claude-sonnet-4".to_string());
+        tracker.record_turn(1, "claude-sonnet-4", 1000, 500);
+        tracker.record_turn(2, "gpt-4o", 2000, 1000);
+        let report = tracker.detailed_report();
+        assert!(report.contains("Per-model breakdown"));
+        assert!(report.contains("claude-sonnet-4"));
+        assert!(report.contains("gpt-4o"));
+    }
+
+    #[test]
+    fn test_cost_tracker_detailed_report_with_budget() {
+        let mut tracker = CostTracker::new("claude-sonnet-4".to_string());
+        tracker.set_budget(10.0);
+        tracker.record_turn(1, "claude-sonnet-4", 1000, 500);
+        let report = tracker.detailed_report();
+        assert!(report.contains("Budget"));
+    }
+
+    #[test]
+    fn test_cost_tracker_detailed_report_recent_turns() {
+        let mut tracker = CostTracker::new("claude-sonnet-4".to_string());
+        for i in 1..=7 {
+            tracker.record_turn(i, "claude-sonnet-4", 100, 50);
+        }
+        let report = tracker.detailed_report();
+        assert!(report.contains("Recent turns (last 5)"));
+        // Should show turns 3-7
+        assert!(report.contains("Turn 7"));
+        assert!(report.contains("Turn 3"));
+    }
+
+    #[test]
+    fn test_calculate_cost_claude_sonnet() {
+        let cost = CostTracker::calculate_cost("claude-3-5-sonnet-20241022", 1_000_000, 0);
+        assert!((cost - 3.0).abs() < 0.001);
+
+        let cost_out = CostTracker::calculate_cost("claude-3-5-sonnet-20241022", 0, 1_000_000);
+        assert!((cost_out - 15.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_calculate_cost_gpt4o() {
+        let cost = CostTracker::calculate_cost("gpt-4o", 1_000_000, 0);
+        assert!((cost - 2.5).abs() < 0.001);
+
+        let cost_out = CostTracker::calculate_cost("gpt-4o", 0, 1_000_000);
+        assert!((cost_out - 10.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_calculate_cost_ollama_free() {
+        let cost = CostTracker::calculate_cost("llama3", 1_000_000, 1_000_000);
+        assert_eq!(cost, 0.0);
+    }
+
+    #[test]
+    fn test_calculate_cost_unknown_model() {
+        let cost = CostTracker::calculate_cost("unknown-model", 1_000_000, 0);
+        // Uses default fallback pricing
+        assert!((cost - 3.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_cost_tracker_default() {
+        let tracker = CostTracker::default();
+        assert_eq!(tracker.model_name, "claude-sonnet-4-20250514");
+    }
+
+    #[test]
+    fn test_cost_tracker_summary() {
+        let mut tracker = CostTracker::new("test-model".to_string());
+        tracker.record_usage("test-model", 5000, 2000);
+        let summary = tracker.summary();
+        assert!(summary.contains("test-model"));
+        assert!(summary.contains("5000"));
+        assert!(summary.contains("2000"));
+        assert!(summary.contains("$"));
+    }
+
+    #[test]
+    fn test_cost_tracker_total_cost() {
+        let mut tracker = CostTracker::new("claude-sonnet-4".to_string());
+        tracker.record_usage("claude-sonnet-4", 100_000, 50_000);
+        let total = tracker.total_cost();
+        // 100K * 3.0/1M + 50K * 15.0/1M = 0.3 + 0.75 = 1.05
+        assert!((total - 1.05).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_model_cost_breakdown_default() {
+        let breakdown = ModelCostBreakdown::default();
+        assert_eq!(breakdown.input_tokens, 0);
+        assert_eq!(breakdown.output_tokens, 0);
+        assert_eq!(breakdown.cost_usd, 0.0);
+        assert_eq!(breakdown.turn_count, 0);
+    }
+
+    #[test]
+    fn test_turn_cost_serialization() {
+        let tc = TurnCost {
+            turn: 1,
+            model: "claude-sonnet-4".to_string(),
+            input_tokens: 1000,
+            output_tokens: 500,
+            cost_usd: 0.015,
+        };
+        let json = serde_json::to_string(&tc).unwrap();
+        let back: TurnCost = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.turn, 1);
+        assert_eq!(back.model, "claude-sonnet-4");
+        assert_eq!(back.input_tokens, 1000);
+    }
 }

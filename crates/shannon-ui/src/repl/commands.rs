@@ -84,7 +84,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "debug" | "dbg" | "dev" => handle_debug(repl, args)?,
             "doctor" | "check" | "diagnostics" => handle_doctor(repl, args)?,
             "compact" => handle_compact(repl, args)?,
-            "cost" => handle_cost(repl)?,
+            "cost" => handle_cost(repl, args)?,
             "team" => handle_team(repl, args)?,
             "branch" | "fork" => handle_branch(repl, args)?,
             _ => handle_other_command(repl, cmd_name, args)?,
@@ -1245,7 +1245,27 @@ fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
     Ok(())
 }
 
-fn handle_cost(repl: &mut Repl) -> Result<()> {
+fn handle_cost(repl: &mut Repl, args: &str) -> Result<()> {
+    let subcmd = args.trim();
+
+    // Handle budget subcommand
+    if let Some(budget_str) = subcmd.strip_prefix("budget ") {
+        let limit: f64 = match budget_str.trim().parse() {
+            Ok(v) if v > 0.0 => v,
+            _ => {
+                repl.chat.add_message(ChatRole::System, "Usage: /cost budget <amount_usd>".to_string());
+                return Ok(());
+            }
+        };
+        if let Some(ref engine) = repl.query_engine {
+            if let Ok(mut tracker) = engine.cost_tracker().write() {
+                tracker.set_budget(limit);
+            }
+        }
+        repl.chat.add_message(ChatRole::System, format!("Budget limit set to ${limit:.2}"));
+        return Ok(());
+    }
+
     let Some(ref engine) = repl.query_engine else {
         repl.chat.add_message(ChatRole::System, "No query engine available.".to_string());
         return Ok(());
@@ -1254,21 +1274,29 @@ fn handle_cost(repl: &mut Repl) -> Result<()> {
     let stats = engine.conversation_stats();
     let model = repl.state.model.as_deref().unwrap_or("unknown");
 
+    // Use detailed report from CostTracker
+    let detailed = if let Ok(tracker) = engine.cost_tracker().read() {
+        tracker.detailed_report()
+    } else {
+        format!("Total cost: ${:.4}\n", repl.state.total_cost_usd)
+    };
+
     let mut report = format!(
-        "Cost Summary:\n  Model: {}\n  Messages: {} turns\n  Tokens used: {} ({:.1}k)\n  Session cost: ${:.4}\n  Working dir: {}",
+        "Cost Summary:\n  Model: {}\n  Messages: {} turns\n  Tokens used: {} ({:.1}k)\n  Working dir: {}\n",
         model,
         stats.turn_count,
         repl.state.tokens_used,
         repl.state.tokens_used as f64 / 1000.0,
-        repl.state.total_cost_usd,
         repl.state.working_directory,
     );
+
+    report.push_str(&detailed);
 
     if let Some(started) = &repl.session_started_at {
         let elapsed = chrono::Utc::now() - *started;
         let mins = elapsed.num_minutes();
         let secs = elapsed.num_seconds() % 60;
-        report.push_str(&format!("\n  Session duration: {mins}m {secs}s"));
+        report.push_str(&format!("  Session duration: {mins}m {secs}s"));
 
         if mins > 0 {
             let cost_per_min = repl.state.total_cost_usd / mins as f64;
@@ -1285,6 +1313,17 @@ fn handle_cost(repl: &mut Repl) -> Result<()> {
             repl.diff_data.total_files_created(),
             repl.diff_data.total_files_deleted(),
         ));
+    }
+
+    // Budget warning
+    if let Ok(tracker) = engine.cost_tracker().read() {
+        if let Some(ratio) = tracker.budget_usage_ratio() {
+            if ratio >= 1.0 {
+                report.push_str("\n  ⚠ BUDGET EXCEEDED");
+            } else if ratio >= 0.8 {
+                report.push_str(&format!("\n  ⚠ Budget usage: {:.0}%", ratio * 100.0));
+            }
+        }
     }
 
     repl.chat.add_message(ChatRole::System, report);

@@ -313,12 +313,8 @@ SHANNON_TIMEOUT=120
     // CostTracker summary generation
     group.bench_function("cost_tracker_summary", |b| {
         b.iter(|| {
-            let tracker = CostTracker {
-                total_input_tokens: 1_500_000,
-                total_output_tokens: 750_000,
-                total_cost_usd: 15.75,
-                model_name: "claude-sonnet-4-20250514".to_string(),
-            };
+            let mut tracker = CostTracker::new("claude-sonnet-4-20250514".to_string());
+            tracker.record_usage("claude-sonnet-4-20250514", 1_500_000, 750_000);
             let _ = tracker.summary();
         })
     });

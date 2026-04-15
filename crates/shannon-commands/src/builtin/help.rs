@@ -495,8 +495,9 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
                 "Show cost summary for the current session".to_string(),
                 HelpCategory::System,
             )
-            .with_examples(vec!["/cost"])
-            .with_when_to_use("Use to check token usage, session cost, and cost rate")
+            .with_arg_hint("[budget <amount_usd>]")
+            .with_examples(vec!["/cost", "/cost budget 5.00"])
+            .with_when_to_use("Use to check token usage, session cost, per-model breakdown, and set budget limits")
             .with_related(vec!["history", "compact"])
         ),
         "team" => Some(
