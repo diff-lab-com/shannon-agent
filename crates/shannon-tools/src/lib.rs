@@ -229,3 +229,17 @@ pub fn register_default_tools(registry: &mut ToolRegistry) -> Result<std::sync::
 
     Ok(agent_context_handle)
 }
+
+/// Register team coordination tools that require an AgentCoordinator.
+///
+/// Call this after `register_default_tools` when a team context is available.
+/// These tools let the LLM manage the shared team TaskBoard for multi-agent coordination.
+pub fn register_team_tools(
+    registry: &mut ToolRegistry,
+    coordinator: Arc<shannon_agents::AgentCoordinator>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    registry.register(Box::new(shannon_agents::TeamTaskCreateTool::new(coordinator.clone())))?;
+    registry.register(Box::new(shannon_agents::TeamTaskUpdateTool::new(coordinator.clone())))?;
+    registry.register(Box::new(shannon_agents::TeamTaskListTool::new(coordinator)))?;
+    Ok(())
+}

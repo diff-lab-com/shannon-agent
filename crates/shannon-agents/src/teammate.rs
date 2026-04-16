@@ -1,6 +1,7 @@
 //! Individual agent teammate implementation
 
 use crate::error::AgentError;
+use crate::executor::AgentExecutor;
 use crate::message::{AgentMessage, MessageContent, MessageType, ProtocolMessage};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -116,6 +117,8 @@ pub struct Teammate {
     metadata: Arc<RwLock<HashMap<String, serde_json::Value>>>,
     /// Creation timestamp
     created_at: chrono::DateTime<chrono::Utc>,
+    /// Optional LLM executor for real task execution (None = placeholder mode)
+    executor: Option<Arc<dyn AgentExecutor>>,
 }
 
 impl fmt::Debug for Teammate {
@@ -128,7 +131,7 @@ impl fmt::Debug for Teammate {
 }
 
 impl Teammate {
-    /// Create a new teammate
+    /// Create a new teammate without an executor (placeholder mode)
     pub fn new(name: String, config: TeammateConfig) -> Self {
         Self {
             name,
@@ -138,6 +141,21 @@ impl Teammate {
             inbox: Arc::new(MessageInbox::new(100)),
             metadata: Arc::new(RwLock::new(HashMap::new())),
             created_at: chrono::Utc::now(),
+            executor: None,
+        }
+    }
+
+    /// Create a new teammate with an LLM executor for real task execution
+    pub fn with_executor(name: String, config: TeammateConfig, executor: Arc<dyn AgentExecutor>) -> Self {
+        Self {
+            name,
+            config,
+            status: Arc::new(RwLock::new(TeammateStatus::Idle)),
+            assigned_tasks: Arc::new(RwLock::new(Vec::new())),
+            inbox: Arc::new(MessageInbox::new(100)),
+            metadata: Arc::new(RwLock::new(HashMap::new())),
+            created_at: chrono::Utc::now(),
+            executor: Some(executor),
         }
     }
 
@@ -261,20 +279,36 @@ impl Teammate {
             "Agent '{}' processing chat message", self.name
         );
 
-        // Process message content (placeholder for actual AI processing)
-        // In a real implementation, this would:
-        // 1. Format the message for the AI model
-        // 2. Include conversation history
-        // 3. Call the model API
-        // 4. Parse and return the response
+        if let Some(executor) = &self.executor {
+            // Real LLM execution via the executor
+            let system_prompt = self.config.system_prompt.as_deref().unwrap_or(
+                "You are a helpful AI agent. Respond concisely."
+            );
+            let model = self.config.model.as_deref();
+            let tools = if self.config.capabilities.is_empty() {
+                None
+            } else {
+                Some(self.config.capabilities.as_slice())
+            };
 
-        let response = format!("Agent '{}' received: {}", self.name, content);
+            let result = executor.execute(system_prompt, &content, model, tools).await
+                .map_err(|e| AgentError::Communication(format!("LLM execution error: {e}")))?;
 
-        Ok(AgentMessage::new_text(
-            self.name.clone(),
-            message.from,
-            response
-        ))
+            Ok(AgentMessage::new_text(
+                self.name.clone(),
+                message.from,
+                result.content,
+            ))
+        } else {
+            // Fallback: no executor, return placeholder response
+            let response = format!("Agent '{}' received: {}", self.name, content);
+
+            Ok(AgentMessage::new_text(
+                self.name.clone(),
+                message.from,
+                response
+            ))
+        }
     }
 
     /// Handle a protocol message
@@ -475,5 +509,10 @@ impl Teammate {
     /// Get agent creation time
     pub fn created_at(&self) -> chrono::DateTime<chrono::Utc> {
         self.created_at
+    }
+
+    /// Get the agent's configuration
+    pub fn config(&self) -> &TeammateConfig {
+        &self.config
     }
 }

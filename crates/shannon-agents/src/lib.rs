@@ -15,8 +15,10 @@ mod sub_agent;
 mod multi_agent;
 mod executor;
 mod summary;
+mod context;
+mod task_tools;
 
-pub use coordinator::{AgentCoordinator, CoordinatorConfig, AssignmentStrategy, CoordinatorEvent};
+pub use coordinator::{AgentCoordinator, CoordinatorConfig, AssignmentStrategy, CoordinatorEvent, AgentInfo, TeamManifest};
 pub use teammate::{Teammate, TeammateConfig, TeammateStatus, TeammateState};
 pub use task_board::{TaskBoard, TaskAssignment, TaskBoardEvent, TaskBoardSummary};
 pub use worktree::{WorktreeManager, WorktreeConfig, WorktreeSession, WorktreeStatus, ExitAction,
@@ -41,6 +43,8 @@ pub use multi_agent::{
 pub use summary::{
     AgentExecutionSummary, SummaryStatus, SummaryGenerator, SuccessMetrics,
 };
+pub use context::TeamContext;
+pub use task_tools::{TeamTaskCreateTool, TeamTaskUpdateTool, TeamTaskListTool};
 pub use executor::{
     AgentExecutor, LlmAgentExecutor, MockAgentExecutor, shared_executor,
 };

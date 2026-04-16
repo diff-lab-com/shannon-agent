@@ -2677,6 +2677,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "shannon-agents",
  "shannon-core",
  "shannon-mcp",
  "shell-words",

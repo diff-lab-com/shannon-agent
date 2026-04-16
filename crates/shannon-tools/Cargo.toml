@@ -7,6 +7,7 @@ edition.workspace = true
 # Core types and traits
 shannon-core = { path = "../shannon-core" }
 shannon-mcp = { path = "../shannon-mcp" }
+shannon-agents = { path = "../shannon-agents" }
 
 # Async runtime
 tokio = { workspace = true }

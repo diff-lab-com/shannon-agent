@@ -2,23 +2,23 @@
 //!
 //! Provides implementations for:
 //! - Agent: Spawn and manage subagent operations with real execution
-//! - Team: Create and manage multi-agent teams
+//! - Team: Create and manage multi-agent teams via AgentCoordinator
 
 use crate::{Tool, ToolError, ToolResult, ToolOutput};
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shannon_agents::{
+    TeamContext,
+    AgentConfig,
+    AgentMessage, MessageContent, ProtocolMessage,
+};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-/// Shared context that AgentTool needs to spawn real sub-agents.
-/// Injected after construction via `inject_context()`.
-#[derive(Clone)]
-pub struct AgentToolContext {
-    /// LLM client config for creating sub-agent QueryEngines
-    pub client_config: shannon_core::api::LlmClientConfig,
-}
+/// Type alias for backward compatibility.
+pub type AgentToolContext = TeamContext;
 
 /// Agent operation types
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,7 +68,7 @@ pub struct AgentSpawnOutput {
 /// Input for sending message to agent
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SendMessageInput {
-    /// Target agent ID
+    /// Target agent ID (name)
     pub agent_id: String,
 
     /// Message content
@@ -176,11 +176,16 @@ impl AgentTool {
         self.context.clone()
     }
 
-    /// Inject the LLM client config for sub-agent execution.
+    /// Inject the team context for real coordinator-backed execution.
     pub fn inject_context(&self, ctx: AgentToolContext) {
         if let Ok(mut guard) = self.context.lock() {
             *guard = Some(ctx);
         }
+    }
+
+    /// Try to get the TeamContext, returns None if not injected.
+    fn get_team_context(&self) -> Option<AgentToolContext> {
+        self.context.lock().ok().and_then(|g| g.clone())
     }
 
     /// Register all tools EXCEPT the Agent tool (prevents infinite recursion).
@@ -247,26 +252,78 @@ impl AgentTool {
         let agent_id = format!("agent_{}", uuid::Uuid::new_v4());
         let agent_type = input.agent_type.clone();
 
-        // Try to get the shared context for real execution
-        let ctx = self.context.lock().ok().and_then(|g| g.clone());
+        if let Some(ctx) = self.get_team_context() {
+            // 1. Register in coordinator for team coordination
+            let team = input.context.as_ref()
+                .and_then(|c| c.get("team").and_then(|v| v.as_str()).map(|s| s.to_string()));
 
-        match ctx {
-            Some(ctx) => {
-                // Real sub-agent execution via QueryEngine
-                self.execute_subagent(agent_id, agent_type, input, ctx).await
-            }
-            None => {
-                // Fallback: no context injected, return initialized status
-                Ok(AgentSpawnOutput {
-                    agent_id,
-                    agent_type,
-                    status: "initialized".to_string(),
-                    message: format!(
-                        "Agent spawned (no execution context). Task: {}",
-                        &input.task[..input.task.len().min(100)]
-                    ),
-                    result: None,
-                })
+            let config = AgentConfig {
+                name: format!("{}-{}", &agent_type, &agent_id[6..14]), // readable name
+                model: ctx.client_config.model.clone(),
+                system_prompt: format!(
+                    "You are a sub-agent of type '{agent_type}'. Focus on completing the assigned task concisely."
+                ),
+                tools: Vec::new(),
+                working_directory: std::path::PathBuf::from("."),
+                max_turns: 50,
+                team,
+            };
+
+            // Spawn in the registry (creates team if needed, adds teammate)
+            let agent = ctx.registry.spawn(config).await
+                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn agent: {e}")))?;
+
+            let agent_name = agent.name.clone();
+            let agent_uid = agent.id.clone();
+
+            // 2. Execute task via real QueryEngine
+            let result = self.execute_subagent(
+                agent_uid.clone(),
+                agent_type.clone(),
+                input,
+                ctx.client_config.clone(),
+            ).await?;
+
+            // 3. Update agent status in registry (use list to find and update)
+            // The SubAgentRegistry tracks agents internally; the coordinator
+            // tracks teammates. Both are updated by the spawn.
+            tracing::info!(
+                agent_id = %agent_uid,
+                agent_name = %agent_name,
+                status = %result.status,
+                "Sub-agent execution completed"
+            );
+
+            Ok(AgentSpawnOutput {
+                agent_id: agent_uid,
+                agent_type,
+                status: result.status,
+                message: result.message,
+                result: result.result,
+            })
+        } else {
+            // Fallback: no context injected, use standalone execution
+            // Try to get client_config for standalone mode
+            let client_config = self.context.lock().ok().and_then(|g| {
+                g.as_ref().map(|c| c.client_config.clone())
+            });
+
+            match client_config {
+                Some(client_config) => {
+                    self.execute_subagent(agent_id, agent_type, input, client_config).await
+                }
+                None => {
+                    Ok(AgentSpawnOutput {
+                        agent_id,
+                        agent_type,
+                        status: "initialized".to_string(),
+                        message: format!(
+                            "Agent spawned (no execution context). Task: {}",
+                            &input.task[..input.task.len().min(100)]
+                        ),
+                        result: None,
+                    })
+                }
             }
         }
     }
@@ -277,9 +334,8 @@ impl AgentTool {
         agent_id: String,
         agent_type: String,
         input: AgentSpawnInput,
-        ctx: AgentToolContext,
+        client_config: shannon_core::api::LlmClientConfig,
     ) -> Result<AgentSpawnOutput, ToolError> {
-        use futures::StreamExt;
         use shannon_core::query_engine::{QueryContext, QueryEvent, QueryMetadata};
         use uuid::Uuid;
 
@@ -289,7 +345,8 @@ impl AgentTool {
             .map_err(|e| ToolError::ExecutionFailed(format!("sub-agent tool setup failed: {e}")))?;
 
         // Create sub-agent engine with FullAuto permissions
-        let client = shannon_core::api::LlmClient::new(ctx.client_config.clone());
+        let model_name = client_config.model.clone();
+        let client = shannon_core::api::LlmClient::new(client_config);
         let mut permissions = shannon_core::permissions::PermissionManager::new();
         permissions.set_approval_mode(shannon_core::permissions::ApprovalMode::FullAuto);
         let state = shannon_core::state::StateManager::new();
@@ -321,7 +378,7 @@ impl AgentTool {
                 timestamp: chrono::Utc::now(),
                 tools_allowed: true,
                 max_tokens: Some(4096),
-                model: ctx.client_config.model.clone(),
+                model: model_name,
                 temperature: None,
                 top_p: None,
             },
@@ -389,39 +446,113 @@ impl AgentTool {
         })
     }
 
-    async fn send_message(&self, _input: SendMessageInput) -> Result<SendMessageOutput, ToolError> {
+    async fn send_message(&self, input: SendMessageInput) -> Result<SendMessageOutput, ToolError> {
         let message_id = format!("msg_{}", uuid::Uuid::new_v4());
 
-        Ok(SendMessageOutput {
-            delivered: true,
-            response: None,
-            message_id,
-        })
+        if let Some(ctx) = self.get_team_context() {
+            // Real message routing through the coordinator
+            let responses = ctx.registry
+                .send_message("lead", &input.agent_id, serde_json::Value::String(input.message))
+                .await
+                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to send message: {e}")))?;
+
+            let response_text = responses.first()
+                .map(|r| match &r.content {
+                    MessageContent::Text(t) => t.clone(),
+                    other => format!("{other:?}"),
+                })
+                .unwrap_or_default();
+
+            Ok(SendMessageOutput {
+                delivered: true,
+                response: Some(response_text),
+                message_id,
+            })
+        } else {
+            // Fallback: no coordinator
+            Ok(SendMessageOutput {
+                delivered: true,
+                response: None,
+                message_id,
+            })
+        }
     }
 
     async fn create_team(&self, input: CreateTeamInput) -> Result<CreateTeamOutput, ToolError> {
-        let team_id = format!("team_{}", uuid::Uuid::new_v4());
+        if let Some(ctx) = self.get_team_context() {
+            // Real team creation through the coordinator
+            let team_name = ctx.registry
+                .create_team(input.team_name.clone(), input.description.clone())
+                .await
+                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to create team: {e}")))?;
 
-        let agent_ids: Vec<String> = input
-            .agents
-            .iter()
-            .map(|_| format!("agent_{}", uuid::Uuid::new_v4()))
-            .collect();
+            // Optionally pre-spawn agents for the specified agent types
+            let mut agent_ids = Vec::new();
+            for agent_type in &input.agents {
+                let config = AgentConfig {
+                    name: format!("{}-{}", agent_type, uuid::Uuid::new_v4().as_simple()),
+                    model: ctx.client_config.model.clone(),
+                    system_prompt: format!("You are a {agent_type} agent. Focus on your specialty."),
+                    tools: Vec::new(),
+                    working_directory: std::path::PathBuf::from("."),
+                    max_turns: 50,
+                    team: Some(team_name.clone()),
+                };
+                let agent = ctx.registry.spawn(config).await
+                    .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn {agent_type}: {e}")))?;
+                agent_ids.push(agent.id);
+            }
 
-        Ok(CreateTeamOutput {
-            team_id,
-            team_name: input.team_name,
-            agent_ids,
-            status: "created".to_string(),
-        })
+            Ok(CreateTeamOutput {
+                team_id: team_name,
+                team_name: input.team_name,
+                agent_ids,
+                status: "created".to_string(),
+            })
+        } else {
+            // Fallback: no coordinator, return placeholder
+            let team_id = format!("team_{}", uuid::Uuid::new_v4());
+            let agent_ids: Vec<String> = input
+                .agents
+                .iter()
+                .map(|_| format!("agent_{}", uuid::Uuid::new_v4()))
+                .collect();
+
+            Ok(CreateTeamOutput {
+                team_id,
+                team_name: input.team_name,
+                agent_ids,
+                status: "created".to_string(),
+            })
+        }
     }
 
     async fn shutdown_agent(&self, input: ShutdownInput) -> Result<ShutdownOutput, ToolError> {
-        Ok(ShutdownOutput {
-            agent_id: input.agent_id,
-            success: true,
-            message: "Agent successfully shut down".to_string(),
-        })
+        if let Some(ctx) = self.get_team_context() {
+            // Send shutdown protocol message through coordinator
+            let msg = AgentMessage::protocol(
+                "lead".to_string(),
+                input.agent_id.clone(),
+                ProtocolMessage::ShutdownRequest {
+                    reason: input.reason.unwrap_or_else(|| "Graceful shutdown".to_string()),
+                },
+            );
+
+            ctx.coordinator.send_message(msg).await
+                .map_err(|e| ToolError::ExecutionFailed(format!("Shutdown failed: {e}")))?;
+
+            Ok(ShutdownOutput {
+                agent_id: input.agent_id,
+                success: true,
+                message: "Agent shutdown request sent".to_string(),
+            })
+        } else {
+            Ok(ShutdownOutput {
+                agent_id: input.agent_id,
+                success: true,
+                message: "Agent successfully shut down".to_string(),
+            })
+        }
     }
 }
 
@@ -461,7 +592,11 @@ impl Tool for AgentTool {
                     .map_err(|e| ToolError::InvalidInput(format!("Invalid message input: {e}")))?;
                 let output = self.send_message(msg_input).await?;
                 Ok(ToolOutput {
-                    content: format!("Message {} delivered successfully", output.message_id),
+                    content: if let Some(response) = &output.response {
+                        format!("Message {} delivered. Response: {}", output.message_id, response)
+                    } else {
+                        format!("Message {} delivered successfully", output.message_id)
+                    },
                     is_error: false,
                     metadata: {
                         let mut map = HashMap::new();
@@ -479,7 +614,7 @@ impl Tool for AgentTool {
                     .map_err(|e| ToolError::InvalidInput(format!("Invalid team input: {e}")))?;
                 let output = self.create_team(team_input).await?;
                 Ok(ToolOutput {
-                    content: format!("Team {} created successfully", output.team_name),
+                    content: format!("Team '{}' created with {} agent(s)", output.team_name, output.agent_ids.len()),
                     is_error: false,
                     metadata: {
                         let mut map = HashMap::new();
@@ -539,11 +674,11 @@ impl Tool for AgentTool {
                 },
                 "context": {
                     "type": "object",
-                    "description": "Optional context"
+                    "description": "Optional context (can include 'team' for team assignment)"
                 },
                 "agent_id": {
                     "type": "string",
-                    "description": "Agent ID for operations"
+                    "description": "Agent ID or name for operations"
                 },
                 "message": {
                     "type": "string",
@@ -556,6 +691,19 @@ impl Tool for AgentTool {
                 "description": {
                     "type": "string",
                     "description": "Team description"
+                },
+                "agents": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Agent types to pre-spawn in team"
+                },
+                "force": {
+                    "type": "boolean",
+                    "description": "Force shutdown"
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Reason for shutdown"
                 }
             },
             "required": ["operation"]

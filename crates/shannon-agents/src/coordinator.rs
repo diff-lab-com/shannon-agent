@@ -14,6 +14,29 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock, broadcast};
 use uuid::Uuid;
 
+/// Information about a team member for agent discovery
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentInfo {
+    /// Agent name
+    pub name: String,
+    /// Agent type/role
+    pub agent_type: String,
+    /// Agent capabilities
+    pub capabilities: Vec<String>,
+}
+
+/// Manifest of a team's members for agent discovery.
+/// Can be injected into spawned agents' system prompts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamManifest {
+    /// Team name
+    pub name: String,
+    /// Team description
+    pub description: String,
+    /// Team members
+    pub members: Vec<AgentInfo>,
+}
+
 /// Configuration for the agent coordinator
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoordinatorConfig {
@@ -526,6 +549,47 @@ impl AgentCoordinator {
     /// Get the task board
     pub fn task_board(&self) -> &TaskBoard {
         &self.task_board
+    }
+
+    /// Check for idle agents in a team and return their names.
+    /// Useful for surfacing available agents to the team lead after task completion.
+    pub async fn idle_agents(&self, team_name: &str) -> Vec<String> {
+        let teams = self.teams.read().await;
+        let Some(team) = teams.get(team_name) else {
+            return Vec::new();
+        };
+        let mut idle = Vec::new();
+        for (name, agent) in &team.members {
+            if agent.is_available().await {
+                idle.push(name.clone());
+            }
+        }
+        idle
+    }
+
+    /// Get a manifest of team members (names, types, capabilities) for agent discovery.
+    /// This can be injected into spawned agents' system prompts so they know their teammates.
+    pub async fn team_manifest(&self, team_name: &str) -> Result<TeamManifest, AgentError> {
+        let teams = self.teams.read().await;
+        let team = teams.get(team_name)
+            .ok_or_else(|| AgentError::Coordination(
+                CoordinationError::TeamNotFound(team_name.to_string())
+            ))?;
+
+        let members: Vec<AgentInfo> = team.members.iter().map(|(name, m)| {
+            let cfg = m.config();
+            AgentInfo {
+                name: name.clone(),
+                agent_type: cfg.agent_type.clone(),
+                capabilities: cfg.capabilities.clone(),
+            }
+        }).collect();
+
+        Ok(TeamManifest {
+            name: team.name.clone(),
+            description: team.description.clone(),
+            members,
+        })
     }
 
     /// Get a human-readable status summary for a team.

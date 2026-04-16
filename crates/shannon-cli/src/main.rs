@@ -439,11 +439,18 @@ fn run_noninteractive_query(query: &str, stream: bool, config: &CliConfig, bypas
         // Build LLM client from the merged ConfigBuilder pipeline
         let client_config = build_llm_config_from_builder(config);
 
-        // Inject client config into AgentTool for sub-agent execution
-        if let Ok(mut guard) = agent_context_handle.lock() {
-            *guard = Some(shannon_tools::AgentToolContext {
-                client_config: client_config.clone(),
-            });
+        // Inject team context into AgentTool for sub-agent execution + team coordination
+        match shannon_tools::AgentToolContext::new(client_config.clone()).await {
+            Ok(ctx) => {
+                // Register team coordination tools (team_task_create/update/list)
+                if let Err(e) = shannon_tools::register_team_tools(&mut tools, ctx.coordinator.clone()) {
+                    eprintln!("Warning: Team tool registration failed: {e}");
+                }
+                if let Ok(mut guard) = agent_context_handle.lock() {
+                    *guard = Some(ctx);
+                }
+            }
+            Err(e) => eprintln!("Warning: Team context init failed (team features disabled): {e}"),
         }
 
         // Validate and warn
@@ -602,11 +609,17 @@ fn run_serve_command(port: u16, host: Option<String>, config: &CliConfig) -> Res
         // Build LLM client config via the shared ConfigBuilder pipeline.
         let client_config = build_llm_config_from_builder(config);
 
-        // Inject client config into AgentTool for sub-agent execution
-        if let Ok(mut guard) = agent_context_handle.lock() {
-            *guard = Some(shannon_tools::AgentToolContext {
-                client_config: client_config.clone(),
-            });
+        // Inject team context into AgentTool for sub-agent execution + team coordination
+        match shannon_tools::AgentToolContext::new(client_config.clone()).await {
+            Ok(ctx) => {
+                if let Err(e) = shannon_tools::register_team_tools(&mut tools, ctx.coordinator.clone()) {
+                    eprintln!("Warning: Team tool registration failed: {e}");
+                }
+                if let Ok(mut guard) = agent_context_handle.lock() {
+                    *guard = Some(ctx);
+                }
+            }
+            Err(e) => eprintln!("Warning: Team context init failed (team features disabled): {e}"),
         }
 
         let mut server = shannon_core::api_server::ShannonApiServer::new(client_config)

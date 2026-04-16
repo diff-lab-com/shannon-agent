@@ -322,11 +322,27 @@ impl Repl {
         // Create LLM client
         let client_config = LlmClientConfig::default();
 
-        // Inject client config into AgentTool for sub-agent execution
+        // Inject team context into AgentTool for sub-agent execution + team coordination
+        // This requires a tokio runtime; skip gracefully in test contexts without one.
         if let Ok(mut guard) = agent_context_handle.lock() {
-            *guard = Some(shannon_tools::AgentToolContext {
-                client_config: client_config.clone(),
-            });
+            let team_ctx = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(
+                        shannon_tools::AgentToolContext::new(client_config.clone())
+                    )
+                })
+            }));
+            match team_ctx {
+                Ok(Ok(ctx)) => {
+                    // Register team coordination tools (team_task_create/update/list)
+                    if let Err(e) = shannon_tools::register_team_tools(&mut tool_registry, ctx.coordinator.clone()) {
+                        tracing::warn!("Team tool registration failed: {e}");
+                    }
+                    *guard = Some(ctx);
+                }
+                Ok(Err(e)) => tracing::warn!("Team context init failed (team features disabled): {e}"),
+                Err(_) => {} // No tokio runtime (test context) — team features disabled
+            }
         }
 
         // Validate config and show warning if not fully configured
