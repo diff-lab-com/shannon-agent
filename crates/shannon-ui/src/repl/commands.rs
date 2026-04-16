@@ -1985,7 +1985,8 @@ fn handle_team(repl: &mut Repl, args: &str) -> Result<()> {
 /team status [team]  — Show team status
 /team list  — List all teams
 /team run  — Execute pending tasks in parallel
-/team shutdown  — Shutdown team".to_string());
+/team shutdown  — Shutdown team
+/team disband <team>  — Disband team and clean up".to_string());
         }
         "create" => {
             let name = parts.get(1).copied().unwrap_or("");
@@ -1999,7 +2000,7 @@ fn handle_team(repl: &mut Repl, args: &str) -> Result<()> {
                 Ok(coordinator) => {
                     match repl.runtime.block_on(coordinator.create_team(name.to_string(), description)) {
                         Ok(()) => {
-                            repl.team_coordinator = Some(coordinator);
+                            repl.team_coordinator = Some(std::sync::Arc::new(coordinator));
                             repl.chat.add_message(ChatRole::System, format!("Team '{name}' created."));
                         }
                         Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to create team: {e}")); }
@@ -2102,6 +2103,21 @@ fn handle_team(repl: &mut Repl, args: &str) -> Result<()> {
                 }
             } else {
                 repl.chat.add_message(ChatRole::System, "No active team.".to_string());
+            }
+        }
+        "disband" => {
+            let team_name = parts.get(1).copied().unwrap_or("");
+            if team_name.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Usage: /team disband <team>".to_string());
+                return Ok(());
+            }
+            if let Some(ref coordinator) = repl.team_coordinator {
+                match repl.runtime.block_on(coordinator.disband_team(team_name)) {
+                    Ok(()) => { repl.chat.add_message(ChatRole::System, format!("Team '{team_name}' disbanded and cleaned up.")); }
+                    Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to disband: {e}")); }
+                }
+            } else {
+                repl.chat.add_message(ChatRole::System, "No active team coordinator.".to_string());
             }
         }
         "run" => {

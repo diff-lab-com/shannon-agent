@@ -223,7 +223,7 @@ pub struct Repl {
     /// Vim key handler for vim mode support (yy/yw/p yank/paste)
     pub(crate) vim_handler: VimHandler,
     /// Multi-agent team coordinator (lazy-initialized on /team create)
-    pub(crate) team_coordinator: Option<shannon_agents::AgentCoordinator>,
+    pub(crate) team_coordinator: Option<std::sync::Arc<shannon_agents::AgentCoordinator>>,
     /// Sub-agent registry for background agent management
     pub(crate) agent_registry: Option<std::sync::Arc<shannon_agents::SubAgentRegistry>>,
     /// Model routing rules: (pattern, model_name) pairs
@@ -324,6 +324,7 @@ impl Repl {
 
         // Inject team context into AgentTool for sub-agent execution + team coordination
         // This requires a tokio runtime; skip gracefully in test contexts without one.
+        let mut shared_coordinator: Option<std::sync::Arc<shannon_agents::AgentCoordinator>> = None;
         if let Ok(mut guard) = agent_context_handle.lock() {
             let team_ctx = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 tokio::task::block_in_place(|| {
@@ -334,10 +335,17 @@ impl Repl {
             }));
             match team_ctx {
                 Ok(Ok(ctx)) => {
+                    // Inject shared LLM executor so teammates can make real LLM calls
+                    let ctx = {
+                        let llm_client = shannon_core::api::LlmClient::new(ctx.client_config.clone());
+                        let executor = shannon_agents::shared_executor(llm_client);
+                        ctx.with_executor(executor)
+                    };
                     // Register team coordination tools (team_task_create/update/list)
                     if let Err(e) = shannon_tools::register_team_tools(&mut tool_registry, ctx.coordinator.clone()) {
                         tracing::warn!("Team tool registration failed: {e}");
                     }
+                    shared_coordinator = Some(ctx.coordinator.clone());
                     *guard = Some(ctx);
                 }
                 Ok(Err(e)) => tracing::warn!("Team context init failed (team features disabled): {e}"),
@@ -455,7 +463,7 @@ impl Repl {
             tab_completion_state: TabCompletionState::default(),
             plugin_manager,
             vim_handler: VimHandler::new(),
-            team_coordinator: None,
+            team_coordinator: shared_coordinator,
             agent_registry: None,
             model_routes: Vec::new(),
             checkpoint_manager: shannon_core::CheckpointManager::new(),

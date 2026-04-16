@@ -83,6 +83,26 @@ pub enum ProtocolMessage {
         approve: bool,
         feedback: Option<String>,
     },
+    /// Assign a task to an agent
+    TaskAssign {
+        task_id: Uuid,
+        description: String,
+        priority: Option<String>,
+    },
+    /// Agent reports task result
+    TaskResult {
+        task_id: Uuid,
+        success: bool,
+        output: String,
+    },
+    /// Request agent status
+    StatusRequest,
+    /// Agent reports its status
+    StatusResponse {
+        status: String,
+        active_tasks: usize,
+        metadata: serde_json::Value,
+    },
 }
 
 impl AgentMessage {

@@ -277,6 +277,38 @@ mod coordinator_tests {
         assert_eq!(deserialized.assignment_strategy, AssignmentStrategy::LeastLoaded);
         assert_eq!(deserialized.heartbeat_interval_secs, 15);
     }
+
+    #[tokio::test]
+    async fn disband_team_removes_team_and_notifies_agents() {
+        let config = CoordinatorConfig::default();
+        let coordinator = AgentCoordinator::new(config).await.unwrap();
+
+        // Create team with 2 agents
+        coordinator.create_team("test-team".into(), "A test team".into()).await.unwrap();
+        let cfg1 = TeammateConfig { agent_type: "worker".into(), ..Default::default() };
+        let cfg2 = TeammateConfig { agent_type: "reviewer".into(), ..Default::default() };
+        coordinator.add_teammate("test-team".into(), "agent-1".into(), cfg1).await.unwrap();
+        coordinator.add_teammate("test-team".into(), "agent-2".into(), cfg2).await.unwrap();
+
+        // Verify team exists with 2 members
+        let status = coordinator.team_status("test-team").await.unwrap();
+        assert!(status.contains("2 members"));
+
+        // Disband the team
+        coordinator.disband_team("test-team").await.unwrap();
+
+        // Verify team no longer exists
+        assert!(coordinator.team_status("test-team").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn disband_nonexistent_team_returns_error() {
+        let config = CoordinatorConfig::default();
+        let coordinator = AgentCoordinator::new(config).await.unwrap();
+
+        let result = coordinator.disband_team("no-such-team").await;
+        assert!(result.is_err());
+    }
 }
 
 // =========================================================================
@@ -1470,5 +1502,124 @@ mod teammate_metadata_tests {
         agent.set_metadata("existing".to_string(), serde_json::json!("value")).await;
         agent.merge_metadata(std::collections::HashMap::new()).await;
         assert_eq!(agent.get_metadata("existing").await, Some(serde_json::json!("value")));
+    }
+}
+
+// =========================================================================
+// Conversation history tests
+// =========================================================================
+
+mod conversation_history_tests {
+    use super::*;
+    use shannon_agents::{Teammate, TeammateConfig, ChatTurn, MockAgentExecutor};
+    use std::sync::Arc;
+
+    fn make_teammate_with_executor() -> Teammate {
+        let config = TeammateConfig {
+            agent_type: "worker".to_string(),
+            capabilities: vec![],
+            max_concurrent_tasks: 3,
+            plan_mode_required: false,
+            model: None,
+            system_prompt: Some("You are a test agent.".to_string()),
+            temperature: None,
+        };
+        let executor = Arc::new(MockAgentExecutor::new("response text"));
+        Teammate::with_executor("test-agent".to_string(), config, executor)
+    }
+
+    fn make_teammate_no_executor() -> Teammate {
+        let config = TeammateConfig {
+            agent_type: "worker".to_string(),
+            capabilities: vec![],
+            max_concurrent_tasks: 3,
+            plan_mode_required: false,
+            model: None,
+            system_prompt: None,
+            temperature: None,
+        };
+        Teammate::new("test-agent".to_string(), config)
+    }
+
+    #[tokio::test]
+    async fn history_starts_empty() {
+        let agent = make_teammate_no_executor();
+        assert!(agent.conversation_history().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn clear_history_works() {
+        let agent = make_teammate_no_executor();
+        agent.clear_history().await;
+        assert!(agent.conversation_history().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn chat_with_executor_appends_to_history() {
+        let agent = make_teammate_with_executor();
+        let msg = AgentMessage::new_text("leader".to_string(), "test-agent".to_string(), "Hello".to_string());
+
+        let response = agent.handle_chat_message(msg).await.unwrap();
+        match &response.content {
+            MessageContent::Text(t) => assert_eq!(t, "response text"),
+            other => panic!("Expected Text response, got {:?}", other),
+        }
+
+        let history = agent.conversation_history().await;
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].role, "user");
+        assert_eq!(history[0].content, "Hello");
+        assert_eq!(history[1].role, "assistant");
+        assert_eq!(history[1].content, "response text");
+    }
+
+    #[tokio::test]
+    async fn multiple_turns_accumulate_history() {
+        let agent = make_teammate_with_executor();
+
+        let msg1 = AgentMessage::new_text("leader".to_string(), "test-agent".to_string(), "First".to_string());
+        let _ = agent.handle_chat_message(msg1).await.unwrap();
+
+        let msg2 = AgentMessage::new_text("leader".to_string(), "test-agent".to_string(), "Second".to_string());
+        let _ = agent.handle_chat_message(msg2).await.unwrap();
+
+        let history = agent.conversation_history().await;
+        assert_eq!(history.len(), 4); // 2 turns × (user + assistant)
+        assert_eq!(history[0].content, "First");
+        assert_eq!(history[2].content, "Second");
+    }
+
+    #[tokio::test]
+    async fn clear_history_resets_context() {
+        let agent = make_teammate_with_executor();
+
+        let msg = AgentMessage::new_text("leader".to_string(), "test-agent".to_string(), "Hello".to_string());
+        let _ = agent.handle_chat_message(msg).await.unwrap();
+        assert_eq!(agent.conversation_history().await.len(), 2);
+
+        agent.clear_history().await;
+        assert!(agent.conversation_history().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn placeholder_mode_does_not_append_history() {
+        let agent = make_teammate_no_executor();
+        let msg = AgentMessage::new_text("leader".to_string(), "test-agent".to_string(), "Hello".to_string());
+
+        let _ = agent.handle_chat_message(msg).await.unwrap();
+        // Placeholder mode should not modify history
+        assert!(agent.conversation_history().await.is_empty());
+    }
+
+    #[test]
+    fn chat_turn_serialization() {
+        let turn = ChatTurn {
+            role: "user".to_string(),
+            content: "Hello world".to_string(),
+        };
+        let json = serde_json::to_string(&turn).unwrap();
+        let decoded: ChatTurn = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.role, "user");
+        assert_eq!(decoded.content, "Hello world");
     }
 }

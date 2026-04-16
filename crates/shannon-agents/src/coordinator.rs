@@ -111,6 +111,12 @@ pub enum CoordinatorEvent {
     TaskFailed { task_id: Uuid, agent: String, reason: String },
     /// Agent status changed
     StatusChanged { agent: String, status: TeammateStatus },
+    /// Team was disbanded/deleted
+    TeamDeleted { team: String },
+    /// Background agent task produced output (streaming chunk)
+    AgentOutput { team: String, agent: String, chunk: String },
+    /// Background agent task completed
+    AgentCompleted { team: String, agent: String, success: bool, output: String },
 }
 
 /// Main coordinator for managing multi-agent teams
@@ -125,6 +131,8 @@ pub struct AgentCoordinator {
     _heartbeat_handle: Arc<tokio::task::JoinHandle<()>>,
     /// Optional file-based persistence layer
     persistence: Option<FilePersistence>,
+    /// Active background tasks keyed by task ID for cancellation
+    background_tasks: Arc<RwLock<HashMap<String, tokio::task::AbortHandle>>>,
 }
 
 /// A team of agents working together
@@ -213,6 +221,7 @@ impl AgentCoordinator {
             _message_receiver: Arc::new(message_handle),
             _heartbeat_handle: Arc::new(heartbeat_handle),
             persistence: None,
+            background_tasks: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -275,6 +284,23 @@ impl AgentCoordinator {
                 CoordinationError::AgentAlreadyMember(agent_name, team_name.to_string())
             ));
         }
+
+        // Inject team manifest into agent's system prompt so it knows its teammates
+        let mut config = config;
+        let manifest = self.team_manifest_internal(&team).await;
+        let manifest_suffix = format!(
+            "\n\n## Your Team: {}\n{}",
+            manifest.name,
+            manifest.members.iter()
+                .filter(|m| m.name != agent_name)
+                .map(|m| format!("- {} ({}): {}", m.name, m.agent_type, m.capabilities.join(", ")))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        config.system_prompt = Some(match config.system_prompt {
+            Some(sp) => format!("{sp}{manifest_suffix}"),
+            None => format!("You are a team agent.{manifest_suffix}"),
+        });
 
         let teammate = Teammate::new(agent_name.clone(), config);
         team.members.insert(agent_name.clone(), teammate);
@@ -942,7 +968,11 @@ impl AgentCoordinator {
             .ok_or_else(|| AgentError::Coordination(
                 CoordinationError::TeamNotFound(team_name.to_string())
             ))?;
+        Ok(self.team_manifest_internal(team).await)
+    }
 
+    /// Build manifest from a direct team reference (avoids re-locking).
+    async fn team_manifest_internal(&self, team: &AgentTeam) -> TeamManifest {
         let members: Vec<AgentInfo> = team.members.iter().map(|(name, m)| {
             let cfg = m.config();
             AgentInfo {
@@ -951,12 +981,11 @@ impl AgentCoordinator {
                 capabilities: cfg.capabilities.clone(),
             }
         }).collect();
-
-        Ok(TeamManifest {
+        TeamManifest {
             name: team.name.clone(),
             description: team.description.clone(),
             members,
-        })
+        }
     }
 
     /// Get a human-readable status summary for a team.
@@ -1149,6 +1178,57 @@ impl AgentCoordinator {
         }
     }
 
+    /// Disband a specific team: shutdown all agents, remove from memory, delete persisted files.
+    pub async fn disband_team(&self, team_name: &str) -> Result<(), AgentError> {
+        tracing::info!(team = %team_name, "Disbanding team");
+
+        let mut teams = self.teams.write().await;
+        let team = teams.get_mut(team_name)
+            .ok_or_else(|| AgentError::Coordination(
+                CoordinationError::TeamNotFound(team_name.to_string())
+            ))?;
+
+        // Send shutdown to all teammates
+        for (agent_name, teammate) in team.members.iter() {
+            tracing::debug!(team = %team_name, agent = %agent_name, "Sending shutdown to agent");
+            let shutdown_msg = AgentMessage::protocol(
+                "coordinator".to_string(),
+                agent_name.clone(),
+                ProtocolMessage::ShutdownRequest {
+                    reason: "Team disbanded".to_string(),
+                },
+            );
+            let _ = teammate.handle_message(shutdown_msg).await;
+            if let Err(e) = self.event_sender.send(CoordinatorEvent::AgentLeft {
+                team: team_name.to_string(),
+                agent: agent_name.clone(),
+            }) {
+                tracing::warn!(team = %team_name, agent = %agent_name, error = %e,
+                    "Failed to send AgentLeft event during disband");
+            }
+        }
+
+        // Remove team from memory
+        teams.remove(team_name);
+        drop(teams);
+
+        // Delete persisted files
+        if let Some(ref persist) = self.persistence {
+            if let Err(e) = persist.delete_team(team_name) {
+                tracing::warn!(team = %team_name, error = %e, "Failed to delete persisted team files");
+            }
+        }
+
+        if let Err(e) = self.event_sender.send(CoordinatorEvent::TeamDeleted {
+            team: team_name.to_string(),
+        }) {
+            tracing::warn!(team = %team_name, error = %e, "Failed to send TeamDeleted event");
+        }
+
+        tracing::info!(team = %team_name, "Team disbanded successfully");
+        Ok(())
+    }
+
     /// Gracefully shutdown the coordinator and all teams
     pub async fn shutdown(&self) -> Result<(), AgentError> {
         tracing::info!("Shutting down agent coordinator");
@@ -1192,5 +1272,165 @@ impl AgentCoordinator {
         }
 
         Ok(())
+    }
+
+    /// Spawn a background task for an agent.
+    ///
+    /// The agent processes the message asynchronously in a separate tokio task.
+    /// When complete, a notification message is sent from the agent back to the
+    /// specified `reply_to` name (typically the team lead).
+    ///
+    /// Returns a `tokio::task::JoinHandle` that can be used to await or cancel the task.
+    pub fn spawn_background_task(
+        &self,
+        team_name: &str,
+        agent_name: &str,
+        reply_to: &str,
+        content: String,
+    ) -> Result<tokio::task::JoinHandle<()>, AgentError> {
+        self.spawn_background_task_with_timeout(team_name, agent_name, reply_to, content, None)
+    }
+
+    /// Spawn a background task with an optional timeout (in seconds).
+    ///
+    /// Returns a `tokio::task::JoinHandle` that can be used to await the task.
+    /// The task is tracked internally and can be cancelled via `cancel_background_task`.
+    pub fn spawn_background_task_with_timeout(
+        &self,
+        team_name: &str,
+        agent_name: &str,
+        reply_to: &str,
+        content: String,
+        timeout_secs: Option<u64>,
+    ) -> Result<tokio::task::JoinHandle<()>, AgentError> {
+        let teams = self.teams.try_read()
+            .map_err(|_| AgentError::Communication("Teams lock poisoned".to_string()))?;
+
+        let team = teams.get(team_name)
+            .ok_or_else(|| AgentError::Coordination(
+                CoordinationError::TeamNotFound(team_name.to_string())
+            ))?;
+
+        let teammate = team.members.get(agent_name)
+            .cloned()
+            .ok_or_else(|| AgentError::Coordination(
+                CoordinationError::AgentNotFound(agent_name.to_string())
+            ))?;
+
+        let from = reply_to.to_string();
+        let agent_name_owned = agent_name.to_string();
+        let task_key = format!("{}:{}", team_name, agent_name);
+        let message = AgentMessage::new_text(from.clone(), agent_name_owned.clone(), content);
+
+        // Drop the teams lock before spawning the task
+        drop(teams);
+
+        let background_tasks = self.background_tasks.clone();
+        let event_sender = self.event_sender.clone();
+        let team_name_owned = team_name.to_string();
+        let task_key_for_cleanup = task_key.clone();
+
+        let handle = tokio::spawn(async move {
+            // Emit started event
+            let _ = event_sender.send(CoordinatorEvent::AgentOutput {
+                team: team_name_owned.clone(),
+                agent: agent_name_owned.clone(),
+                chunk: "[started]".to_string(),
+            });
+
+            let result = if let Some(secs) = timeout_secs {
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(secs),
+                    teammate.handle_chat_message(message),
+                ).await {
+                    Ok(inner) => inner,
+                    Err(_) => {
+                        tracing::warn!(
+                            agent = %agent_name_owned,
+                            timeout_secs = secs,
+                            "Background task timed out"
+                        );
+                        // Clean up tracking entry
+                        background_tasks.write().await.remove(&task_key_for_cleanup);
+                        return;
+                    }
+                }
+            } else {
+                teammate.handle_chat_message(message).await
+            };
+
+            match result {
+                Ok(response) => {
+                    tracing::info!(
+                        agent = %agent_name_owned,
+                        to = %response.to,
+                        "Background task completed"
+                    );
+                    let output = match &response.content {
+                        MessageContent::Text(t) => t.clone(),
+                        other => format!("{other:?}"),
+                    };
+                    let _ = event_sender.send(CoordinatorEvent::AgentCompleted {
+                        team: team_name_owned.clone(),
+                        agent: agent_name_owned.clone(),
+                        success: true,
+                        output,
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        agent = %agent_name_owned,
+                        error = %e,
+                        "Background task failed"
+                    );
+                    let _ = event_sender.send(CoordinatorEvent::AgentCompleted {
+                        team: team_name_owned.clone(),
+                        agent: agent_name_owned.clone(),
+                        success: false,
+                        output: e.to_string(),
+                    });
+                }
+            }
+
+            // Clean up tracking entry
+            background_tasks.write().await.remove(&task_key_for_cleanup);
+        });
+
+        // Track the abort handle for cancellation
+        let abort_handle = handle.abort_handle();
+        // Use blocking lock since we're in a sync context (try_read above already succeeded)
+        if let Ok(mut tasks) = self.background_tasks.try_write() {
+            tasks.insert(task_key.clone(), abort_handle);
+        }
+
+        tracing::info!(
+            team = %team_name,
+            agent = %agent_name,
+            timeout = ?timeout_secs,
+            "Spawned background task"
+        );
+
+        Ok(handle)
+    }
+
+    /// Cancel a running background task for a specific agent.
+    ///
+    /// Returns true if the task was found and aborted, false if it wasn't running.
+    pub async fn cancel_background_task(&self, team_name: &str, agent_name: &str) -> bool {
+        let key = format!("{}:{}", team_name, agent_name);
+        let mut tasks = self.background_tasks.write().await;
+        if let Some(handle) = tasks.remove(&key) {
+            handle.abort();
+            tracing::info!(team = %team_name, agent = %agent_name, "Cancelled background task");
+            true
+        } else {
+            tracing::debug!(team = %team_name, agent = %agent_name, "No background task to cancel");
+            false
+        }
+    }
+
+    /// List all running background tasks.
+    pub async fn running_background_tasks(&self) -> Vec<String> {
+        self.background_tasks.read().await.keys().cloned().collect()
     }
 }

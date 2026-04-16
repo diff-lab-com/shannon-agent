@@ -1,7 +1,7 @@
 //! Individual agent teammate implementation
 
 use crate::error::AgentError;
-use crate::executor::AgentExecutor;
+use crate::executor::{AgentExecutor, ChatTurn};
 use crate::message::{AgentMessage, MessageContent, MessageType, ProtocolMessage};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -119,6 +119,8 @@ pub struct Teammate {
     created_at: chrono::DateTime<chrono::Utc>,
     /// Optional LLM executor for real task execution (None = placeholder mode)
     executor: Option<Arc<dyn AgentExecutor>>,
+    /// Multi-turn conversation history for context-aware responses
+    conversation_history: Arc<RwLock<Vec<ChatTurn>>>,
 }
 
 impl fmt::Debug for Teammate {
@@ -142,6 +144,7 @@ impl Teammate {
             metadata: Arc::new(RwLock::new(HashMap::new())),
             created_at: chrono::Utc::now(),
             executor: None,
+            conversation_history: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -156,6 +159,7 @@ impl Teammate {
             metadata: Arc::new(RwLock::new(HashMap::new())),
             created_at: chrono::Utc::now(),
             executor: Some(executor),
+            conversation_history: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -259,7 +263,7 @@ impl Teammate {
     }
 
     /// Handle a chat message
-    async fn handle_chat_message(&self, message: AgentMessage) -> Result<AgentMessage, AgentError> {
+    pub async fn handle_chat_message(&self, message: AgentMessage) -> Result<AgentMessage, AgentError> {
         let content = match &message.content {
             MessageContent::Text(text) => text.clone(),
             MessageContent::Structured(data) => {
@@ -280,7 +284,7 @@ impl Teammate {
         );
 
         if let Some(executor) = &self.executor {
-            // Real LLM execution via the executor
+            // Real LLM execution via the executor with multi-turn history
             let system_prompt = self.config.system_prompt.as_deref().unwrap_or(
                 "You are a helpful AI agent. Respond concisely."
             );
@@ -291,8 +295,26 @@ impl Teammate {
                 Some(self.config.capabilities.as_slice())
             };
 
-            let result = executor.execute(system_prompt, &content, model, tools).await
+            // Read current history for context
+            let history = self.conversation_history.read().await.clone();
+
+            let result = executor.execute_with_history(
+                system_prompt, &history, &content, model, tools
+            ).await
                 .map_err(|e| AgentError::Communication(format!("LLM execution error: {e}")))?;
+
+            // Append user message and assistant response to history
+            {
+                let mut hist = self.conversation_history.write().await;
+                hist.push(ChatTurn {
+                    role: "user".to_string(),
+                    content: content.clone(),
+                });
+                hist.push(ChatTurn {
+                    role: "assistant".to_string(),
+                    content: result.content.clone(),
+                });
+            }
 
             Ok(AgentMessage::new_text(
                 self.name.clone(),
@@ -360,6 +382,55 @@ impl Teammate {
                 ProtocolMessage::ShutdownResponse { .. } |
                 ProtocolMessage::PlanApprovalResponse { .. } => {
                     // These are responses, not requests
+                }
+                ProtocolMessage::TaskAssign { task_id, .. } => {
+                    tracing::debug!(
+                        agent = %self.name,
+                        task_id = %task_id,
+                        "Task assignment received via protocol"
+                    );
+                    self.assign_task(*task_id).await?;
+                    return Ok(AgentMessage::new_text(
+                        self.name.clone(),
+                        message.from,
+                        format!("Task {} accepted", task_id),
+                    ));
+                }
+                ProtocolMessage::TaskResult { task_id, success, output } => {
+                    tracing::debug!(
+                        agent = %self.name,
+                        task_id = %task_id,
+                        success = success,
+                        "Task result received via protocol"
+                    );
+                    if *success {
+                        self.complete_task(*task_id).await;
+                    } else {
+                        self.fail_task(*task_id, output.clone()).await;
+                    }
+                    return Ok(AgentMessage::new_text(
+                        self.name.clone(),
+                        message.from,
+                        "Task result acknowledged".to_string(),
+                    ));
+                }
+                ProtocolMessage::StatusRequest => {
+                    let state = self.state().await;
+                    let response = ProtocolMessage::StatusResponse {
+                        status: format!("{:?}", state.status),
+                        active_tasks: state.active_tasks,
+                        metadata: serde_json::json!({
+                            "current_worktree": state.current_worktree,
+                        }),
+                    };
+                    return Ok(AgentMessage::protocol(
+                        self.name.clone(),
+                        message.from,
+                        response,
+                    ));
+                }
+                ProtocolMessage::StatusResponse { .. } => {
+                    // Status responses are handled by the caller
                 }
             }
         }
@@ -479,6 +550,16 @@ impl Teammate {
         for (key, value) in entries {
             metadata.insert(key, value);
         }
+    }
+
+    /// Get the conversation history (read-only snapshot).
+    pub async fn conversation_history(&self) -> Vec<ChatTurn> {
+        self.conversation_history.read().await.clone()
+    }
+
+    /// Clear conversation history.
+    pub async fn clear_history(&self) {
+        self.conversation_history.write().await.clear();
     }
 
     /// Enter plan mode

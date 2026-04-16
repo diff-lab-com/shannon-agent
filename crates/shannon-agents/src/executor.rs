@@ -12,19 +12,33 @@ use shannon_core::api::{
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// A single turn in a conversation, used for multi-turn agent execution.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ChatTurn {
+    /// Speaker role: "user" or "assistant"
+    pub role: String,
+    /// Message content
+    pub content: String,
+}
+
 /// Trait for executing agent tasks. Implementations can use different backends
 /// (LLM API, subprocess, mock for testing, etc.).
 #[async_trait]
 pub trait AgentExecutor: Send + Sync {
-    /// Execute a task and return the output.
-    ///
-    /// - `system_prompt`: instructions defining agent behavior
-    /// - `task`: the user-facing task description
-    /// - `model`: optional model override (e.g. "claude-haiku-4-5")
-    /// - `tools`: optional restricted tool set (reserved for future use)
+    /// Execute a single-turn task and return the output.
     async fn execute(
         &self,
         system_prompt: &str,
+        task: &str,
+        model: Option<&str>,
+        tools: Option<&[String]>,
+    ) -> Result<ToolOutput, String>;
+
+    /// Execute a multi-turn conversation with history.
+    async fn execute_with_history(
+        &self,
+        system_prompt: &str,
+        history: &[ChatTurn],
         task: &str,
         model: Option<&str>,
         tools: Option<&[String]>,
@@ -65,29 +79,65 @@ impl AgentExecutor for LlmAgentExecutor {
             .await
             .map_err(|e| format!("LLM error: {e}"))?;
 
-        // Extract text from response blocks
-        let text: String = result
-            .iter()
-            .filter_map(|block| match block {
-                ContentBlock::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<&str>>()
-            .join("\n");
+        extract_text_output(result)
+    }
 
-        if text.is_empty() {
-            Ok(ToolOutput {
-                content: "[Agent returned no text]".to_string(),
-                is_error: false,
-                metadata: HashMap::new(),
+    async fn execute_with_history(
+        &self,
+        system_prompt: &str,
+        history: &[ChatTurn],
+        task: &str,
+        _model: Option<&str>,
+        _tools: Option<&[String]>,
+    ) -> Result<ToolOutput, String> {
+        // Build full message list from conversation history
+        let mut messages: Vec<Message> = history
+            .iter()
+            .map(|turn| Message {
+                role: turn.role.clone(),
+                content: MessageContent::Text(turn.content.clone()),
             })
-        } else {
-            Ok(ToolOutput {
-                content: text,
-                is_error: false,
-                metadata: HashMap::new(),
-            })
-        }
+            .collect();
+
+        // Append current task as the latest user message
+        messages.push(Message {
+            role: "user".to_string(),
+            content: MessageContent::Text(task.to_string()),
+        });
+
+        let result = self
+            .client
+            .send_message(messages, None, Some(system_prompt.to_string()))
+            .await
+            .map_err(|e| format!("LLM error: {e}"))?;
+
+        extract_text_output(result)
+    }
+}
+
+/// Extract text content from LLM response blocks.
+fn extract_text_output(blocks: Vec<ContentBlock>) -> Result<ToolOutput, String> {
+    let text: String = blocks
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<&str>>()
+        .join("\n");
+
+    if text.is_empty() {
+        Ok(ToolOutput {
+            content: "[Agent returned no text]".to_string(),
+            is_error: false,
+            metadata: HashMap::new(),
+        })
+    } else {
+        Ok(ToolOutput {
+            content: text,
+            is_error: false,
+            metadata: HashMap::new(),
+        })
     }
 }
 
@@ -109,6 +159,21 @@ impl AgentExecutor for MockAgentExecutor {
     async fn execute(
         &self,
         _system_prompt: &str,
+        _task: &str,
+        _model: Option<&str>,
+        _tools: Option<&[String]>,
+    ) -> Result<ToolOutput, String> {
+        Ok(ToolOutput {
+            content: self.response.clone(),
+            is_error: false,
+            metadata: HashMap::new(),
+        })
+    }
+
+    async fn execute_with_history(
+        &self,
+        _system_prompt: &str,
+        _history: &[ChatTurn],
         _task: &str,
         _model: Option<&str>,
         _tools: Option<&[String]>,

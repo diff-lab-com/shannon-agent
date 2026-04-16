@@ -58,6 +58,7 @@ pub use agent_defs::{
 };
 pub use executor::{
     AgentExecutor, LlmAgentExecutor, MockAgentExecutor, shared_executor,
+    ChatTurn,
 };
 
 /// Version information for the agents crate
