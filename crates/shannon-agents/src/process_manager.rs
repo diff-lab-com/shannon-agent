@@ -1,0 +1,520 @@
+//! Agent process management for isolated agent execution.
+//!
+//! Manages agent processes as separate OS processes communicating via
+//! JSON-RPC over stdin/stdout. Each agent runs in its own process for
+//! crash isolation, resource boundaries, and parallel execution.
+
+use crate::protocol::{
+    self, AgentReadyParams, AgentIdleParams, ClaimTaskParams, ClaimTaskResult,
+    ExecuteTaskParams, JsonRpcError, JsonRpcId, JsonRpcMessage, TaskCompleteParams,
+    TaskProgressParams, frame_message, parse_message,
+};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::sync::{mpsc, oneshot, RwLock};
+
+/// Status of an agent process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AgentProcessStatus {
+    /// Process is starting up (not yet sent `agent_ready`).
+    Starting,
+    /// Process is ready and waiting for tasks.
+    Idle,
+    /// Process is executing a task.
+    Busy,
+    /// Process has stopped (exited or killed).
+    Stopped,
+    /// Process crashed and may need restart.
+    Crashed,
+}
+
+/// Configuration for spawning an agent process.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentProcessConfig {
+    /// Path to the `shannon-agent` binary.
+    pub binary_path: PathBuf,
+    /// Command-line arguments to pass to the process.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Extra environment variables.
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    /// Working directory (isolated worktree, if configured).
+    pub worktree_path: Option<PathBuf>,
+    /// LLM model override for this agent.
+    pub model: Option<String>,
+    /// System prompt for this agent.
+    pub system_prompt: Option<String>,
+    /// Agent name (passed as `--name` argument).
+    pub agent_name: String,
+}
+
+/// A pending RPC response waiter.
+struct PendingRpc {
+    sender: oneshot::Sender<Result<JsonRpcMessage, String>>,
+}
+
+/// Handle to a running agent process.
+pub struct AgentHandle {
+    /// The spawned child process.
+    child: Child,
+    /// stdin for sending messages to the agent.
+    stdin: ChildStdin,
+    /// Agent name.
+    name: String,
+    /// Current status.
+    status: AgentProcessStatus,
+    /// Pending RPC responses keyed by request ID.
+    pending_rpcs: HashMap<i64, PendingRpc>,
+    /// Channel for receiving events (notifications) from the agent.
+    event_tx: mpsc::Sender<AgentEvent>,
+    /// Kill handle sender — drop the child on shutdown.
+    _kill_tx: oneshot::Sender<()>,
+}
+
+/// Events emitted by agent processes.
+#[derive(Debug, Clone)]
+pub enum AgentEvent {
+    /// Agent process is ready.
+    Ready {
+        agent_name: String,
+        capabilities: Vec<String>,
+    },
+    /// Streaming progress from a task.
+    Progress {
+        agent_name: String,
+        task_id: String,
+        chunk: String,
+    },
+    /// Task completed (or failed).
+    TaskComplete {
+        agent_name: String,
+        task_id: String,
+        success: bool,
+        output: String,
+    },
+    /// Agent is idle and looking for more work.
+    Idle {
+        agent_name: String,
+        available_tasks_count: usize,
+    },
+    /// Agent process exited.
+    ProcessExited {
+        agent_name: String,
+        exit_code: Option<i32>,
+    },
+}
+
+/// Manages agent process lifecycle.
+pub struct AgentProcessManager {
+    /// Running agent handles, keyed by agent name.
+    agents: Arc<RwLock<HashMap<String, AgentHandle>>>,
+    /// Next RPC request ID.
+    next_rpc_id: AtomicU64,
+    /// Event receiver — consume events via `recv()`.
+    event_rx: mpsc::Receiver<AgentEvent>,
+    /// Event sender — cloned for each agent.
+    event_tx: mpsc::Sender<AgentEvent>,
+}
+
+impl AgentProcessManager {
+    /// Create a new process manager.
+    pub fn new() -> Self {
+        let (event_tx, event_rx) = mpsc::channel(256);
+        Self {
+            agents: Arc::new(RwLock::new(HashMap::new())),
+            next_rpc_id: AtomicU64::new(1),
+            event_rx,
+            event_tx,
+        }
+    }
+
+    /// Allocate a new RPC request ID.
+    fn next_id(&self) -> i64 {
+        self.next_rpc_id.fetch_add(1, Ordering::Relaxed) as i64
+    }
+
+    /// Spawn a new agent process.
+    ///
+    /// The process is started and reads JSON-RPC from stdin, writes to stdout.
+    /// Logs go to stderr (captured by the coordinator at trace level).
+    pub async fn spawn_agent(
+        &self,
+        config: AgentProcessConfig,
+    ) -> Result<String, AgentProcessError> {
+        let name = config.agent_name.clone();
+
+        // Build command
+        let mut cmd = Command::new(&config.binary_path);
+        cmd.arg("--name").arg(&name);
+        if let Some(ref model) = config.model {
+            cmd.arg("--model").arg(model);
+        }
+        if let Some(ref prompt) = config.system_prompt {
+            cmd.arg("--system-prompt").arg(prompt);
+        }
+        if let Some(ref path) = config.worktree_path {
+            cmd.arg("--workdir").arg(path);
+        }
+        cmd.args(&config.args);
+        cmd.envs(&config.env);
+        cmd.stdout(std::process::Stdio::piped())
+            .stdin(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        // Kill switch
+        let (kill_tx, kill_rx) = oneshot::channel::<()>();
+
+        let mut child = cmd.spawn().map_err(|e| AgentProcessError::SpawnFailed {
+            agent: name.clone(),
+            source: e,
+        })?;
+
+        let stdin = child.stdin.take()
+            .ok_or_else(|| AgentProcessError::SpawnFailed {
+                agent: name.clone(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "stdin not captured",
+                ),
+            })?;
+        let stdout = child.stdout.take()
+            .ok_or_else(|| AgentProcessError::SpawnFailed {
+                agent: name.clone(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "stdout not captured",
+                ),
+            })?;
+
+        let event_tx = self.event_tx.clone();
+        let agent_name_for_reader = name.clone();
+
+        // Spawn a reader task that reads lines from stdout and dispatches
+        tokio::spawn(async move {
+            Self::read_loop(stdout, event_tx, agent_name_for_reader).await;
+        });
+
+        // Spawn a watcher for process exit + kill signal
+        let event_tx_exit = self.event_tx.clone();
+        let name_exit = name.clone();
+        tokio::spawn(async move {
+            // Wait for kill signal or just let it drop
+            let _ = kill_rx.await;
+            // The child will be killed when AgentHandle is dropped
+            let _ = event_tx_exit.send(AgentEvent::ProcessExited {
+                agent_name: name_exit.clone(),
+                exit_code: None,
+            }).await;
+        });
+
+        let handle = AgentHandle {
+            child,
+            stdin,
+            name: name.clone(),
+            status: AgentProcessStatus::Starting,
+            pending_rpcs: HashMap::new(),
+            event_tx: self.event_tx.clone(),
+            _kill_tx: kill_tx,
+        };
+
+        self.agents.write().await.insert(name.clone(), handle);
+
+        tracing::info!(agent = %name, "Spawned agent process");
+        Ok(name)
+    }
+
+    /// Send a JSON-RPC request to an agent and wait for the response.
+    pub async fn send_request(
+        &self,
+        agent_name: &str,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<JsonRpcMessage, AgentProcessError> {
+        let rpc_id = self.next_id();
+        let msg = JsonRpcMessage::request(method, params, rpc_id);
+
+        let mut agents = self.agents.write().await;
+        let handle = agents.get_mut(agent_name)
+            .ok_or_else(|| AgentProcessError::AgentNotFound(agent_name.to_string()))?;
+
+        let (tx, rx) = oneshot::channel();
+        handle.pending_rpcs.insert(rpc_id, PendingRpc { sender: tx });
+
+        let line = frame_message(&msg)
+            .map_err(|e| AgentProcessError::Protocol(e.to_string()))?;
+        handle.stdin.write_all(line.as_bytes()).await
+            .map_err(|e| AgentProcessError::Io(e))?;
+        handle.stdin.flush().await
+            .map_err(|e| AgentProcessError::Io(e))?;
+
+        drop(agents);
+
+        // Wait for response
+        rx.await.map_err(|_| AgentProcessError::Protocol(
+            format!("Agent '{agent_name}' dropped response channel for RPC {rpc_id}")
+        ))?.map_err(|e| AgentProcessError::Protocol(e))
+    }
+
+    /// Send a notification (no response expected) to an agent.
+    pub async fn send_notification(
+        &self,
+        agent_name: &str,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<(), AgentProcessError> {
+        let msg = JsonRpcMessage::notification(method, params);
+
+        let mut agents = self.agents.write().await;
+        let handle = agents.get_mut(agent_name)
+            .ok_or_else(|| AgentProcessError::AgentNotFound(agent_name.to_string()))?;
+
+        let line = frame_message(&msg)
+            .map_err(|e| AgentProcessError::Protocol(e.to_string()))?;
+        handle.stdin.write_all(line.as_bytes()).await
+            .map_err(|e| AgentProcessError::Io(e))?;
+        handle.stdin.flush().await
+            .map_err(|e| AgentProcessError::Io(e))?;
+
+        Ok(())
+    }
+
+    /// Send an `execute_task` request to an agent.
+    pub async fn execute_task(
+        &self,
+        agent_name: &str,
+        params: ExecuteTaskParams,
+    ) -> Result<(), AgentProcessError> {
+        let params_value = serde_json::to_value(&params)
+            .map_err(|e| AgentProcessError::Protocol(e.to_string()))?;
+
+        // execute_task is a notification (fire-and-forget); agent sends back
+        // task_progress and task_complete notifications.
+        self.send_notification(agent_name, protocol::methods::EXECUTE_TASK, params_value).await
+    }
+
+    /// Send a `shutdown` notification to an agent.
+    pub async fn shutdown_agent(&self, agent_name: &str, reason: &str) -> Result<(), AgentProcessError> {
+        let params = serde_json::to_value(ShutdownParamsWrapper { reason: reason.to_string() })
+            .map_err(|e| AgentProcessError::Protocol(e.to_string()))?;
+        self.send_notification(agent_name, protocol::methods::SHUTDOWN, params).await
+    }
+
+    /// Kill an agent process immediately.
+    pub async fn kill_agent(&self, agent_name: &str) -> Result<(), AgentProcessError> {
+        let mut agents = self.agents.write().await;
+        if let Some(mut handle) = agents.remove(agent_name) {
+            let _ = handle.child.kill().await;
+            tracing::info!(agent = %agent_name, "Killed agent process");
+            Ok(())
+        } else {
+            Err(AgentProcessError::AgentNotFound(agent_name.to_string()))
+        }
+    }
+
+    /// Get the status of an agent.
+    pub async fn agent_status(&self, agent_name: &str) -> Option<AgentProcessStatus> {
+        let agents = self.agents.read().await;
+        agents.get(agent_name).map(|h| h.status)
+    }
+
+    /// List all running agent names.
+    pub async fn running_agents(&self) -> Vec<String> {
+        let agents = self.agents.read().await;
+        agents.keys().cloned().collect()
+    }
+
+    /// Receive the next event from any agent process (non-blocking).
+    pub async fn recv_event(&mut self) -> Option<AgentEvent> {
+        self.event_rx.recv().await
+    }
+
+    /// Try to receive an event without blocking.
+    pub fn try_recv_event(&mut self) -> Option<AgentEvent> {
+        self.event_rx.try_recv().ok()
+    }
+
+    /// Read loop: reads lines from agent stdout, dispatches events and RPC responses.
+    async fn read_loop(
+        stdout: ChildStdout,
+        event_tx: mpsc::Sender<AgentEvent>,
+        agent_name: String,
+    ) {
+        let reader = BufReader::new(stdout);
+        let mut lines = reader.lines();
+
+        while let Ok(Some(line)) = lines.next_line().await {
+            let msg = match parse_message(&line) {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::warn!(
+                        agent = %agent_name,
+                        error = %e,
+                        line = %line,
+                        "Failed to parse JSON-RPC from agent"
+                    );
+                    continue;
+                }
+            };
+
+            // Dispatch based on method
+            if let Some(method) = msg.method() {
+                match method {
+                    protocol::methods::AGENT_READY => {
+                        if let Ok(params) = serde_json::from_value::<AgentReadyParams>(
+                            msg.params.unwrap_or_default()
+                        ) {
+                            let _ = event_tx.send(AgentEvent::Ready {
+                                agent_name: params.agent_name.clone(),
+                                capabilities: params.capabilities,
+                            }).await;
+                        }
+                    }
+                    protocol::methods::TASK_PROGRESS => {
+                        if let Ok(params) = serde_json::from_value::<TaskProgressParams>(
+                            msg.params.unwrap_or_default()
+                        ) {
+                            let _ = event_tx.send(AgentEvent::Progress {
+                                agent_name: agent_name.clone(),
+                                task_id: params.task_id,
+                                chunk: params.chunk,
+                            }).await;
+                        }
+                    }
+                    protocol::methods::TASK_COMPLETE => {
+                        if let Ok(params) = serde_json::from_value::<TaskCompleteParams>(
+                            msg.params.unwrap_or_default()
+                        ) {
+                            let _ = event_tx.send(AgentEvent::TaskComplete {
+                                agent_name: agent_name.clone(),
+                                task_id: params.task_id,
+                                success: params.success,
+                                output: params.output,
+                            }).await;
+                        }
+                    }
+                    protocol::methods::AGENT_IDLE => {
+                        if let Ok(params) = serde_json::from_value::<AgentIdleParams>(
+                            msg.params.unwrap_or_default()
+                        ) {
+                            let _ = event_tx.send(AgentEvent::Idle {
+                                agent_name: params.agent_name,
+                                available_tasks_count: params.available_tasks_count,
+                            }).await;
+                        }
+                    }
+                    other => {
+                        tracing::debug!(
+                            agent = %agent_name,
+                            method = %other,
+                            "Unhandled method from agent"
+                        );
+                    }
+                }
+            }
+            // If it's a response (has id, no method), it would be handled by
+            // pending RPC lookups. For simplicity in the initial implementation,
+            // responses are dispatched via events too.
+        }
+
+        tracing::info!(agent = %agent_name, "Agent stdout closed");
+        let _ = event_tx.send(AgentEvent::ProcessExited {
+            agent_name,
+            exit_code: None,
+        }).await;
+    }
+
+    /// Shut down all agents.
+    pub async fn shutdown_all(&self) {
+        let mut agents = self.agents.write().await;
+        for (name, mut handle) in agents.drain() {
+            tracing::info!(agent = %name, "Shutting down agent process");
+            let _ = handle.child.kill().await;
+        }
+    }
+}
+
+/// Wrapper for shutdown params (avoids name collision with protocol::ShutdownParams).
+#[derive(Serialize, Deserialize)]
+struct ShutdownParamsWrapper {
+    reason: String,
+}
+
+/// Errors from agent process operations.
+#[derive(Debug, thiserror::Error)]
+pub enum AgentProcessError {
+    #[error("Agent process spawn failed for '{agent}': {source}")]
+    SpawnFailed {
+        agent: String,
+        source: std::io::Error,
+    },
+    #[error("Agent not found: {0}")]
+    AgentNotFound(String),
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Protocol error: {0}")]
+    Protocol(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_process_manager_creation() {
+        let _mgr = AgentProcessManager::new();
+    }
+
+    #[tokio::test]
+    async fn test_spawn_nonexistent_binary() {
+        let mgr = AgentProcessManager::new();
+        let config = AgentProcessConfig {
+            binary_path: PathBuf::from("/nonexistent/shannon-agent"),
+            args: vec![],
+            env: HashMap::new(),
+            worktree_path: None,
+            model: None,
+            system_prompt: None,
+            agent_name: "test-agent".to_string(),
+        };
+        let result = mgr.spawn_agent(config).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_agent_not_found_for_request() {
+        let mgr = AgentProcessManager::new();
+        let result = mgr.send_request(
+            "nonexistent",
+            "ping",
+            serde_json::Value::Null,
+        ).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_agent_not_found_for_kill() {
+        let mgr = AgentProcessManager::new();
+        let result = mgr.kill_agent("nonexistent").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_running_agents_empty() {
+        let mgr = AgentProcessManager::new();
+        let agents = mgr.running_agents().await;
+        assert!(agents.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_agent_status_nonexistent() {
+        let mgr = AgentProcessManager::new();
+        let status = mgr.agent_status("nonexistent").await;
+        assert!(status.is_none());
+    }
+}

@@ -19,9 +19,11 @@ mod context;
 mod task_tools;
 mod persistence;
 mod agent_defs;
+mod process_manager;
+mod protocol;
 mod tmux;
 
-pub use coordinator::{AgentCoordinator, CoordinatorConfig, AssignmentStrategy, CoordinatorEvent, AgentInfo, TeamManifest, InboxSummary};
+pub use coordinator::{AgentCoordinator, CoordinatorConfig, AssignmentStrategy, AgentMode, CoordinatorEvent, AgentInfo, TeamManifest, InboxSummary};
 pub use teammate::{Teammate, TeammateConfig, TeammateStatus, TeammateState};
 pub use task_board::{TaskBoard, TaskAssignment, TaskBoardEvent, TaskBoardSummary};
 pub use worktree::{WorktreeManager, WorktreeConfig, WorktreeSession, WorktreeStatus, ExitAction,
@@ -62,6 +64,18 @@ pub use executor::{
     ChatTurn,
 };
 pub use tmux::TmuxManager;
+pub use process_manager::{
+    AgentProcessManager, AgentProcessConfig, AgentProcessStatus,
+    AgentProcessError, AgentEvent,
+};
+pub use protocol::{
+    JsonRpcMessage, JsonRpcId, JsonRpcError,
+    ExecuteTaskParams, ShutdownParams,
+    AgentReadyParams, TaskProgressParams, TaskCompleteParams,
+    AgentIdleParams, ClaimTaskParams, ClaimTaskResult,
+    SendMessageParams, ListTasksParams, ListTasksResult, TaskSummary,
+    frame_message, parse_message,
+};
 
 /// Version information for the agents crate
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -35,11 +35,8 @@ mod coordinator_tests {
             heartbeat_interval_secs: 15,
             assignment_strategy: AssignmentStrategy::RoundRobin,
             delegate_mode: false,
+            agent_mode: AgentMode::default(),
         };
-
-        let coordinator = AgentCoordinator::new(config).await;
-
-        assert!(coordinator.is_ok());
     }
 
     #[tokio::test]

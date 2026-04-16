@@ -253,6 +253,7 @@ mod coordinator_tests {
             heartbeat_interval_secs: 60,
             assignment_strategy: AssignmentStrategy::RoundRobin,
             delegate_mode: false,
+            agent_mode: AgentMode::default(),
         };
 
         assert_eq!(config.max_team_size, 5);
@@ -272,6 +273,7 @@ mod coordinator_tests {
             heartbeat_interval_secs: 15,
             assignment_strategy: AssignmentStrategy::LeastLoaded,
             delegate_mode: false,
+            agent_mode: AgentMode::default(),
         };
 
         let json = serde_json::to_string(&config).expect("serialize custom config");

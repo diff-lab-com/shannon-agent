@@ -69,6 +69,9 @@ pub struct CoordinatorConfig {
     /// messages teammates) and does not directly implement code changes.
     /// Inspired by Claude Code's Shift+Tab delegate mode.
     pub delegate_mode: bool,
+    /// Agent execution mode: in-process (default) or separate OS process.
+    #[serde(default)]
+    pub agent_mode: AgentMode,
 }
 
 /// Strategy for assigning tasks to agents
@@ -86,6 +89,16 @@ pub enum AssignmentStrategy {
     SelfClaim,
 }
 
+/// Agent execution mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum AgentMode {
+    /// Agents run as in-process tokio tasks (default).
+    #[default]
+    InProcess,
+    /// Agents run as separate OS processes with JSON-RPC IPC.
+    Process,
+}
+
 impl Default for CoordinatorConfig {
     fn default() -> Self {
         Self {
@@ -96,6 +109,7 @@ impl Default for CoordinatorConfig {
             heartbeat_interval_secs: 30,
             assignment_strategy: AssignmentStrategy::SelfClaim,
             delegate_mode: false,
+            agent_mode: AgentMode::default(),
         }
     }
 }

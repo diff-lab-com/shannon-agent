@@ -7,6 +7,7 @@ members = [
     "crates/shannon-mcp",
     "crates/shannon-tools",
     "crates/shannon-agents",
+    "crates/shannon-agent",
     "crates/shannon-types",
     "crates/shannon-commands",
     "crates/shannon-skills",
