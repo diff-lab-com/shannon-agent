@@ -1304,8 +1304,8 @@ mod self_claim_tests {
 
         // Create tasks in order (earlier = lower ID)
         let task1 = create_task(&coordinator, "First task", "Created first", TaskPriority::Low).await;
-        // Small sleep to ensure different timestamps
-        sleep(Duration::from_millis(1)).await;
+        // Small sleep to ensure different timestamps (10ms for reliable resolution)
+        sleep(Duration::from_millis(10)).await;
         let _task2 = create_task(&coordinator, "Second task", "Created second", TaskPriority::High).await;
 
         // claim_next should pick the earliest-created task

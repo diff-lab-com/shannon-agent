@@ -123,6 +123,8 @@ pub enum CoordinatorEvent {
     AgentOutput { team: String, agent: String, chunk: String },
     /// Background agent task completed
     AgentCompleted { team: String, agent: String, success: bool, output: String },
+    /// An idle agent was auto-assigned a task
+    TaskAutoClaimed { task_id: Uuid, team: String, agent: String },
 }
 
 /// Main coordinator for managing multi-agent teams
@@ -217,12 +219,22 @@ impl AgentCoordinator {
         // Spawn heartbeat task
         let teams_heartbeat = teams.clone();
         let event_heartbeat = event_sender.clone();
+        let task_board_heartbeat = task_board.clone();
         let heartbeat_interval = config.heartbeat_interval_secs;
+        let assignment_strategy = config.assignment_strategy;
         let heartbeat_handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(heartbeat_interval));
+            // Consume the first immediate tick so heartbeat waits a full interval
+            // before firing. This avoids racing with test setup and initial task creation.
+            interval.tick().await;
             loop {
                 interval.tick().await;
                 Self::send_heartbeats(&teams_heartbeat, &event_heartbeat).await;
+                if matches!(assignment_strategy, AssignmentStrategy::SelfClaim) {
+                    Self::auto_claim_idle_agents(
+                        &teams_heartbeat, &task_board_heartbeat, &event_heartbeat,
+                    ).await;
+                }
             }
         });
 
@@ -1572,6 +1584,58 @@ impl AgentCoordinator {
                         error = %e,
                         "Failed to send StatusChanged event - no active receivers"
                     );
+                }
+            }
+        }
+    }
+
+    /// Auto-claim tasks for idle agents (SelfClaim strategy).
+    ///
+    /// Scans all teams for idle agents and attempts to assign them
+    /// ready, unowned tasks from the task board.
+    async fn auto_claim_idle_agents(
+        teams: &Arc<RwLock<HashMap<String, AgentTeam>>>,
+        task_board: &Arc<TaskBoard>,
+        event_sender: &broadcast::Sender<CoordinatorEvent>,
+    ) {
+        let teams_lock = teams.read().await;
+        for (team_name, team) in teams_lock.iter() {
+            for (agent_name, agent) in team.members.iter() {
+                if !agent.is_available().await {
+                    continue;
+                }
+
+                // Find the first ready, unowned task this agent could claim
+                let ready_tasks = task_board.list_ready_tasks().await;
+                let claimable = ready_tasks.into_iter()
+                    .find(|t| t.owner.is_none());
+
+                if let Some(task) = claimable {
+                    match task_board.assign_task(task.id, agent_name.clone()).await {
+                        Ok(()) => {
+                            tracing::info!(
+                                team = %team_name,
+                                agent = %agent_name,
+                                task_id = %task.id,
+                                "Auto-claimed task for idle agent via heartbeat"
+                            );
+                            let _ = event_sender.send(CoordinatorEvent::TaskAutoClaimed {
+                                task_id: task.id,
+                                team: team_name.clone(),
+                                agent: agent_name.clone(),
+                            });
+                        }
+                        Err(e) => {
+                            tracing::debug!(
+                                agent = %agent_name,
+                                task_id = %task.id,
+                                error = %e,
+                                "Auto-claim failed (likely raced with another agent)"
+                            );
+                        }
+                    }
+                    // Only claim one task per agent per heartbeat tick
+                    break;
                 }
             }
         }
