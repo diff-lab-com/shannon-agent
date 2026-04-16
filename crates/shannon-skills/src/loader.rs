@@ -150,23 +150,28 @@ pub fn load_skills_from_directory(
 
 /// Discover skill directories by walking up from file paths
 ///
-/// Searches for `.claude/skills/` directories between the given paths
-/// and the current working directory.
+/// Searches for `.claude/skills/` and `.shannon/skills/` directories between
+/// the given paths and the current working directory, plus user-level skills
+/// from `~/.claude/skills/` and `~/.shannon/skills/`.
 pub fn discover_skill_directories(
     file_paths: &[PathBuf],
     cwd: &Path,
 ) -> Vec<PathBuf> {
     let mut discovered = std::collections::HashSet::new();
 
+    // Skill directory names to search (Claude Code compat + Shannon)
+    let skill_dir_names = [".claude/skills", ".shannon/skills"];
+
     for file_path in file_paths {
         let mut current = file_path.parent()
             .unwrap_or_else(|| Path::new("."));
 
         while current != cwd && current.starts_with(cwd) {
-            let skill_dir = current.join(".claude").join("skills");
-
-            if skill_dir.exists() && skill_dir.is_dir() {
-                discovered.insert(skill_dir);
+            for dir_name in &skill_dir_names {
+                let skill_dir = current.join(dir_name);
+                if skill_dir.exists() && skill_dir.is_dir() {
+                    discovered.insert(skill_dir);
+                }
             }
 
             current = match current.parent() {
@@ -177,9 +182,21 @@ pub fn discover_skill_directories(
     }
 
     // Check cwd level
-    let cwd_skills = cwd.join(".claude").join("skills");
-    if cwd_skills.exists() && cwd_skills.is_dir() {
-        discovered.insert(cwd_skills);
+    for dir_name in &skill_dir_names {
+        let cwd_skills = cwd.join(dir_name);
+        if cwd_skills.exists() && cwd_skills.is_dir() {
+            discovered.insert(cwd_skills);
+        }
+    }
+
+    // User-level skills (home directory)
+    if let Some(home) = dirs::home_dir() {
+        for dir_name in &skill_dir_names {
+            let user_skills = home.join(dir_name);
+            if user_skills.exists() && user_skills.is_dir() {
+                discovered.insert(user_skills);
+            }
+        }
     }
 
     let mut result: Vec<_> = discovered.into_iter().collect();

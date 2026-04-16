@@ -2059,8 +2059,8 @@ fn test_repl_mode_shows_current() {
     super::commands::submit_input(&mut repl).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Current approval mode"), "/mode should show current mode");
-    assert!(last_msg.contains("suggest"), "/mode should list available modes");
-    assert!(last_msg.contains("auto-edit"), "/mode should list auto-edit");
+    assert!(last_msg.contains("default"), "/mode should list available modes");
+    assert!(last_msg.contains("auto"), "/mode should list auto");
     assert!(last_msg.contains("full-auto"), "/mode should list full-auto");
     assert!(last_msg.contains("readonly"), "/mode should list readonly");
 }
@@ -2088,7 +2088,7 @@ fn test_repl_mode_invalid() {
     super::commands::submit_input(&mut repl).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Unknown mode"), "/mode invalid should show error");
-    assert!(last_msg.contains("suggest"), "should list valid modes");
+    assert!(last_msg.contains("default"), "should list valid modes");
 }
 
 #[test]
@@ -2097,7 +2097,7 @@ fn test_repl_mode_suggest_alias() {
     repl.prompt.set_input("/mode ask".to_string());
     super::commands::submit_input(&mut repl).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("suggest"), "'ask' should map to 'suggest' mode");
+    assert!(last_msg.contains("default"), "'ask' should map to 'default' mode");
 }
 
 #[test]

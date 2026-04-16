@@ -330,78 +330,56 @@ impl ProjectMemoryManager {
         parts.join("\n")
     }
 
-    /// Load and merge memory from multiple sources in priority order.
+    /// Load and merge memory from multiple sources following Claude Code's hierarchy.
     ///
     /// Searches for memory files in the following order (later entries override earlier ones):
-    /// 1. Global `~/.shannon/CLAUDE.md`
-    /// 2. Global `~/.shannon/SHANNON.md`
-    /// 3. Project `CLAUDE.md` (found at base_dir)
-    /// 4. Project `SHANNON.md` (found at base_dir)
+    /// 1. Global `~/.claude/CLAUDE.md` (Claude Code compatible)
+    /// 2. Global `~/.shannon/CLAUDE.md`
+    /// 3. Global `~/.shannon/SHANNON.md`
+    /// 4. Project `.claude/CLAUDE.md` (Claude Code compatible)
+    /// 5. Project `CLAUDE.md` (at base_dir)
+    /// 6. Project `CLAUDE.local.md` (gitignored, personal instructions)
+    /// 7. Project `SHANNON.md`
+    /// 8. Parent directory `CLAUDE.md`/`SHANNON.md` files (walking up to root)
     pub fn load_merged(&self) -> Result<MergedMemory, ProjectMemoryError> {
         let mut sources: Vec<MemorySource> = Vec::new();
         let mut merged_instructions: Vec<String> = Vec::new();
         let mut merged_metadata = ProjectMemoryMetadata::default();
 
-        // 1. Global CLAUDE.md
+        let mut try_add = |path: PathBuf| {
+            if let Some(source) = try_load_source(&path) {
+                if !source.config.instructions.is_empty() {
+                    merged_instructions.push(source.config.instructions.clone());
+                }
+                merged_metadata = merge_metadata(merged_metadata.clone(), source.config.metadata.clone());
+                sources.push(source);
+            }
+        };
+
+        // Global paths (both .claude/ and .shannon/)
         if let Some(home) = dirs_home() {
-            let global_claude = home.join(".shannon").join("CLAUDE.md");
-            if global_claude.exists() {
-                if let Ok(config) = self.parse_memory_file(&global_claude) {
-                    if !config.instructions.is_empty() {
-                        merged_instructions.push(config.instructions.clone());
-                    }
-                    merged_metadata = merge_metadata(merged_metadata, config.metadata.clone());
-                    sources.push(MemorySource {
-                        path: global_claude,
-                        config,
-                    });
-                }
-            }
-
-            // 2. Global SHANNON.md
-            let global_shannon = home.join(".shannon").join("SHANNON.md");
-            if global_shannon.exists() {
-                if let Ok(config) = self.parse_memory_file(&global_shannon) {
-                    if !config.instructions.is_empty() {
-                        merged_instructions.push(config.instructions.clone());
-                    }
-                    merged_metadata = merge_metadata(merged_metadata, config.metadata.clone());
-                    sources.push(MemorySource {
-                        path: global_shannon,
-                        config,
-                    });
-                }
-            }
+            try_add(home.join(".claude").join("CLAUDE.md"));
+            try_add(home.join(".shannon").join("CLAUDE.md"));
+            try_add(home.join(".shannon").join("SHANNON.md"));
         }
 
-        // 3. Project CLAUDE.md
-        let project_claude = self.base_dir.join("CLAUDE.md");
-        if project_claude.exists() {
-            if let Ok(config) = self.parse_memory_file(&project_claude) {
-                if !config.instructions.is_empty() {
-                    merged_instructions.push(config.instructions.clone());
-                }
-                merged_metadata = merge_metadata(merged_metadata, config.metadata.clone());
-                sources.push(MemorySource {
-                    path: project_claude,
-                    config,
-                });
-            }
-        }
+        // Project paths
+        try_add(self.base_dir.join(".claude").join("CLAUDE.md"));
+        try_add(self.base_dir.join("CLAUDE.md"));
+        try_add(self.base_dir.join("CLAUDE.local.md"));
+        try_add(self.base_dir.join("SHANNON.md"));
 
-        // 4. Project SHANNON.md
-        let project_shannon = self.base_dir.join("SHANNON.md");
-        if project_shannon.exists() {
-            if let Ok(config) = self.parse_memory_file(&project_shannon) {
-                if !config.instructions.is_empty() {
-                    merged_instructions.push(config.instructions.clone());
-                }
-                merged_metadata = merge_metadata(merged_metadata, config.metadata.clone());
-                sources.push(MemorySource {
-                    path: project_shannon,
-                    config,
-                });
-            }
+        // Parent directories (walking up from base_dir, root-first order)
+        let mut parents: Vec<PathBuf> = Vec::new();
+        let mut cur = self.base_dir.parent().map(|p| p.to_path_buf());
+        while let Some(p) = cur.take() {
+            parents.push(p.clone());
+            cur = p.parent().map(|q| q.to_path_buf());
+        }
+        parents.reverse(); // root-first so closer dirs come last (higher priority)
+        for p in parents {
+            try_add(p.join("CLAUDE.md"));
+            try_add(p.join("SHANNON.md"));
         }
 
         Ok(MergedMemory {
@@ -434,6 +412,147 @@ fn merge_metadata(base: ProjectMemoryMetadata, later: ProjectMemoryMetadata) -> 
     }
 }
 
+/// Try to load and parse a memory file at the given path.
+/// Returns None if the file doesn't exist or can't be parsed.
+fn try_load_source(path: &Path) -> Option<MemorySource> {
+    if !path.exists() {
+        return None;
+    }
+    let content = std::fs::read_to_string(path).ok()?;
+    let parent = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let manager = ProjectMemoryManager::new(parent);
+    let config = manager.parse_memory_file_content(&content, path).ok()?;
+    Some(MemorySource {
+        path: path.to_path_buf(),
+        config,
+    })
+}
+
+/// Load MEMORY.md index file (first 200 lines).
+/// Searches project root, .claude/, and .shannon/ directories.
+/// Returns None if no MEMORY.md is found.
+pub fn load_memory_index(dir: &Path) -> Option<String> {
+    let paths = [
+        dir.join("MEMORY.md"),
+        dir.join(".claude").join("MEMORY.md"),
+        dir.join(".shannon").join("MEMORY.md"),
+    ];
+
+    for path in &paths {
+        if path.exists() {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                let lines: Vec<&str> = content.lines().take(200).collect();
+                let truncated = lines.join("\n");
+                if !truncated.trim().is_empty() {
+                    return Some(format!("=== Memory Index (MEMORY.md) ===\n\n{truncated}"));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Resolve `@import` directives in content.
+///
+/// Supports patterns like `@README`, `@docs/guide.md`, `@CONTRIBUTING`.
+/// Lines starting with `@` followed by a path-like string (no spaces, no `@`,
+/// no `:`, not starting with `/`) are treated as imports.
+///
+/// If the imported file can't be found, the original line is kept as-is.
+pub fn resolve_imports(content: &str, base_dir: &Path) -> String {
+    let mut result = String::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(import_path) = trimmed.strip_prefix('@') {
+            // Only treat as import if it looks like a file path
+            if !import_path.contains(' ')
+                && !import_path.contains('@')
+                && !import_path.contains(':')
+                && !import_path.starts_with('/')
+            {
+                let candidates = if import_path.contains('.') {
+                    vec![import_path.to_string()]
+                } else {
+                    vec![
+                        import_path.to_string(),
+                        format!("{import_path}.md"),
+                        format!("{import_path}.txt"),
+                    ]
+                };
+
+                let mut resolved = false;
+                for candidate in &candidates {
+                    let full_path = base_dir.join(candidate);
+                    if full_path.exists() {
+                        if let Ok(imported) = std::fs::read_to_string(&full_path) {
+                            result.push_str(&imported);
+                            result.push('\n');
+                            resolved = true;
+                            break;
+                        }
+                    }
+                }
+
+                if !resolved {
+                    result.push_str(line);
+                    result.push('\n');
+                }
+                continue;
+            }
+        }
+        result.push_str(line);
+        result.push('\n');
+    }
+
+    result
+}
+
+/// Save a memory entry as a file in the project memory directory.
+///
+/// Writes to `~/.shannon/projects/<project_hash>/memory/<id>.md` for
+/// Claude Code-compatible file-based auto-memory.
+///
+/// Returns the path where the file was saved, or an error.
+pub fn save_memory_file(project_dir: &Path, id: &str, content: &str) -> std::io::Result<PathBuf> {
+    let memory_dir = project_memory_dir(project_dir);
+    std::fs::create_dir_all(&memory_dir)?;
+
+    // Use first 8 chars of id as filename, sanitized
+    let safe_id: String = id.chars()
+        .take(8)
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    let filename = format!("{safe_id}.md");
+    let path = memory_dir.join(&filename);
+
+    // Write with YAML frontmatter
+    let file_content = format!(
+        "---\nid: {id}\ndate: {}\n---\n\n{content}",
+        chrono::Utc::now().to_rfc3339()
+    );
+    std::fs::write(&path, file_content)?;
+
+    Ok(path)
+}
+
+/// Get the project memory directory path.
+///
+/// Returns `~/.shannon/projects/<project_hash>/memory/`.
+/// The project hash is derived from the project directory path.
+pub fn project_memory_dir(project_dir: &Path) -> PathBuf {
+    use std::hash::{Hash, Hasher};
+    use std::collections::hash_map::DefaultHasher;
+
+    let mut hasher = DefaultHasher::new();
+    project_dir.hash(&mut hasher);
+    let hash = format!("{:016x}", hasher.finish());
+
+    dirs_home()
+        .map(|h| h.join(".shannon").join("projects").join(&hash).join("memory"))
+        .unwrap_or_else(|| PathBuf::from(".shannon/projects").join(&hash).join("memory"))
+}
+
 /// Attempt to resolve the user's home directory.
 fn dirs_home() -> Option<PathBuf> {
     std::env::var("HOME")
@@ -452,6 +571,7 @@ pub type ClaudeMdError = ProjectMemoryError;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn test_parse_memory_file_without_frontmatter() {
@@ -564,5 +684,109 @@ Another instruction"#;
         assert_eq!(merged.temperature, Some(0.5)); // inherited from base
         assert!(merged.disable_auto_memory);
         assert_eq!(merged.max_tokens, Some(4096));
+    }
+
+    #[test]
+    fn test_load_merged_finds_claude_paths() {
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        let claude_dir = tmp.join(".claude");
+        fs::create_dir_all(&claude_dir).unwrap();
+        fs::write(tmp.join("CLAUDE.md"), "Root CLAUDE.md instructions").unwrap();
+        fs::write(claude_dir.join("CLAUDE.md"), "Hidden claude dir instructions").unwrap();
+        fs::write(tmp.join("CLAUDE.local.md"), "Local gitignored instructions").unwrap();
+        fs::write(tmp.join("SHANNON.md"), "Shannon project instructions").unwrap();
+
+        let manager = ProjectMemoryManager::new(tmp.clone());
+        let result = manager.load_merged().unwrap();
+
+        assert!(!result.sources.is_empty(), "Should find at least some sources");
+        assert!(result.instructions.contains("Root CLAUDE.md"), "Should contain root CLAUDE.md");
+        assert!(result.instructions.contains("Hidden claude dir"), "Should contain .claude/CLAUDE.md");
+        assert!(result.instructions.contains("Local gitignored"), "Should contain CLAUDE.local.md");
+        assert!(result.instructions.contains("Shannon project"), "Should contain SHANNON.md");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_load_memory_index() {
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+
+        // No MEMORY.md → returns None
+        assert!(load_memory_index(&tmp).is_none());
+
+        // With MEMORY.md
+        let content: Vec<String> = (0..300).map(|i| format!("Line {i}")).collect();
+        fs::write(tmp.join("MEMORY.md"), content.join("\n")).unwrap();
+
+        let result = load_memory_index(&tmp);
+        assert!(result.is_some(), "Should find MEMORY.md");
+        let text = result.unwrap();
+        assert!(text.contains("=== Memory Index"), "Should have header");
+        // Should be truncated to ~200 lines
+        assert!(!text.contains("Line 250"), "Should not contain line 250+");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_resolve_imports() {
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(tmp.join("docs")).unwrap();
+        fs::write(tmp.join("README.md"), "# Readme content").unwrap();
+        fs::write(tmp.join("docs").join("guide.md"), "# Guide content").unwrap();
+
+        // Test @import resolution
+        let content = "Header line\n@README\nMiddle line\n@docs/guide.md\nFooter";
+        let result = resolve_imports(content, &tmp);
+
+        assert!(result.contains("Header line"), "Should keep non-import lines");
+        assert!(result.contains("Readme content"), "Should resolve @README");
+        assert!(result.contains("Middle line"), "Should keep middle lines");
+        assert!(result.contains("Guide content"), "Should resolve @docs/guide.md");
+        assert!(result.contains("Footer"), "Should keep footer");
+        assert!(!result.contains("@README"), "Should not contain @README after resolution");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_resolve_imports_unresolved() {
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+
+        // @nonexistent should be kept as-is
+        let content = "Line one\n@nonexistent_file_xyz\nLine two";
+        let result = resolve_imports(content, &tmp);
+        assert!(result.contains("@nonexistent_file_xyz"), "Unresolved imports kept as-is");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_resolve_imports_skips_non_paths() {
+        let content = "Email: user@example.com\nMention: @someone\nPath: /absolute/path";
+        let result = resolve_imports(content, Path::new("."));
+        assert!(result.contains("user@example.com"), "Should not resolve emails");
+        assert!(result.contains("@someone"), "Should not resolve @mentions");
+    }
+
+    #[test]
+    fn test_try_load_source() {
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+
+        // Nonexistent file
+        assert!(try_load_source(&tmp.join("nonexistent.md")).is_none());
+
+        // Valid file
+        fs::write(tmp.join("test.md"), "Test content").unwrap();
+        let result = try_load_source(&tmp.join("test.md"));
+        assert!(result.is_some(), "Should load valid file");
+        let source = result.unwrap();
+        assert!(source.config.content.contains("Test content"));
+
+        let _ = fs::remove_dir_all(&tmp);
     }
 }

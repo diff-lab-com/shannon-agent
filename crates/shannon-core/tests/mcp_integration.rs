@@ -22,7 +22,7 @@ fn test_mcp_adapter_construction() {
         json!({"type": "object", "properties": {"query": {"type": "string"}}}),
     );
 
-    assert_eq!(adapter.name(), "mcp_test-server");
+    assert_eq!(adapter.name(), "mcp__test-server");
     assert_eq!(adapter.description(), "Test MCP tool");
     assert_eq!(
         adapter.input_schema()["type"],
@@ -46,7 +46,7 @@ fn test_mcp_adapter_with_env() {
         json!({"type": "object"}),
     );
 
-    assert_eq!(adapter.name(), "mcp_env-server");
+    assert_eq!(adapter.name(), "mcp__env-server");
 }
 
 /// Test: McpToolAdapter can be registered in ToolRegistry.
@@ -68,7 +68,7 @@ fn test_mcp_adapter_registration_in_tool_registry() {
 
     // Verify the tool is registered
     let tools = registry.list_tools_info();
-    assert!(tools.iter().any(|t| t.name == "mcp_my-server"), "Tool should be registered as 'mcp_my-server'");
+    assert!(tools.iter().any(|t| t.name == "mcp__my-server"), "Tool should be registered as 'mcp_my-server'");
 }
 
 /// Test: Multiple MCP adapters can be registered.
@@ -90,9 +90,9 @@ fn test_multiple_mcp_adapters_registration() {
     }
 
     let tools = registry.list_tools_info();
-    assert!(tools.iter().any(|t| t.name == "mcp_server-0"));
-    assert!(tools.iter().any(|t| t.name == "mcp_server-1"));
-    assert!(tools.iter().any(|t| t.name == "mcp_server-2"));
+    assert!(tools.iter().any(|t| t.name == "mcp__server-0"));
+    assert!(tools.iter().any(|t| t.name == "mcp__server-1"));
+    assert!(tools.iter().any(|t| t.name == "mcp__server-2"));
 }
 
 /// Test: McpToolAdapter input_schema returns valid JSON Schema.
@@ -144,7 +144,7 @@ fn test_mcp_adapter_with_complex_args() {
         json!({"type": "object"}),
     );
 
-    assert_eq!(adapter.name(), "mcp_complex");
+    assert_eq!(adapter.name(), "mcp__complex");
     assert_eq!(adapter.description(), "Filesystem server");
 }
 
@@ -160,7 +160,7 @@ fn test_mcp_adapter_no_command() {
         json!({"type": "object"}),
     );
 
-    assert_eq!(adapter.name(), "mcp_no-cmd");
+    assert_eq!(adapter.name(), "mcp__no-cmd");
     assert_eq!(adapter.description(), "No command server");
 }
 
@@ -176,8 +176,8 @@ fn test_mcp_adapter_naming_convention() {
         json!({"type": "object"}),
     );
 
-    assert!(adapter.name().starts_with("mcp_"));
-    assert_eq!(adapter.name(), "mcp_my-filesystem-server");
+    assert!(adapter.name().starts_with("mcp__"));
+    assert_eq!(adapter.name(), "mcp__my-filesystem-server");
 }
 
 /// Test: McpToolAdapter with empty args and empty env.
@@ -192,7 +192,7 @@ fn test_mcp_adapter_minimal() {
         json!({"type": "object"}),
     );
 
-    assert_eq!(adapter.name(), "mcp_minimal");
+    assert_eq!(adapter.name(), "mcp__minimal");
     let schema = adapter.input_schema();
     assert_eq!(schema["type"], json!("object"));
 }

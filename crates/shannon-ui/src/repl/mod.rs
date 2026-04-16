@@ -358,12 +358,33 @@ impl Repl {
             base_engine.with_memory(mem_store)
         };
 
-        // Auto-load project instructions (CLAUDE.md, AGENTS.md, GEMINI.md) + git context
-        if let Some(instructions) = std::env::current_dir()
-            .ok()
-            .and_then(|dir| shannon_core::project_instructions::load_full_context(&dir))
+        // Auto-load project instructions (Claude Code compatible hierarchy)
         {
-            query_engine.append_system_prompt(&instructions.content);
+            let cwd = std::env::current_dir().unwrap_or_default();
+
+            // 1. Load full CLAUDE.md hierarchy (global → project → parents)
+            let mem_manager = shannon_core::project_memory::ProjectMemoryManager::new(cwd.clone());
+            if let Ok(merged) = mem_manager.load_merged() {
+                if !merged.instructions.is_empty() {
+                    let resolved = shannon_core::project_memory::resolve_imports(
+                        &merged.instructions, &cwd,
+                    );
+                    query_engine.append_system_prompt(&format!(
+                        "# Project Instructions\n\n{resolved}"
+                    ));
+                }
+                tracing::info!("Loaded {} project memory source(s)", merged.sources.len());
+            }
+
+            // 2. Load MEMORY.md index (first 200 lines)
+            if let Some(memory_content) = shannon_core::project_memory::load_memory_index(&cwd) {
+                query_engine.append_system_prompt(&memory_content);
+            }
+
+            // 3. Load git context (branch, recent commits, status)
+            if let Some(git_ctx) = shannon_core::project_instructions::git_context(&cwd) {
+                query_engine.append_system_prompt(&git_ctx);
+            }
         }
 
         // Create permission request channel
@@ -445,6 +466,21 @@ impl Repl {
 
         self.running = true;
 
+        // Fire SessionStart hooks (Claude Code compatible lifecycle)
+        if let Some(ref engine) = self.query_engine {
+            let session_id = engine.session_id().to_string();
+            let hook_mgr = engine.hook_manager();
+            let event = shannon_core::hooks::HookEvent::SessionStart {
+                session_id: session_id.clone(),
+            };
+            self.runtime.block_on(async {
+                let mgr = hook_mgr.read().await;
+                if let Err(e) = mgr.run_hooks(&event).await {
+                    tracing::debug!("SessionStart hook error: {e}");
+                }
+            });
+        }
+
         // Show welcome message rendered through the markdown renderer
         let welcome_md = self.renderer.render_markdown(
             "# Welcome to Shannon!\n\nType your message and press **Enter**. Type `/help` for commands."
@@ -481,6 +517,21 @@ impl Repl {
             if let Some(event) = self.events.next()? {
                 self.handle_event(event);
             }
+        }
+
+        // Fire SessionEnd hooks before shutting down
+        if let Some(ref engine) = self.query_engine {
+            let session_id = engine.session_id().to_string();
+            let hook_mgr = engine.hook_manager();
+            let event = shannon_core::hooks::HookEvent::SessionEnd {
+                session_id: session_id.clone(),
+            };
+            self.runtime.block_on(async {
+                let mgr = hook_mgr.read().await;
+                if let Err(e) = mgr.run_hooks(&event).await {
+                    tracing::debug!("SessionEnd hook error: {e}");
+                }
+            });
         }
 
         // Restore terminal

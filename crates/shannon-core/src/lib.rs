@@ -85,6 +85,7 @@ pub mod credential_manager;
 pub mod billing;
 pub mod enhanced_suggestions;
 pub mod ui_adapter;
+pub mod sandbox;
 
 // Re-export key types for convenience
 pub use query_engine::{QueryEngine, QueryContext, QueryEvent};

@@ -1458,11 +1458,12 @@ mod hook_manager_tests {
             .to_str()
             .unwrap()
             .ends_with("hooks.json"));
-        // Project config should be .shannon/hooks.json
-        assert_eq!(
-            manager.project_config_path().to_str().unwrap(),
-            ".shannon/hooks.json"
-        );
+        // Project config should be .shannon/hooks.json (now absolute via base_dir)
+        assert!(manager
+            .project_config_path()
+            .to_str()
+            .unwrap()
+            .ends_with(".shannon/hooks.json"));
     }
 
     #[test]

@@ -46,15 +46,38 @@ pub enum PermissionChoice {
 }
 
 /// Approval policy mode controlling how tool execution is authorized.
+///
+/// Compatible with Claude Code's permission modes:
+/// - `default`  → [`Suggest`]:            ask for each new tool use
+/// - `plan`     → [`Plan`]:               plan first, ask before execution
+/// - `auto`     → [`AutoEdit`]:           auto-accept file ops, ask for bash
+/// - `bypassPermissions` → [`BypassPermissions`]: skip all checks
+/// - `dontAsk`  → [`DontAsk`]:            accept everything without prompting
+///
+/// Shannon extensions:
+/// - `full-auto` → [`FullAuto`]:  auto-approve everything except critical
+/// - `readonly`  → [`Readonly`]:  only allow read operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum ApprovalMode {
     /// Ask for confirmation on every tool execution.
+    /// Claude Code alias: "default"
     Suggest,
+    /// Plan mode: AI proposes a plan first, asks for approval before executing.
+    /// Once the plan is approved, individual tool calls are auto-approved.
+    /// Claude Code alias: "plan"
+    Plan,
     /// Auto-approve file operations (edit, write); ask for bash and other risky tools.
+    /// Claude Code alias: "auto"
     #[default]
     AutoEdit,
     /// Auto-approve everything except critical-risk operations.
     FullAuto,
+    /// Skip all permission checks entirely. Use with extreme caution.
+    /// Claude Code alias: "bypassPermissions"
+    BypassPermissions,
+    /// Accept everything without prompting, including critical operations.
+    /// Claude Code alias: "dontAsk"
+    DontAsk,
     /// Only allow read operations — no writes, no bash.
     Readonly,
 }
@@ -62,37 +85,46 @@ pub enum ApprovalMode {
 impl std::fmt::Display for ApprovalMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Suggest => write!(f, "suggest"),
-            Self::AutoEdit => write!(f, "auto-edit"),
+            Self::Suggest => write!(f, "default"),
+            Self::Plan => write!(f, "plan"),
+            Self::AutoEdit => write!(f, "auto"),
             Self::FullAuto => write!(f, "full-auto"),
+            Self::BypassPermissions => write!(f, "bypassPermissions"),
+            Self::DontAsk => write!(f, "dontAsk"),
             Self::Readonly => write!(f, "readonly"),
         }
     }
 }
 
 impl ApprovalMode {
-    /// Parse from string (case-insensitive).
+    /// Parse from string (case-insensitive). Accepts both Shannon and Claude Code names.
     pub fn from_str_ci(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
-            "suggest" | "ask" => Some(Self::Suggest),
-            "auto-edit" | "auto_edit" | "auto" => Some(Self::AutoEdit),
+            "suggest" | "ask" | "default" => Some(Self::Suggest),
+            "plan" => Some(Self::Plan),
+            "auto-edit" | "auto_edit" | "auto" | "acceptedits" => Some(Self::AutoEdit),
             "full-auto" | "full_auto" | "fullauto" => Some(Self::FullAuto),
+            "bypasspermissions" | "bypass_permissions" | "bypass-permissions" => Some(Self::BypassPermissions),
+            "dontask" | "dont_ask" | "dont-ask" => Some(Self::DontAsk),
             "readonly" | "read-only" | "read_only" => Some(Self::Readonly),
             _ => None,
         }
     }
 
-    /// Returns all variant names for display.
+    /// Returns all variant names for display (Claude Code compatible).
     pub fn all_names() -> &'static [&'static str] {
-        &["suggest", "auto-edit", "full-auto", "readonly"]
+        &["default", "plan", "auto", "full-auto", "bypassPermissions", "dontAsk", "readonly"]
     }
 
     /// Description of this mode for help text.
     pub fn description(&self) -> &'static str {
         match self {
             Self::Suggest => "Ask for confirmation on every tool call",
+            Self::Plan => "Plan first, then auto-approve within the approved plan",
             Self::AutoEdit => "Auto-approve file edits; ask for bash/other risky tools",
             Self::FullAuto => "Auto-approve everything except critical operations",
+            Self::BypassPermissions => "Skip all permission checks (dangerous, trusted env only)",
+            Self::DontAsk => "Accept everything without prompting",
             Self::Readonly => "Only allow read operations — no writes, no bash",
         }
     }
@@ -100,7 +132,7 @@ impl ApprovalMode {
     /// Whether a tool should be auto-approved under this mode.
     pub fn should_auto_approve(&self, tool_name: &str, risk_level: RiskLevel) -> bool {
         match self {
-            Self::Suggest => false,
+            Self::Suggest | Self::Plan => false,
             Self::AutoEdit => {
                 // Auto-approve file operations; ask for everything else
                 let is_file_tool = matches!(
@@ -110,6 +142,7 @@ impl ApprovalMode {
                 is_file_tool && risk_level <= RiskLevel::Medium
             }
             Self::FullAuto => risk_level < RiskLevel::Critical,
+            Self::BypassPermissions | Self::DontAsk => true,
             Self::Readonly => false, // handled at a higher level
         }
     }
@@ -424,6 +457,9 @@ pub struct PermissionManager {
 
     /// Current approval policy mode
     approval_mode: ApprovalMode,
+
+    /// Sessions with an approved plan (for Plan mode auto-approval).
+    plan_approved_sessions: HashSet<uuid::Uuid>,
 }
 
 impl PermissionManager {
@@ -437,6 +473,7 @@ impl PermissionManager {
             memory: PermissionMemory::new(),
             classifier: crate::permission_classifier::PermissionClassifier::new(),
             approval_mode: ApprovalMode::default(),
+            plan_approved_sessions: HashSet::new(),
         };
 
         // Register default tool policies for common tools
@@ -627,6 +664,21 @@ impl PermissionManager {
         self.approval_mode = mode;
     }
 
+    /// Approve the plan for a session (enables auto-approve in Plan mode).
+    pub fn approve_plan(&mut self, session_id: uuid::Uuid) {
+        self.plan_approved_sessions.insert(session_id);
+    }
+
+    /// Check if a plan has been approved for a session.
+    pub fn is_plan_approved(&self, session_id: uuid::Uuid) -> bool {
+        self.plan_approved_sessions.contains(&session_id)
+    }
+
+    /// Clear plan approval for a session.
+    pub fn clear_plan_approval(&mut self, session_id: uuid::Uuid) {
+        self.plan_approved_sessions.remove(&session_id);
+    }
+
     /// Create a permission prompt for a tool execution
     pub fn create_permission_prompt(
         &self,
@@ -744,6 +796,7 @@ impl PermissionManager {
     pub fn clear_session(&mut self, session_id: uuid::Uuid) {
         self.session_permissions.remove(&session_id);
         self.memory.clear_session(session_id);
+        self.plan_approved_sessions.remove(&session_id);
     }
 
     /// Classify a tool operation using the PermissionClassifier and check permission.
@@ -759,6 +812,10 @@ impl PermissionManager {
     ) -> Result<Option<PermissionPrompt>, PermissionError> {
         // --- Approval mode overrides ---
         match self.approval_mode {
+            // BypassPermissions / DontAsk: skip all permission checks
+            ApprovalMode::BypassPermissions | ApprovalMode::DontAsk => {
+                return Ok(None);
+            }
             ApprovalMode::Readonly => {
                 // Only allow read-only tools
                 let is_read_tool = matches!(
@@ -774,6 +831,17 @@ impl PermissionManager {
                 return Err(PermissionError::Denied(format!(
                     "Readonly mode: {tool_name} is not a read operation"
                 )));
+            }
+            ApprovalMode::Plan => {
+                // If plan is approved for this session, auto-approve all tools
+                if self.plan_approved_sessions.contains(&session_id) {
+                    return Ok(None);
+                }
+                // Otherwise behave like Suggest — prompt unless always-allowed
+                if self.memory.is_always_allowed(session_id, tool_name) {
+                    return Ok(None);
+                }
+                // Fall through to classifier for risk level and prompt creation
             }
             ApprovalMode::Suggest => {
                 // Always prompt unless always-allowed in memory
@@ -815,7 +883,7 @@ impl PermissionManager {
             }
         }
 
-        // --- Default classifier logic (Suggest mode path) ---
+        // --- Default classifier logic (Suggest / Plan mode path) ---
         let result = self.classifier.classify(tool_name, tool_input);
 
         match result.decision {
@@ -826,7 +894,7 @@ impl PermissionManager {
                 )))
             }
             crate::permission_classifier::RuleDecision::Allow => {
-                // For suggest mode, always prompt
+                // For suggest/plan mode, always prompt
                 self.create_permission_prompt_with_risk(
                     tool_name,
                     tool_input,
@@ -1418,26 +1486,58 @@ mod tests {
 
     #[test]
     fn test_approval_mode_display() {
-        assert_eq!(ApprovalMode::Suggest.to_string(), "suggest");
-        assert_eq!(ApprovalMode::AutoEdit.to_string(), "auto-edit");
+        assert_eq!(ApprovalMode::Suggest.to_string(), "default");
+        assert_eq!(ApprovalMode::Plan.to_string(), "plan");
+        assert_eq!(ApprovalMode::AutoEdit.to_string(), "auto");
         assert_eq!(ApprovalMode::FullAuto.to_string(), "full-auto");
+        assert_eq!(ApprovalMode::BypassPermissions.to_string(), "bypassPermissions");
+        assert_eq!(ApprovalMode::DontAsk.to_string(), "dontAsk");
         assert_eq!(ApprovalMode::Readonly.to_string(), "readonly");
     }
 
     #[test]
     fn test_approval_mode_from_str() {
+        // Claude Code names
+        assert_eq!(ApprovalMode::from_str_ci("default"), Some(ApprovalMode::Suggest));
+        assert_eq!(ApprovalMode::from_str_ci("plan"), Some(ApprovalMode::Plan));
+        assert_eq!(ApprovalMode::from_str_ci("auto"), Some(ApprovalMode::AutoEdit));
+        assert_eq!(ApprovalMode::from_str_ci("bypassPermissions"), Some(ApprovalMode::BypassPermissions));
+        assert_eq!(ApprovalMode::from_str_ci("dontAsk"), Some(ApprovalMode::DontAsk));
+        // Shannon aliases
         assert_eq!(ApprovalMode::from_str_ci("suggest"), Some(ApprovalMode::Suggest));
         assert_eq!(ApprovalMode::from_str_ci("ask"), Some(ApprovalMode::Suggest));
         assert_eq!(ApprovalMode::from_str_ci("auto-edit"), Some(ApprovalMode::AutoEdit));
-        assert_eq!(ApprovalMode::from_str_ci("auto"), Some(ApprovalMode::AutoEdit));
         assert_eq!(ApprovalMode::from_str_ci("full-auto"), Some(ApprovalMode::FullAuto));
         assert_eq!(ApprovalMode::from_str_ci("readonly"), Some(ApprovalMode::Readonly));
+        // Case insensitive
+        assert_eq!(ApprovalMode::from_str_ci("DEFAULT"), Some(ApprovalMode::Suggest));
+        assert_eq!(ApprovalMode::from_str_ci("PLAN"), Some(ApprovalMode::Plan));
+        assert_eq!(ApprovalMode::from_str_ci("AUTO"), Some(ApprovalMode::AutoEdit));
+        // Invalid
         assert_eq!(ApprovalMode::from_str_ci("invalid"), None);
+    }
+
+    #[test]
+    fn test_approval_mode_all_names() {
+        let names = ApprovalMode::all_names();
+        assert!(names.contains(&"default"));
+        assert!(names.contains(&"plan"));
+        assert!(names.contains(&"auto"));
+        assert!(names.contains(&"bypassPermissions"));
+        assert!(names.contains(&"dontAsk"));
+        assert!(names.contains(&"readonly"));
     }
 
     #[test]
     fn test_approval_mode_auto_approve_suggest() {
         let mode = ApprovalMode::Suggest;
+        assert!(!mode.should_auto_approve("edit", RiskLevel::Low));
+        assert!(!mode.should_auto_approve("bash", RiskLevel::Low));
+    }
+
+    #[test]
+    fn test_approval_mode_auto_approve_plan() {
+        let mode = ApprovalMode::Plan;
         assert!(!mode.should_auto_approve("edit", RiskLevel::Low));
         assert!(!mode.should_auto_approve("bash", RiskLevel::Low));
     }
@@ -1465,6 +1565,21 @@ mod tests {
     }
 
     #[test]
+    fn test_approval_mode_auto_approve_bypass_permissions() {
+        let mode = ApprovalMode::BypassPermissions;
+        assert!(mode.should_auto_approve("edit", RiskLevel::Low));
+        assert!(mode.should_auto_approve("bash", RiskLevel::Critical));
+        assert!(mode.should_auto_approve("anything", RiskLevel::Critical));
+    }
+
+    #[test]
+    fn test_approval_mode_auto_approve_dont_ask() {
+        let mode = ApprovalMode::DontAsk;
+        assert!(mode.should_auto_approve("edit", RiskLevel::Low));
+        assert!(mode.should_auto_approve("bash", RiskLevel::Critical));
+    }
+
+    #[test]
     fn test_set_and_get_approval_mode() {
         let mut mgr = PermissionManager::new();
         assert_eq!(mgr.approval_mode(), ApprovalMode::AutoEdit);
@@ -1472,6 +1587,12 @@ mod tests {
         assert_eq!(mgr.approval_mode(), ApprovalMode::FullAuto);
         mgr.set_approval_mode(ApprovalMode::Readonly);
         assert_eq!(mgr.approval_mode(), ApprovalMode::Readonly);
+        mgr.set_approval_mode(ApprovalMode::Plan);
+        assert_eq!(mgr.approval_mode(), ApprovalMode::Plan);
+        mgr.set_approval_mode(ApprovalMode::BypassPermissions);
+        assert_eq!(mgr.approval_mode(), ApprovalMode::BypassPermissions);
+        mgr.set_approval_mode(ApprovalMode::DontAsk);
+        assert_eq!(mgr.approval_mode(), ApprovalMode::DontAsk);
     }
 
     #[test]
@@ -1488,5 +1609,121 @@ mod tests {
         // Write tools should be denied
         let result = mgr.classify_and_check(sid, "bash", &serde_json::json!({"command": "ls"}));
         assert!(result.is_err());
+    }
+
+    // --- New permission mode tests ---
+
+    #[test]
+    fn test_bypass_permissions_skips_all_checks() {
+        let mut mgr = PermissionManager::new();
+        mgr.set_approval_mode(ApprovalMode::BypassPermissions);
+        let sid = Uuid::new_v4();
+
+        // Even critical-risk bash commands should be auto-approved
+        let result = mgr.classify_and_check(
+            sid,
+            "Bash",
+            &serde_json::json!({"command": "rm -rf /"}),
+        );
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none()); // no prompt needed
+    }
+
+    #[test]
+    fn test_dont_ask_accepts_everything() {
+        let mut mgr = PermissionManager::new();
+        mgr.set_approval_mode(ApprovalMode::DontAsk);
+        let sid = Uuid::new_v4();
+
+        let result = mgr.classify_and_check(
+            sid,
+            "Bash",
+            &serde_json::json!({"command": "anything dangerous"}),
+        );
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_plan_mode_without_approval_prompts() {
+        let mut mgr = PermissionManager::new();
+        mgr.set_approval_mode(ApprovalMode::Plan);
+        let sid = Uuid::new_v4();
+
+        // Without plan approval, should prompt like Suggest mode
+        let result = mgr.classify_and_check(
+            sid,
+            "SomeTool",
+            &serde_json::json!({"arg": "val"}),
+        );
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_some()); // prompt needed
+    }
+
+    #[test]
+    fn test_plan_mode_with_approval_auto_approves() {
+        let mut mgr = PermissionManager::new();
+        mgr.set_approval_mode(ApprovalMode::Plan);
+        let sid = Uuid::new_v4();
+        mgr.approve_plan(sid);
+
+        // With plan approval, all tools should be auto-approved
+        let result = mgr.classify_and_check(
+            sid,
+            "Bash",
+            &serde_json::json!({"command": "cargo build"}),
+        );
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none()); // no prompt needed
+    }
+
+    #[test]
+    fn test_plan_mode_clear_approval() {
+        let mut mgr = PermissionManager::new();
+        mgr.set_approval_mode(ApprovalMode::Plan);
+        let sid = Uuid::new_v4();
+        mgr.approve_plan(sid);
+        assert!(mgr.is_plan_approved(sid));
+
+        mgr.clear_plan_approval(sid);
+        assert!(!mgr.is_plan_approved(sid));
+
+        // Should prompt again after clearing
+        let result = mgr.classify_and_check(
+            sid,
+            "SomeTool",
+            &serde_json::json!({}),
+        );
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_some());
+    }
+
+    #[test]
+    fn test_clear_session_clears_plan_approval() {
+        let mut mgr = PermissionManager::new();
+        mgr.set_approval_mode(ApprovalMode::Plan);
+        let sid = Uuid::new_v4();
+        mgr.approve_plan(sid);
+        assert!(mgr.is_plan_approved(sid));
+
+        mgr.clear_session(sid);
+        assert!(!mgr.is_plan_approved(sid));
+    }
+
+    #[test]
+    fn test_plan_mode_always_allowed_still_works() {
+        let mut mgr = PermissionManager::new();
+        mgr.set_approval_mode(ApprovalMode::Plan);
+        let sid = Uuid::new_v4();
+        // No plan approval, but tool is always-allowed
+        mgr.allow_tool("Read");
+
+        let result = mgr.classify_and_check(
+            sid,
+            "Read",
+            &serde_json::json!({"path": "/tmp/test"}),
+        );
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none()); // auto-allowed via memory
     }
 }

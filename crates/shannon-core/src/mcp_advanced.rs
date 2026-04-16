@@ -24,6 +24,8 @@
 //!     command: Some("node".to_string()),
 //!     args: vec!["server.js".to_string()],
 //!     env: Default::default(),
+//!     url: None,
+//!     headers: Default::default(),
 //!     enabled: true,
 //! };
 //! registry.register(config);
@@ -76,9 +78,14 @@ pub enum McpAdvancedError {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum TransportType {
     /// Standard input/output (subprocess communication)
+    #[serde(rename = "stdio", alias = "Stdio")]
     Stdio,
-    /// HTTP-based transport (SSE or WebSocket)
+    /// HTTP-based transport (streamable HTTP)
+    #[serde(rename = "http", alias = "Http")]
     Http,
+    /// Server-Sent Events transport
+    #[serde(rename = "sse", alias = "Sse")]
+    Sse,
 }
 
 impl std::fmt::Display for TransportType {
@@ -86,6 +93,7 @@ impl std::fmt::Display for TransportType {
         match self {
             TransportType::Stdio => write!(f, "stdio"),
             TransportType::Http => write!(f, "http"),
+            TransportType::Sse => write!(f, "sse"),
         }
     }
 }
@@ -100,7 +108,8 @@ pub struct McpServerConfig {
     /// Unique human-readable name for the server
     pub name: String,
 
-    /// Transport type (stdio or http)
+    /// Transport type (stdio, http, or sse)
+    #[serde(default = "default_transport_stdio")]
     pub transport_type: TransportType,
 
     /// Command to execute (for stdio transport)
@@ -115,13 +124,90 @@ pub struct McpServerConfig {
     #[serde(default)]
     pub env: HashMap<String, String>,
 
+    /// URL for HTTP/SSE transports
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+
+    /// HTTP headers for HTTP/SSE transports
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
+
     /// Whether the server is enabled
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 }
 
+fn default_transport_stdio() -> TransportType {
+    TransportType::Stdio
+}
+
 fn default_enabled() -> bool {
     true
+}
+
+/// Expand environment variables in a server config.
+///
+/// Supports `${VAR}` and `${VAR:-default}` syntax in command, args, env values, url, and headers.
+fn expand_env_vars_in_config(config: &mut McpServerConfig) {
+    if let Some(ref mut cmd) = config.command {
+        *cmd = expand_env_vars(cmd);
+    }
+    for arg in &mut config.args {
+        *arg = expand_env_vars(arg);
+    }
+    for val in config.env.values_mut() {
+        *val = expand_env_vars(val);
+    }
+    if let Some(ref mut url) = config.url {
+        *url = expand_env_vars(url);
+    }
+    for val in config.headers.values_mut() {
+        *val = expand_env_vars(val);
+    }
+}
+
+/// Expand `${VAR}` and `${VAR:-default}` in a string.
+fn expand_env_vars(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '$' && chars.peek() == Some(&'{') {
+            chars.next(); // consume '{'
+            let mut var_name = String::new();
+            let mut default_val = String::new();
+            let mut in_default = false;
+
+            while let Some(c) = chars.next() {
+                if c == '}' {
+                    break;
+                } else if c == ':' && chars.peek() == Some(&'-') {
+                    chars.next(); // consume '-'
+                    in_default = true;
+                } else if in_default {
+                    default_val.push(c);
+                } else {
+                    var_name.push(c);
+                }
+            }
+
+            if !var_name.is_empty() {
+                match std::env::var(&var_name) {
+                    Ok(val) => result.push_str(&val),
+                    Err(_) => {
+                        if !default_val.is_empty() {
+                            result.push_str(&default_val);
+                        }
+                        // If no default and var not set, leave as-is (empty)
+                    }
+                }
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+
+    result
 }
 
 impl McpServerConfig {
@@ -133,18 +219,36 @@ impl McpServerConfig {
             command: Some(command.to_string()),
             args: Vec::new(),
             env: HashMap::new(),
+            url: None,
+            headers: HashMap::new(),
             enabled: true,
         }
     }
 
     /// Create a new HTTP-based server configuration.
-    pub fn new_http(name: &str) -> Self {
+    pub fn new_http(name: &str, url: &str) -> Self {
         Self {
             name: name.to_string(),
             transport_type: TransportType::Http,
             command: None,
             args: Vec::new(),
             env: HashMap::new(),
+            url: Some(url.to_string()),
+            headers: HashMap::new(),
+            enabled: true,
+        }
+    }
+
+    /// Create a new SSE-based server configuration.
+    pub fn new_sse(name: &str, url: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            transport_type: TransportType::Sse,
+            command: None,
+            args: Vec::new(),
+            env: HashMap::new(),
+            url: Some(url.to_string()),
+            headers: HashMap::new(),
             enabled: true,
         }
     }
@@ -161,6 +265,15 @@ impl McpServerConfig {
             return Err(McpAdvancedError::InvalidConfig(
                 "Stdio transport requires a command".to_string(),
             ));
+        }
+
+        if matches!(self.transport_type, TransportType::Http | TransportType::Sse)
+            && self.url.is_none()
+        {
+            return Err(McpAdvancedError::InvalidConfig(format!(
+                "{:?} transport requires a URL",
+                self.transport_type
+            )));
         }
 
         if let Some(ref cmd) = self.command {
@@ -716,6 +829,103 @@ impl McpServerRegistry {
         Ok(())
     }
 
+    /// Load from Claude Code format: `{"mcpServers": {"name": {...}, ...}}`.
+    ///
+    /// Each entry maps to an `McpServerConfig`. The `type` field determines
+    /// transport (default: stdio). If `command` is present, transport is stdio.
+    /// If `url` is present with `type: "http"` or `type: "sse"`, that transport is used.
+    pub fn load_from_mcp_json_value(&mut self, json: &serde_json::Value) -> usize {
+        let servers_map = match json.get("mcpServers").and_then(|v| v.as_object()) {
+            Some(map) => map,
+            None => return 0,
+        };
+
+        let mut count = 0usize;
+        for (name, config_val) in servers_map {
+            match Self::parse_claude_code_server(name, config_val) {
+                Ok(mut config) => {
+                    expand_env_vars_in_config(&mut config);
+                    let config_name = config.name.clone();
+                    if self.servers.contains_key(&config_name) {
+                        if self.update(&config_name, config).is_ok() {
+                            count += 1;
+                        }
+                    } else if self.register(config).is_ok() {
+                        count += 1;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Skipping MCP server '{}': {}", name, e);
+                }
+            }
+        }
+        count
+    }
+
+    /// Parse a single Claude Code MCP server entry into `McpServerConfig`.
+    fn parse_claude_code_server(
+        name: &str,
+        val: &serde_json::Value,
+    ) -> Result<McpServerConfig, McpAdvancedError> {
+        let transport_type = match val.get("type").and_then(|v| v.as_str()) {
+            Some("http") => TransportType::Http,
+            Some("sse") => TransportType::Sse,
+            _ => {
+                // Default: stdio if command is present, otherwise http if url is present
+                if val.get("command").is_some() {
+                    TransportType::Stdio
+                } else if val.get("url").is_some() {
+                    TransportType::Http
+                } else {
+                    TransportType::Stdio
+                }
+            }
+        };
+
+        let command = val.get("command").and_then(|v| v.as_str()).map(String::from);
+        let args = val
+            .get("args")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let env = val
+            .get("env")
+            .and_then(|v| v.as_object())
+            .map(|obj| {
+                obj.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let url = val.get("url").and_then(|v| v.as_str()).map(String::from);
+        let headers = val
+            .get("headers")
+            .and_then(|v| v.as_object())
+            .map(|obj| {
+                obj.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let config = McpServerConfig {
+            name: name.to_string(),
+            transport_type,
+            command,
+            args,
+            env,
+            url,
+            headers,
+            enabled: true,
+        };
+        config.validate()?;
+        Ok(config)
+    }
+
     /// Export all server configurations as a JSON array.
     pub fn export_to_json(&self) -> serde_json::Value {
         let configs: Vec<&McpServerConfig> = self.list_servers();
@@ -724,54 +934,93 @@ impl McpServerRegistry {
 
     /// Load server configurations from default file paths.
     ///
-    /// Searches (in order, later wins):
-    ///   1. `~/.shannon/mcp_servers.json` — global user config
-    ///   2. `.shannon/mcp_servers.json` — project-local config
+    /// Searches (in order of priority, later overrides earlier):
     ///
-    /// Returns the number of servers loaded. Malformed entries are logged and
-    /// skipped so the application doesn't crash.
+    /// **Legacy Shannon paths** (flat JSON array format):
+    ///   1. `~/.shannon/mcp_servers.json` — global user config
+    ///
+    /// **Claude Code compatible paths** (later wins):
+    ///   2. `~/.claude/settings.json` — user-level (mcpServers key)
+    ///   3. `.claude/settings.json` — project-level (mcpServers key)
+    ///   4. `.claude/settings.local.json` — project local (mcpServers key)
+    ///   5. `.mcp.json` — project-level MCP config (Claude Code standard)
+    ///   6. `.shannon/settings.json` — Shannon project-level (mcpServers key)
+    ///   7. `.shannon/mcp_servers.json` — Shannon project-local (flat array)
+    ///
+    /// Returns the number of servers loaded.
     pub fn load_from_default_paths(&mut self) -> usize {
-        let mut count = 0usize;
+        self.load_from_default_paths_with_base(std::path::PathBuf::from("."))
+    }
 
-        let paths: Vec<std::path::PathBuf> = {
-            let mut p = Vec::new();
-            // Global: ~/.shannon/mcp_servers.json
-            if let Some(home) = dirs::home_dir() {
-                p.push(home.join(".shannon").join("mcp_servers.json"));
+    /// Same as [`load_from_default_paths`] but with an explicit project base directory.
+    pub fn load_from_default_paths_with_base(&mut self, base: std::path::PathBuf) -> usize {
+        let mut count = 0usize;
+        let home = dirs::home_dir();
+
+        // Helper: load a JSON file and try both array and mcpServers formats
+        let try_load_file = |path: &std::path::PathBuf| -> Option<serde_json::Value> {
+            if !path.exists() {
+                return None;
             }
-            // Project-local: .shannon/mcp_servers.json
-            p.push(std::path::PathBuf::from(".shannon/mcp_servers.json"));
+            match std::fs::read_to_string(path) {
+                Ok(content) => serde_json::from_str(&content).ok(),
+                Err(e) => {
+                    tracing::warn!("Cannot read MCP config {:?}: {}", path, e);
+                    None
+                }
+            }
+        };
+
+        // Phase 1: Legacy Shannon flat-array format (lowest priority)
+        if let Some(ref home) = home {
+            let legacy_global = home.join(".shannon").join("mcp_servers.json");
+            if let Some(json) = try_load_file(&legacy_global) {
+                let before = self.count();
+                if json.is_array() {
+                    let _ = self.load_from_json(json);
+                } else {
+                    // Also try mcpServers key for backward compat
+                    self.load_from_mcp_json_value(&json);
+                }
+                let loaded = self.count().saturating_sub(before);
+                if loaded > 0 {
+                    tracing::info!("Loaded {} MCP server(s) from {:?}", loaded, legacy_global);
+                    count += loaded;
+                }
+            }
+        }
+
+        // Phase 2: Claude Code compatible paths (increasing priority)
+        let claude_code_paths: Vec<std::path::PathBuf> = {
+            let mut p = Vec::new();
+            // User-level: ~/.claude/settings.json
+            if let Some(ref home) = home {
+                p.push(home.join(".claude").join("settings.json"));
+            }
+            // Project-level settings
+            p.push(base.join(".claude").join("settings.json"));
+            p.push(base.join(".claude").join("settings.local.json"));
+            p.push(base.join(".shannon").join("settings.json"));
+            // .mcp.json (Claude Code project standard)
+            p.push(base.join(".mcp.json"));
+            // Shannon project-local (highest priority)
+            p.push(base.join(".shannon").join("mcp_servers.json"));
             p
         };
 
-        for path in &paths {
-            if !path.exists() {
-                continue;
-            }
-            match std::fs::read_to_string(path) {
-                Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
-                    Ok(json) => {
-                        let before = self.count();
-                        if let Err(e) = self.load_from_json(json) {
-                            tracing::warn!("MCP config error in {:?}: {}", path, e);
-                            continue;
-                        }
-                        let loaded = self.count().saturating_sub(before);
-                        if loaded > 0 {
-                            tracing::info!(
-                                "Loaded {} MCP server(s) from {:?}",
-                                loaded,
-                                path
-                            );
-                            count += loaded;
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("Invalid JSON in {:?}: {}", path, e);
-                    }
-                },
-                Err(e) => {
-                    tracing::warn!("Cannot read {:?}: {}", path, e);
+        for path in &claude_code_paths {
+            if let Some(json) = try_load_file(path) {
+                let before = self.count();
+                // Try mcpServers key first (Claude Code format)
+                let loaded_mcp = self.load_from_mcp_json_value(&json);
+                // If no mcpServers, try flat array (Shannon legacy)
+                if loaded_mcp == 0 && json.is_array() {
+                    let _ = self.load_from_json(json);
+                }
+                let loaded = self.count().saturating_sub(before);
+                if loaded > 0 {
+                    tracing::info!("Loaded {} MCP server(s) from {:?}", loaded, path);
+                    count += loaded;
                 }
             }
         }
@@ -802,10 +1051,11 @@ mod tests {
 
     #[test]
     fn test_http_config_creation() {
-        let config = McpServerConfig::new_http("remote-server");
+        let config = McpServerConfig::new_http("remote-server", "https://example.com/mcp");
         assert_eq!(config.name, "remote-server");
         assert_eq!(config.transport_type, TransportType::Http);
         assert!(config.command.is_none());
+        assert_eq!(config.url.as_deref(), Some("https://example.com/mcp"));
     }
 
     #[test]
@@ -825,6 +1075,8 @@ mod tests {
             command: None,
             args: vec![],
             env: HashMap::new(),
+            url: None,
+            headers: HashMap::new(),
             enabled: true,
         };
         assert!(config.validate().is_err());
@@ -836,12 +1088,14 @@ mod tests {
             command: Some(String::new()),
             args: vec![],
             env: HashMap::new(),
+            url: None,
+            headers: HashMap::new(),
             enabled: true,
         };
         assert!(config.validate().is_err());
 
         // HTTP without command is fine
-        let config = McpServerConfig::new_http("http-ok");
+        let config = McpServerConfig::new_http("http-ok", "https://example.com");
         assert!(config.validate().is_ok());
     }
 
@@ -1111,7 +1365,7 @@ mod tests {
         let mut registry = McpServerRegistry::new();
         registry.register(McpServerConfig::new_stdio("s1", "node")).unwrap();
         registry.register(McpServerConfig::new_stdio("s2", "python")).unwrap();
-        registry.register(McpServerConfig::new_http("s3")).unwrap();
+        registry.register(McpServerConfig::new_http("s3", "https://example.com/mcp")).unwrap();
 
         let stdio = registry.servers_by_transport(&TransportType::Stdio);
         assert_eq!(stdio.len(), 2);
@@ -1160,6 +1414,7 @@ mod tests {
             {
                 "name": "test-http",
                 "transport_type": "Http",
+                "url": "https://mcp.example.com",
                 "enabled": true
             }
         ]);
@@ -1186,5 +1441,189 @@ mod tests {
         // Should update, not duplicate
         assert_eq!(registry.count(), 1);
         assert_eq!(registry.get("existing").unwrap().command, Some("node".to_string()));
+    }
+
+    // ---- Claude Code compatibility tests ----
+
+    #[test]
+    fn test_load_from_mcp_json_stdio() {
+        let mut registry = McpServerRegistry::new();
+        let json = serde_json::json!({
+            "mcpServers": {
+                "filesystem": {
+                    "command": "npx",
+                    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+                    "env": {}
+                }
+            }
+        });
+        let loaded = registry.load_from_mcp_json_value(&json);
+        assert_eq!(loaded, 1);
+        let config = registry.get("filesystem").unwrap();
+        assert_eq!(config.transport_type, TransportType::Stdio);
+        assert_eq!(config.command.as_deref(), Some("npx"));
+        assert_eq!(config.args, vec!["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]);
+    }
+
+    #[test]
+    fn test_load_from_mcp_json_http() {
+        let mut registry = McpServerRegistry::new();
+        let json = serde_json::json!({
+            "mcpServers": {
+                "remote-api": {
+                    "type": "http",
+                    "url": "https://mcp.example.com/api",
+                    "headers": {
+                        "Authorization": "Bearer token123"
+                    }
+                }
+            }
+        });
+        let loaded = registry.load_from_mcp_json_value(&json);
+        assert_eq!(loaded, 1);
+        let config = registry.get("remote-api").unwrap();
+        assert_eq!(config.transport_type, TransportType::Http);
+        assert_eq!(config.url.as_deref(), Some("https://mcp.example.com/api"));
+        assert_eq!(config.headers.get("Authorization").unwrap(), "Bearer token123");
+    }
+
+    #[test]
+    fn test_load_from_mcp_json_sse() {
+        let mut registry = McpServerRegistry::new();
+        let json = serde_json::json!({
+            "mcpServers": {
+                "events": {
+                    "type": "sse",
+                    "url": "https://events.example.com/sse"
+                }
+            }
+        });
+        let loaded = registry.load_from_mcp_json_value(&json);
+        assert_eq!(loaded, 1);
+        let config = registry.get("events").unwrap();
+        assert_eq!(config.transport_type, TransportType::Sse);
+    }
+
+    #[test]
+    fn test_load_from_mcp_json_no_mcp_servers_key() {
+        let mut registry = McpServerRegistry::new();
+        let json = serde_json::json!({"hooks": {"PreToolUse": []}});
+        let loaded = registry.load_from_mcp_json_value(&json);
+        assert_eq!(loaded, 0);
+        assert_eq!(registry.count(), 0);
+    }
+
+    #[test]
+    fn test_load_from_mcp_json_invalid_server_skipped() {
+        let mut registry = McpServerRegistry::new();
+        let json = serde_json::json!({
+            "mcpServers": {
+                "valid": {
+                    "command": "node",
+                    "args": ["server.js"]
+                },
+                "invalid": {
+                    "type": "http"
+                    // Missing required URL
+                }
+            }
+        });
+        let loaded = registry.load_from_mcp_json_value(&json);
+        assert_eq!(loaded, 1); // Only the valid one
+        assert!(registry.contains("valid"));
+        assert!(!registry.contains("invalid"));
+    }
+
+    #[test]
+    fn test_expand_env_vars_simple() {
+        unsafe { std::env::set_var("SHANNON_TEST_VAR", "hello"); }
+        let result = expand_env_vars("prefix_${SHANNON_TEST_VAR}_suffix");
+        assert_eq!(result, "prefix_hello_suffix");
+        unsafe { std::env::remove_var("SHANNON_TEST_VAR"); }
+    }
+
+    #[test]
+    fn test_expand_env_vars_with_default() {
+        unsafe { std::env::remove_var("SHANNON_NONEXISTENT_VAR"); }
+        let result = expand_env_vars("${SHANNON_NONEXISTENT_VAR:-fallback}");
+        assert_eq!(result, "fallback");
+    }
+
+    #[test]
+    fn test_expand_env_vars_no_braces() {
+        let result = expand_env_vars("$NOT_EXPANDED plain text");
+        assert_eq!(result, "$NOT_EXPANDED plain text");
+    }
+
+    #[test]
+    fn test_expand_env_vars_multiple() {
+        unsafe { std::env::set_var("SHANNON_HOST", "example.com"); }
+        unsafe { std::env::set_var("SHANNON_PORT", "8080"); }
+        let result = expand_env_vars("https://${SHANNON_HOST}:${SHANNON_PORT}/path");
+        assert_eq!(result, "https://example.com:8080/path");
+        unsafe { std::env::remove_var("SHANNON_HOST"); }
+        unsafe { std::env::remove_var("SHANNON_PORT"); }
+    }
+
+    #[test]
+    fn test_expand_env_vars_in_config() {
+        unsafe { std::env::set_var("SHANNON_API_KEY", "secret123"); }
+        let mut config = McpServerConfig {
+            name: "test".to_string(),
+            transport_type: TransportType::Http,
+            command: None,
+            args: vec![],
+            env: HashMap::new(),
+            url: Some("https://api.example.com/mcp".to_string()),
+            headers: HashMap::from([
+                ("Authorization".to_string(), "Bearer ${SHANNON_API_KEY}".to_string()),
+            ]),
+            enabled: true,
+        };
+        expand_env_vars_in_config(&mut config);
+        assert_eq!(config.headers.get("Authorization").unwrap(), "Bearer secret123");
+        unsafe { std::env::remove_var("SHANNON_API_KEY"); }
+    }
+
+    #[test]
+    fn test_load_from_settings_with_mcp_servers() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = McpServerRegistry::new();
+
+        // Create .mcp.json in temp dir
+        let mcp_json = serde_json::json!({
+            "mcpServers": {
+                "local-server": {
+                    "command": "node",
+                    "args": ["mcp-server.js"]
+                }
+            }
+        });
+        std::fs::write(
+            dir.path().join(".mcp.json"),
+            serde_json::to_string_pretty(&mcp_json).unwrap(),
+        ).unwrap();
+
+        let loaded = registry.load_from_default_paths_with_base(dir.path().to_path_buf());
+        assert_eq!(loaded, 1);
+        assert!(registry.contains("local-server"));
+    }
+
+    #[test]
+    fn test_transport_type_deserialization_aliases() {
+        // Old format (PascalCase)
+        let old: TransportType = serde_json::from_str("\"Stdio\"").unwrap();
+        assert_eq!(old, TransportType::Stdio);
+
+        // New format (lowercase)
+        let new: TransportType = serde_json::from_str("\"stdio\"").unwrap();
+        assert_eq!(new, TransportType::Stdio);
+
+        // Claude Code format
+        let cc: TransportType = serde_json::from_str("\"http\"").unwrap();
+        assert_eq!(cc, TransportType::Http);
+
+        let sse: TransportType = serde_json::from_str("\"sse\"").unwrap();
+        assert_eq!(sse, TransportType::Sse);
     }
 }

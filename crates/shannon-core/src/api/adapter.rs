@@ -19,8 +19,15 @@ pub fn serialize_request(request: &MessageRequest, provider: &LlmProvider) -> Va
     match provider {
         LlmProvider::Anthropic | LlmProvider::Custom => serde_json::to_value(request)
             .unwrap_or_default(),
-        LlmProvider::OpenAI => serialize_openai_request(request),
+        LlmProvider::OpenAI
+        | LlmProvider::Azure
+        | LlmProvider::Mistral
+        | LlmProvider::DeepSeek
+        | LlmProvider::Groq
+        | LlmProvider::Together => serialize_openai_request(request),
         LlmProvider::Ollama => serialize_ollama_request(request),
+        LlmProvider::Gemini => serialize_gemini_request(request),
+        LlmProvider::Bedrock => serialize_bedrock_request(request),
     }
 }
 
@@ -307,8 +314,15 @@ pub fn normalize_sse_event(
                 )))],
             }
         }
-        LlmProvider::OpenAI => normalize_openai_event(json_str, openai_state),
+        LlmProvider::OpenAI
+        | LlmProvider::Azure
+        | LlmProvider::Mistral
+        | LlmProvider::DeepSeek
+        | LlmProvider::Groq
+        | LlmProvider::Together => normalize_openai_event(json_str, openai_state),
         LlmProvider::Ollama => normalize_ollama_event(json_str),
+        LlmProvider::Gemini => normalize_gemini_event(json_str, openai_state),
+        LlmProvider::Bedrock => normalize_bedrock_event(json_str, openai_state),
     }
 }
 
@@ -388,13 +402,18 @@ pub fn normalize_response(
                 ))
             })
         }
-        LlmProvider::OpenAI => {
+        LlmProvider::OpenAI
+        | LlmProvider::Azure
+        | LlmProvider::Mistral
+        | LlmProvider::DeepSeek
+        | LlmProvider::Groq
+        | LlmProvider::Together => {
             let resp: OpenAiMessageResponse = serde_json::from_str(json_str).map_err(|e| {
-                ApiError::InvalidResponse(format!("Failed to parse OpenAI response: {e}"))
+                ApiError::InvalidResponse(format!("Failed to parse OpenAI-compatible response: {e}"))
             })?;
 
             let choice = resp.choices.into_iter().next().ok_or_else(|| {
-                ApiError::InvalidResponse("OpenAI response has no choices".to_string())
+                ApiError::InvalidResponse("Response has no choices".to_string())
             })?;
 
             let mut content = Vec::new();
@@ -479,6 +498,8 @@ pub fn normalize_response(
                 },
             })
         }
+        LlmProvider::Gemini => normalize_gemini_response(json_str),
+        LlmProvider::Bedrock => normalize_bedrock_response(json_str),
     }
 }
 
@@ -741,6 +762,328 @@ fn normalize_ollama_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> 
     }
 
     vec![]
+}
+
+// ── Gemini Request Serialization ────────────────────────────────────────────
+
+/// Build a Google Gemini-compatible request body.
+///
+/// Gemini's `generateContent` endpoint uses a different schema:
+/// - `system` → `systemInstruction.parts[].text`
+/// - Messages → `contents[]` with `role` mapping (user→user, assistant→model)
+/// - Tools → `tools[].functionDeclarations[]`
+/// - `max_tokens` → `generationConfig.maxOutputTokens`
+fn serialize_gemini_request(request: &MessageRequest) -> Value {
+    let mut contents = Vec::new();
+
+    for msg in &request.messages {
+        let gemini_role = match msg.role.as_str() {
+            "assistant" => "model",
+            _ => "user",
+        };
+
+        let text = match &msg.content {
+            super::types::MessageContent::Text(t) => t.clone(),
+            super::types::MessageContent::Blocks(blocks) => blocks
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        };
+
+        contents.push(json!({
+            "role": gemini_role,
+            "parts": [{ "text": text }]
+        }));
+    }
+
+    let mut body = json!({
+        "contents": contents,
+    });
+
+    // System instruction
+    if let Some(ref system) = request.system {
+        body["systemInstruction"] = json!({
+            "parts": [{ "text": system }]
+        });
+    }
+
+    // Generation config
+    let mut gen_config = json!({});
+    if request.max_tokens > 0 {
+        gen_config["maxOutputTokens"] = json!(request.max_tokens);
+    }
+    if let Some(temp) = request.temperature {
+        gen_config["temperature"] = json!(temp);
+    }
+    if let Some(top_p) = request.top_p {
+        gen_config["topP"] = json!(top_p);
+    }
+    if let Some(ref seqs) = request.stop_sequences {
+        gen_config["stopSequences"] = json!(seqs);
+    }
+    if gen_config.as_object().map(|o| !o.is_empty()).unwrap_or(false) {
+        body["generationConfig"] = gen_config;
+    }
+
+    // Tools
+    if let Some(ref tools) = request.tools {
+        let func_decls: Vec<Value> = tools
+            .iter()
+            .map(|t| {
+                json!({
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": t.input_schema,
+                })
+            })
+            .collect();
+        body["tools"] = json!([{ "functionDeclarations": func_decls }]);
+    }
+
+    body
+}
+
+// ── Bedrock Request Serialization ────────────────────────────────────────────
+
+/// Build an AWS Bedrock-compatible request body.
+///
+/// Bedrock's converse API uses the Anthropic-like schema for Claude models
+/// but supports a simplified OpenAI-like format for other models.
+/// We serialize to the Anthropic format since that's what Shannon already
+/// produces, and Bedrock's invoke endpoint accepts it for Claude models.
+fn serialize_bedrock_request(request: &MessageRequest) -> Value {
+    // Use Anthropic passthrough format — Bedrock's invoke endpoint for
+    // Claude models accepts the native Anthropic request body.
+    serde_json::to_value(request).unwrap_or_default()
+}
+
+// ── Gemini Response Parsing ─────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct GeminiResponse {
+    candidates: Option<Vec<GeminiCandidate>>,
+    #[serde(default)]
+    #[serde(rename = "usageMetadata")]
+    usage_metadata: Option<GeminiUsageMetadata>,
+}
+
+#[derive(Deserialize)]
+struct GeminiCandidate {
+    content: Option<GeminiContent>,
+    #[serde(default)]
+    #[serde(rename = "finishReason")]
+    finish_reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GeminiContent {
+    #[serde(default)]
+    parts: Vec<GeminiPart>,
+}
+
+#[derive(Deserialize)]
+struct GeminiPart {
+    text: Option<String>,
+    #[serde(default)]
+    #[serde(rename = "functionCall")]
+    function_call: Option<GeminiFunctionCall>,
+}
+
+#[derive(Deserialize)]
+struct GeminiFunctionCall {
+    name: String,
+    args: Option<Value>,
+}
+
+#[derive(Deserialize)]
+struct GeminiUsageMetadata {
+    #[serde(default)]
+    #[serde(rename = "promptTokenCount")]
+    prompt_token_count: Option<u32>,
+    #[serde(default)]
+    #[serde(rename = "candidatesTokenCount")]
+    candidates_token_count: Option<u32>,
+}
+
+fn normalize_gemini_response(
+    json_str: &str,
+) -> Result<super::types::MessageResponse, ApiError> {
+    let resp: GeminiResponse = serde_json::from_str(json_str).map_err(|e| {
+        ApiError::InvalidResponse(format!("Failed to parse Gemini response: {e}"))
+    })?;
+
+    let candidate = resp
+        .candidates
+        .and_then(|c| c.into_iter().next())
+        .ok_or_else(|| {
+            ApiError::InvalidResponse("Gemini response has no candidates".to_string())
+        })?;
+
+    let mut content = Vec::new();
+    let mut tool_idx = 0;
+
+    if let Some(gemini_content) = candidate.content {
+        for part in gemini_content.parts {
+            if let Some(text) = part.text {
+                if !text.is_empty() {
+                    content.push(ContentBlock::Text { text });
+                }
+            }
+            if let Some(fc) = part.function_call {
+                content.push(ContentBlock::ToolUse {
+                    id: format!("gemini_call_{tool_idx}"),
+                    name: fc.name,
+                    input: fc.args.unwrap_or(Value::Null),
+                });
+                tool_idx += 1;
+            }
+        }
+    }
+
+    let stop_reason = candidate.finish_reason.map(|r| match r.as_str() {
+        "STOP" => "end_turn".to_string(),
+        "MAX_TOKENS" => "max_tokens".to_string(),
+        "SAFETY" => "stop".to_string(),
+        other => other.to_lowercase(),
+    });
+
+    Ok(super::types::MessageResponse {
+        id: String::new(),
+        role: "assistant".to_string(),
+        content,
+        model: String::new(),
+        stop_reason,
+        usage: resp
+            .usage_metadata
+            .map(|u| super::types::Usage {
+                input_tokens: u.prompt_token_count.unwrap_or(0),
+                output_tokens: u.candidates_token_count.unwrap_or(0),
+            })
+            .unwrap_or(super::types::Usage {
+                input_tokens: 0,
+                output_tokens: 0,
+            }),
+    })
+}
+
+/// Normalize a Gemini SSE event.
+///
+/// Gemini streaming uses a different format: each chunk is a complete
+/// `generateContentResponse` with incremental content.
+fn normalize_gemini_event(
+    json_str: &str,
+    _state: &mut OpenaiStreamState,
+) -> Vec<Result<StreamEvent, ApiError>> {
+    let resp: GeminiResponse = match serde_json::from_str(json_str) {
+        Ok(r) => r,
+        Err(e) => {
+            return vec![Err(ApiError::InvalidResponse(format!(
+                "Failed to parse Gemini SSE event: {e} (data: {json_str})"
+            )))];
+        }
+    };
+
+    let mut events = Vec::new();
+
+    if let Some(candidates) = resp.candidates {
+        for candidate in candidates {
+            if let Some(gemini_content) = candidate.content {
+                for (idx, part) in gemini_content.parts.into_iter().enumerate() {
+                    if let Some(text) = part.text {
+                        if !text.is_empty() {
+                            events.push(StreamEvent::ContentBlockDelta {
+                                index: idx,
+                                delta: ContentDelta::TextDelta { text },
+                            });
+                        }
+                    }
+                    if let Some(fc) = part.function_call {
+                        events.push(StreamEvent::ContentBlockStart {
+                            index: idx,
+                            content_block: ContentBlock::ToolUse {
+                                id: format!("gemini_call_{idx}"),
+                                name: fc.name,
+                                input: fc.args.unwrap_or(Value::Null),
+                            },
+                        });
+                        events.push(StreamEvent::ContentBlockStop { index: idx });
+                    }
+                }
+            }
+
+            // Finish reason
+            if let Some(reason) = candidate.finish_reason {
+                let stop_reason = match reason.as_str() {
+                    "STOP" => "end_turn".to_string(),
+                    "MAX_TOKENS" => "max_tokens".to_string(),
+                    _ => "stop".to_string(),
+                };
+                events.push(StreamEvent::MessageDelta {
+                    delta: MessageDeltaDelta {
+                        stop_reason: Some(stop_reason),
+                        stop_sequence: None,
+                    },
+                    usage: Usage {
+                        input_tokens: 0,
+                        output_tokens: 0,
+                    },
+                });
+            }
+        }
+    }
+
+    // Usage from final chunk
+    if let Some(usage) = resp.usage_metadata {
+        events.push(StreamEvent::MessageDelta {
+            delta: MessageDeltaDelta {
+                stop_reason: None,
+                stop_sequence: None,
+            },
+            usage: Usage {
+                input_tokens: usage.prompt_token_count.unwrap_or(0),
+                output_tokens: usage.candidates_token_count.unwrap_or(0),
+            },
+        });
+    }
+
+    events.into_iter().map(Ok).collect()
+}
+
+// ── Bedrock Response Parsing ─────────────────────────────────────────────────
+
+/// Normalize a Bedrock non-streaming response.
+///
+/// For Claude models on Bedrock, the response format matches Anthropic's
+/// `MessageResponse` schema, so we parse it directly.
+fn normalize_bedrock_response(
+    json_str: &str,
+) -> Result<super::types::MessageResponse, ApiError> {
+    // Bedrock Claude responses use Anthropic format
+    serde_json::from_str(json_str).map_err(|e| {
+        ApiError::InvalidResponse(format!(
+            "Failed to parse Bedrock response: {e}"
+        ))
+    })
+}
+
+/// Normalize a Bedrock SSE event.
+///
+/// Bedrock streaming for Claude models emits Anthropic-format SSE events,
+/// so we parse them the same way.
+fn normalize_bedrock_event(
+    json_str: &str,
+    _state: &mut OpenaiStreamState,
+) -> Vec<Result<StreamEvent, ApiError>> {
+    match serde_json::from_str::<StreamEvent>(json_str) {
+        Ok(event) => vec![Ok(event)],
+        Err(e) => vec![Err(ApiError::InvalidResponse(format!(
+            "Failed to parse Bedrock SSE event: {e} (data: {json_str})"
+        )))],
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -1396,5 +1739,178 @@ mod tests {
         assert_eq!(content[1]["type"], "image_url");
         let url = content[1]["image_url"]["url"].as_str().unwrap();
         assert!(url.starts_with("data:image/jpeg;base64,/9j/4AAQ"));
+    }
+
+    // -- OpenAI-compatible provider tests --
+
+    #[test]
+    fn test_mistral_serialize_uses_openai_format() {
+        let req = make_request();
+        let val = serialize_request(&req, &LlmProvider::Mistral);
+        assert!(val.get("system").is_none(), "Mistral should use OpenAI format");
+        let messages = val["messages"].as_array().unwrap();
+        assert_eq!(messages[0]["role"], "system");
+    }
+
+    #[test]
+    fn test_deepseek_serialize_uses_openai_format() {
+        let req = make_request();
+        let val = serialize_request(&req, &LlmProvider::DeepSeek);
+        assert!(val["max_completion_tokens"].is_number());
+    }
+
+    #[test]
+    fn test_groq_serialize_uses_openai_format() {
+        let req = make_request();
+        let val = serialize_request(&req, &LlmProvider::Groq);
+        let tools = val["tools"].as_array().unwrap();
+        assert_eq!(tools[0]["type"], "function");
+    }
+
+    #[test]
+    fn test_together_serialize_uses_openai_format() {
+        let req = make_request();
+        let val = serialize_request(&req, &LlmProvider::Together);
+        assert!(val["messages"].is_array());
+    }
+
+    #[test]
+    fn test_mistral_sse_normalization() {
+        let chunk_json = r#"{"choices":[{"delta":{"content":"bonjour"},"index":0}]}"#;
+        let result = normalize_sse_event(chunk_json, &LlmProvider::Mistral, &mut fresh_state());
+        match &result[0] {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                assert_eq!(delta, &ContentDelta::TextDelta { text: "bonjour".to_string() });
+            }
+            other => panic!("Expected ContentBlockDelta, got {other:?}"),
+        }
+    }
+
+    // -- Gemini serialization tests --
+
+    #[test]
+    fn test_gemini_serialize_system_instruction() {
+        let req = make_request();
+        let val = serialize_gemini_request(&req);
+        assert!(val.get("system").is_none(), "Gemini should not use top-level system");
+        let sys = val["systemInstruction"]["parts"].as_array().unwrap();
+        assert_eq!(sys[0]["text"], "You are helpful.");
+    }
+
+    #[test]
+    fn test_gemini_serialize_contents() {
+        let req = make_request();
+        let val = serialize_gemini_request(&req);
+        let contents = val["contents"].as_array().unwrap();
+        assert_eq!(contents[0]["role"], "user");
+        assert_eq!(contents[0]["parts"][0]["text"], "Hello");
+    }
+
+    #[test]
+    fn test_gemini_serialize_assistant_role_mapping() {
+        let req = MessageRequest {
+            model: "gemini-2.0-flash".to_string(),
+            max_tokens: 1024,
+            system: None,
+            messages: vec![
+                Message { role: "user".to_string(), content: crate::api::types::MessageContent::Text("Hi".to_string()) },
+                Message { role: "assistant".to_string(), content: crate::api::types::MessageContent::Text("Hello!".to_string()) },
+            ],
+            tools: None,
+            stream: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+        };
+        let val = serialize_gemini_request(&req);
+        let contents = val["contents"].as_array().unwrap();
+        assert_eq!(contents[0]["role"], "user");
+        assert_eq!(contents[1]["role"], "model");
+    }
+
+    #[test]
+    fn test_gemini_serialize_generation_config() {
+        let req = make_request();
+        let val = serialize_gemini_request(&req);
+        assert_eq!(val["generationConfig"]["maxOutputTokens"], 4096);
+        let temp = val["generationConfig"]["temperature"].as_f64().unwrap();
+        assert!((temp - 0.7).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_gemini_serialize_tools() {
+        let req = make_request();
+        let val = serialize_gemini_request(&req);
+        let tools = val["tools"].as_array().unwrap();
+        let func_decls = tools[0]["functionDeclarations"].as_array().unwrap();
+        assert_eq!(func_decls[0]["name"], "bash");
+        assert_eq!(func_decls[0]["description"], "Run commands");
+    }
+
+    // -- Gemini response normalization tests --
+
+    #[test]
+    fn test_gemini_normalize_response_text() {
+        let resp = r#"{"candidates":[{"content":{"parts":[{"text":"Hello from Gemini"}],"role":"model"},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5}}"#;
+        let result = normalize_response(resp, &LlmProvider::Gemini).unwrap();
+        assert_eq!(result.role, "assistant");
+        assert_eq!(result.content.len(), 1);
+        assert_eq!(result.stop_reason, Some("end_turn".to_string()));
+        assert_eq!(result.usage.input_tokens, 10);
+        assert_eq!(result.usage.output_tokens, 5);
+    }
+
+    #[test]
+    fn test_gemini_normalize_response_with_tool_calls() {
+        let resp = r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"bash","args":{"command":"ls"}}}],"role":"model"},"finishReason":"STOP"}]}"#;
+        let result = normalize_response(resp, &LlmProvider::Gemini).unwrap();
+        let tool_blocks: Vec<_> = result.content.iter().filter_map(|b| match b {
+            ContentBlock::ToolUse { name, .. } => Some(name.clone()),
+            _ => None,
+        }).collect();
+        assert_eq!(tool_blocks, vec!["bash"]);
+    }
+
+    #[test]
+    fn test_gemini_sse_normalization() {
+        let chunk_json = r#"{"candidates":[{"content":{"parts":[{"text":"hello"}],"role":"model"}}]}"#;
+        let result = normalize_sse_event(chunk_json, &LlmProvider::Gemini, &mut fresh_state());
+        match &result[0] {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                assert_eq!(delta, &ContentDelta::TextDelta { text: "hello".to_string() });
+            }
+            other => panic!("Expected ContentBlockDelta, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_gemini_sse_finish_reason() {
+        let chunk_json = r#"{"candidates":[{"finishReason":"STOP"}]}"#;
+        let result = normalize_sse_event(chunk_json, &LlmProvider::Gemini, &mut fresh_state());
+        let found = result.iter().any(|e| matches!(e, Ok(StreamEvent::MessageDelta { delta, .. }) if delta.stop_reason == Some("end_turn".to_string())));
+        assert!(found, "Expected MessageDelta with end_turn stop_reason");
+    }
+
+    // -- Bedrock tests --
+
+    #[test]
+    fn test_bedrock_serialize_is_anthropic_passthrough() {
+        let req = make_request();
+        let val = serialize_request(&req, &LlmProvider::Bedrock);
+        assert_eq!(val["system"], "You are helpful.");
+        assert_eq!(val["max_tokens"], 4096);
+    }
+
+    #[test]
+    fn test_bedrock_sse_normalization() {
+        let event_json = r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}"#;
+        let result = normalize_sse_event(event_json, &LlmProvider::Bedrock, &mut fresh_state());
+        match &result[0] {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                assert_eq!(delta, &ContentDelta::TextDelta { text: "hi".to_string() });
+            }
+            other => panic!("Expected ContentBlockDelta, got {other:?}"),
+        }
     }
 }

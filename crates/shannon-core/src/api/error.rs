@@ -103,8 +103,13 @@ impl ApiError {
                         };
                     }
                 }
-                LlmProvider::OpenAI => {
-                    // OpenAI: { "error": { "message": "...", "type": "...", "code": "..." } }
+                LlmProvider::OpenAI
+                | LlmProvider::Azure
+                | LlmProvider::Mistral
+                | LlmProvider::DeepSeek
+                | LlmProvider::Groq
+                | LlmProvider::Together => {
+                    // OpenAI-compatible: { "error": { "message": "...", "type": "...", "code": "..." } }
                     if let Some(err_obj) = val.get("error").and_then(|e| e.as_object()) {
                         let error_type = err_obj
                             .get("type")
@@ -129,6 +134,41 @@ impl ApiError {
                         return ApiError::ProviderError {
                             provider: provider_name,
                             error_type: "ollama_error".to_string(),
+                            message: msg.to_string(),
+                        };
+                    }
+                }
+                LlmProvider::Gemini => {
+                    // Gemini: { "error": { "code": ..., "message": "...", "status": "..." } }
+                    if let Some(err_obj) = val.get("error").and_then(|e| e.as_object()) {
+                        let error_type = err_obj
+                            .get("status")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        let message = err_obj
+                            .get("message")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(body)
+                            .to_string();
+                        return ApiError::ProviderError {
+                            provider: provider_name,
+                            error_type,
+                            message,
+                        };
+                    }
+                }
+                LlmProvider::Bedrock => {
+                    // AWS Bedrock: { "message": "..." } or { "message": "...", "type": "..." }
+                    if let Some(msg) = val.get("message").and_then(|v| v.as_str()) {
+                        let error_type = val
+                            .get("type")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("bedrock_error")
+                            .to_string();
+                        return ApiError::ProviderError {
+                            provider: provider_name,
+                            error_type,
                             message: msg.to_string(),
                         };
                     }

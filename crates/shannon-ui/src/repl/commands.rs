@@ -418,6 +418,14 @@ fn handle_remember(repl: &mut Repl, args: &str) -> Result<()> {
     }
     drop(store);
 
+    // Also save as file for Claude Code-compatible auto-memory
+    let project_path = std::path::PathBuf::from(&project);
+    if let Err(e) = shannon_core::project_memory::save_memory_file(
+        &project_path, &id, content,
+    ) {
+        tracing::debug!("File-based memory save skipped: {e}");
+    }
+
     repl.chat.add_message(ChatRole::System, format!("Remembered (id: {}...)", &id[..8]));
     Ok(())
 }
@@ -3183,7 +3191,15 @@ fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
     let result = match strategy {
         CompactStrategy::MicroCompress => compact_engine.micro_compact(&mut messages),
         CompactStrategy::GroupCompress => compact_engine.group_compact(&mut messages),
-        _ => compact_engine.compact(&mut messages),
+        _ => {
+            // Default: 3-tier compaction with re-injection of project context
+            let reinjection = repl.query_engine.as_ref().and_then(|e| {
+                e.system_prompt().map(|sp| {
+                    if sp.len() > 2000 { format!("{}\n[...truncated]", &sp[..2000]) } else { sp }
+                })
+            });
+            compact_engine.compact_tiered(&mut messages, reinjection.as_deref())
+        }
     };
 
     match result {

@@ -30,7 +30,7 @@ pub struct McpToolAdapter {
     description: String,
     /// JSON Schema for the tool input.
     input_schema: Value,
-    /// Tool name in the registry (e.g. "mcp_my-server").
+    /// Tool name in the registry (e.g. "mcp__my-server").
     tool_name: String,
 }
 
@@ -44,7 +44,7 @@ impl McpToolAdapter {
         description: String,
         input_schema: Value,
     ) -> Self {
-        let tool_name = format!("mcp_{server_name}");
+        let tool_name = format!("mcp__{server_name}");
         Self {
             server_name,
             command,
@@ -232,7 +232,7 @@ mod tests {
             "Test MCP server".to_string(),
             serde_json::json!({"type": "object"}),
         );
-        assert_eq!(adapter.name(), "mcp_test-server");
+        assert_eq!(adapter.name(), "mcp__test-server");
     }
 
     #[test]
@@ -320,6 +320,6 @@ mod tests {
         );
         let debug_str = format!("{adapter:?}");
         assert!(debug_str.contains("test"));
-        assert!(debug_str.contains("mcp_test"));
+        assert!(debug_str.contains("mcp__test"));
     }
 }

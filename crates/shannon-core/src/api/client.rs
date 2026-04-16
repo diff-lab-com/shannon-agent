@@ -69,7 +69,12 @@ impl LlmClient {
                     headers.push(("anthropic-version".to_string(), self.config.api_version.clone()));
                 }
             }
-            LlmProvider::OpenAI => {
+            LlmProvider::OpenAI
+            | LlmProvider::Azure
+            | LlmProvider::Mistral
+            | LlmProvider::DeepSeek
+            | LlmProvider::Groq
+            | LlmProvider::Together => {
                 headers.push(("Authorization".to_string(), format!("Bearer {}", self.config.api_key)));
             }
             LlmProvider::Custom => {
@@ -80,6 +85,22 @@ impl LlmClient {
             }
             LlmProvider::Ollama => {
                 // No auth needed
+            }
+            LlmProvider::Gemini => {
+                // Gemini uses API key as query parameter, handled in endpoint URL construction.
+                // However, also set as header for some endpoint styles.
+                headers.push(("x-goog-api-key".to_string(), self.config.api_key.clone()));
+            }
+            LlmProvider::Bedrock => {
+                // Bedrock uses AWS SigV4 auth; for now use Bearer token via extra_headers
+                // or the API key as a session token. Full SigV4 signing would require
+                // an AWS SDK dependency — this supports API-key-based access patterns.
+                for (k, v) in &self.config.extra_headers {
+                    headers.push((k.clone(), v.clone()));
+                }
+                if !self.config.api_key.is_empty() && self.config.extra_headers.is_empty() {
+                    headers.push(("Authorization".to_string(), format!("Bearer {}", self.config.api_key)));
+                }
             }
         }
         headers

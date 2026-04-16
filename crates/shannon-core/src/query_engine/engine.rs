@@ -168,6 +168,11 @@ impl QueryEngine {
         self.config.system_prompt = Some(format!("{current}\n\n{content}"));
     }
 
+    /// Get the current system prompt, if set.
+    pub fn system_prompt(&self) -> Option<String> {
+        self.config.system_prompt.clone()
+    }
+
     /// Attach a memory store to this query engine.
     ///
     /// Enables memory-augmented queries (relevant memories injected into the
@@ -186,6 +191,11 @@ impl QueryEngine {
     /// Get the current session ID
     pub fn session_id(&self) -> Uuid {
         self.session_id
+    }
+
+    /// Access the hook manager for firing lifecycle events (SessionStart, SessionEnd, etc.)
+    pub fn hook_manager(&self) -> Arc<tokio::sync::RwLock<crate::hooks::HookManager>> {
+        self.hook_manager.clone()
     }
 
     /// Restore conversation from a previously saved session
@@ -483,13 +493,25 @@ impl QueryEngine {
                     if estimated_tokens as f32 / max_context as f32 > 0.8 {
                         match crate::compact::CompactEngine::with_defaults() {
                             Ok(mut compact_engine) => {
-                                match compact_engine.compact(&mut messages) {
+                                // Build re-injection context from system prompt
+                                let reinjection = system_prompt.as_deref().map(|sp| {
+                                    // Truncate to avoid bloating the compacted context
+                                    if sp.len() > 2000 {
+                                        format!("{}\n[...truncated]", &sp[..2000])
+                                    } else {
+                                        sp.to_string()
+                                    }
+                                });
+                                match compact_engine.compact_tiered(&mut messages, reinjection.as_deref()) {
                                     Ok(result) => {
                                         let _ = tx.send(Ok(QueryEvent::Progress {
                                             query_id,
                                             message: format!(
-                                                "Context compressed: {} -> {} tokens",
-                                                result.original_tokens, result.compacted_tokens
+                                                "Context compressed (3-tier): {} -> {} tokens ({:.0}% reduction, {} messages compacted)",
+                                                result.original_tokens,
+                                                result.compacted_tokens,
+                                                result.reduction_ratio * 100.0,
+                                                result.messages_compacted,
                                             ),
                                         }));
                                     }

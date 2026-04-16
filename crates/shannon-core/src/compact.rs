@@ -1096,6 +1096,136 @@ impl CompactEngine {
             strategy: CompactStrategy::GroupCompress,
         })
     }
+
+    // ========================================================================
+    // 3-Tier Compaction with Re-injection
+    // ========================================================================
+
+    /// Run 3-tier compaction: micro-compress → summarize old → re-inject context.
+    ///
+    /// Tier 1: Micro-compact individual large messages (>micro_compact_threshold tokens).
+    /// Tier 2: Summarize old conversation turns (keeps recent `keep_recent_count` messages).
+    /// Tier 3: Re-inject a context anchor message summarizing what was compacted
+    ///         so the LLM retains key information about prior work.
+    ///
+    /// The `reinjection_context` string is appended to the context anchor message,
+    /// allowing callers to inject project memory / CLAUDE.md content / git status.
+    pub fn compact_tiered(
+        &mut self,
+        messages: &mut Vec<Message>,
+        reinjection_context: Option<&str>,
+    ) -> Result<CompactResult, CompactError> {
+        if messages.is_empty() {
+            return Err(CompactError::NoMessagesToCompact);
+        }
+
+        let original_tokens = estimate_tokens(messages);
+        if messages.len() <= self.config.keep_recent_count + 1 {
+            return Ok(CompactResult::no_change(CompactStrategy::SummarizeOld, original_tokens));
+        }
+
+        let start = Instant::now();
+        let mut total_micro_compacted = 0usize;
+        let mut total_removed = 0usize;
+
+        // ── Tier 1: Micro-compact large individual messages ──
+        if self.config.enable_micro_compact {
+            for msg in messages.iter_mut() {
+                let tokens = estimate_message_tokens(msg);
+                if tokens > self.config.micro_compact_threshold {
+                    match self.summarizer.micro_summarize(msg, self.config.max_output_tokens) {
+                        Ok(summary) => {
+                            msg.content = MessageContent::Text(format!(
+                                "[Micro-compressed from {} tokens]\n{summary}",
+                                tokens
+                            ));
+                            total_micro_compacted += 1;
+                        }
+                        Err(_) => {
+                            // Truncate as fallback
+                            let text = extract_text_content(msg);
+                            let truncated = truncate_text(&text, self.config.max_output_tokens * 4);
+                            msg.content = MessageContent::Text(format!(
+                                "[Truncated from {} tokens]\n{truncated}",
+                                tokens
+                            ));
+                            total_micro_compacted += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Tier 2: Summarize old conversation turns ──
+        if messages.len() > self.config.keep_recent_count + 1 {
+            let keep_count = self.config.keep_recent_count;
+            let split_point = messages.len().saturating_sub(keep_count);
+
+            // Gather files edited and tools used from old messages for re-injection
+            let (files_touched, tools_used) = extract_compaction_metadata(&messages[..split_point]);
+
+            let old_messages: Vec<Message> = messages[..split_point].to_vec();
+            total_removed = old_messages.len();
+
+            let summary = self.summarizer.summarize(&old_messages, self.config.max_output_tokens)?;
+
+            // Build re-injection anchor
+            let mut anchor_parts = vec![format!(
+                "[Previous conversation compacted - {} messages summarized]",
+                total_removed
+            )];
+            anchor_parts.push(String::new());
+            anchor_parts.push(summary);
+
+            if !files_touched.is_empty() {
+                anchor_parts.push(format!(
+                    "\nFiles touched: {}",
+                    files_touched.iter().take(20).cloned().collect::<Vec<_>>().join(", ")
+                ));
+            }
+            if !tools_used.is_empty() {
+                anchor_parts.push(format!(
+                    "\nTools used: {}",
+                    tools_used.iter().take(10).cloned().collect::<Vec<_>>().join(", ")
+                ));
+            }
+            if let Some(ctx) = reinjection_context {
+                if !ctx.is_empty() {
+                    anchor_parts.push(String::new());
+                    anchor_parts.push("--- Project Context ---".to_string());
+                    anchor_parts.push(ctx.to_string());
+                }
+            }
+
+            let anchor_message = Message {
+                role: "system".to_string(),
+                content: MessageContent::Text(anchor_parts.join("\n")),
+            };
+
+            messages.drain(..split_point);
+            messages.insert(0, anchor_message);
+        }
+
+        // ── Post-compaction cleanup ──
+        self.post_compact_cleanup(messages);
+
+        let compacted_tokens = estimate_tokens(messages);
+        let reduction_ratio = if original_tokens > 0 {
+            1.0 - (compacted_tokens as f32 / original_tokens as f32)
+        } else {
+            0.0
+        };
+
+        Ok(CompactResult {
+            original_tokens,
+            compacted_tokens,
+            reduction_ratio,
+            messages_removed: total_removed,
+            messages_compacted: total_micro_compacted + total_removed,
+            duration: start.elapsed(),
+            strategy: CompactStrategy::SummarizeOld,
+        })
+    }
 }
 
 // ============================================================================
@@ -1250,6 +1380,57 @@ fn contains_tool_result_for(msg: &Message, tool_uses: &[ToolUseInfo]) -> bool {
         }
     }
     false
+}
+
+/// Extract file paths and tool names from messages for re-injection context.
+fn extract_compaction_metadata(messages: &[Message]) -> (HashSet<String>, HashSet<String>) {
+    let mut files = HashSet::new();
+    let mut tools = HashSet::new();
+
+    // Regex-free path extraction: look for common file extensions
+    let extensions = [
+        ".rs", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".java", ".toml",
+        ".json", ".yaml", ".yml", ".md", ".html", ".css", ".sql", ".sh",
+    ];
+
+    for msg in messages {
+        let text = extract_text_content(msg);
+
+        // Extract tool names from ToolUse blocks
+        if let MessageContent::Blocks(blocks) = &msg.content {
+            for block in blocks {
+                if let ContentBlock::ToolUse { name, input, .. } = block {
+                    tools.insert(name.clone());
+                    // Extract file paths from tool input
+                    if let Some(path) = input.get("file_path").and_then(|v| v.as_str()) {
+                        files.insert(path.to_string());
+                    }
+                    if let Some(path) = input.get("path").and_then(|v| v.as_str()) {
+                        files.insert(path.to_string());
+                    }
+                    if let Some(cmd) = input.get("command").and_then(|v| v.as_str()) {
+                        // Quick scan for paths in command strings
+                        for word in cmd.split_whitespace() {
+                            if extensions.iter().any(|ext| word.ends_with(ext)) {
+                                files.insert(word.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Extract file paths from text content
+        for word in text.split_whitespace() {
+            // Clean up surrounding punctuation
+            let cleaned = word.trim_matches(|c: char| c == '"' || c == '\'' || c == '`' || c == ',' || c == ':' || c == ';');
+            if extensions.iter().any(|ext| cleaned.ends_with(ext)) && cleaned.len() < 300 {
+                files.insert(cleaned.to_string());
+            }
+        }
+    }
+
+    (files, tools)
 }
 
 // ============================================================================
@@ -2198,6 +2379,236 @@ mod tests {
         // Recent messages should be preserved
         let last_msg = messages.last().unwrap();
         assert_eq!(last_msg.role, "assistant");
+    }
+
+    // -- compact_tiered (3-tier compaction) --
+
+    #[test]
+    fn test_compact_tiered_empty_messages() {
+        let mut engine = CompactEngine::with_defaults().unwrap();
+        let mut messages: Vec<Message> = vec![];
+        let result = engine.compact_tiered(&mut messages, None);
+        assert!(matches!(result, Err(CompactError::NoMessagesToCompact)));
+    }
+
+    #[test]
+    fn test_compact_tiered_too_few_messages() {
+        let mut engine = CompactEngine::with_defaults().unwrap();
+        let mut messages = vec![user_msg("Hello"), assistant_msg("Hi")];
+        let result = engine.compact_tiered(&mut messages, None).unwrap();
+        // Default keep_recent_count is 10, so 2 messages => no change
+        assert_eq!(result.messages_removed, 0);
+        assert_eq!(messages.len(), 2);
+    }
+
+    #[test]
+    fn test_compact_tiered_basic() {
+        let mut engine = CompactEngine::new(
+            CompactConfig {
+                keep_recent_count: 4,
+                enable_micro_compact: false,
+                ..Default::default()
+            },
+            Box::new(RuleBasedSummarizer::new()),
+        )
+        .unwrap();
+
+        let mut messages: Vec<Message> = vec![];
+        for i in 0..20 {
+            messages.push(user_msg(&format!("User message {i}")));
+            messages.push(assistant_msg(&format!("Response {i}")));
+        }
+        let original_count = messages.len();
+
+        let result = engine.compact_tiered(&mut messages, None).unwrap();
+        assert!(result.messages_removed > 0);
+        assert!(messages.len() < original_count);
+        // First message should be the anchor/summary
+        assert_eq!(messages[0].role, "system");
+        if let MessageContent::Text(t) = &messages[0].content {
+            assert!(t.contains("compacted"));
+        } else {
+            panic!("Expected text content in anchor message");
+        }
+    }
+
+    #[test]
+    fn test_compact_tiered_with_reinjection() {
+        let mut engine = CompactEngine::new(
+            CompactConfig {
+                keep_recent_count: 2,
+                enable_micro_compact: false,
+                ..Default::default()
+            },
+            Box::new(RuleBasedSummarizer::new()),
+        )
+        .unwrap();
+
+        let mut messages: Vec<Message> = vec![];
+        for i in 0..10 {
+            messages.push(user_msg(&format!("Message {i}")));
+            messages.push(assistant_msg(&format!("Reply {i}")));
+        }
+
+        let ctx = "Project: shannon-code\nBuild: cargo build";
+        let result = engine.compact_tiered(&mut messages, Some(ctx)).unwrap();
+        assert!(result.messages_removed > 0);
+
+        // Check re-injection context appears in anchor
+        let anchor = &messages[0];
+        if let MessageContent::Text(t) = &anchor.content {
+            assert!(t.contains("Project Context"));
+            assert!(t.contains("shannon-code"));
+        } else {
+            panic!("Expected text content in anchor");
+        }
+    }
+
+    #[test]
+    fn test_compact_tiered_micro_compact() {
+        let mut engine = CompactEngine::new(
+            CompactConfig {
+                keep_recent_count: 2,
+                enable_micro_compact: true,
+                micro_compact_threshold: 50, // very low threshold
+                ..Default::default()
+            },
+            Box::new(RuleBasedSummarizer::new()),
+        )
+        .unwrap();
+
+        let mut messages: Vec<Message> = vec![];
+        // One very large message that should trigger micro-compact
+        messages.push(user_msg(&"A".repeat(500)));
+        for i in 0..10 {
+            messages.push(user_msg(&format!("Normal message {i}")));
+            messages.push(assistant_msg(&format!("Reply {i}")));
+        }
+
+        let result = engine.compact_tiered(&mut messages, None).unwrap();
+        assert!(result.messages_compacted > 0);
+        // Original first message should be micro-compacted
+        assert!(messages.iter().any(|m| {
+            if let MessageContent::Text(t) = &m.content {
+                t.contains("Micro-compressed") || t.contains("Truncated")
+            } else {
+                false
+            }
+        }));
+    }
+
+    #[test]
+    fn test_compact_tiered_extracts_file_metadata() {
+        let mut engine = CompactEngine::new(
+            CompactConfig {
+                keep_recent_count: 2,
+                enable_micro_compact: false,
+                ..Default::default()
+            },
+            Box::new(RuleBasedSummarizer::new()),
+        )
+        .unwrap();
+
+        let mut messages: Vec<Message> = vec![];
+        messages.push(user_msg("Edit src/main.rs"));
+        messages.push(tool_use_msg("t1", "bash", "cat src/main.rs"));
+        messages.push(tool_result_msg("t1", "fn main() {}"));
+        messages.push(assistant_msg("I see main.rs"));
+        messages.push(user_msg("Also check lib.rs"));
+        messages.push(tool_use_msg("t2", "bash", "cat lib.rs"));
+        messages.push(tool_result_msg("t2", "pub fn foo() {}"));
+        messages.push(assistant_msg("Found foo in lib.rs"));
+        messages.push(user_msg("Recent message"));
+        messages.push(assistant_msg("Recent reply"));
+
+        let result = engine.compact_tiered(&mut messages, None).unwrap();
+        assert!(result.messages_removed > 0);
+
+        let anchor = &messages[0];
+        if let MessageContent::Text(t) = &anchor.content {
+            assert!(t.contains("Files touched"), "Should list files touched: {t}");
+            assert!(t.contains("Tools used"), "Should list tools used: {t}");
+        }
+    }
+
+    #[test]
+    fn test_compact_tiered_empty_reinjection_ignored() {
+        let mut engine = CompactEngine::new(
+            CompactConfig {
+                keep_recent_count: 2,
+                enable_micro_compact: false,
+                ..Default::default()
+            },
+            Box::new(RuleBasedSummarizer::new()),
+        )
+        .unwrap();
+
+        let mut messages: Vec<Message> = vec![];
+        for i in 0..10 {
+            messages.push(user_msg(&format!("Msg {i}")));
+            messages.push(assistant_msg(&format!("Reply {i}")));
+        }
+
+        let _result = engine.compact_tiered(&mut messages, Some("")).unwrap();
+        let anchor = &messages[0];
+        if let MessageContent::Text(t) = &anchor.content {
+            assert!(!t.contains("Project Context"), "Empty reinjection should be ignored");
+        }
+    }
+
+    // -- extract_compaction_metadata --
+
+    #[test]
+    fn test_extract_compaction_metadata_empty() {
+        let (files, tools) = extract_compaction_metadata(&[]);
+        assert!(files.is_empty());
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn test_extract_compaction_metadata_from_tool_use() {
+        let messages = vec![
+            tool_use_msg("t1", "bash", "cat src/main.rs"),
+            tool_use_msg("t2", "edit_file", ""),
+        ];
+        let (files, tools) = extract_compaction_metadata(&messages);
+        assert!(tools.contains("bash"));
+        assert!(tools.contains("edit_file"));
+        assert!(files.contains("src/main.rs"));
+    }
+
+    #[test]
+    fn test_extract_compaction_metadata_from_text() {
+        let messages = vec![
+            user_msg("Look at Cargo.toml and src/lib.rs for details"),
+        ];
+        let (files, _tools) = extract_compaction_metadata(&messages);
+        assert!(files.contains("Cargo.toml"));
+        assert!(files.contains("src/lib.rs"));
+    }
+
+    #[test]
+    fn test_extract_compaction_metadata_from_tool_input_paths() {
+        let msg = Message {
+            role: "assistant".to_string(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                id: "t1".to_string(),
+                name: "read_file".to_string(),
+                input: serde_json::json!({"file_path": "/home/user/project/config.toml"}),
+            }]),
+        };
+        let (files, tools) = extract_compaction_metadata(&[msg]);
+        assert!(files.contains("/home/user/project/config.toml"));
+        assert!(tools.contains("read_file"));
+    }
+
+    #[test]
+    fn test_extract_compaction_metadata_ignores_long_paths() {
+        // Paths > 300 chars should be ignored
+        let long_path = format!("src/{}.rs", "a".repeat(300));
+        let messages = vec![user_msg(&format!("Check {long_path}"))];
+        let (files, _) = extract_compaction_metadata(&messages);
+        assert!(files.is_empty(), "Long paths should be ignored");
     }
 
     // -- Edge case: set_config validates new config --

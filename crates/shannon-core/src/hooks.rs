@@ -15,9 +15,21 @@
 //!
 //! ## Configuration
 //!
-//! Hooks are loaded from two locations (project-level overrides user-level):
-//! - **User-level**: `~/.shannon/hooks.json`
-//! - **Project-level**: `.shannon/hooks.json`
+//! Hooks are loaded from multiple locations (later files override earlier ones).
+//! Claude Code's `settings.json` format is fully compatible — serde ignores
+//! non-hook fields like `mcpServers`.
+//!
+//! **User-level** (lower priority):
+//! - `~/.claude/settings.json`
+//! - `~/.shannon/settings.json`
+//! - `~/.shannon/hooks.json`
+//!
+//! **Project-level** (higher priority):
+//! - `.claude/settings.json`
+//! - `.claude/settings.local.json`
+//! - `.shannon/settings.json`
+//! - `.shannon/settings.local.json`
+//! - `.shannon/hooks.json`
 //!
 //! ## Example hooks.json
 //!
@@ -452,6 +464,8 @@ pub struct HookManager {
     user_config_path: PathBuf,
     /// Path to the project-level hooks config
     project_config_path: PathBuf,
+    /// Base directory for resolving project-level paths (defaults to cwd)
+    base_dir: PathBuf,
 }
 
 impl std::fmt::Debug for HookManager {
@@ -459,6 +473,7 @@ impl std::fmt::Debug for HookManager {
         f.debug_struct("HookManager")
             .field("user_config_path", &self.user_config_path)
             .field("project_config_path", &self.project_config_path)
+            .field("base_dir", &self.base_dir)
             .field("hooks_file", &self.hooks_file)
             .finish()
     }
@@ -474,14 +489,16 @@ impl HookManager {
     /// Create a new HookManager with default paths
     pub fn new() -> Self {
         let home_dir = dirs::home_dir().expect("Home directory should exist");
+        let base_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
         let user_config_path = home_dir.join(".shannon").join("hooks.json");
-        let project_config_path = PathBuf::from(".shannon/hooks.json");
+        let project_config_path = base_dir.join(".shannon").join("hooks.json");
 
         Self {
             hooks_file: HooksFile::new(),
             user_config_path,
             project_config_path,
+            base_dir,
         }
     }
 
@@ -491,24 +508,74 @@ impl HookManager {
             hooks_file: HooksFile::new(),
             user_config_path: user_path,
             project_config_path: project_path,
+            base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        }
+    }
+
+    /// Create a HookManager with an explicit base directory for project-level paths
+    pub fn with_base_dir(base_dir: PathBuf) -> Self {
+        let home_dir = dirs::home_dir().expect("Home directory should exist");
+        let user_config_path = home_dir.join(".shannon").join("hooks.json");
+        let project_config_path = base_dir.join(".shannon").join("hooks.json");
+
+        Self {
+            hooks_file: HooksFile::new(),
+            user_config_path,
+            project_config_path,
+            base_dir,
         }
     }
 
     /// Load hook configurations from disk.
-    /// Project-level hooks are merged after user-level hooks.
+    ///
+    /// Loads from both Shannon-native paths and Claude Code compatible paths.
+    /// Later files override earlier ones. Load order:
+    ///
+    /// User-level (lower priority):
+    /// - `~/.claude/settings.json`
+    /// - `~/.shannon/settings.json`
+    /// - `~/.shannon/hooks.json`
+    ///
+    /// Project-level (higher priority):
+    /// - `.claude/settings.json`
+    /// - `.claude/settings.local.json`
+    /// - `.shannon/settings.json`
+    /// - `.shannon/settings.local.json`
+    /// - `.shannon/hooks.json`
     pub fn load(&mut self) -> Result<(), HookError> {
         let mut combined = HooksFile::new();
 
-        // Load user-level hooks
-        if self.user_config_path.exists() {
-            let user_hooks = HooksFile::load_from_file(&self.user_config_path)?;
-            combined.merge(user_hooks);
-        }
+        let home_dir = dirs::home_dir().ok_or(HookError::HomeNotFound)?;
+        let base = &self.base_dir;
 
-        // Load and merge project-level hooks
-        if self.project_config_path.exists() {
-            let project_hooks = HooksFile::load_from_file(&self.project_config_path)?;
-            combined.merge(project_hooks);
+        // User-level hooks (lower priority, loaded first)
+        let user_paths: Vec<PathBuf> = vec![
+            home_dir.join(".claude").join("settings.json"),
+            home_dir.join(".shannon").join("settings.json"),
+            self.user_config_path.clone(),
+        ];
+
+        // Project-level hooks (higher priority, loaded after)
+        let project_paths: Vec<PathBuf> = vec![
+            base.join(".claude").join("settings.json"),
+            base.join(".claude").join("settings.local.json"),
+            base.join(".shannon").join("settings.json"),
+            base.join(".shannon").join("settings.local.json"),
+            self.project_config_path.clone(),
+        ];
+
+        for path in user_paths.iter().chain(project_paths.iter()) {
+            if path.exists() {
+                match HooksFile::load_from_file(path) {
+                    Ok(hooks) => {
+                        tracing::debug!("Loaded hooks from {}", path.display());
+                        combined.merge(hooks);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to load hooks from {}: {e}", path.display());
+                    }
+                }
+            }
         }
 
         self.hooks_file = combined;
@@ -1132,10 +1199,7 @@ More lines"#;
             manager.user_config_path().file_name().unwrap(),
             "hooks.json"
         );
-        assert_eq!(
-            manager.project_config_path().to_str().unwrap(),
-            ".shannon/hooks.json"
-        );
+        assert!(manager.project_config_path().ends_with(".shannon/hooks.json"));
     }
 
     #[tokio::test]
@@ -1672,5 +1736,96 @@ More lines"#;
             reason: "policy".to_string(),
         };
         assert!(err.to_string().contains("policy"));
+    }
+
+    // ── Claude Code compatible path loading ─────────────────────────────
+
+    #[test]
+    fn test_hooks_file_ignores_non_hook_fields() {
+        // Claude Code settings.json has extra fields like mcpServers, permissions
+        let json = r#"{
+            "mcpServers": {
+                "fetch": {"command": "uvx", "args": ["mcp-server-fetch"]}
+            },
+            "permissions": {"allow": ["Bash"]},
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [
+                            {"command": "echo 'hook ran'", "timeout": 5, "blocking": true}
+                        ]
+                    }
+                ]
+            }
+        }"#;
+        let file = HooksFile::from_json(json).unwrap();
+        let configs = file.get_for_event(&HookEventType::PreToolUse);
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].matcher, "Bash");
+    }
+
+    #[tokio::test]
+    async fn test_load_from_claude_code_settings_paths() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+
+        // Create .claude/settings.json in the temp dir (project-level)
+        let claude_dir = temp_dir.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let claude_settings = claude_dir.join("settings.json");
+        std::fs::write(&claude_settings, r#"{
+            "hooks": {
+                "SessionStart": [
+                    {"matcher": "*", "hooks": [{"command": "echo 'claude session start'", "timeout": 5}]}
+                ]
+            },
+            "mcpServers": {}
+        }"#).unwrap();
+
+        // Also create .shannon/hooks.json (project-level via base_dir)
+        let shannon_dir = temp_dir.path().join(".shannon");
+        std::fs::create_dir_all(&shannon_dir).unwrap();
+        let shannon_hooks = shannon_dir.join("hooks.json");
+        std::fs::write(&shannon_hooks, r#"{
+            "hooks": {
+                "PreToolUse": [
+                    {"matcher": "Bash", "hooks": [{"command": "echo 'shannon hook'", "timeout": 5}]}
+                ]
+            }
+        }"#).unwrap();
+
+        let mut manager = HookManager::with_base_dir(temp_dir.path().to_path_buf());
+        manager.load().unwrap();
+
+        // Both .claude/settings.json and .shannon/hooks.json should be loaded
+        let start_configs = manager.hooks_file().get_for_event(&HookEventType::SessionStart);
+        assert_eq!(start_configs.len(), 1);
+
+        let pre_configs = manager.hooks_file().get_for_event(&HookEventType::PreToolUse);
+        assert_eq!(pre_configs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_load_priority_later_overrides() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+
+        // Create .claude/settings.local.json (highest project priority)
+        let claude_dir = temp_dir.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let local_settings = claude_dir.join("settings.local.json");
+        std::fs::write(&local_settings, r#"{
+            "hooks": {
+                "PreToolUse": [
+                    {"matcher": "Bash", "hooks": [{"command": "echo 'local override'", "timeout": 5}]}
+                ]
+            }
+        }"#).unwrap();
+
+        let mut manager = HookManager::with_base_dir(temp_dir.path().to_path_buf());
+        manager.load().unwrap();
+
+        let configs = manager.hooks_file().get_for_event(&HookEventType::PreToolUse);
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].hooks[0].command, "echo 'local override'");
     }
 }
