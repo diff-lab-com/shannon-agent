@@ -18,6 +18,7 @@ use crate::registry::CommandRegistry;
 mod commit;
 mod review_pr;
 mod pdf;
+mod issue;
 mod help;
 mod status;
 mod diff;
@@ -42,6 +43,7 @@ pub fn all_commands() -> Vec<Command> {
         commit::command(),
         review_pr::command(),
         pdf::command(),
+        issue::command(),
         help::command(),
         status::command(),
         diff::command(),

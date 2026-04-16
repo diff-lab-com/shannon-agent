@@ -877,6 +877,7 @@ fn test_query_engine_config_custom() {
         keep_recent_messages: 5,
         compression_strategy: shannon_core::query_engine::CompressionStrategy::TruncateOldest,
         system_prompt: Some("Custom prompt".to_string()),
+        auto_commit: false,
     };
     assert_eq!(config.max_turns, 5);
     assert_eq!(config.max_budget_usd, Some(1.0));

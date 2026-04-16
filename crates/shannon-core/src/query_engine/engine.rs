@@ -488,6 +488,7 @@ impl QueryEngine {
             let mut tool_results: Vec<(String, String)> = Vec::new();
             let mut total_input_tokens: u64 = 0;
             let mut total_output_tokens: u64 = 0;
+            let mut file_edits_made = false;
 
             loop {
                 if turn >= config.max_turns {
@@ -620,6 +621,9 @@ impl QueryEngine {
                         let mut accumulated_tool_input = String::new();
                         let mut tool_inputs: Vec<(String, String, serde_json::Value)> = Vec::new();
                         let mut has_content = false;
+                        // Accumulate the full assistant response for conversation tracking
+                        let mut assistant_text = String::new();
+                        let mut assistant_tool_uses: Vec<ContentBlock> = Vec::new();
 
                         // Process streaming events
                         while let Some(event_result) = stream.next().await {
@@ -655,6 +659,7 @@ impl QueryEngine {
                                             match delta {
                                                 ContentDelta::TextDelta { text } => {
                                                     has_content = true;
+                                                    assistant_text.push_str(&text);
                                                     let _ = tx.send(Ok(QueryEvent::Text {
                                                         query_id,
                                                         content: text,
@@ -678,7 +683,12 @@ impl QueryEngine {
                                                         &accumulated_tool_input,
                                                     )
                                                 {
-                                                    tool_inputs.push((id, name, json_val));
+                                                    tool_inputs.push((id.clone(), name.clone(), json_val.clone()));
+                                                    assistant_tool_uses.push(ContentBlock::ToolUse {
+                                                        id,
+                                                        name,
+                                                        input: json_val,
+                                                    });
                                                 }
                                                 accumulated_tool_input.clear();
                                             }
@@ -976,12 +986,15 @@ impl QueryEngine {
                                                                         let _ = tx.send(Ok(QueryEvent::ToolUseResult {
                                                                             query_id,
                                                                             tool_use_id: tool_id.clone(),
-                                                                            tool_name,
+                                                                            tool_name: tool_name.clone(),
                                                                             result: output.content.clone(),
                                                                             is_error: false,
                                                                         }));
                                                                         tool_results
                                                                             .push((tool_id, output.content.clone()));
+                                                                        if matches!(tool_name.as_str(), "Edit" | "Write") {
+                                                                            file_edits_made = true;
+                                                                        }
                                                                     }
                                                                     Err(e) => {
                                                                         let error_msg =
@@ -1036,12 +1049,15 @@ impl QueryEngine {
                                                                 let _ = tx.send(Ok(QueryEvent::ToolUseResult {
                                                                     query_id,
                                                                     tool_use_id: tool_id.clone(),
-                                                                    tool_name,
+                                                                    tool_name: tool_name.clone(),
                                                                     result: output.content.clone(),
                                                                     is_error: false,
                                                                 }));
                                                                 tool_results
                                                                     .push((tool_id, output.content.clone()));
+                                                                if matches!(tool_name.as_str(), "Edit" | "Write") {
+                                                                    file_edits_made = true;
+                                                                }
                                                             }
                                                             Err(e) => {
                                                                 let error_msg =
@@ -1060,6 +1076,80 @@ impl QueryEngine {
                                                 }
 
                                                 turn += 1;
+
+                                                // Save assistant response to conversation for multi-turn context.
+                                                // The API requires: assistant(tool_use) → user(tool_result).
+                                                // Without the assistant message, the next API call has no
+                                                // context for which tools were requested.
+                                                {
+                                                    let mut assistant_blocks: Vec<ContentBlock> = Vec::new();
+                                                    if !assistant_text.is_empty() {
+                                                        assistant_blocks.push(ContentBlock::Text {
+                                                            text: assistant_text.clone(),
+                                                        });
+                                                    }
+                                                    assistant_blocks.extend(assistant_tool_uses.drain(..));
+                                                    if !assistant_blocks.is_empty() {
+                                                        conversation.messages.push(Message {
+                                                            role: "assistant".to_string(),
+                                                            content: MessageContent::Blocks(assistant_blocks),
+                                                        });
+                                                    }
+                                                }
+
+                                                // Auto-commit: if enabled and file-write tools were used,
+                                                // stage changes and commit automatically.
+                                                if config.auto_commit && file_edits_made {
+                                                    file_edits_made = false; // reset for next turn
+                                                    let _ = (|| async {
+                                                        let add_output = tokio::process::Command::new("git")
+                                                            .args(["add", "-A"])
+                                                            .output()
+                                                            .await;
+                                                        if let Ok(out) = add_output {
+                                                            if out.status.success() {
+                                                                // Generate commit message from diff stat
+                                                                let stat_output = tokio::process::Command::new("git")
+                                                                    .args(["diff", "--stat", "--cached"])
+                                                                    .output()
+                                                                    .await;
+                                                                let msg = match stat_output {
+                                                                    Ok(s) if s.status.success() => {
+                                                                        let stat = String::from_utf8_lossy(&s.stdout);
+                                                                        let file_count = stat.lines().filter(|l| !l.trim().is_empty()).count().saturating_sub(1);
+                                                                        if file_count == 0 {
+                                                                            "chore: update files".to_string()
+                                                                        } else {
+                                                                            format!("chore: auto-commit ({file_count} files)")
+                                                                        }
+                                                                    }
+                                                                    _ => "chore: auto-commit".to_string(),
+                                                                };
+                                                                let commit_output = tokio::process::Command::new("git")
+                                                                    .args(["commit", "-m", &msg])
+                                                                    .output()
+                                                                    .await;
+                                                                if let Ok(co) = commit_output {
+                                                                    if co.status.success() {
+                                                                        let hash = String::from_utf8_lossy(&co.stdout)
+                                                                            .lines()
+                                                                            .find(|l| l.starts_with('['))
+                                                                            .unwrap_or("committed")
+                                                                            .to_string();
+                                                                        let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                            query_id,
+                                                                            tool_use_id: String::new(),
+                                                                            tool_name: "auto_commit".to_string(),
+                                                                            result: format!("Auto-committed: {hash}"),
+                                                                            is_error: false,
+                                                                        }));
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    })().await;
+                                                }
+
                                                 let _ = tx.send(Ok(QueryEvent::TurnCompleted {
                                                     query_id,
                                                     turn_number: turn,
@@ -1068,6 +1158,13 @@ impl QueryEngine {
                                                         as u64,
                                                 }));
                                             } else {
+                                                // No tool uses — save assistant text to conversation
+                                                if !assistant_text.is_empty() {
+                                                    conversation.messages.push(Message {
+                                                        role: "assistant".to_string(),
+                                                        content: MessageContent::Text(assistant_text.clone()),
+                                                    });
+                                                }
                                                 let total_cost = CostTracker::calculate_cost(
                                                     &client_model,
                                                     total_input_tokens,
