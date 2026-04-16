@@ -21,6 +21,10 @@ pub enum AgentError {
     #[error("communication error: {0}")]
     Communication(String),
 
+    /// Configuration or feature-flag errors
+    #[error("configuration error: {0}")]
+    Configuration(String),
+
     /// I/O errors
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

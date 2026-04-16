@@ -1386,3 +1386,89 @@ mod crate_tests {
         assert!(result.is_err());
     }
 }
+
+// =========================================================================
+// InboxSummary tests
+// =========================================================================
+
+mod inbox_summary_tests {
+    use super::*;
+
+    #[test]
+    fn inbox_summary_default() {
+        let summary = InboxSummary::default();
+        assert_eq!(summary.total, 0);
+        assert_eq!(summary.unread, 0);
+        assert!(summary.senders.is_empty());
+    }
+
+    #[test]
+    fn inbox_summary_serialization_roundtrip() {
+        let summary = InboxSummary {
+            total: 5,
+            unread: 2,
+            senders: vec!["alice".to_string(), "bob".to_string()],
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        let decoded: InboxSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.total, 5);
+        assert_eq!(decoded.unread, 2);
+        assert_eq!(decoded.senders, vec!["alice", "bob"]);
+    }
+}
+
+// =========================================================================
+// Teammate metadata merge tests
+// =========================================================================
+
+mod teammate_metadata_tests {
+    use super::*;
+    use shannon_agents::TeammateConfig;
+
+    fn make_teammate() -> Teammate {
+        let config = TeammateConfig {
+            agent_type: "worker".to_string(),
+            capabilities: vec![],
+            max_concurrent_tasks: 3,
+            plan_mode_required: false,
+            model: None,
+            system_prompt: None,
+            temperature: None,
+        };
+        Teammate::new("test-agent".to_string(), config)
+    }
+
+    #[tokio::test]
+    async fn merge_metadata_adds_multiple_entries() {
+        let agent = make_teammate();
+        let entries = std::collections::HashMap::from([
+            ("role".to_string(), serde_json::json!("reviewer")),
+            ("priority".to_string(), serde_json::json!(42)),
+        ]);
+        agent.merge_metadata(entries).await;
+
+        assert_eq!(agent.get_metadata("role").await, Some(serde_json::json!("reviewer")));
+        assert_eq!(agent.get_metadata("priority").await, Some(serde_json::json!(42)));
+    }
+
+    #[tokio::test]
+    async fn merge_metadata_overwrites_existing() {
+        let agent = make_teammate();
+        agent.set_metadata("key".to_string(), serde_json::json!("old")).await;
+
+        let entries = std::collections::HashMap::from([
+            ("key".to_string(), serde_json::json!("new")),
+        ]);
+        agent.merge_metadata(entries).await;
+
+        assert_eq!(agent.get_metadata("key").await, Some(serde_json::json!("new")));
+    }
+
+    #[tokio::test]
+    async fn merge_metadata_empty_is_noop() {
+        let agent = make_teammate();
+        agent.set_metadata("existing".to_string(), serde_json::json!("value")).await;
+        agent.merge_metadata(std::collections::HashMap::new()).await;
+        assert_eq!(agent.get_metadata("existing").await, Some(serde_json::json!("value")));
+    }
+}

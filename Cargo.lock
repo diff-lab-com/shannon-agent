@@ -2508,14 +2508,17 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "dirs 6.0.0",
  "futures",
  "serde",
  "serde_json",
  "shannon-core",
  "shannon-types",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-test",
+ "toml",
  "tracing",
  "uuid",
 ]

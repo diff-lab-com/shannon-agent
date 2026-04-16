@@ -472,6 +472,15 @@ impl Teammate {
         metadata.get(key).cloned()
     }
 
+    /// Merge multiple metadata entries at once.
+    /// Existing keys are overwritten with new values.
+    pub async fn merge_metadata(&self, entries: HashMap<String, serde_json::Value>) {
+        let mut metadata = self.metadata.write().await;
+        for (key, value) in entries {
+            metadata.insert(key, value);
+        }
+    }
+
     /// Enter plan mode
     pub async fn enter_plan_mode(&self) -> Result<(), AgentError> {
         if !self.config.plan_mode_required {

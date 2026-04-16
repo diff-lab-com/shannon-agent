@@ -2,7 +2,8 @@
 
 use crate::{
     error::{AgentError, CoordinationError},
-    message::{AgentMessage, ProtocolMessage},
+    message::{AgentMessage, MessageContent, MessageType, ProtocolMessage},
+    persistence::{FilePersistence, InboxMessage, TeamConfigFile},
     task::{AgentTask, TaskPriority, TaskStatus},
     teammate::{Teammate, TeammateConfig, TeammateStatus},
     worktree::{WorktreeConfig, WorktreeManager},
@@ -37,6 +38,17 @@ pub struct TeamManifest {
     pub members: Vec<AgentInfo>,
 }
 
+/// Summary of an agent's inbox across all teams.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InboxSummary {
+    /// Total messages in inbox
+    pub total: usize,
+    /// Unread message count
+    pub unread: usize,
+    /// Unique senders who have messaged this agent
+    pub senders: Vec<String>,
+}
+
 /// Configuration for the agent coordinator
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoordinatorConfig {
@@ -65,6 +77,8 @@ pub enum AssignmentStrategy {
     CapabilityBased,
     /// First available agent
     FirstAvailable,
+    /// Agents self-claim the lowest-ID unblocked task (Claude Code approach)
+    SelfClaim,
 }
 
 impl Default for CoordinatorConfig {
@@ -109,6 +123,8 @@ pub struct AgentCoordinator {
     event_sender: broadcast::Sender<CoordinatorEvent>,
     _message_receiver: Arc<tokio::task::JoinHandle<()>>,
     _heartbeat_handle: Arc<tokio::task::JoinHandle<()>>,
+    /// Optional file-based persistence layer
+    persistence: Option<FilePersistence>,
 }
 
 /// A team of agents working together
@@ -196,6 +212,7 @@ impl AgentCoordinator {
             event_sender,
             _message_receiver: Arc::new(message_handle),
             _heartbeat_handle: Arc::new(heartbeat_handle),
+            persistence: None,
         })
     }
 
@@ -223,6 +240,10 @@ impl AgentCoordinator {
         };
 
         teams.insert(name.clone(), team);
+        drop(teams);
+
+        // Persist to disk if persistence layer is configured
+        self.persist_team(&name).await;
 
         tracing::info!(team = %name, "Team created");
 
@@ -260,6 +281,9 @@ impl AgentCoordinator {
 
         drop(teams);
 
+        // Persist updated team config to disk
+        self.persist_team(team_name).await;
+
         if let Err(e) = self.event_sender.send(CoordinatorEvent::AgentJoined {
             team: team_name.to_string(),
             agent: agent_name.clone(),
@@ -287,6 +311,184 @@ impl AgentCoordinator {
             .map_err(|e| AgentError::Communication(format!("Failed to send message: {e}")))?;
 
         Ok(())
+    }
+
+    // ── Peer-to-Peer + Team-Scoped Messaging ──────────────────────────
+
+    /// Send a direct P2P message from one agent to another within a team.
+    ///
+    /// Routes the message through the team's members, delivers to the
+    /// recipient's inbox, and persists it if persistence is configured.
+    pub async fn send_direct_message(
+        &self,
+        team_name: &str,
+        from: &str,
+        to: &str,
+        content: MessageContent,
+    ) -> Result<AgentMessage, AgentError> {
+        let message = AgentMessage {
+            id: Uuid::new_v4(),
+            from: from.to_string(),
+            to: to.to_string(),
+            message_type: MessageType::Chat,
+            priority: crate::message::MessagePriority::Normal,
+            content,
+            timestamp: chrono::Utc::now(),
+        };
+
+        // Deliver to the recipient agent within the team
+        let teams = self.teams.read().await;
+        let team = teams.get(team_name)
+            .ok_or_else(|| AgentError::Coordination(
+                CoordinationError::TeamNotFound(team_name.to_string())
+            ))?;
+
+        let agent = team.members.get(to)
+            .ok_or_else(|| AgentError::Coordination(
+                CoordinationError::AgentNotFound(to.to_string())
+            ))?;
+
+        let response = agent.handle_message(message.clone()).await?;
+
+        // Persist to inbox if persistence is configured
+        if let Some(ref persist) = self.persistence {
+            let inbox_msg = InboxMessage {
+                id: message.id.to_string(),
+                from: message.from.clone(),
+                content: format!("{:?}", message.content),
+                timestamp: message.timestamp.to_rfc3339(),
+                read: false,
+            };
+            if let Err(e) = persist.deliver_message(team_name, to, &inbox_msg) {
+                tracing::warn!(agent = %to, error = %e, "Failed to persist inbox message");
+            }
+        }
+
+        if let Err(e) = self.event_sender.send(CoordinatorEvent::MessageSent(message.clone())) {
+            tracing::warn!(error = %e, "Failed to send MessageSent event");
+        }
+
+        Ok(response)
+    }
+
+    /// Broadcast a message to all members of a specific team.
+    ///
+    /// Unlike the global `"*"` broadcast which hits all teams,
+    /// this sends only to members of the named team.
+    pub async fn broadcast_to_team(
+        &self,
+        team_name: &str,
+        from: &str,
+        content: String,
+    ) -> Result<Vec<AgentMessage>, AgentError> {
+        let teams = self.teams.read().await;
+        let team = teams.get(team_name)
+            .ok_or_else(|| AgentError::Coordination(
+                CoordinationError::TeamNotFound(team_name.to_string())
+            ))?;
+
+        let mut responses = Vec::new();
+
+        for (agent_name, agent) in &team.members {
+            if agent_name == from {
+                continue; // Don't send to self
+            }
+
+            let message = AgentMessage {
+                id: Uuid::new_v4(),
+                from: from.to_string(),
+                to: agent_name.clone(),
+                message_type: MessageType::Chat,
+                priority: crate::message::MessagePriority::Normal,
+                content: MessageContent::Text(content.clone()),
+                timestamp: chrono::Utc::now(),
+            };
+
+            match agent.handle_message(message.clone()).await {
+                Ok(response) => {
+                    // Persist to inbox
+                    if let Some(ref persist) = self.persistence {
+                        let inbox_msg = InboxMessage {
+                            id: message.id.to_string(),
+                            from: message.from.clone(),
+                            content: content.clone(),
+                            timestamp: message.timestamp.to_rfc3339(),
+                            read: false,
+                        };
+                        if let Err(e) = persist.deliver_message(team_name, agent_name, &inbox_msg) {
+                            tracing::warn!(agent = %agent_name, error = %e, "Failed to persist inbox message");
+                        }
+                    }
+
+                    if let Err(e) = self.event_sender.send(CoordinatorEvent::MessageSent(message)) {
+                        tracing::warn!(error = %e, "Failed to send MessageSent event");
+                    }
+
+                    responses.push(response);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        from = %from,
+                        to = %agent_name,
+                        error = %e,
+                        "Failed to deliver broadcast message"
+                    );
+                }
+            }
+        }
+
+        tracing::info!(
+            from = %from,
+            team = %team_name,
+            recipients = responses.len(),
+            "Team broadcast sent"
+        );
+
+        Ok(responses)
+    }
+
+    /// Read unread messages from an agent's persisted inbox.
+    /// Searches across all teams for the agent's inbox.
+    pub async fn read_agent_inbox(&self, agent_name: &str) -> Vec<InboxMessage> {
+        if let Some(ref persist) = self.persistence {
+            // Search all teams for this agent
+            let team_names = self.list_teams().await;
+            for team_name in &team_names {
+                match persist.read_inbox(team_name, agent_name) {
+                    Ok(messages) if !messages.is_empty() => return messages,
+                    Ok(_) => continue,
+                    Err(e) => {
+                        tracing::warn!(agent = %agent_name, error = %e, "Failed to read inbox");
+                    }
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    /// Get a summary of an agent's inbox across all teams.
+    ///
+    /// Returns the total message count, unread count, and a list of unique senders.
+    /// Useful for agents to quickly check their inbox status without loading full messages.
+    pub async fn inbox_summary(&self, agent_name: &str) -> InboxSummary {
+        let mut summary = InboxSummary::default();
+        let team_names = self.list_teams().await;
+        if let Some(ref persist) = self.persistence {
+            for team_name in &team_names {
+                if let Ok(messages) = persist.read_inbox(team_name, agent_name) {
+                    for msg in &messages {
+                        summary.total += 1;
+                        if !msg.read {
+                            summary.unread += 1;
+                        }
+                        if !summary.senders.contains(&msg.from) {
+                            summary.senders.push(msg.from.clone());
+                        }
+                    }
+                }
+            }
+        }
+        summary
     }
 
     /// Subscribe to coordinator events
@@ -384,6 +586,11 @@ impl AgentCoordinator {
                 self.assign_capability_based(team_name, &required_capabilities).await?
             }
             AssignmentStrategy::FirstAvailable => {
+                self.assign_first_available(team_name).await?
+            }
+            // SelfClaim is normally invoked via self_claim_task() directly,
+            // but when used through assign_task we find the next available task.
+            AssignmentStrategy::SelfClaim => {
                 self.assign_first_available(team_name).await?
             }
         };
@@ -546,6 +753,166 @@ impl AgentCoordinator {
             .ok_or_else(|| AgentError::Communication("No available agents".to_string()))
     }
 
+    // ── Self-Claim Task Assignment (Claude Code approach) ──────────────
+
+    /// An agent explicitly claims a specific task by ID.
+    ///
+    /// The agent becomes the task owner and the task transitions to InProgress.
+    /// This is the Claude Code model: idle agents claim tasks themselves rather
+    /// than waiting for central assignment.
+    pub async fn self_claim_task(
+        &self,
+        team_name: &str,
+        agent_name: &str,
+        task_id: Uuid,
+    ) -> Result<AgentTask, AgentError> {
+        // Verify the agent is a member of the team
+        {
+            let teams = self.teams.read().await;
+            let team = teams.get(team_name)
+                .ok_or_else(|| AgentError::Coordination(
+                    CoordinationError::TeamNotFound(team_name.to_string())
+                ))?;
+            if !team.members.contains_key(agent_name) {
+                return Err(AgentError::Communication(
+                    format!("Agent '{agent_name}' is not a member of team '{team_name}'")
+                ));
+            }
+        }
+
+        // Verify task is claimable: Pending + no owner + no blockers
+        let task = self.task_board.get_task(task_id).await?;
+        if task.status != TaskStatus::Pending {
+            return Err(AgentError::Task(
+                crate::error::TaskError::InvalidTaskState(task_id)
+            ));
+        }
+        if task.owner.is_some() {
+            return Err(AgentError::Communication(
+                format!("Task {} already claimed by {:?}", task_id, task.owner)
+            ));
+        }
+        if !task.blocked_by.is_empty() {
+            return Err(AgentError::Communication(
+                format!("Task {} is blocked by {:?}", task_id, task.blocked_by)
+            ));
+        }
+
+        // Assign and transition to InProgress
+        self.task_board.assign_task(task_id, agent_name.to_string()).await?;
+        self.task_board.update_task_status(task_id, TaskStatus::InProgress).await?;
+
+        // Update the agent's assigned tasks
+        {
+            let teams = self.teams.read().await;
+            if let Some(team) = teams.get(team_name) {
+                if let Some(agent) = team.members.get(agent_name) {
+                    let _ = agent.assign_task(task_id).await;
+                }
+            }
+        }
+
+        let updated_task = self.task_board.get_task(task_id).await?;
+
+        if let Err(e) = self.event_sender.send(CoordinatorEvent::TaskAssigned {
+            task_id,
+            agent: agent_name.to_string(),
+        }) {
+            tracing::warn!(
+                task_id = %task_id,
+                agent = %agent_name,
+                error = %e,
+                "Failed to send TaskAssigned event - no active receivers"
+            );
+        }
+
+        tracing::info!(
+            task_id = %task_id,
+            agent = %agent_name,
+            team = %team_name,
+            "Agent self-claimed task"
+        );
+
+        // Persist updated state
+        self.persist_team(team_name).await;
+
+        Ok(updated_task)
+    }
+
+    /// Find the next claimable task for an agent (lowest-ID unblocked, pending, unowned).
+    ///
+    /// This implements the Claude Code priority rule: prefer tasks in ID order
+    /// so that earlier-created tasks are picked first.
+    pub async fn find_next_claimable_task(&self, agent_name: &str) -> Option<AgentTask> {
+        let ready_tasks = self.task_board.list_ready_tasks().await;
+
+        // Filter to tasks with no owner, sorted by creation time (earliest first)
+        let mut claimable: Vec<_> = ready_tasks
+            .into_iter()
+            .filter(|t| t.owner.is_none())
+            .collect();
+        claimable.sort_by_key(|t| t.created_at);
+
+        let task = claimable.into_iter().next()?;
+
+        tracing::debug!(
+            task_id = %task.id,
+            subject = %task.subject,
+            agent = %agent_name,
+            "Found claimable task for agent"
+        );
+
+        Some(task)
+    }
+
+    /// Convenience: find and claim the next available task for an agent.
+    ///
+    /// Returns the claimed task, or None if no tasks are available.
+    pub async fn claim_next_task(
+        &self,
+        team_name: &str,
+        agent_name: &str,
+    ) -> Result<Option<AgentTask>, AgentError> {
+        let Some(task) = self.find_next_claimable_task(agent_name).await else {
+            return Ok(None);
+        };
+
+        let claimed = self.self_claim_task(team_name, agent_name, task.id).await?;
+        Ok(Some(claimed))
+    }
+
+    // ── Idle Notification ─────────────────────────────────────────────
+
+    /// Called by a teammate when it finishes a task and becomes idle.
+    /// Returns the list of claimable tasks (so the agent can immediately
+    /// pick up the next one if available).
+    pub async fn notify_idle(
+        &self,
+        team_name: &str,
+        agent_name: &str,
+    ) -> Result<Vec<AgentTask>, AgentError> {
+        tracing::info!(
+            agent = %agent_name,
+            team = %team_name,
+            "Agent is now idle, checking for available tasks"
+        );
+
+        let claimable = self.task_board.list_ready_tasks().await
+            .into_iter()
+            .filter(|t| t.owner.is_none())
+            .collect::<Vec<_>>();
+
+        if !claimable.is_empty() {
+            tracing::info!(
+                agent = %agent_name,
+                available_tasks = claimable.len(),
+                "Idle agent has available tasks to claim"
+            );
+        }
+
+        Ok(claimable)
+    }
+
     /// Get the task board
     pub fn task_board(&self) -> &TaskBoard {
         &self.task_board
@@ -605,6 +972,108 @@ impl AgentCoordinator {
     /// Get the worktree manager
     pub fn worktree_manager(&self) -> Option<&WorktreeManager> {
         self.worktree_manager.as_ref()
+    }
+
+    /// Set the file persistence layer for durable team/task state.
+    pub fn set_persistence(&mut self, persistence: FilePersistence) {
+        self.persistence = Some(persistence);
+    }
+
+    /// Get a reference to the persistence layer (if configured).
+    pub fn persistence(&self) -> Option<&FilePersistence> {
+        self.persistence.as_ref()
+    }
+
+    /// Load persisted teams and tasks from disk into memory.
+    /// Call this once after coordinator creation, before use.
+    pub async fn load_from_disk(&self) -> Result<usize, AgentError> {
+        let Some(ref persist) = self.persistence else {
+            return Ok(0);
+        };
+
+        let team_names = persist.list_teams()?;
+        let mut loaded = 0;
+
+        for team_name in &team_names {
+            let config_file = match persist.load_team(team_name) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(team = %team_name, error = %e, "Failed to load team, skipping");
+                    continue;
+                }
+            };
+
+            // Reconstruct teammates from config
+            let mut members = HashMap::new();
+            for (agent_name, teammate_config) in &config_file.members {
+                members.insert(agent_name.clone(), Teammate::new(agent_name.clone(), teammate_config.clone()));
+            }
+
+            // Load persisted tasks
+            let task_files = persist.load_tasks(team_name)?;
+            let mut task_list = Vec::new();
+            for tf in &task_files {
+                if let Ok(task) = tf.to_agent_task() {
+                    // Also add to the shared task board
+                    let _ = self.task_board.add_task(task.clone()).await;
+                    task_list.push(task);
+                }
+            }
+
+            let team = AgentTeam {
+                name: config_file.name.clone(),
+                description: config_file.description.clone(),
+                members,
+                task_list,
+                created_at: config_file.created_at.parse()
+                    .unwrap_or(chrono::Utc::now()),
+                assignment_index: config_file.assignment_index,
+            };
+
+            self.teams.write().await.insert(team_name.clone(), team);
+            loaded += 1;
+
+            tracing::info!(team = %team_name, "Loaded team from disk");
+        }
+
+        Ok(loaded)
+    }
+
+    /// Persist a single team's current state to disk.
+    async fn persist_team(&self, team_name: &str) {
+        let teams = self.teams.read().await;
+        self.persist_team_snapshot(team_name, &teams);
+    }
+
+    /// Internal helper: persist from an existing lock guard (non-async).
+    fn persist_team_snapshot(
+        &self,
+        team_name: &str,
+        teams: &tokio::sync::RwLockReadGuard<'_, HashMap<String, AgentTeam>>,
+    ) {
+        let Some(ref persist) = self.persistence else {
+            return;
+        };
+
+        let Some(team) = teams.get(team_name) else {
+            return;
+        };
+
+        let members: HashMap<String, TeammateConfig> = team.members.iter()
+            .map(|(name, m)| (name.clone(), m.config().clone()))
+            .collect();
+
+        let config_file = TeamConfigFile {
+            name: team.name.clone(),
+            description: team.description.clone(),
+            members,
+            created_at: team.created_at.to_rfc3339(),
+            assignment_index: team.assignment_index,
+        };
+
+        if let Err(e) = persist.save_team(&config_file) {
+            tracing::warn!(team = %team_name, error = %e, "Failed to persist team config");
+        }
     }
 
     /// Handle incoming message internally

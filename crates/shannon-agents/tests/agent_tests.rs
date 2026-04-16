@@ -1198,3 +1198,255 @@ mod integration_tests {
         }
     }
 }
+
+// =========================================================================
+// Self-Claim Task Tests
+// =========================================================================
+
+mod self_claim_tests {
+    use super::*;
+
+    async fn setup_team_with_tasks() -> AgentCoordinator {
+        let config = CoordinatorConfig {
+            assignment_strategy: AssignmentStrategy::SelfClaim,
+            ..Default::default()
+        };
+        let coordinator = AgentCoordinator::new(config).await.unwrap();
+        coordinator.create_team("dev".to_string(), "Development team".to_string()).await.unwrap();
+        coordinator
+            .add_teammate("dev", "alice".to_string(), TeammateConfig::default())
+            .await.unwrap();
+        coordinator
+            .add_teammate("dev", "bob".to_string(), TeammateConfig::default())
+            .await.unwrap();
+        coordinator
+    }
+
+    /// Helper: create a task on the coordinator's task board.
+    async fn create_task(
+        coordinator: &AgentCoordinator,
+        subject: &str,
+        description: &str,
+        priority: TaskPriority,
+    ) -> Uuid {
+        coordinator
+            .add_task("dev", subject.to_string(), description.to_string(), priority)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn self_claim_task_assigns_to_agent() {
+        let coordinator = setup_team_with_tasks().await;
+        let task_id = create_task(&coordinator, "Task 1", "Do something", TaskPriority::Medium).await;
+
+        let task = coordinator
+            .self_claim_task("dev", "alice", task_id)
+            .await
+            .unwrap();
+
+        assert_eq!(task.owner.as_deref(), Some("alice"));
+        assert!(matches!(task.status, TaskStatus::InProgress));
+    }
+
+    #[tokio::test]
+    async fn self_claim_rejects_already_owned_task() {
+        let coordinator = setup_team_with_tasks().await;
+        let task_id = create_task(&coordinator, "Task 1", "Do something", TaskPriority::Medium).await;
+
+        // Alice claims first
+        coordinator
+            .self_claim_task("dev", "alice", task_id)
+            .await
+            .unwrap();
+
+        // Bob tries to claim the same task
+        let result = coordinator
+            .self_claim_task("dev", "bob", task_id)
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn self_claim_rejects_non_member() {
+        let coordinator = setup_team_with_tasks().await;
+        let task_id = create_task(&coordinator, "Task 1", "Do something", TaskPriority::Medium).await;
+
+        let result = coordinator
+            .self_claim_task("dev", "unknown_agent", task_id)
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn self_claim_rejects_blocked_task() {
+        let coordinator = setup_team_with_tasks().await;
+        let blocker_id = create_task(&coordinator, "Blocker", "Must finish first", TaskPriority::High).await;
+        let blocked_id = create_task(&coordinator, "Blocked", "Waiting", TaskPriority::Medium).await;
+
+        // Add dependency: blocked_task depends on blocker
+        coordinator
+            .task_board()
+            .add_dependency(blocked_id, blocker_id)
+            .await
+            .unwrap();
+
+        let result = coordinator
+            .self_claim_task("dev", "alice", blocked_id)
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn claim_next_picks_lowest_id_task() {
+        let coordinator = setup_team_with_tasks().await;
+
+        // Create tasks in order (earlier = lower ID)
+        let task1 = create_task(&coordinator, "First task", "Created first", TaskPriority::Low).await;
+        // Small sleep to ensure different timestamps
+        sleep(Duration::from_millis(1)).await;
+        let _task2 = create_task(&coordinator, "Second task", "Created second", TaskPriority::High).await;
+
+        // claim_next should pick the earliest-created task
+        let claimed = coordinator
+            .claim_next_task("dev", "alice")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(claimed.id, task1);
+        assert_eq!(claimed.owner.as_deref(), Some("alice"));
+    }
+
+    #[tokio::test]
+    async fn claim_next_returns_none_when_no_tasks() {
+        let coordinator = setup_team_with_tasks().await;
+
+        let result = coordinator
+            .claim_next_task("dev", "alice")
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn claim_next_skips_owned_tasks() {
+        let coordinator = setup_team_with_tasks().await;
+
+        let task1 = create_task(&coordinator, "First task", "Created first", TaskPriority::Medium).await;
+        let task2 = create_task(&coordinator, "Second task", "Created second", TaskPriority::Medium).await;
+
+        // Alice claims task1
+        coordinator
+            .self_claim_task("dev", "alice", task1)
+            .await
+            .unwrap();
+
+        // Bob claims next — should get task2
+        let claimed = coordinator
+            .claim_next_task("dev", "bob")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(claimed.id, task2);
+        assert_eq!(claimed.owner.as_deref(), Some("bob"));
+    }
+
+    #[tokio::test]
+    async fn find_next_claimable_returns_none_when_all_claimed() {
+        let coordinator = setup_team_with_tasks().await;
+
+        let task1 = create_task(&coordinator, "Only task", "Solo", TaskPriority::Medium).await;
+
+        // Alice claims it
+        coordinator
+            .self_claim_task("dev", "alice", task1)
+            .await
+            .unwrap();
+
+        // Bob looks for tasks — should find none
+        let result = coordinator.find_next_claimable_task("bob").await;
+        assert!(result.is_none());
+    }
+
+    // ── Idle Notification Tests ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn notify_idle_returns_available_tasks() {
+        let coordinator = setup_team_with_tasks().await;
+
+        create_task(&coordinator, "Task 1", "Available", TaskPriority::Medium).await;
+        create_task(&coordinator, "Task 2", "Also available", TaskPriority::High).await;
+
+        let available = coordinator
+            .notify_idle("dev", "alice")
+            .await
+            .unwrap();
+
+        assert_eq!(available.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn notify_idle_returns_empty_when_no_tasks() {
+        let coordinator = setup_team_with_tasks().await;
+
+        let available = coordinator
+            .notify_idle("dev", "alice")
+            .await
+            .unwrap();
+
+        assert!(available.is_empty());
+    }
+
+    #[tokio::test]
+    async fn notify_idle_excludes_owned_tasks() {
+        let coordinator = setup_team_with_tasks().await;
+
+        let task_id = create_task(&coordinator, "Task 1", "Claimed", TaskPriority::Medium).await;
+
+        // Alice claims the task
+        coordinator
+            .self_claim_task("dev", "alice", task_id)
+            .await
+            .unwrap();
+
+        // Bob goes idle — should see no unowned tasks
+        let available = coordinator
+            .notify_idle("dev", "bob")
+            .await
+            .unwrap();
+
+        assert!(available.is_empty());
+    }
+
+    #[tokio::test]
+    async fn idle_agents_detects_idle_team_members() {
+        let coordinator = setup_team_with_tasks().await;
+
+        // Initially both alice and bob are idle
+        let idle = coordinator.idle_agents("dev").await;
+        assert_eq!(idle.len(), 2);
+        assert!(idle.contains(&"alice".to_string()));
+        assert!(idle.contains(&"bob".to_string()));
+    }
+
+    #[tokio::test]
+    async fn idle_agents_excludes_busy_members() {
+        let coordinator = setup_team_with_tasks().await;
+
+        let task_id = create_task(&coordinator, "Task 1", "Work", TaskPriority::Medium).await;
+
+        // Alice claims and becomes busy
+        coordinator
+            .self_claim_task("dev", "alice", task_id)
+            .await
+            .unwrap();
+
+        let idle = coordinator.idle_agents("dev").await;
+        assert_eq!(idle.len(), 1);
+        assert!(idle.contains(&"bob".to_string()));
+        assert!(!idle.contains(&"alice".to_string()));
+    }
+}

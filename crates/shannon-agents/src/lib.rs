@@ -17,8 +17,10 @@ mod executor;
 mod summary;
 mod context;
 mod task_tools;
+mod persistence;
+mod agent_defs;
 
-pub use coordinator::{AgentCoordinator, CoordinatorConfig, AssignmentStrategy, CoordinatorEvent, AgentInfo, TeamManifest};
+pub use coordinator::{AgentCoordinator, CoordinatorConfig, AssignmentStrategy, CoordinatorEvent, AgentInfo, TeamManifest, InboxSummary};
 pub use teammate::{Teammate, TeammateConfig, TeammateStatus, TeammateState};
 pub use task_board::{TaskBoard, TaskAssignment, TaskBoardEvent, TaskBoardSummary};
 pub use worktree::{WorktreeManager, WorktreeConfig, WorktreeSession, WorktreeStatus, ExitAction,
@@ -43,8 +45,17 @@ pub use multi_agent::{
 pub use summary::{
     AgentExecutionSummary, SummaryStatus, SummaryGenerator, SuccessMetrics,
 };
-pub use context::TeamContext;
-pub use task_tools::{TeamTaskCreateTool, TeamTaskUpdateTool, TeamTaskListTool};
+pub use context::{TeamContext, teams_enabled, TEAMS_ENV_VAR};
+pub use task_tools::{
+    TeamTaskCreateTool, TeamTaskUpdateTool, TeamTaskListTool,
+    TeamTaskClaimTool, TeamNotifyIdleTool,
+};
+pub use persistence::{
+    FilePersistence, TeamConfigFile, TaskFile, InboxMessage,
+};
+pub use agent_defs::{
+    AgentDefinition, AgentDefinitionRegistry, AgentDefError,
+};
 pub use executor::{
     AgentExecutor, LlmAgentExecutor, MockAgentExecutor, shared_executor,
 };
