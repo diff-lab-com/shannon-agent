@@ -10,6 +10,7 @@ use crate::{
     TaskBoard,
 };
 use serde::{Deserialize, Serialize};
+use shannon_core::hooks::{HookEvent, HookManager};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock, broadcast, watch};
@@ -145,6 +146,8 @@ pub struct AgentCoordinator {
     /// Sender side of the cancellation signal for the delivery loop.
     /// Sending `true` tells the loop to stop.
     delivery_cancel: watch::Sender<bool>,
+    /// Optional hook manager for firing team-related hooks
+    hook_manager: Option<Arc<HookManager>>,
 }
 
 /// A team of agents working together
@@ -242,6 +245,7 @@ impl AgentCoordinator {
             delegate_mode_flag: std::sync::atomic::AtomicBool::new(delegate_mode),
             _delivery_handle: None,
             delivery_cancel,
+            hook_manager: None,
         };
 
         // Start the background inbox delivery loop
@@ -618,7 +622,7 @@ impl AgentCoordinator {
         description: String,
         priority: TaskPriority,
     ) -> Result<Uuid, AgentError> {
-        let task = AgentTask::new(subject, description, priority);
+        let task = AgentTask::new(subject.clone(), description, priority);
         let task_id = task.id;
 
         self.task_board.add_task(task).await?;
@@ -642,6 +646,15 @@ impl AgentCoordinator {
             });
         }
 
+        // Fire TeamTaskCreated hook
+        self.fire_hook(HookEvent::TeamTaskCreated {
+            task_id: task_id.to_string(),
+            team_name: team_name.to_string(),
+            agent_name: None,
+            subject: subject.clone(),
+            priority: format!("{:?}", priority),
+        });
+
         Ok(task_id)
     }
 
@@ -658,7 +671,7 @@ impl AgentCoordinator {
         priority: TaskPriority,
         blocked_by: Vec<Uuid>,
     ) -> Result<Uuid, AgentError> {
-        let mut task = AgentTask::new(subject, description, priority);
+        let mut task = AgentTask::new(subject.clone(), description, priority);
         let task_id = task.id;
 
         // Register dependencies on the task itself before adding to the board
@@ -705,6 +718,15 @@ impl AgentCoordinator {
             team = %team_name,
             "Task added with dependencies"
         );
+
+        // Fire TeamTaskCreated hook
+        self.fire_hook(HookEvent::TeamTaskCreated {
+            task_id: task_id.to_string(),
+            team_name: team_name.to_string(),
+            agent_name: None,
+            subject: subject.clone(),
+            priority: format!("{:?}", priority),
+        });
 
         Ok(task_id)
     }
@@ -1109,12 +1131,159 @@ impl AgentCoordinator {
             );
         }
 
+        // Fire TeammateIdle hook
+        self.fire_hook(HookEvent::TeammateIdle {
+            team_name: team_name.to_string(),
+            agent_name: agent_name.to_string(),
+            available_tasks: claimable.len(),
+        });
+
         Ok(claimable)
     }
 
     /// Get the task board
     pub fn task_board(&self) -> &TaskBoard {
         &self.task_board
+    }
+
+    /// Complete a task on the task board and fire the TeamTaskCompleted hook.
+    ///
+    /// This is the preferred way to mark a task as completed because it
+    /// triggers the hook system for quality gates.
+    pub async fn complete_task(
+        &self,
+        task_id: Uuid,
+        team_name: &str,
+        agent_name: &str,
+    ) -> Result<(), AgentError> {
+        // Fetch task details before completing (for hook subject)
+        let subject = self.task_board.get_task(task_id).await
+            .map(|t| t.subject.clone())
+            .unwrap_or_else(|_| task_id.to_string());
+
+        self.task_board.complete_task(task_id).await?;
+
+        // Fire TeamTaskCompleted hook
+        self.fire_hook(HookEvent::TeamTaskCompleted {
+            task_id: task_id.to_string(),
+            team_name: team_name.to_string(),
+            agent_name: agent_name.to_string(),
+            subject,
+        });
+
+        Ok(())
+    }
+
+    /// Request plan approval from a target agent (typically the team lead).
+    ///
+    /// Sends a `PlanApprovalRequest` protocol message to the specified agent.
+    /// The agent should respond with a `PlanApprovalResponse`.
+    pub async fn request_plan_approval(
+        &self,
+        team_name: &str,
+        from_agent: &str,
+        to_agent: &str,
+        plan: String,
+    ) -> Result<Uuid, AgentError> {
+        let teams = self.teams.read().await;
+        let team = teams.get(team_name)
+            .ok_or_else(|| AgentError::Coordination(
+                CoordinationError::TeamNotFound(team_name.to_string())
+            ))?;
+        let teammate = team.members.get(to_agent)
+            .ok_or_else(|| AgentError::Coordination(
+                CoordinationError::AgentNotFound(to_agent.to_string())
+            ))?;
+
+        let request_id = Uuid::new_v4();
+        let message = AgentMessage::protocol(
+            from_agent.to_string(),
+            to_agent.to_string(),
+            ProtocolMessage::PlanApprovalRequest {
+                request_id,
+                plan,
+            },
+        );
+
+        teammate.send(message).await?;
+
+        tracing::info!(
+            team = %team_name,
+            from = %from_agent,
+            to = %to_agent,
+            request_id = %request_id,
+            "Plan approval request sent"
+        );
+
+        Ok(request_id)
+    }
+
+    /// Process a plan approval response.
+    ///
+    /// If approved, the requesting agent exits plan mode and can proceed with execution.
+    /// If rejected, the feedback is sent back to the requesting agent for revision.
+    pub async fn handle_plan_response(
+        &self,
+        team_name: &str,
+        request_id: Uuid,
+        approved: bool,
+        feedback: Option<String>,
+        responder: &str,
+        requester: &str,
+    ) -> Result<(), AgentError> {
+        let teams = self.teams.read().await;
+        let team = teams.get(team_name)
+            .ok_or_else(|| AgentError::Coordination(
+                CoordinationError::TeamNotFound(team_name.to_string())
+            ))?;
+        let requester_agent = team.members.get(requester)
+            .ok_or_else(|| AgentError::Coordination(
+                CoordinationError::AgentNotFound(requester.to_string())
+            ))?;
+
+        if approved {
+            // Exit plan mode on the requesting agent
+            drop(teams); // Release read lock before modifying
+            let teams = self.teams.read().await;
+            if let Some(team) = teams.get(team_name) {
+                if let Some(agent) = team.members.get(requester) {
+                    if let Err(e) = agent.exit_plan_mode().await {
+                        tracing::warn!(
+                            agent = %requester,
+                            error = %e,
+                            "Failed to exit plan mode after approval"
+                        );
+                    }
+                }
+            }
+
+            tracing::info!(
+                team = %team_name,
+                request_id = %request_id,
+                responder = %responder,
+                requester = %requester,
+                "Plan approved"
+            );
+        } else {
+            // Send feedback back to the requesting agent
+            let feedback_text = feedback.unwrap_or_else(|| "No specific feedback provided".to_string());
+            let message = AgentMessage::new_text(
+                responder.to_string(),
+                requester.to_string(),
+                format!("Plan rejected. Feedback: {}", feedback_text),
+            );
+            requester_agent.send(message).await?;
+
+            tracing::info!(
+                team = %team_name,
+                request_id = %request_id,
+                responder = %responder,
+                requester = %requester,
+                "Plan rejected with feedback"
+            );
+        }
+
+        Ok(())
     }
 
     /// Check for idle agents in a team and return their names.
@@ -1174,6 +1343,48 @@ impl AgentCoordinator {
         // the config field directly since it's on self.
         // Use interior mutability via a separate flag.
         self.delegate_mode_flag.store(enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Set the hook manager for firing team-related hooks.
+    pub fn set_hook_manager(&mut self, manager: Arc<HookManager>) {
+        self.hook_manager = Some(manager);
+    }
+
+    /// Fire a hook event asynchronously (non-blocking).
+    /// Errors are logged but not propagated — hooks should never block coordinator operations.
+    fn fire_hook(&self, event: HookEvent) {
+        if let Some(hm) = &self.hook_manager {
+            let hm = hm.clone();
+            tokio::spawn(async move {
+                match hm.run_hooks(&event).await {
+                    Ok(results) => {
+                        for r in &results {
+                            if r.exit_code == 2 {
+                                tracing::info!(
+                                    event = ?event.event_type(),
+                                    exit_code = r.exit_code,
+                                    "Hook requested rollback/prevention"
+                                );
+                            } else if r.exit_code != 0 {
+                                tracing::warn!(
+                                    event = ?event.event_type(),
+                                    exit_code = r.exit_code,
+                                    stderr = %r.stderr,
+                                    "Hook returned non-zero exit code"
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            event = ?event.event_type(),
+                            error = %e,
+                            "Hook execution failed"
+                        );
+                    }
+                }
+            });
+        }
     }
 
     /// Get a human-readable status summary for a team.
