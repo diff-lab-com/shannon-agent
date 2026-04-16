@@ -1,8 +1,8 @@
 # Shannon Code - Implementation Roadmap
 
-> Updated: 2026-04-16
+> Updated: 2026-04-17
 > Priority: P0 features referencing Claude Code's implementation approach
-> Goal: Claude Code MCP/Skill ecosystem compatibility
+> Goal: Claude Code MCP/Skill/Agent ecosystem compatibility
 
 ## Current Infrastructure Status
 
@@ -18,6 +18,67 @@ Shannon already has significant foundational code. The work is primarily **integ
 | Hooks | `shannon-core/src/hooks.rs` | Types + config | Tool execution pipeline integration |
 | Project Memory | `shannon-core/src/project_instructions.rs` | Loads CLAUDE.md | Session lifecycle integration, auto-memory |
 | Project Memory | `shannon-core/src/project_memory.rs` | Types defined | Merge + inject into system prompt |
+| Agent Teams | `shannon-agents/` | Coordinator + TaskBoard + Teammate | See gap analysis below |
+
+---
+
+## Agent Teams: Claude Code Gap Analysis
+
+> Comparison against Claude Code's agent teams system (v2.1.32+, Feb 2026)
+
+### What Shannon Has (Implemented)
+
+| Feature | Shannon Implementation | Claude Code Equivalent |
+|---------|----------------------|----------------------|
+| Team creation | `AgentCoordinator.create_team()` | `TeamCreate` tool |
+| Agent spawning | `AgentTool.spawn_agent()` + `SubAgentRegistry.spawn()` | `Agent` tool with `team_name` + `name` |
+| Inter-agent messaging | `AgentCoordinator.send_message()` + `SendMessageTool` | `SendMessage` tool (file mailbox) |
+| Task board | `TaskBoard` with priorities, dependencies, assignments | `TaskCreate/TaskList/TaskUpdate` (per-file JSON) |
+| Task dependencies | `blocked_by` / `blocks` arrays on `AgentTask` | `addBlocks` / `addBlockedBy` on task files |
+| Teammate state machine | `TeammateStatus` (Idle/Busy/Planning/ShuttingDown/Stopped/Error) | Idle/active state in config.json |
+| Agent executor | `AgentExecutor` trait + `LlmAgentExecutor` | In-process Claude Code instance |
+| Worktree isolation | `WorktreeManager` + `EnterWorktreeTool`/`ExitWorktreeTool` | `isolation: "worktree"` param |
+| Teammate config | `TeammateConfig` (agent_type, capabilities, max_tasks, plan_mode, model, system_prompt) | `.claude/agents/{name}.md` frontmatter |
+| Protocol messages | `ProtocolMessage` (ShutdownRequest/Response, PlanApproval) | Same protocol via JSON-in-JSON |
+| Coordinator events | `CoordinatorEvent` broadcast channel | File polling on inbox |
+| Agent discovery | `coordinator.team_manifest()` | Read `config.json` members array |
+| Idle detection | `coordinator.idle_agents()` | Auto `idle_notification` after every turn |
+| Task tools for LLM | `TeamTaskCreateTool/UpdateTool/ListTool` | `TaskCreate/TaskList/TaskUpdate` tools |
+| Multi-agent spawner | `MultiAgentSpawner` with parallel execution | Background agent spawning |
+| Assignment strategies | RoundRobin/LeastLoaded/CapabilityBased/FirstAvailable | Self-claim (lowest ID first) |
+| Shared context | `TeamContext` bridges coordinator + registry + LLM config | `~/.claude/teams/{team}/config.json` |
+
+### Critical Gaps (Missing vs Claude Code)
+
+| Gap | Priority | Description | Effort |
+|-----|----------|-------------|--------|
+| **File-based coordination** | P0 | Claude Code uses flat files (`~/.claude/teams/`, `~/.claude/tasks/`) for all state. Shannon uses in-process `Arc<RwLock>` — teams don't survive restarts and aren't visible cross-process. | Large |
+| **Separate process spawning** | P0 | Claude Code spawns each teammate as a **separate OS process** (tmux pane or in-process). Shannon runs teammates in the same process with shared memory. No true isolation. | Large |
+| **Idle notification loop** | P1 | Claude Code teammates auto-send `idle_notification` after every LLM turn. Shannon has `idle_agents()` but no automatic polling/notification mechanism. | Medium |
+| **Peer-to-peer messaging** | P1 | Claude Code supports direct teammate-to-teammate DMs. Shannon routes all messages through the coordinator (hub-and-spoke). | Medium |
+| **Broadcast messaging** | P1 | Claude Code supports `SendMessage` with `type: "broadcast"` to all teammates. Shannon has the coordinator for this but no explicit broadcast tool. | Low |
+| **Self-claim task scheduling** | P1 | Claude Code teammates self-claim tasks (call TaskList, grab lowest ID). Shannon uses coordinator-assigned strategies. Self-claim is more natural for autonomous agents. | Medium |
+| **File-based task persistence** | P1 | Claude Code stores each task as a separate JSON file with `flock()` for concurrency. Shannon uses in-memory `HashMap`. Tasks don't survive restarts. | Large |
+| **Custom agent definitions** | P1 | Claude Code reads `.claude/agents/{name}.md` with YAML frontmatter for custom agent configs. Shannon has `TeammateConfig` but no file-based discovery. | Medium |
+| **Feature flag gating** | P2 | Claude Code requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`. Shannon has no feature flag for team features. | Low |
+| **tmux display backend** | P2 | Claude Code shows each teammate in its own tmux pane. Shannon has no multi-pane agent display. | Large |
+| **Permission inheritance** | P2 | Claude Code teammates inherit lead's permission mode. Shannon doesn't pass permission context to teammates. | Medium |
+| **Team hooks** | P2 | Claude Code has `SubagentStart`, `SubagentStop`, `TeammateIdle`, `TaskCreated`, `TaskCompleted` hooks. Shannon has no team-specific hooks. | Medium |
+| **High-watermark task IDs** | P3 | Claude Code uses auto-incrementing integer IDs via `.highwatermark` file. Shannon uses UUIDs (works fine but differs from standard). | Low |
+| **Message summary field** | P3 | Claude Code `SendMessage` requires a 5-10 word `summary` for UI preview. Shannon messages have no summary field. | Low |
+| **Team member colors** | P3 | Claude Code assigns display colors to teammates. Shannon has no color system. | Low |
+| **Metadata on tasks** | P3 | Claude Code `TaskUpdate` supports merging arbitrary `metadata` key-value pairs. Shannon has `metadata: serde_json::Value` but no merge API in update tool. | Low |
+
+### Architectural Differences (Design Choices, Not Gaps)
+
+| Dimension | Shannon | Claude Code | Assessment |
+|-----------|---------|-------------|------------|
+| **State storage** | In-process `Arc<RwLock<HashMap>>` | Flat files on disk (`~/.claude/`) | Shannon is faster but not persistent |
+| **Messaging** | In-process channels (mpsc) | File-based mailbox (append + poll) | Shannon is faster; Claude Code is cross-process |
+| **Task format** | In-memory `AgentTask` structs | One JSON file per task + `flock()` | Shannon is simpler; Claude Code is crash-safe |
+| **Agent execution** | `AgentExecutor` trait (pluggable) | Separate Claude Code CLI process | Shannon is more flexible; Claude Code is more isolated |
+| **Assignment** | Coordinator-assigned (4 strategies) | Self-claim (lowest ID first) | Different paradigms, both valid |
+| **Coordinator** | Central `AgentCoordinator` | No central coordinator; peer-based via files | Shannon has a coordinator; Claude Code is distributed |
 
 ---
 
@@ -167,6 +228,135 @@ Shannon already has significant foundational code. The work is primarily **integ
 
 ---
 
+## P0.5 - Agent Teams Enhancements
+
+> These are specific gaps identified against Claude Code's agent teams implementation.
+> The foundation is in place (coordinator, task board, teammate, executor, tools).
+> These items close the functional gaps.
+
+### AT-1. File-Based Team & Task Persistence
+
+**Reference**: Claude Code stores all team state as flat files (`~/.claude/teams/`, `~/.claude/tasks/`)
+
+**Why**: Current in-process state dies on restart. File-based state enables cross-process coordination and crash recovery.
+
+**Work Required**:
+- [ ] Team config persistence: write `config.json` on team create/update, read on startup
+- [ ] Task file persistence: one JSON file per task with `flock()` for concurrency
+- [ ] High-watermark file for auto-incrementing task IDs
+- [ ] Mailbox files: `~/.claude/teams/{team}/inboxes/{agent}.json` for message delivery
+- [ ] `TeamContext::new()` loads existing teams from disk
+- [ ] Graceful degradation: if no files exist, create fresh in-memory state
+
+**Effort**: Large | **Files**: New `shannon-agents/src/persistence.rs`, `coordinator.rs`, `task_board.rs`
+
+---
+
+### AT-2. Separate-Process Agent Spawning
+
+**Reference**: Claude Code spawns teammates as separate `claude` CLI processes (tmux pane or in-process)
+
+**Why**: True isolation between agents — a crash in one doesn't take down others. Each agent has its own context window and tool access.
+
+**Work Required**:
+- [ ] Define agent spawn backend trait: `InProcessBackend` (current) + `ProcessBackend` (new)
+- [ ] `ProcessBackend`: spawn `shannon` CLI with `--team-agent` mode
+- [ ] Pass agent config via env vars or temp file (`SHANNON_TEAM_NAME`, `SHANNON_AGENT_NAME`)
+- [ ] Teammate reads config, connects to coordinator, starts work loop
+- [ ] Capture stdout/stderr for agent output
+- [ ] Optional tmux integration: spawn in tmux pane with `tmux split-window`
+
+**Effort**: Large | **Files**: New `shannon-agents/src/spawn.rs`, `shannon-cli/src/main.rs`, `shannon-ui/src/repl/mod.rs`
+
+---
+
+### AT-3. Idle Notification + Self-Claim Task Loop
+
+**Reference**: Claude Code teammates auto-send `idle_notification` after every LLM turn and self-claim tasks
+
+**Why**: Enables autonomous agent behavior — agents find their own work without lead micromanagement.
+
+**Work Required**:
+- [ ] After `AgentExecutor.execute()` returns, auto-send idle notification to coordinator
+- [ ] Teammate work loop: idle → TaskList (find unblocked, no owner) → TaskUpdate (claim) → execute → complete → idle
+- [ ] Self-claim logic: prefer lowest ID, respect `blocked_by` constraints
+- [ ] Lead notification: when agent goes idle, surface to LLM as `QueryEvent::Info`
+- [ ] Configurable idle poll interval (default: check tasks every 3s while idle)
+
+**Effort**: Medium | **Files**: `teammate.rs`, `coordinator.rs`, `task_tools.rs`
+
+---
+
+### AT-4. Custom Agent Definitions (`.claude/agents/`)
+
+**Reference**: Claude Code reads `.claude/agents/{name}.md` with YAML frontmatter for agent configs
+
+**Why**: Users define reusable agent templates (like "backend-dev", "test-runner") without code changes.
+
+**Work Required**:
+- [ ] Parse `.claude/agents/*.md` files with YAML frontmatter
+- [ ] Frontmatter fields: `description`, `tools`, `disallowedTools`, `model`, `permissionMode`, `maxTurns`, `isolation`
+- [ ] Body = system prompt
+- [ ] `AgentTool` resolves `agent_type` to custom definitions
+- [ ] Merge custom definition with `TeammateConfig` defaults
+- [ ] Discovery: list available agent types from files
+- [ ] Support both `.claude/agents/` and `.shannon/agents/`
+
+**Effort**: Medium | **Files**: New `shannon-agents/src/agent_defs.rs`, `shannon-tools/src/agent.rs`
+
+---
+
+### AT-5. Peer-to-Peer + Broadcast Messaging
+
+**Reference**: Claude Code supports direct teammate-to-teammate DMs and `type: "broadcast"` messages
+
+**Why**: Hub-and-spoke (through coordinator) limits parallel collaboration. Peer messaging enables agents to coordinate directly.
+
+**Work Required**:
+- [ ] Add `broadcast` message type to `MessageType` enum
+- [ ] `SendMessageTool` support for `recipient: "*"` (broadcast)
+- [ ] Allow teammates to send messages to each other (not just to/from lead)
+- [ ] Message summary field (5-10 word preview for UI)
+- [ ] Lead visibility into peer DMs (summary in idle notification)
+
+**Effort**: Medium | **Files**: `message.rs`, `coordinator.rs`, `sub_agent.rs`
+
+---
+
+### AT-6. Team Feature Flag + Permission Inheritance
+
+**Reference**: Claude Code requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` and teammates inherit lead's permissions
+
+**Why**: Team features are complex and resource-intensive. Feature flag lets users opt in. Permission inheritance ensures consistent security.
+
+**Work Required**:
+- [ ] Add `SHANNON_AGENT_TEAMS` env var (or config flag) to enable team tools
+- [ ] When disabled: `TeamContext::new()` returns error, team tools not registered
+- [ ] Pass lead's `PermissionManager` mode to spawned teammates
+- [ ] Document feature flag in help text and README
+
+**Effort**: Low | **Files**: `context.rs`, `shannon-tools/src/lib.rs`, `shannon-cli/src/main.rs`
+
+---
+
+### AT-7. Team Hooks (Quality Gates)
+
+**Reference**: Claude Code has `SubagentStart`, `SubagentStop`, `TeammateIdle`, `TaskCreated`, `TaskCompleted` hooks
+
+**Why**: Quality gates prevent bad task completion, block inappropriate agent spawns, and enforce team policies.
+
+**Work Required**:
+- [ ] Add team hook events to `HookEventType` enum
+- [ ] Fire `SubagentStart` before agent spawn (exit 2 = block)
+- [ ] Fire `SubagentStop` after agent finishes
+- [ ] Fire `TeammateIdle` when agent goes idle (stderr = feedback to agent)
+- [ ] Fire `TaskCreated` / `TaskCompleted` on task lifecycle events (exit 2 = block)
+- [ ] Hook handlers: command (shell), prompt (LLM eval), agent (multi-turn)
+
+**Effort**: Medium | **Files**: `hooks.rs`, `coordinator.rs`, `task_board.rs`
+
+---
+
 ## Implementation Order
 
 ```
@@ -185,6 +375,10 @@ Phase 3 (Security):     6
 Phase 4 (Architecture): 7
   Multi-session
   Requires stable foundation from Phases 1-3.
+
+Phase 5 (Agent Teams):  AT-6 → AT-1 → AT-3 → AT-5 → AT-4 → AT-7 → AT-2
+  Feature Flag → File Persistence → Idle/Self-Claim → P2P Messaging → Agent Defs → Team Hooks → Process Spawn
+  Feature flag first (gating), then persistence (foundation), then behavioral features, then heavy lift (process spawn).
 ```
 
 **Why this order**:
@@ -194,7 +388,8 @@ Phase 4 (Architecture): 7
 - Skills fourth: mostly compatible already, just needs verification + wiring
 - MCP fifth: unlocks the entire Claude Code MCP server ecosystem
 - Sandbox sixth: security hardening after core features are stable
-- Multi-session last: architectural change, benefits from stable foundation
+- Multi-session seventh: architectural change, benefits from stable foundation
+- Agent Teams last: foundation is in place; enhancements are additive
 
 ---
 
