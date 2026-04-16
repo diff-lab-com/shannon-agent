@@ -208,7 +208,8 @@ mod coordinator_tests {
         assert!(!config.enable_worktree_isolation);
         assert!(config.worktree_config.is_none());
         assert_eq!(config.heartbeat_interval_secs, 30);
-        assert_eq!(config.assignment_strategy, AssignmentStrategy::FirstAvailable);
+        assert_eq!(config.assignment_strategy, AssignmentStrategy::SelfClaim);
+        assert!(!config.delegate_mode);
     }
 
     #[test]
@@ -231,6 +232,7 @@ mod coordinator_tests {
             AssignmentStrategy::LeastLoaded,
             AssignmentStrategy::CapabilityBased,
             AssignmentStrategy::FirstAvailable,
+            AssignmentStrategy::SelfClaim,
         ];
 
         for strategy in &strategies {
@@ -250,6 +252,7 @@ mod coordinator_tests {
             worktree_config: None,
             heartbeat_interval_secs: 60,
             assignment_strategy: AssignmentStrategy::RoundRobin,
+            delegate_mode: false,
         };
 
         assert_eq!(config.max_team_size, 5);
@@ -268,6 +271,7 @@ mod coordinator_tests {
             worktree_config: None,
             heartbeat_interval_secs: 15,
             assignment_strategy: AssignmentStrategy::LeastLoaded,
+            delegate_mode: false,
         };
 
         let json = serde_json::to_string(&config).expect("serialize custom config");

@@ -100,6 +100,12 @@ pub enum HookEventType {
     Notification,
     /// When the user submits a prompt
     UserPromptSubmit,
+    /// When a team task is created (before committing)
+    TeamTaskCreated,
+    /// When a team task is marked completed (before committing)
+    TeamTaskCompleted,
+    /// When a teammate goes idle
+    TeammateIdle,
 }
 
 impl HookEventType {
@@ -112,6 +118,9 @@ impl HookEventType {
             "SessionEnd" => Some(Self::SessionEnd),
             "Notification" => Some(Self::Notification),
             "UserPromptSubmit" => Some(Self::UserPromptSubmit),
+            "TeamTaskCreated" => Some(Self::TeamTaskCreated),
+            "TeamTaskCompleted" => Some(Self::TeamTaskCompleted),
+            "TeammateIdle" => Some(Self::TeammateIdle),
             _ => None,
         }
     }
@@ -126,6 +135,9 @@ impl std::fmt::Display for HookEventType {
             Self::SessionEnd => write!(f, "SessionEnd"),
             Self::Notification => write!(f, "Notification"),
             Self::UserPromptSubmit => write!(f, "UserPromptSubmit"),
+            Self::TeamTaskCreated => write!(f, "TeamTaskCreated"),
+            Self::TeamTaskCompleted => write!(f, "TeamTaskCompleted"),
+            Self::TeammateIdle => write!(f, "TeammateIdle"),
         }
     }
 }
@@ -170,6 +182,42 @@ pub enum HookEvent {
         /// The user's prompt text
         prompt: String,
     },
+    /// When a team task is created (before committing).
+    /// Exit code 2 from the hook = rollback (delete the task).
+    TeamTaskCreated {
+        /// The task ID
+        task_id: String,
+        /// The team name
+        team_name: String,
+        /// The agent that created the task (if known)
+        agent_name: Option<String>,
+        /// Brief task subject
+        subject: String,
+        /// Task priority
+        priority: String,
+    },
+    /// When a team task is marked completed (before committing).
+    /// Exit code 2 from the hook = prevent completion (revert to in_progress).
+    TeamTaskCompleted {
+        /// The task ID
+        task_id: String,
+        /// The team name
+        team_name: String,
+        /// The agent that completed the task
+        agent_name: String,
+        /// Brief task subject
+        subject: String,
+    },
+    /// When a teammate goes idle.
+    /// Exit code 2 from the hook = send feedback and keep working.
+    TeammateIdle {
+        /// The team name
+        team_name: String,
+        /// The agent that went idle
+        agent_name: String,
+        /// Number of remaining available tasks
+        available_tasks: usize,
+    },
 }
 
 impl HookEvent {
@@ -182,6 +230,9 @@ impl HookEvent {
             Self::SessionEnd { .. } => HookEventType::SessionEnd,
             Self::Notification { .. } => HookEventType::Notification,
             Self::UserPromptSubmit { .. } => HookEventType::UserPromptSubmit,
+            Self::TeamTaskCreated { .. } => HookEventType::TeamTaskCreated,
+            Self::TeamTaskCompleted { .. } => HookEventType::TeamTaskCompleted,
+            Self::TeammateIdle { .. } => HookEventType::TeammateIdle,
         }
     }
 
@@ -196,6 +247,9 @@ impl HookEvent {
             Self::SessionEnd { session_id } => session_id.clone(),
             Self::Notification { message } => message.clone(),
             Self::UserPromptSubmit { prompt } => prompt.clone(),
+            Self::TeamTaskCreated { subject, .. } => subject.clone(),
+            Self::TeamTaskCompleted { subject, .. } => subject.clone(),
+            Self::TeammateIdle { agent_name, .. } => agent_name.clone(),
         }
     }
 

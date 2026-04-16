@@ -98,6 +98,24 @@ impl MessageInbox {
         let mut receiver = self.receiver.lock().await;
         receiver.recv().await
     }
+
+    /// Non-blocking attempt to receive a message.
+    /// Returns Ok(Some(msg)) if available, Ok(None) if empty, Err if closed.
+    fn try_recv(&self) -> Result<Option<AgentMessage>, AgentError> {
+        match self.receiver.try_lock() {
+            Ok(mut receiver) => match receiver.try_recv() {
+                Ok(msg) => Ok(Some(msg)),
+                Err(mpsc::error::TryRecvError::Empty) => Ok(None),
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    Err(AgentError::Communication("Inbox closed".to_string()))
+                }
+            },
+            Err(_) => {
+                // Lock is held by another task (e.g. a recv in progress); treat as empty
+                Ok(None)
+            }
+        }
+    }
 }
 
 /// An individual agent teammate
@@ -260,6 +278,14 @@ impl Teammate {
     /// Receive next message from inbox
     pub async fn recv(&self) -> Option<AgentMessage> {
         self.inbox.recv().await
+    }
+
+    /// Non-blocking attempt to receive the next message from inbox.
+    ///
+    /// Returns `Ok(Some(message))` if a message was available,
+    /// `Ok(None)` if the inbox is empty, or `Err` if the inbox is closed.
+    pub fn try_recv(&self) -> Result<Option<AgentMessage>, AgentError> {
+        self.inbox.try_recv()
     }
 
     /// Handle a chat message

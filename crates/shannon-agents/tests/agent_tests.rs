@@ -34,6 +34,7 @@ mod coordinator_tests {
             worktree_config: None,
             heartbeat_interval_secs: 15,
             assignment_strategy: AssignmentStrategy::RoundRobin,
+            delegate_mode: false,
         };
 
         let coordinator = AgentCoordinator::new(config).await;
@@ -1367,7 +1368,7 @@ mod self_claim_tests {
             .unwrap();
 
         // Bob looks for tasks — should find none
-        let result = coordinator.find_next_claimable_task("bob").await;
+        let result = coordinator.find_next_claimable_task("dev", "bob").await;
         assert!(result.is_none());
     }
 

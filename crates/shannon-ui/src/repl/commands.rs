@@ -1986,7 +1986,8 @@ fn handle_team(repl: &mut Repl, args: &str) -> Result<()> {
 /team list  — List all teams
 /team run  — Execute pending tasks in parallel
 /team shutdown  — Shutdown team
-/team disband <team>  — Disband team and clean up".to_string());
+/team disband <team>  — Disband team and clean up
+/team delegate  — Toggle delegate mode (lead only coordinates)".to_string());
         }
         "create" => {
             let name = parts.get(1).copied().unwrap_or("");
@@ -2116,6 +2117,16 @@ fn handle_team(repl: &mut Repl, args: &str) -> Result<()> {
                     Ok(()) => { repl.chat.add_message(ChatRole::System, format!("Team '{team_name}' disbanded and cleaned up.")); }
                     Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to disband: {e}")); }
                 }
+            } else {
+                repl.chat.add_message(ChatRole::System, "No active team coordinator.".to_string());
+            }
+        }
+        "delegate" => {
+            if let Some(ref coordinator) = repl.team_coordinator {
+                let current = coordinator.delegate_mode();
+                coordinator.set_delegate_mode(!current);
+                let state = if !current { "ON" } else { "OFF" };
+                repl.chat.add_message(ChatRole::System, format!("Delegate mode: {state}"));
             } else {
                 repl.chat.add_message(ChatRole::System, "No active team coordinator.".to_string());
             }

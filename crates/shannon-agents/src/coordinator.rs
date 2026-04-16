@@ -12,7 +12,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock, broadcast};
+use tokio::sync::{mpsc, RwLock, broadcast, watch};
 use uuid::Uuid;
 
 /// Information about a team member for agent discovery
@@ -64,6 +64,10 @@ pub struct CoordinatorConfig {
     pub heartbeat_interval_secs: u64,
     /// Task assignment strategy
     pub assignment_strategy: AssignmentStrategy,
+    /// Delegate mode: when true, the lead agent only coordinates (creates tasks,
+    /// messages teammates) and does not directly implement code changes.
+    /// Inspired by Claude Code's Shift+Tab delegate mode.
+    pub delegate_mode: bool,
 }
 
 /// Strategy for assigning tasks to agents
@@ -89,7 +93,8 @@ impl Default for CoordinatorConfig {
             enable_worktree_isolation: false,
             worktree_config: None,
             heartbeat_interval_secs: 30,
-            assignment_strategy: AssignmentStrategy::FirstAvailable,
+            assignment_strategy: AssignmentStrategy::SelfClaim,
+            delegate_mode: false,
         }
     }
 }
@@ -133,6 +138,13 @@ pub struct AgentCoordinator {
     persistence: Option<FilePersistence>,
     /// Active background tasks keyed by task ID for cancellation
     background_tasks: Arc<RwLock<HashMap<String, tokio::task::AbortHandle>>>,
+    /// Runtime delegate mode flag (toggled after construction)
+    delegate_mode_flag: std::sync::atomic::AtomicBool,
+    /// Background task that auto-delivers inbox messages to teammates
+    _delivery_handle: Option<tokio::task::JoinHandle<()>>,
+    /// Sender side of the cancellation signal for the delivery loop.
+    /// Sending `true` tells the loop to stop.
+    delivery_cancel: watch::Sender<bool>,
 }
 
 /// A team of agents working together
@@ -211,7 +223,12 @@ impl AgentCoordinator {
             }
         });
 
-        Ok(Self {
+        let delegate_mode = config.delegate_mode;
+
+        // Cancellation channel for the inbox delivery loop
+        let (delivery_cancel, mut delivery_cancel_rx) = watch::channel(false);
+
+        let mut coordinator = Self {
             config,
             teams,
             worktree_manager,
@@ -222,7 +239,15 @@ impl AgentCoordinator {
             _heartbeat_handle: Arc::new(heartbeat_handle),
             persistence: None,
             background_tasks: Arc::new(RwLock::new(HashMap::new())),
-        })
+            delegate_mode_flag: std::sync::atomic::AtomicBool::new(delegate_mode),
+            _delivery_handle: None,
+            delivery_cancel,
+        };
+
+        // Start the background inbox delivery loop
+        coordinator.start_inbox_delivery_loop(&mut delivery_cancel_rx);
+
+        Ok(coordinator)
     }
 
     /// Create a new agent team
@@ -304,6 +329,36 @@ impl AgentCoordinator {
 
         let teammate = Teammate::new(agent_name.clone(), config);
         team.members.insert(agent_name.clone(), teammate);
+
+        // Create isolated worktree for this agent if worktree isolation is enabled
+        if self.config.enable_worktree_isolation {
+            if let Some(ref wm) = self.worktree_manager {
+                match wm.create_agent_session(&agent_name, None).await {
+                    Ok(session) => {
+                        tracing::info!(
+                            team = %team_name,
+                            agent = %agent_name,
+                            worktree = %session.path.display(),
+                            "Created isolated worktree for agent"
+                        );
+                        // Store worktree path in teammate metadata
+                        let agent = team.members.get(&agent_name).unwrap();
+                        agent.set_metadata("worktree_path".to_string(),
+                            serde_json::json!(session.path.to_string_lossy().to_string())).await;
+                        agent.set_metadata("worktree_branch".to_string(),
+                            serde_json::json!(session.branch_name)).await;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            team = %team_name,
+                            agent = %agent_name,
+                            error = %e,
+                            "Failed to create worktree for agent, continuing without isolation"
+                        );
+                    }
+                }
+            }
+        }
 
         drop(teams);
 
@@ -590,12 +645,86 @@ impl AgentCoordinator {
         Ok(task_id)
     }
 
-    /// Assign a task to an agent
+    /// Add a task to the team with explicit dependency declarations.
+    ///
+    /// Creates the task and registers `blocked_by` dependencies on the task board.
+    /// Each dependency ID in `blocked_by` must correspond to an existing task that
+    /// must complete before this new task can be claimed by an agent.
+    pub async fn add_task_with_deps(
+        &self,
+        team_name: &str,
+        subject: String,
+        description: String,
+        priority: TaskPriority,
+        blocked_by: Vec<Uuid>,
+    ) -> Result<Uuid, AgentError> {
+        let mut task = AgentTask::new(subject, description, priority);
+        let task_id = task.id;
+
+        // Register dependencies on the task itself before adding to the board
+        for dep_id in &blocked_by {
+            task.add_dependency(*dep_id);
+        }
+
+        self.task_board.add_task(task).await?;
+
+        // Register dependencies on the task board for graph tracking
+        for dep_id in &blocked_by {
+            if let Err(e) = self.task_board.add_dependency(task_id, *dep_id).await {
+                tracing::warn!(
+                    task_id = %task_id,
+                    dep_id = %dep_id,
+                    error = %e,
+                    "Failed to register task dependency"
+                );
+            }
+        }
+
+        let mut teams = self.teams.write().await;
+        if let Some(team) = teams.get_mut(team_name) {
+            team.task_list.push(AgentTask {
+                id: task_id,
+                subject: String::new(),
+                description: String::new(),
+                status: TaskStatus::Pending,
+                priority: TaskPriority::Medium,
+                owner: None,
+                blocked_by: blocked_by.clone(),
+                blocks: Vec::new(),
+                active_form: None,
+                required_capabilities: Vec::new(),
+                metadata: serde_json::Value::Null,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            });
+        }
+
+        tracing::info!(
+            task_id = %task_id,
+            deps = blocked_by.len(),
+            team = %team_name,
+            "Task added with dependencies"
+        );
+
+        Ok(task_id)
+    }
+
+    /// Assign a task to an agent using the configured assignment strategy.
+    ///
+    /// **Note**: For decentralized coordination, prefer `self_claim_task` or
+    /// `self_claim_task_for_agent` instead. This method is retained for backward
+    /// compatibility with centrally-assigned workflows.
     pub async fn assign_task(
         &self,
         team_name: &str,
         task_id: Uuid,
     ) -> Result<String, AgentError> {
+        tracing::warn!(
+            task_id = %task_id,
+            "assign_task() is deprecated for decentralized coordination; \
+             prefer self_claim_task() or self_claim_task_for_agent()"
+        );
+
         // Fetch the task's required capabilities first (if it exists on the board).
         let required_capabilities = self.task_board.get_task(task_id).await
             .map(|t| t.required_capabilities.clone())
@@ -865,11 +994,34 @@ impl AgentCoordinator {
         Ok(updated_task)
     }
 
-    /// Find the next claimable task for an agent (lowest-ID unblocked, pending, unowned).
+    /// Find the next claimable task for an agent within a specific team.
     ///
-    /// This implements the Claude Code priority rule: prefer tasks in ID order
-    /// so that earlier-created tasks are picked first.
-    pub async fn find_next_claimable_task(&self, agent_name: &str) -> Option<AgentTask> {
+    /// Finds the lowest-ID (earliest created) task in the team that is:
+    /// - `Pending` status
+    /// - Has no owner
+    /// - Has no unresolved `blocked_by` dependencies
+    ///
+    /// This implements the Claude Code priority rule: prefer tasks in creation
+    /// order so that earlier-created tasks are picked first.
+    ///
+    /// Returns `Option<(Uuid, AgentTask)>` — the task ID and full task — or
+    /// `None` if no tasks are available.
+    pub async fn find_next_claimable_task(
+        &self,
+        team_name: &str,
+        agent_name: &str,
+    ) -> Option<(Uuid, AgentTask)> {
+        // Verify the team exists and the agent is a member
+        {
+            let teams = self.teams.read().await;
+            let Some(team) = teams.get(team_name) else {
+                return None;
+            };
+            if !team.members.contains_key(agent_name) {
+                return None;
+            }
+        }
+
         let ready_tasks = self.task_board.list_ready_tasks().await;
 
         // Filter to tasks with no owner, sorted by creation time (earliest first)
@@ -885,10 +1037,11 @@ impl AgentCoordinator {
             task_id = %task.id,
             subject = %task.subject,
             agent = %agent_name,
+            team = %team_name,
             "Found claimable task for agent"
         );
 
-        Some(task)
+        Some((task.id, task))
     }
 
     /// Convenience: find and claim the next available task for an agent.
@@ -899,12 +1052,32 @@ impl AgentCoordinator {
         team_name: &str,
         agent_name: &str,
     ) -> Result<Option<AgentTask>, AgentError> {
-        let Some(task) = self.find_next_claimable_task(agent_name).await else {
+        let Some((task_id, _)) = self.find_next_claimable_task(team_name, agent_name).await else {
             return Ok(None);
         };
 
-        let claimed = self.self_claim_task(team_name, agent_name, task.id).await?;
+        let claimed = self.self_claim_task(team_name, agent_name, task_id).await?;
         Ok(Some(claimed))
+    }
+
+    /// Find and atomically claim the next available task for an agent.
+    ///
+    /// This is the primary decentralized coordination entry point: an idle agent
+    /// calls this to find the lowest-ID unblocked, unowned task and claim it in
+    /// a single operation.
+    ///
+    /// Returns the claimed task ID, or `None` if no tasks are available.
+    pub async fn self_claim_task_for_agent(
+        &self,
+        team_name: &str,
+        agent_name: &str,
+    ) -> Result<Option<Uuid>, AgentError> {
+        let Some((task_id, _)) = self.find_next_claimable_task(team_name, agent_name).await else {
+            return Ok(None);
+        };
+
+        self.self_claim_task(team_name, agent_name, task_id).await?;
+        Ok(Some(task_id))
     }
 
     // ── Idle Notification ─────────────────────────────────────────────
@@ -986,6 +1159,21 @@ impl AgentCoordinator {
             description: team.description.clone(),
             members,
         }
+    }
+
+    /// Check if delegate mode is enabled.
+    /// In delegate mode, the lead agent only coordinates (creates tasks, messages
+    /// teammates) and should not directly implement code changes.
+    pub fn delegate_mode(&self) -> bool {
+        self.config.delegate_mode
+    }
+
+    /// Toggle delegate mode on or off.
+    pub fn set_delegate_mode(&self, enabled: bool) {
+        // Config is behind Arc<RwLock> in some paths, but here we access
+        // the config field directly since it's on self.
+        // Use interior mutability via a separate flag.
+        self.delegate_mode_flag.store(enabled, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Get a human-readable status summary for a team.
@@ -1176,6 +1364,56 @@ impl AgentCoordinator {
                 }
             }
         }
+    }
+
+    /// Start the background inbox delivery loop.
+    ///
+    /// Periodically checks all teammates' inboxes and auto-delivers pending
+    /// messages by injecting them into the teammate's message handling flow.
+    fn start_inbox_delivery_loop(&mut self, cancel_rx: &mut watch::Receiver<bool>) {
+        let teams = self.teams.clone();
+        let mut cancel_rx = cancel_rx.clone();
+
+        let handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {}
+                    _ = cancel_rx.changed() => {
+                        if *cancel_rx.borrow() {
+                            tracing::info!("Inbox delivery loop cancelled");
+                            return;
+                        }
+                    }
+                }
+
+                let teams = teams.read().await;
+                for (team_name, team) in teams.iter() {
+                    for (agent_name, teammate) in &team.members {
+                        // Check if the teammate has pending messages in its inbox
+                        if let Ok(Some(msg)) = teammate.try_recv() {
+                            tracing::debug!(
+                                team = %team_name,
+                                agent = %agent_name,
+                                from = %msg.from,
+                                "Auto-delivering inbox message to teammate"
+                            );
+                            if let Err(e) = teammate.handle_message(msg).await {
+                                tracing::warn!(
+                                    team = %team_name,
+                                    agent = %agent_name,
+                                    error = %e,
+                                    "Failed to auto-deliver inbox message"
+                                );
+                            }
+                        }
+                    }
+                }
+                drop(teams);
+            }
+        });
+
+        self._delivery_handle = Some(handle);
     }
 
     /// Disband a specific team: shutdown all agents, remove from memory, delete persisted files.

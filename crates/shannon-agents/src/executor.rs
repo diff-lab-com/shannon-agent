@@ -57,6 +57,21 @@ impl LlmAgentExecutor {
     pub fn new(client: LlmClient) -> Self {
         Self { client }
     }
+
+    /// Return a client instance with an optional model override applied.
+    ///
+    /// When `model` is `Some`, clones the client and switches its model.
+    /// When `None`, returns a reference-counted clone using the default model.
+    fn client_for_model(&self, model: Option<&str>) -> LlmClient {
+        match model {
+            Some(m) => {
+                let mut c = self.client.clone();
+                c.set_model(m.to_string());
+                c
+            }
+            None => self.client.clone(),
+        }
+    }
 }
 
 #[async_trait]
@@ -65,7 +80,7 @@ impl AgentExecutor for LlmAgentExecutor {
         &self,
         system_prompt: &str,
         task: &str,
-        _model: Option<&str>,
+        model: Option<&str>,
         _tools: Option<&[String]>,
     ) -> Result<ToolOutput, String> {
         let messages = vec![Message {
@@ -73,8 +88,8 @@ impl AgentExecutor for LlmAgentExecutor {
             content: MessageContent::Text(task.to_string()),
         }];
 
-        let result = self
-            .client
+        let client = self.client_for_model(model);
+        let result = client
             .send_message(messages, None, Some(system_prompt.to_string()))
             .await
             .map_err(|e| format!("LLM error: {e}"))?;
@@ -87,7 +102,7 @@ impl AgentExecutor for LlmAgentExecutor {
         system_prompt: &str,
         history: &[ChatTurn],
         task: &str,
-        _model: Option<&str>,
+        model: Option<&str>,
         _tools: Option<&[String]>,
     ) -> Result<ToolOutput, String> {
         // Build full message list from conversation history
@@ -105,8 +120,8 @@ impl AgentExecutor for LlmAgentExecutor {
             content: MessageContent::Text(task.to_string()),
         });
 
-        let result = self
-            .client
+        let client = self.client_for_model(model);
+        let result = client
             .send_message(messages, None, Some(system_prompt.to_string()))
             .await
             .map_err(|e| format!("LLM error: {e}"))?;
