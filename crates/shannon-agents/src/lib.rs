@@ -19,6 +19,7 @@ mod context;
 mod task_tools;
 mod persistence;
 mod agent_defs;
+mod tmux;
 
 pub use coordinator::{AgentCoordinator, CoordinatorConfig, AssignmentStrategy, CoordinatorEvent, AgentInfo, TeamManifest, InboxSummary};
 pub use teammate::{Teammate, TeammateConfig, TeammateStatus, TeammateState};
@@ -60,6 +61,7 @@ pub use executor::{
     AgentExecutor, LlmAgentExecutor, MockAgentExecutor, shared_executor,
     ChatTurn,
 };
+pub use tmux::TmuxManager;
 
 /// Version information for the agents crate
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
