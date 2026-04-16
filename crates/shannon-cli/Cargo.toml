@@ -28,5 +28,8 @@ shannon-commands = { path = "../shannon-commands" }
 shannon-tools = { path = "../shannon-tools" }
 shannon-skills = { path = "../shannon-skills" }
 
+# Internationalization
+rust-i18n = { workspace = true }
+
 [dev-dependencies]
 tokio-test = "0.4"

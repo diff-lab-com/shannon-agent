@@ -1243,6 +1243,215 @@ impl Tool for GitSafetyTool {
 }
 
 // ---------------------------------------------------------------------------
+// AutoCommitTool
+// ---------------------------------------------------------------------------
+
+/// Input for AutoCommitTool.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AutoCommitInput {
+    /// Commit message. If omitted, one is generated from the diff.
+    pub message: Option<String>,
+    /// If true, show what would be committed without committing.
+    #[serde(default)]
+    pub dry_run: bool,
+    /// If true, stage all tracked changes (`git add -u`). Default: true.
+    #[serde(default = "default_true")]
+    pub add_all: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Auto-commit tool. Stages and commits all current changes with a generated
+/// or provided commit message. Inspired by Aider's auto-commit behavior.
+///
+/// # Safety
+///
+/// - Never force-pushes.
+/// - Skips commit if working directory is clean.
+/// - Checks for GitSafety violations before staging.
+pub struct AutoCommitTool {
+    description: String,
+}
+
+impl Default for AutoCommitTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AutoCommitTool {
+    pub fn new() -> Self {
+        Self {
+            description: "Auto-commit all current changes with a generated or provided commit message. \
+                Stages modified files, creates a commit, and returns the result."
+                .to_string(),
+        }
+    }
+
+    /// Generate a commit message from the staged diff stats.
+    fn generate_message(cwd: Option<&str>) -> Result<String, ToolError> {
+        // Get short stat from diff
+        let (stat, _, success) = run_git(
+            &["diff", "--stat", "--cached"],
+            cwd,
+        )?;
+        if !success {
+            // Fallback to unstaged diff if no cached changes yet
+            let (stat2, _, _) = run_git(&["diff", "--stat"], cwd)?;
+            return Ok(Self::message_from_stat(&stat2));
+        }
+        Ok(Self::message_from_stat(&stat))
+    }
+
+    fn message_from_stat(stat: &str) -> String {
+        let file_count = stat
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .count()
+            .saturating_sub(1); // last line is summary
+
+        let summary_line = stat.lines().last().unwrap_or("").trim();
+
+        if file_count == 0 {
+            return "chore: update files".to_string();
+        }
+
+        // Extract file names for a descriptive message
+        let files: Vec<&str> = stat
+            .lines()
+            .take(file_count)
+            .filter_map(|l| l.split_whitespace().next())
+            .collect();
+
+        if files.len() <= 3 {
+            let file_list = files.join(", ");
+            format!("chore: update {file_list}")
+        } else {
+            format!("chore: update {file_count} files ({summary_line})")
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for AutoCommitTool {
+    fn name(&self) -> &str {
+        "auto_commit"
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "Commit message. Auto-generated from diff if omitted."
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "Show what would be committed without committing.",
+                    "default": false
+                },
+                "add_all": {
+                    "type": "boolean",
+                    "description": "Stage all tracked changes before committing.",
+                    "default": true
+                }
+            }
+        })
+    }
+
+    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
+        let parsed: AutoCommitInput = serde_json::from_value(input)
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid auto_commit input: {e}")))?;
+
+        let cwd: Option<&str> = None;
+
+        // Check if we're in a git repo
+        let _git_root = find_git_root(cwd)?;
+
+        // Check if working directory is dirty
+        if !is_working_dir_dirty(cwd)? {
+            return Ok(ToolOutput {
+                content: "Nothing to commit — working directory is clean.".to_string(),
+                is_error: false,
+                metadata: HashMap::new(),
+            });
+        }
+
+        // Safety check: get current branch
+        let branch = current_branch(cwd)?;
+
+        // Stage changes if requested
+        if parsed.add_all {
+            let (_, stderr, success) = run_git(&["add", "-u"], cwd)?;
+            if !success {
+                return Ok(ToolOutput {
+                    content: format!("Failed to stage changes: {stderr}"),
+                    is_error: true,
+                    metadata: HashMap::new(),
+                });
+            }
+        }
+
+        // Dry run: show what would be committed
+        if parsed.dry_run {
+            let (stat, _, _) = run_git(&["diff", "--stat", "--cached"], cwd)?;
+            let message = parsed.message.clone().unwrap_or_else(|| {
+                Self::generate_message(cwd).unwrap_or_else(|_| "chore: update files".to_string())
+            });
+            return Ok(ToolOutput {
+                content: format!(
+                    "[dry-run] Would commit on branch '{branch}':\n{stat}\nMessage: {message}"
+                ),
+                is_error: false,
+                metadata: HashMap::new(),
+            });
+        }
+
+        // Generate or use provided commit message
+        let message = match parsed.message {
+            Some(msg) => msg,
+            None => Self::generate_message(cwd)?,
+        };
+
+        // Commit
+        let (_, stderr, success) = run_git(
+            &["commit", "-m", &message],
+            cwd,
+        )?;
+        if !success {
+            return Ok(ToolOutput {
+                content: format!("Commit failed: {stderr}"),
+                is_error: true,
+                metadata: HashMap::new(),
+            });
+        }
+
+        // Get the short hash of the new commit
+        let (hash, _, _) = run_git(&["rev-parse", "--short", "HEAD"], cwd)?;
+        let hash = hash.trim();
+
+        Ok(ToolOutput {
+            content: format!(
+                "Committed on branch '{branch}': {hash} {message}"
+            ),
+            is_error: false,
+            metadata: HashMap::new(),
+        })
+    }
+
+    fn category(&self) -> &str {
+        "git"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1736,5 +1945,18 @@ mod tests {
         let input = json!({"action": "apply"});
         let parsed: GitStashInput = serde_json::from_value(input).unwrap();
         assert_eq!(parsed.action, StashAction::Apply);
+    }
+
+    #[test]
+    fn test_auto_commit_input_deserialization() {
+        let input = json!({"message": "feat: add new feature"});
+        let parsed: AutoCommitInput = serde_json::from_value(input).unwrap();
+        assert_eq!(parsed.message, Some("feat: add new feature".to_string()));
+        assert!(!parsed.dry_run);
+
+        let input = json!({"message": "wip", "dry_run": true, "add_all": false});
+        let parsed: AutoCommitInput = serde_json::from_value(input).unwrap();
+        assert!(parsed.dry_run);
+        assert!(!parsed.add_all);
     }
 }

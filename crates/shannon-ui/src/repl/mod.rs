@@ -16,6 +16,7 @@ use crate::{
     },
     Result,
 };
+use rust_i18n::t;
 use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -483,7 +484,7 @@ impl Repl {
 
         // Show welcome message rendered through the markdown renderer
         let welcome_md = self.renderer.render_markdown(
-            "# Welcome to Shannon!\n\nType your message and press **Enter**. Type `/help` for commands."
+            &format!("# {}\n\n{}", t!("repl.welcome"), t!("repl.welcome_help"))
         );
         let welcome_text: String = welcome_md.iter()
             .flat_map(|line| line.spans.iter().map(|s| s.content.clone()))
@@ -545,6 +546,31 @@ impl Repl {
             LeaveAlternateScreen
         )?;
         terminal.show_cursor()?;
+
+        // Print session cost summary to stdout after terminal is restored
+        if let Some(ref engine) = self.query_engine {
+            if let Ok(tracker) = engine.cost_tracker().read() {
+                let total_cost = tracker.total_cost();
+                if tracker.total_input_tokens > 0 {
+                    println!();
+                    println!("── Session Summary ──");
+                    println!("  Tokens: {} in + {} out  |  Cost: ${total_cost:.4}",
+                        tracker.total_input_tokens, tracker.total_output_tokens);
+                    if let Some(budget) = tracker.budget_limit_usd {
+                        let pct = (total_cost / budget) * 100.0;
+                        println!("  Budget: ${total_cost:.4} / ${budget:.2} ({pct:.0}%)");
+                    }
+                    println!("  Model: {}", tracker.model_name);
+                    if let Some(started) = &self.session_started_at {
+                        let elapsed = chrono::Utc::now() - *started;
+                        let mins = elapsed.num_minutes();
+                        let secs = elapsed.num_seconds() % 60;
+                        println!("  Duration: {mins}m {secs}s");
+                    }
+                    println!("─────────────────────");
+                }
+            }
+        }
 
         Ok(())
     }

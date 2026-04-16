@@ -2,6 +2,9 @@
 //!
 //! Terminal-based user interface for Shannon using Ratatui.
 
+// Initialize i18n translations — path is relative to this crate's src/ dir
+rust_i18n::i18n!("../../locales", fallback = "en");
+
 pub mod repl;
 mod widgets;
 mod events;

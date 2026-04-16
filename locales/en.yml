@@ -1,0 +1,162 @@
+_en: "&English"
+# English (default) locale for Shannon Code
+
+# ── REPL Messages ──────────────────────────────────────────────────────────
+repl:
+  chat_cleared: "Chat cleared."
+  unknown_command: "Unknown command: /%{name}. Type /help for available commands."
+  session_saved: "Session saved."
+  project_initialized: "Project initialized.\n%{info}"
+  welcome: "Welcome to Shannon!"
+  welcome_help: "Type your message and press **Enter**. Type `/help` for commands."
+  no_input: "No input provided on stdin."
+  input_error: "Input error: %{error}"
+  query_failed: "Query failed: %{error}"
+  stream_error: "Stream error: %{error}"
+  cancelled: "Cancelled"
+  cancelled_by_user: "Cancelled by user."
+  query_task_panicked: "Query task panicked"
+
+# ── Status Messages ────────────────────────────────────────────────────────
+status:
+  ready: "Ready"
+  processing: "Processing..."
+  running: "Running"
+  error: "Error: %{error}"
+  warning: "Warning: %{message}"
+  loading: "Loading..."
+  completed: "Completed"
+  failed: "Failed"
+  cancelled_status: "Cancelled"
+
+# ── Command Descriptions ───────────────────────────────────────────────────
+commands:
+  help:
+    title: "Available Commands"
+    no_help_found: "No help found for: %{topic}"
+  clear:
+    title: "Clear Chat"
+    confirm: "Clear all messages? This cannot be undone."
+  quit:
+    title: "End Session?"
+    confirm: "You have unsaved activity. Quit anyway?"
+  model:
+    title: "Set Model"
+    prompt: "Enter model name (e.g. claude-3.5-sonnet, gpt-4o)..."
+    set: "Model set to: %{name}"
+  config:
+    warning_load: "Warning: could not load config: %{error}"
+    key_not_found: "Config key not found: %{key}"
+    error_saving: "Error saving config: %{error}"
+    usage_get: "Usage: /config get <key>"
+    usage_set: "Usage: /config set <key> <value>"
+    usage_reset: "Usage: /config reset <key>"
+  hooks:
+    none: "No hooks configured."
+    reloaded: "Hooks reloaded successfully."
+    reload_failed: "Failed to reload hooks: %{error}"
+  memory:
+    usage_remember: "Usage: /remember <text to remember>"
+    store_not_available: "Memory store not available."
+    store_not_configured: "Memory store not configured."
+    save_failed: "Failed to save memory: %{error}"
+    remembered: "Remembered (id: %{id}...)"
+    no_memories: "No memories found."
+    usage_forget: "Usage: /forget <memory-id-prefix>"
+    forgot: "Forgot memory %{id}..."
+    not_found: "Memory not found."
+    delete_error: "Error deleting memory: %{error}"
+    no_match: "No memory found matching '%{prefix}'"
+    cleanup: "Cleanup complete: removed %{removed} stale memories. %{remaining} remaining."
+  export:
+    session_exported: "Session exported to: %{path}"
+    export_failed: "Failed to export: %{error}"
+    export_error: "Export error: %{error}"
+    no_sessions: "No saved sessions found."
+  resume:
+    usage: "Usage: /resume <number-or-uuid>\nUse /sessions to see available sessions."
+    invalid_number: "Invalid session number: %{num}. Use /sessions to see available sessions."
+    invalid_id: "Invalid session identifier: %{arg}. Use a number from /sessions or a UUID."
+    not_found: "Session not found: %{id}"
+    load_error: "Error loading session: %{error}"
+    warn_restore: "Warning: could not restore AI context (messages will lack prior history): %{error}"
+  history:
+    usage: "Usage: /history --export <file-path>"
+  rewind:
+    usage: "Usage: /rewind [number-of-turns]"
+  image:
+    file_not_found: "File not found: %{path}"
+    read_failed: "Failed to read file: %{error}"
+    image_attached: "[Image attached: %{path}]"
+    image_sent: "Image sent to model. Processing..."
+    clipboard_pasted: "[Image pasted from clipboard]"
+    clipboard_sent: "Clipboard image sent. Processing..."
+    no_engine: "Query engine not available."
+  notify:
+    enabled: "Desktop notifications enabled."
+    disabled: "Desktop notifications disabled."
+  sandbox:
+    enabled: "Sandbox mode enabled (Docker isolation)."
+    disabled: "Sandbox mode disabled (direct execution)."
+    not_available: "Docker is not available. Sandbox mode requires Docker."
+
+# ── CLI Help ───────────────────────────────────────────────────────────────
+cli:
+  about: "AI-powered code assistant in Rust"
+  prompt_help: "Execute a prompt directly (non-interactive mode)."
+  pipe_help: "Read prompt from stdin (pipe mode)."
+  model_help: "LLM model to use (e.g., claude-sonnet-4, gpt-4o)"
+  provider_help: "LLM provider (anthropic, openai, ollama, custom)"
+  repl_about: "Start the Shannon REPL (Read-Eval-Print Loop)"
+  repl_file_help: "Optional project file to load on startup"
+  repl_env_help: "Set environment variables, format: KEY=VALUE."
+  repl_model_help: "LLM model to use"
+  repl_provider_help: "LLM provider (anthropic, openai, ollama, custom)"
+  repl_max_tokens_help: "Maximum tokens for the response (default: 8192)"
+  repl_temperature_help: "Sampling temperature, 0.0 - 1.0 (default: 0.7)"
+  repl_timeout_help: "Request timeout in seconds (default: 120)"
+  repl_debug_help: "Enable debug logging"
+  repl_cwd_help: "Working directory for the session (default: current directory)"
+  repl_local_help: "Use local Ollama for inference (shortcut for --provider ollama)"
+  version_about: "Display version information"
+  version_verbose_help: "Show detailed version information"
+  config_about: "Manage Shannon configuration"
+  query_about: "Execute a query directly (non-interactive mode)"
+  query_query_help: "The query/prompt to execute"
+  query_output_help: "Output format (text, json, markdown)"
+  query_no_stream_help: "Disable streaming output (wait for complete response)"
+  version_line: "Shannon Code v0.1.0"
+  pipe_requires_input: "Error: --pipe requires stdin input or a prompt argument"
+  lang_help: "Set language/locale (e.g., en, zh)"
+
+# ── Tool Messages ──────────────────────────────────────────────────────────
+tools:
+  registration_failed: "tool registration failed: %{error}"
+  using: "Using: %{name} with input: %{input}"
+  tool_done: "tool-done: %{name}"
+  tool_error: "tool-error: %{name}"
+  tool_progress: "Tool progress: %{pct}%"
+  loaded_plugins: "Loaded %{count} plugin(s)"
+  plugin_warning: "Warning: plugin discovery failed: %{error}"
+  discovered_mcp: "Discovered %{count} MCP server(s)"
+
+# ── Query Events ───────────────────────────────────────────────────────────
+query:
+  turn_completed: "[Turn %{turn} completed, %{tokens} tokens]"
+  processing_status: "Processing: %{message}"
+  running_step: "Running: %{tool} (step %{step})"
+  cost_session: "Session total: $%{cost}"
+  cost_estimate: "Cost estimate: %{estimate}"
+  processing_tokens: "Processing... (%{tokens} tokens, $%{cost})"
+  ready_steps: "Ready (%{steps} steps completed)"
+  api_key_required: "API Key Required"
+  api_key_prompt: "Enter your API key..."
+  query_error: "Query Error"
+
+# ── Diff/Review ────────────────────────────────────────────────────────────
+review:
+  all_accepted: "All changes accepted and staged."
+  no_changes_reject: "No changes to reject."
+  all_discarded: "All unstaged changes discarded (%{count} files)."
+  file_accepted: "Changes to '%{file}' accepted (staged)."
+  file_rejected: "Changes to '%{file}' rejected (reverted)."

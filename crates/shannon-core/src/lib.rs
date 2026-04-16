@@ -1,10 +1,6 @@
 //! # Shannon Core
 //!
 //! Core engine for Shannon Code - query processing, tool orchestration, and state management.
-
-// Warn on .unwrap() in production code so new instances are caught by CI.
-// Existing instances will show as warnings — fix incrementally.
-#![warn(clippy::unwrap_used)]
 //!
 //! ## Architecture
 //!
@@ -25,6 +21,13 @@
 //! - [`TranscriptStore`]: Persistent conversation transcript storage and search
 //! - [`ActivityManager`]: Long-running task activity tracking with progress
 //! - [`Housekeeper`]: Periodic background cleanup tasks
+
+// Warn on .unwrap() in production code so new instances are caught by CI.
+// Existing instances will show as warnings — fix incrementally.
+#![warn(clippy::unwrap_used)]
+
+// Initialize i18n translations from workspace locales directory
+rust_i18n::i18n!("../../locales", fallback = "en");
 
 pub mod query_engine;
 pub mod tools;
@@ -86,6 +89,9 @@ pub mod billing;
 pub mod enhanced_suggestions;
 pub mod ui_adapter;
 pub mod sandbox;
+pub mod api_server;
+
+pub mod i18n;
 
 // Re-export key types for convenience
 pub use query_engine::{QueryEngine, QueryContext, QueryEvent};

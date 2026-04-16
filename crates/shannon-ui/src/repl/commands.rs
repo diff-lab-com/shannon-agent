@@ -4,6 +4,7 @@ use crate::{
     widgets::ChatRole,
     Result,
 };
+use rust_i18n::t;
 
 use super::Repl;
 
@@ -123,7 +124,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
     } else {
         repl.chat.add_message(
             ChatRole::System,
-            format!("Unknown command: /{cmd_name}. Type /help for available commands."),
+            t!("repl.unknown_command", name = cmd_name).to_string(),
         );
         Ok(())
     }
@@ -152,7 +153,7 @@ fn handle_clear(repl: &mut Repl) -> Result<()> {
         );
     } else {
         repl.chat.clear();
-        repl.chat.add_message(ChatRole::System, "Chat cleared.".to_string());
+        repl.chat.add_message(ChatRole::System, t!("repl.chat_cleared").to_string());
     }
     Ok(())
 }
@@ -184,7 +185,7 @@ fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
         repl.state.model = Some(args.to_string());
         repl.chat.add_message(
             ChatRole::System,
-            format!("Model set to: {args}"),
+            t!("commands.model.set", name = args).to_string(),
         );
     }
     Ok(())
@@ -213,7 +214,7 @@ fn handle_init(repl: &mut Repl) -> Result<()> {
     }
 
     init_info.push_str(&format!("Working directory: {cwd}\n"));
-    repl.chat.add_message(ChatRole::System, format!("Project initialized.\n{init_info}"));
+    repl.chat.add_message(ChatRole::System, t!("repl.project_initialized", info = init_info).to_string());
     Ok(())
 }
 
@@ -223,7 +224,7 @@ fn handle_config(repl: &mut Repl, args: &str) -> Result<()> {
 
     let mut manager = ConfigManager::new();
     if let Err(e) = manager.load() {
-        repl.chat.add_message(ChatRole::System, format!("Warning: could not load config: {e}"));
+        repl.chat.add_message(ChatRole::System, t!("commands.config.warning_load", error = e).to_string());
     }
 
     let parts: Vec<&str> = args.splitn(3, ' ').collect();
@@ -325,7 +326,7 @@ fn handle_hooks(repl: &mut Repl, args: &str) -> Result<()> {
         "reload" | "refresh" => {
             let mut mgr2 = HookManager::new();
             match mgr2.load() {
-                Ok(()) => { repl.chat.add_message(ChatRole::System, "Hooks reloaded successfully.".to_string()); }
+                Ok(()) => { repl.chat.add_message(ChatRole::System, t!("commands.hooks.reloaded").to_string()); }
                 Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to reload hooks: {e}")); }
             }
             return Ok(());
@@ -387,14 +388,14 @@ fn handle_remember(repl: &mut Repl, args: &str) -> Result<()> {
 
     let content = args.trim();
     if content.is_empty() {
-        repl.chat.add_message(ChatRole::System, "Usage: /remember <text to remember>".to_string());
+        repl.chat.add_message(ChatRole::System, t!("commands.memory.usage_remember").to_string());
         return Ok(());
     }
 
     let engine = match repl.query_engine.as_ref() {
         Some(e) => e,
         None => {
-            repl.chat.add_message(ChatRole::System, "Memory store not available.".to_string());
+            repl.chat.add_message(ChatRole::System, t!("commands.memory.store_not_available").to_string());
             return Ok(());
         }
     };
@@ -402,7 +403,7 @@ fn handle_remember(repl: &mut Repl, args: &str) -> Result<()> {
     let memory = match engine.memory() {
         Some(m) => m,
         None => {
-            repl.chat.add_message(ChatRole::System, "Memory store not configured.".to_string());
+            repl.chat.add_message(ChatRole::System, t!("commands.memory.store_not_configured").to_string());
             return Ok(());
         }
     };
@@ -434,7 +435,7 @@ fn handle_recall(repl: &mut Repl, args: &str) -> Result<()> {
     let engine = match repl.query_engine.as_ref() {
         Some(e) => e,
         None => {
-            repl.chat.add_message(ChatRole::System, "Memory store not available.".to_string());
+            repl.chat.add_message(ChatRole::System, t!("commands.memory.store_not_available").to_string());
             return Ok(());
         }
     };
@@ -442,7 +443,7 @@ fn handle_recall(repl: &mut Repl, args: &str) -> Result<()> {
     let memory = match engine.memory() {
         Some(m) => m,
         None => {
-            repl.chat.add_message(ChatRole::System, "Memory store not configured.".to_string());
+            repl.chat.add_message(ChatRole::System, t!("commands.memory.store_not_configured").to_string());
             return Ok(());
         }
     };
@@ -457,7 +458,7 @@ fn handle_recall(repl: &mut Repl, args: &str) -> Result<()> {
     };
 
     if results.is_empty() {
-        repl.chat.add_message(ChatRole::System, "No memories found.".to_string());
+        repl.chat.add_message(ChatRole::System, t!("commands.memory.no_memories").to_string());
         return Ok(());
     }
 
@@ -485,7 +486,7 @@ fn handle_forget(repl: &mut Repl, args: &str) -> Result<()> {
     let engine = match repl.query_engine.as_ref() {
         Some(e) => e,
         None => {
-            repl.chat.add_message(ChatRole::System, "Memory store not available.".to_string());
+            repl.chat.add_message(ChatRole::System, t!("commands.memory.store_not_available").to_string());
             return Ok(());
         }
     };
@@ -493,7 +494,7 @@ fn handle_forget(repl: &mut Repl, args: &str) -> Result<()> {
     let memory = match engine.memory() {
         Some(m) => m,
         None => {
-            repl.chat.add_message(ChatRole::System, "Memory store not configured.".to_string());
+            repl.chat.add_message(ChatRole::System, t!("commands.memory.store_not_configured").to_string());
             return Ok(());
         }
     };
@@ -529,14 +530,14 @@ fn handle_memory(repl: &mut Repl, args: &str) -> Result<()> {
             let engine = match repl.query_engine.as_ref() {
                 Some(e) => e,
                 None => {
-                    repl.chat.add_message(ChatRole::System, "Memory store not available.".to_string());
+                    repl.chat.add_message(ChatRole::System, t!("commands.memory.store_not_available").to_string());
                     return Ok(());
                 }
             };
             let memory = match engine.memory() {
                 Some(m) => m,
                 None => {
-                    repl.chat.add_message(ChatRole::System, "Memory store not configured.".to_string());
+                    repl.chat.add_message(ChatRole::System, t!("commands.memory.store_not_configured").to_string());
                     return Ok(());
                 }
             };
@@ -548,14 +549,14 @@ fn handle_memory(repl: &mut Repl, args: &str) -> Result<()> {
             let engine = match repl.query_engine.as_ref() {
                 Some(e) => e,
                 None => {
-                    repl.chat.add_message(ChatRole::System, "Memory store not available.".to_string());
+                    repl.chat.add_message(ChatRole::System, t!("commands.memory.store_not_available").to_string());
                     return Ok(());
                 }
             };
             let memory = match engine.memory() {
                 Some(m) => m,
                 None => {
-                    repl.chat.add_message(ChatRole::System, "Memory store not configured.".to_string());
+                    repl.chat.add_message(ChatRole::System, t!("commands.memory.store_not_configured").to_string());
                     return Ok(());
                 }
             };
@@ -647,7 +648,7 @@ fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
     let engine = match repl.query_engine.as_mut() {
         Some(e) => e,
         None => {
-            repl.chat.add_message(ChatRole::System, "Query engine not available.".to_string());
+            repl.chat.add_message(ChatRole::System, t!("commands.image.no_engine").to_string());
             return Ok(());
         }
     };
@@ -662,7 +663,7 @@ fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
 
     engine.add_user_message_blocks(blocks);
     repl.chat.add_message(ChatRole::User, format!("[Image attached: {}]", file_path.display()));
-    repl.chat.add_message(ChatRole::System, "Image sent to model. Processing...".to_string());
+    repl.chat.add_message(ChatRole::System, t!("commands.image.image_sent").to_string());
 
     // Trigger query processing
     super::query::handle_query(repl, &format!("Please analyze the image I just shared: {}", file_path.display()))?;
@@ -735,7 +736,7 @@ fn handle_image_paste(repl: &mut Repl, prompt_args: &str) -> Result<()> {
             let engine = match repl.query_engine.as_mut() {
                 Some(e) => e,
                 None => {
-                    repl.chat.add_message(ChatRole::System, "Query engine not available.".to_string());
+                    repl.chat.add_message(ChatRole::System, t!("commands.image.no_engine").to_string());
                     return Ok(());
                 }
             };
@@ -748,7 +749,7 @@ fn handle_image_paste(repl: &mut Repl, prompt_args: &str) -> Result<()> {
             ];
             engine.add_user_message_blocks(blocks);
             repl.chat.add_message(ChatRole::User, "[Image pasted from clipboard]".to_string());
-            repl.chat.add_message(ChatRole::System, "Clipboard image sent. Processing...".to_string());
+            repl.chat.add_message(ChatRole::System, t!("commands.image.clipboard_sent").to_string());
 
             super::query::handle_query(repl, "Please analyze the image I just shared from my clipboard.")?;
         }
@@ -4064,7 +4065,7 @@ pub fn execute_pending_action(repl: &mut Repl, action: &str) -> Result<()> {
     match action {
         "clear_chat" => {
             repl.chat.clear();
-            repl.chat.add_message(ChatRole::System, "Chat cleared.".to_string());
+            repl.chat.add_message(ChatRole::System, t!("repl.chat_cleared").to_string());
         }
         "quit" => {
             repl.running = false;

@@ -1,0 +1,162 @@
+_zh: "&中文"
+# Chinese (Simplified) locale for Shannon Code
+
+# ── REPL Messages ──────────────────────────────────────────────────────────
+repl:
+  chat_cleared: "聊天已清空。"
+  unknown_command: "未知命令: /%{name}。输入 /help 查看可用命令。"
+  session_saved: "会话已保存。"
+  project_initialized: "项目已初始化。\n%{info}"
+  welcome: "欢迎使用 Shannon！"
+  welcome_help: "输入消息并按 **Enter**。输入 `/help` 查看命令列表。"
+  no_input: "标准输入没有提供内容。"
+  input_error: "输入错误: %{error}"
+  query_failed: "查询失败: %{error}"
+  stream_error: "流错误: %{error}"
+  cancelled: "已取消"
+  cancelled_by_user: "用户已取消。"
+  query_task_panicked: "查询任务崩溃"
+
+# ── Status Messages ────────────────────────────────────────────────────────
+status:
+  ready: "就绪"
+  processing: "处理中..."
+  running: "运行中"
+  error: "错误: %{error}"
+  warning: "警告: %{message}"
+  loading: "加载中..."
+  completed: "已完成"
+  failed: "失败"
+  cancelled_status: "已取消"
+
+# ── Command Descriptions ───────────────────────────────────────────────────
+commands:
+  help:
+    title: "可用命令"
+    no_help_found: "未找到帮助信息: %{topic}"
+  clear:
+    title: "清空聊天"
+    confirm: "清空所有消息？此操作无法撤销。"
+  quit:
+    title: "结束会话？"
+    confirm: "您有未保存的活动。确定退出吗？"
+  model:
+    title: "设置模型"
+    prompt: "输入模型名称（例如 claude-3.5-sonnet、gpt-4o）..."
+    set: "模型已设置为: %{name}"
+  config:
+    warning_load: "警告: 无法加载配置: %{error}"
+    key_not_found: "未找到配置项: %{key}"
+    error_saving: "保存配置出错: %{error}"
+    usage_get: "用法: /config get <键名>"
+    usage_set: "用法: /config set <键名> <值>"
+    usage_reset: "用法: /config reset <键名>"
+  hooks:
+    none: "未配置钩子。"
+    reloaded: "钩子已成功重新加载。"
+    reload_failed: "重新加载钩子失败: %{error}"
+  memory:
+    usage_remember: "用法: /remember <要记住的文本>"
+    store_not_available: "记忆存储不可用。"
+    store_not_configured: "记忆存储未配置。"
+    save_failed: "保存记忆失败: %{error}"
+    remembered: "已记住 (id: %{id}...)"
+    no_memories: "未找到记忆。"
+    usage_forget: "用法: /forget <记忆ID前缀>"
+    forgot: "已遗忘记忆 %{id}..."
+    not_found: "未找到记忆。"
+    delete_error: "删除记忆出错: %{error}"
+    no_match: "未找到匹配 '%{prefix}' 的记忆"
+    cleanup: "清理完成: 移除了 %{removed} 条过期记忆。剩余 %{remaining} 条。"
+  export:
+    session_exported: "会话已导出至: %{path}"
+    export_failed: "导出失败: %{error}"
+    export_error: "导出错误: %{error}"
+    no_sessions: "未找到已保存的会话。"
+  resume:
+    usage: "用法: /resume <编号或UUID>\n使用 /sessions 查看可用会话。"
+    invalid_number: "无效的会话编号: %{num}。使用 /sessions 查看可用会话。"
+    invalid_id: "无效的会话标识: %{arg}。使用 /sessions 中的编号或 UUID。"
+    not_found: "未找到会话: %{id}"
+    load_error: "加载会话出错: %{error}"
+    warn_restore: "警告: 无法恢复AI上下文（消息将缺少历史记录）: %{error}"
+  history:
+    usage: "用法: /history --export <文件路径>"
+  rewind:
+    usage: "用法: /rewind [轮次数]"
+  image:
+    file_not_found: "文件未找到: %{path}"
+    read_failed: "读取文件失败: %{error}"
+    image_attached: "[已附加图片: %{path}]"
+    image_sent: "图片已发送至模型。处理中..."
+    clipboard_pasted: "[已从剪贴板粘贴图片]"
+    clipboard_sent: "剪贴板图片已发送。处理中..."
+    no_engine: "查询引擎不可用。"
+  notify:
+    enabled: "桌面通知已启用。"
+    disabled: "桌面通知已禁用。"
+    not_available: "Docker 不可用。沙盒模式需要 Docker。"
+  sandbox:
+    enabled: "沙盒模式已启用（Docker 隔离）。"
+    disabled: "沙盒模式已禁用（直接执行）。"
+
+# ── CLI Help ───────────────────────────────────────────────────────────────
+cli:
+  about: "Rust 编写的 AI 代码助手"
+  prompt_help: "直接执行提示（非交互模式）。"
+  pipe_help: "从标准输入读取提示（管道模式）。"
+  model_help: "要使用的 LLM 模型（如 claude-sonnet-4、gpt-4o）"
+  provider_help: "LLM 提供商（anthropic、openai、ollama、custom）"
+  repl_about: "启动 Shannon REPL（读取-求值-打印循环）"
+  repl_file_help: "启动时加载的项目文件"
+  repl_env_help: "设置环境变量，格式: KEY=VALUE。"
+  repl_model_help: "要使用的 LLM 模型"
+  repl_provider_help: "LLM 提供商（anthropic、openai、ollama、custom）"
+  repl_max_tokens_help: "响应的最大 token 数（默认: 8192）"
+  repl_temperature_help: "采样温度，0.0 - 1.0（默认: 0.7）"
+  repl_timeout_help: "请求超时时间（秒）（默认: 120）"
+  repl_debug_help: "启用调试日志"
+  repl_cwd_help: "会话的工作目录（默认: 当前目录）"
+  repl_local_help: "使用本地 Ollama 推理（--provider ollama 的快捷方式）"
+  version_about: "显示版本信息"
+  version_verbose_help: "显示详细版本信息"
+  config_about: "管理 Shannon 配置"
+  query_about: "直接执行查询（非交互模式）"
+  query_query_help: "要执行的查询/提示"
+  query_output_help: "输出格式（text、json、markdown）"
+  query_no_stream_help: "禁用流式输出（等待完整响应）"
+  version_line: "Shannon Code v0.1.0"
+  pipe_requires_input: "错误: --pipe 需要标准输入或提示参数"
+  lang_help: "设置语言/区域（如 en、zh）"
+
+# ── Tool Messages ──────────────────────────────────────────────────────────
+tools:
+  registration_failed: "工具注册失败: %{error}"
+  using: "使用: %{name}，输入: %{input}"
+  tool_done: "工具完成: %{name}"
+  tool_error: "工具错误: %{name}"
+  tool_progress: "工具进度: %{pct}%"
+  loaded_plugins: "已加载 %{count} 个插件"
+  plugin_warning: "警告: 插件发现失败: %{error}"
+  discovered_mcp: "发现 %{count} 个 MCP 服务器"
+
+# ── Query Events ───────────────────────────────────────────────────────────
+query:
+  turn_completed: "[第 %{turn} 轮完成，%{tokens} 个 token]"
+  processing_status: "处理中: %{message}"
+  running_step: "运行中: %{tool}（第 %{step} 步）"
+  cost_session: "会话总计: $%{cost}"
+  cost_estimate: "费用估算: %{estimate}"
+  processing_tokens: "处理中...（%{tokens} 个 token，$%{cost}）"
+  ready_steps: "就绪（已完成 %{steps} 步）"
+  api_key_required: "需要 API 密钥"
+  api_key_prompt: "输入您的 API 密钥..."
+  query_error: "查询错误"
+
+# ── Diff/Review ────────────────────────────────────────────────────────────
+review:
+  all_accepted: "所有更改已接受并暂存。"
+  no_changes_reject: "没有要拒绝的更改。"
+  all_discarded: "所有未暂存的更改已丢弃（%{count} 个文件）。"
+  file_accepted: "'%{file}' 的更改已接受（已暂存）。"
+  file_rejected: "'%{file}' 的更改已拒绝（已还原）。"

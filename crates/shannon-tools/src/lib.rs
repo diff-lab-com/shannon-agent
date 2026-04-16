@@ -57,7 +57,7 @@ pub mod mcp_auth;
 // Re-exports for convenience
 pub use file::{ReadTool, WriteTool, EditTool, GlobTool, FileOperation};
 pub use system::{SystemTool, ShellCommand, SleepTool, BashTool, PowerShellTool, DockerSandbox, DockerSandboxConfig, SandboxMode};
-pub use git::{GitBranchTool, GitDiffTool, GitLogTool, GitStashTool, GitSafetyTool};
+pub use git::{GitBranchTool, GitDiffTool, GitLogTool, GitStashTool, GitSafetyTool, AutoCommitTool};
 pub use web::{WebFetchTool, WebSearchTool, WebOperation};
 pub use agent::{AgentTool, AgentOperation};
 pub use task::{TaskTool, TaskOperation};
@@ -155,6 +155,7 @@ pub fn register_default_tools(registry: &mut ToolRegistry) -> Result<(), Box<dyn
     registry.register(Box::new(GitLogTool::new()))?;
     registry.register(Box::new(GitStashTool::new()))?;
     registry.register(Box::new(GitSafetyTool::new()))?;
+    registry.register(Box::new(AutoCommitTool::new()))?;
 
     // ── Web operations ─────────────────────────────────────────────────
     registry.register(Box::new(WebFetchTool::new()))?;

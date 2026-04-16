@@ -51,6 +51,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # HTTP
 reqwest = { version = "0.12", features = ["json", "stream"] }
+axum = "0.7"
+tower-http = { version = "0.6", features = ["cors"] }
 
 # Utilities
 uuid = { version = "1.12", features = ["v4", "serde"] }
@@ -60,6 +62,9 @@ futures-util = "0.3"
 dirs = "5.0"
 dotenvy = "0.15"
 bytes = "1.0"
+
+# Internationalization
+rust-i18n = "3"
 
 # WebSocket support
 tokio-tungstenite = { version = "0.26", features = ["connect"] }

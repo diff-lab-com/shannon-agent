@@ -4,6 +4,7 @@ use clap::Subcommand;
 use futures::StreamExt;
 use shannon_core::{
     api::LlmClientConfig,
+    i18n,
     query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata},
     state::StateManager,
     tools::ToolRegistry,
@@ -166,6 +167,12 @@ struct Cli {
     #[arg(index = 1)]
     prompt: Option<String>,
 
+    /// Read prompt from stdin (pipe mode).
+    /// Example: echo "fix this bug" | shannon --pipe
+    ///          cat file.txt | shannon --pipe "summarize this"
+    #[arg(long)]
+    pipe: bool,
+
     /// LLM model to use (e.g., claude-sonnet-4, gpt-4o)
     #[arg(short, long)]
     model: Option<String>,
@@ -173,6 +180,10 @@ struct Cli {
     /// LLM provider (anthropic, openai, ollama, custom)
     #[arg(short, long)]
     provider: Option<String>,
+
+    /// Set language/locale (e.g., en, zh)
+    #[arg(long)]
+    lang: Option<String>,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -263,6 +274,17 @@ enum Commands {
         /// Disable streaming output (wait for complete response)
         #[arg(long)]
         no_stream: bool,
+    },
+
+    /// Start the HTTP API server
+    Serve {
+        /// Port to listen on
+        #[arg(short, long, default_value_t = 8080)]
+        port: u16,
+
+        /// Host to bind to
+        #[arg(short, long)]
+        host: Option<String>,
     },
 }
 
@@ -505,8 +527,79 @@ fn run_noninteractive_query(query: &str, stream: bool, config: &CliConfig) -> Re
     })
 }
 
+/// Read all of stdin into a String. Returns empty string if stdin is a terminal
+/// (i.e., not piped).
+fn read_stdin() -> String {
+    use std::io::IsTerminal;
+    if std::io::stdin().is_terminal() {
+        return String::new();
+    }
+    let mut buf = String::new();
+    let _ = std::io::stdin().read_line(&mut buf);
+    // Also read remaining content if available
+    let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf);
+    buf.trim().to_string()
+}
+
+/// Run the HTTP API server.
+fn run_serve_command(port: u16, host: Option<String>, config: &CliConfig) -> Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        // Build tool registry with default tools.
+        let mut tools = shannon_core::ToolRegistry::new();
+        register_default_tools(&mut tools)
+            .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
+
+        // Load and register skills.
+        shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
+
+        // Build LLM client config via the shared ConfigBuilder pipeline.
+        let client_config = build_llm_config_from_builder(config);
+
+        let mut server = shannon_core::api_server::ShannonApiServer::new(client_config)
+            .with_tools(tools)
+            .port(port);
+
+        if let Some(h) = host {
+            server = server.host(h);
+        }
+
+        println!("Shannon API server starting on port {port}");
+        server.serve().await.map_err(|e| anyhow::anyhow!("{e}"))
+    })
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Initialize i18n — override locale from --lang flag if provided
+    if let Some(ref lang) = cli.lang {
+        i18n::set_locale(lang);
+    }
+
+    // Pipe mode: read prompt from stdin
+    if cli.pipe {
+        let stdin_content = read_stdin();
+        let prompt = match (cli.prompt, stdin_content.is_empty()) {
+            (Some(arg), false) => format!("{arg}\n\n{stdin_content}"),
+            (Some(arg), true) => arg,
+            (None, false) => stdin_content,
+            (None, true) => {
+                eprintln!("Error: --pipe requires stdin input or a prompt argument");
+                std::process::exit(1);
+            }
+        };
+        let config = build_cli_config(
+            cli.model.as_deref(),
+            cli.provider.as_deref(),
+            None,
+            None,
+            None,
+            false,
+            HashMap::new(),
+        );
+        return run_noninteractive_query(&prompt, true, &config);
+    }
 
     // Bare prompt case: handle directly with explicit config
     if let Some(prompt) = cli.prompt {
@@ -574,8 +667,8 @@ fn main() -> Result<()> {
                 HashMap::new(),
             )
         }
-        // No subcommand, Version, and Config commands don't need config
-        None | Some(Commands::Version { .. }) | Some(Commands::Config { .. }) => CliConfig::default(),
+        // No subcommand, Version, Config, and Serve commands don't need config in the same way
+        None | Some(Commands::Version { .. }) | Some(Commands::Config { .. }) | Some(Commands::Serve { .. }) => CliConfig::default(),
     };
 
     // Execute commands with explicit config
@@ -660,6 +753,9 @@ fn main() -> Result<()> {
             ..
         }) => {
             run_noninteractive_query(&query, !no_stream, &config)?;
+        }
+        Some(Commands::Serve { port, host }) => {
+            run_serve_command(port, host.clone(), &config)?;
         }
     }
 

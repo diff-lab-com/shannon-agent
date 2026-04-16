@@ -4,6 +4,7 @@ use crate::{
     widgets::ChatRole,
     Result,
 };
+use rust_i18n::t;
 use ratatui::backend::CrosstermBackend;
 use futures::StreamExt;
 use ratatui::Terminal;
@@ -17,7 +18,7 @@ use super::Repl;
 
 /// Handle a query (send to AI)
 pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
-    repl.state.status = "Processing...".to_string();
+    repl.state.status = t!("status.processing").to_string();
     repl.state.active_tool = None;
     repl.state.query_steps_done = 0;
     repl.state.query_steps_total = 0;
@@ -79,6 +80,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
     let streaming_progress: Arc<Mutex<f64>> = Arc::new(Mutex::new(0.0));
     let streaming_multi_progress: Arc<Mutex<Vec<(String, f64, ratatui::style::Color)>>> = Arc::new(Mutex::new(Vec::new()));
     let streaming_tokens: Arc<Mutex<(u64, u64)>> = Arc::new(Mutex::new((0, 0))); // (input, output)
+    let streaming_budget: Arc<Mutex<Option<f64>>> = Arc::new(Mutex::new(None));
 
     let buffer_clone = streaming_buffer.clone();
     let status_clone = streaming_status.clone();
@@ -87,6 +89,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
     let progress_clone = streaming_progress.clone();
     let multi_progress_clone = streaming_multi_progress.clone();
     let tokens_clone = streaming_tokens.clone();
+    let budget_clone = streaming_budget.clone();
     let permission_tx = repl.permission_req_tx.clone();
 
     // Spawn the query processing in a separate thread
@@ -174,6 +177,21 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                 Ok(QueryEvent::Cost { total_cost_usd, input_tokens, output_tokens, .. }) => {
                     tokens_in_turn = input_tokens + output_tokens;
                     if let Ok(mut c) = cost_clone.lock() { *c = total_cost_usd; }
+                    // Budget warning: alert when cost exceeds 80% of limit
+                    if let Ok(budget) = budget_clone.lock() {
+                        if let Some(limit) = *budget {
+                            if total_cost_usd > limit * 0.8 && total_cost_usd <= limit {
+                                response_text.push_str(&format!(
+                                    "\n\n⚠️ Budget warning: ${total_cost_usd:.4} / ${limit:.2} ({:.0}% used)",
+                                    (total_cost_usd / limit) * 100.0
+                                ));
+                            } else if total_cost_usd > limit {
+                                response_text.push_str(&format!(
+                                    "\n\n🚨 Budget exceeded: ${total_cost_usd:.4} > ${limit:.2}"
+                                ));
+                            }
+                        }
+                    }
                 }
                 Ok(QueryEvent::ToolProgress { progress, tool_name, .. }) => {
                     let pct = (progress * 100.0) as u32;
@@ -305,7 +323,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                             buf.push_str("\n\n⚠️ Cancelled by user.");
                         }
                         if let Ok(mut s) = streaming_status.lock() {
-                            *s = "Cancelled".to_string();
+                            *s = t!("status.cancelled_status").to_string();
                         }
                         break;
                     }
@@ -349,9 +367,9 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
             repl.state.progress_bar_visible = false;
             repl.state.progress_bar.set_progress(0.0);
             repl.state.status = if steps > 0 {
-                format!("Ready ({steps} steps completed)")
+                t!("query.ready_steps", steps = steps).to_string()
             } else {
-                "Ready".to_string()
+                t!("status.ready").to_string()
             };
 
             // Desktop notification on query completion
@@ -376,7 +394,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
             if is_cancelled {
                 let current = streaming_buffer.lock().map(|g| g.clone()).unwrap_or_default();
                 repl.chat.update_message(assistant_msg_index, current);
-                repl.state.status = "Ready".to_string();
+                repl.state.status = t!("status.ready").to_string();
             } else {
                 repl.chat.update_message(assistant_msg_index, format!("❌ Error: {e}"));
 
@@ -388,7 +406,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                 }
             }
 
-            repl.state.status = "Ready".to_string();
+            repl.state.status = t!("status.ready").to_string();
             repl.state.progress_bar_visible = false;
             repl.state.progress_bar.set_progress(0.0);
         }

@@ -28,6 +28,11 @@ reqwest = { workspace = true }
 futures = "0.3"
 tokio-stream = "0.1"
 
+# HTTP server
+axum = { workspace = true }
+tower = "0.4"
+tower-http = { workspace = true }
+
 # State management
 dashmap = "6.1"
 serde_yaml = "0.9.34"
@@ -41,6 +46,9 @@ dotenvy = { workspace = true }
 # Regex for hook matching
 regex = "1.11"
 
+# Internationalization
+rust-i18n = { workspace = true }
+
 # Platform-specific disk space info
 libc = "0.2"
 
@@ -51,6 +59,7 @@ tempfile = "3.16"
 tokio-test = "0.4"
 criterion = "0.5"
 mockito = "1.6"
+tower = "0.5"
 
 [[bench]]
 name = "query_engine"
