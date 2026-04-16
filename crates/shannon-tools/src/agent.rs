@@ -1,14 +1,24 @@
 //! Agent operation tools
 //!
 //! Provides implementations for:
-//! - Agent: Spawn and manage subagent operations
+//! - Agent: Spawn and manage subagent operations with real execution
 //! - Team: Create and manage multi-agent teams
 
 use crate::{Tool, ToolError, ToolResult, ToolOutput};
 use async_trait::async_trait;
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+/// Shared context that AgentTool needs to spawn real sub-agents.
+/// Injected after construction via `inject_context()`.
+#[derive(Clone)]
+pub struct AgentToolContext {
+    /// LLM client config for creating sub-agent QueryEngines
+    pub client_config: shannon_core::api::LlmClientConfig,
+}
 
 /// Agent operation types
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +60,9 @@ pub struct AgentSpawnOutput {
 
     /// Message for user
     pub message: String,
+
+    /// Actual result from sub-agent execution (if completed)
+    pub result: Option<String>,
 }
 
 /// Input for sending message to agent
@@ -140,6 +153,8 @@ pub struct ShutdownOutput {
 /// Agent tool implementation
 pub struct AgentTool {
     description: String,
+    /// Shared context injected after construction. None until inject_context() is called.
+    context: Arc<Mutex<Option<AgentToolContext>>>,
 }
 
 impl Default for AgentTool {
@@ -152,19 +167,225 @@ impl AgentTool {
     pub fn new() -> Self {
         Self {
             description: "Spawn and manage AI agent teammates for collaborative problem-solving".to_string(),
+            context: Arc::new(Mutex::new(None)),
         }
     }
 
+    /// Get a clone of the context Arc for injection from external code.
+    pub fn context_handle(&self) -> Arc<Mutex<Option<AgentToolContext>>> {
+        self.context.clone()
+    }
+
+    /// Inject the LLM client config for sub-agent execution.
+    pub fn inject_context(&self, ctx: AgentToolContext) {
+        if let Ok(mut guard) = self.context.lock() {
+            *guard = Some(ctx);
+        }
+    }
+
+    /// Register all tools EXCEPT the Agent tool (prevents infinite recursion).
+    pub fn register_subagent_tools(
+        registry: &mut shannon_core::ToolRegistry,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // File operations
+        registry.register(Box::new(crate::ReadTool::new()))?;
+        registry.register(Box::new(crate::WriteTool::new()))?;
+        registry.register(Box::new(crate::EditTool::new()))?;
+        registry.register(Box::new(crate::GlobTool::new()))?;
+
+        // System operations
+        registry.register(Box::new(crate::BashTool::new()))?;
+        registry.register(Box::new(crate::SleepTool::new()))?;
+        registry.register(Box::new(crate::PowerShellTool::new()))?;
+        registry.register(Box::new(crate::ReplTool::new()))?;
+
+        // Git operations
+        registry.register(Box::new(crate::GitBranchTool::new()))?;
+        registry.register(Box::new(crate::GitDiffTool::new()))?;
+        registry.register(Box::new(crate::GitLogTool::new()))?;
+        registry.register(Box::new(crate::GitStashTool::new()))?;
+        registry.register(Box::new(crate::GitSafetyTool::new()))?;
+        registry.register(Box::new(crate::AutoCommitTool::new()))?;
+
+        // Web operations
+        registry.register(Box::new(crate::WebFetchTool::new()))?;
+        registry.register(Box::new(crate::WebSearchTool::new()))?;
+
+        // Search
+        registry.register(Box::new(crate::GrepTool::new()))?;
+
+        // Task management (for TodoWrite etc.)
+        registry.register(Box::new(crate::TodoWriteTool::new()))?;
+        registry.register(Box::new(crate::TaskCreateTool::new()))?;
+        registry.register(Box::new(crate::TaskListTool::new()))?;
+        registry.register(Box::new(crate::TaskUpdateTool::new()))?;
+        registry.register(Box::new(crate::TaskGetTool::new()))?;
+        registry.register(Box::new(crate::TaskTool::new()))?;
+        registry.register(Box::new(crate::TaskOutputTool::new()))?;
+        registry.register(Box::new(crate::TaskStopTool::new()))?;
+
+        // LSP
+        registry.register(Box::new(crate::GoToDefinitionTool::new()))?;
+        registry.register(Box::new(crate::FindReferencesTool::new()))?;
+        registry.register(Box::new(crate::HoverTool::new()))?;
+        registry.register(Box::new(crate::DocumentSymbolTool::new()))?;
+        registry.register(Box::new(crate::WorkspaceSymbolTool::new()))?;
+
+        // Notebook
+        registry.register(Box::new(crate::NotebookEditTool::new()))?;
+
+        // Worktree
+        registry.register(Box::new(crate::WorktreeTool::new()))?;
+
+        // Config tool
+        registry.register(Box::new(crate::ConfigTool::new()))?;
+
+        Ok(())
+    }
+
     async fn spawn_agent(&self, input: AgentSpawnInput) -> Result<AgentSpawnOutput, ToolError> {
-        // Generate unique agent ID
         let agent_id = format!("agent_{}", uuid::Uuid::new_v4());
         let agent_type = input.agent_type.clone();
 
+        // Try to get the shared context for real execution
+        let ctx = self.context.lock().ok().and_then(|g| g.clone());
+
+        match ctx {
+            Some(ctx) => {
+                // Real sub-agent execution via QueryEngine
+                self.execute_subagent(agent_id, agent_type, input, ctx).await
+            }
+            None => {
+                // Fallback: no context injected, return initialized status
+                Ok(AgentSpawnOutput {
+                    agent_id,
+                    agent_type,
+                    status: "initialized".to_string(),
+                    message: format!(
+                        "Agent spawned (no execution context). Task: {}",
+                        &input.task[..input.task.len().min(100)]
+                    ),
+                    result: None,
+                })
+            }
+        }
+    }
+
+    /// Execute a task in a real sub-agent QueryEngine.
+    async fn execute_subagent(
+        &self,
+        agent_id: String,
+        agent_type: String,
+        input: AgentSpawnInput,
+        ctx: AgentToolContext,
+    ) -> Result<AgentSpawnOutput, ToolError> {
+        use futures::StreamExt;
+        use shannon_core::query_engine::{QueryContext, QueryEvent, QueryMetadata};
+        use uuid::Uuid;
+
+        // Build a sub-agent tool registry (without Agent tool to prevent recursion)
+        let mut sub_tools = shannon_core::ToolRegistry::new();
+        Self::register_subagent_tools(&mut sub_tools)
+            .map_err(|e| ToolError::ExecutionFailed(format!("sub-agent tool setup failed: {e}")))?;
+
+        // Create sub-agent engine with FullAuto permissions
+        let client = shannon_core::api::LlmClient::new(ctx.client_config.clone());
+        let mut permissions = shannon_core::permissions::PermissionManager::new();
+        permissions.set_approval_mode(shannon_core::permissions::ApprovalMode::FullAuto);
+        let state = shannon_core::state::StateManager::new();
+
+        let engine = shannon_core::query_engine::QueryEngine::with_defaults(
+            client, sub_tools,
+            permissions,
+            state,
+        );
+
+        // Build context with agent type role
+        let system_hint = format!(
+            "You are a sub-agent of type '{agent_type}'. Focus on completing the assigned task concisely.\n\nTask: {task}",
+            task = input.task,
+        );
+        let user_message = match &input.context {
+            Some(ctx_val) => format!(
+                "{system_hint}\n\nAdditional context:\n{}",
+                serde_json::to_string_pretty(ctx_val).unwrap_or_default()
+            ),
+            None => system_hint,
+        };
+
+        let query_context = QueryContext {
+            query_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            user_message,
+            metadata: QueryMetadata {
+                timestamp: chrono::Utc::now(),
+                tools_allowed: true,
+                max_tokens: Some(4096),
+                model: ctx.client_config.model.clone(),
+                temperature: None,
+                top_p: None,
+            },
+        };
+
+        // Execute and collect the response
+        let mut stream = engine.process_query(query_context, None).await;
+        let mut response_text = String::new();
+        let mut tools_used = 0usize;
+
+        while let Some(event_result) = stream.next().await {
+            match event_result {
+                Ok(QueryEvent::Text { content, .. }) => {
+                    response_text.push_str(&content);
+                }
+                Ok(QueryEvent::ToolUseRequest { tool_name, .. }) => {
+                    tools_used += 1;
+                    // Safety: cap tool usage to prevent runaway agents
+                    if tools_used > 10 {
+                        response_text.push_str("\n[Sub-agent tool limit reached (10)]");
+                        break;
+                    }
+                    let _ = tool_name; // suppress unused warning
+                }
+                Ok(QueryEvent::ToolUseResult { is_error, result, .. }) => {
+                    if is_error {
+                        response_text.push_str(&format!("\n[Tool error: {}]", &result[..result.len().min(200)]));
+                    }
+                }
+                Ok(QueryEvent::Failed { error, .. }) => {
+                    return Ok(AgentSpawnOutput {
+                        agent_id,
+                        agent_type,
+                        status: "failed".to_string(),
+                        message: format!("Sub-agent failed: {error}"),
+                        result: None,
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        let status = if response_text.is_empty() {
+            "completed_empty".to_string()
+        } else {
+            "completed".to_string()
+        };
+
+        // Truncate very long responses to avoid bloating the conversation
+        let result_text = if response_text.len() > 4000 {
+            format!("{}...\n[Response truncated: {} chars total]", &response_text[..4000], response_text.len())
+        } else {
+            response_text
+        };
+
         Ok(AgentSpawnOutput {
-            agent_id: agent_id.clone(),
+            agent_id,
             agent_type,
-            status: "initialized".to_string(),
-            message: format!("Spawned {} agent with ID {}", input.agent_type, agent_id),
+            status,
+            message: format!(
+                "Sub-agent completed ({} tool(s) used).",
+                tools_used
+            ),
+            result: Some(result_text),
         })
     }
 
@@ -173,7 +394,7 @@ impl AgentTool {
 
         Ok(SendMessageOutput {
             delivered: true,
-            response: None, // Would be populated by actual agent
+            response: None,
             message_id,
         })
     }
@@ -181,7 +402,6 @@ impl AgentTool {
     async fn create_team(&self, input: CreateTeamInput) -> Result<CreateTeamOutput, ToolError> {
         let team_id = format!("team_{}", uuid::Uuid::new_v4());
 
-        // Mock agent IDs for team members
         let agent_ids: Vec<String> = input
             .agents
             .iter()
@@ -208,7 +428,6 @@ impl AgentTool {
 #[async_trait]
 impl Tool for AgentTool {
     async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
-        // Parse operation type from input
         let operation = input
             .get("operation")
             .and_then(|v| v.as_str())
@@ -219,8 +438,14 @@ impl Tool for AgentTool {
                 let spawn_input: AgentSpawnInput = serde_json::from_value(input)
                     .map_err(|e| ToolError::InvalidInput(format!("Invalid spawn input: {e}")))?;
                 let output = self.spawn_agent(spawn_input).await?;
+
+                let content = match &output.result {
+                    Some(result) => result.clone(),
+                    None => output.message.clone(),
+                };
+
                 Ok(ToolOutput {
-                    content: output.message,
+                    content,
                     is_error: false,
                     metadata: {
                         let mut map = HashMap::new();

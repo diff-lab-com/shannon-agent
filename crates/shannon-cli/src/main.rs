@@ -185,6 +185,12 @@ struct Cli {
     #[arg(long)]
     lang: Option<String>,
 
+    /// Auto-approve all tool executions (non-interactive mode only).
+    /// Without this flag, non-interactive mode uses FullAuto (allows all non-critical tools).
+    /// With this flag, even critical tools are allowed (BypassPermissions).
+    #[arg(short = 'y', long)]
+    yes: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -372,13 +378,14 @@ fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {
 /// Run a non-interactive query, outputting results to stdout.
 /// `stream` controls whether text is streamed character-by-character.
 /// `config` holds explicit CLI configuration.
-fn run_noninteractive_query(query: &str, stream: bool, config: &CliConfig) -> Result<()> {
+/// `bypass_all` when true, skips all permission checks (BypassPermissions mode).
+fn run_noninteractive_query(query: &str, stream: bool, config: &CliConfig, bypass_all: bool) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
 
     rt.block_on(async {
         // Build tool registry with all standard tools
         let mut tools = ToolRegistry::new();
-        register_default_tools(&mut tools)
+        let agent_context_handle = register_default_tools(&mut tools)
             .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
 
         // Load and register skills from shannon-skills as tools
@@ -432,6 +439,13 @@ fn run_noninteractive_query(query: &str, stream: bool, config: &CliConfig) -> Re
         // Build LLM client from the merged ConfigBuilder pipeline
         let client_config = build_llm_config_from_builder(config);
 
+        // Inject client config into AgentTool for sub-agent execution
+        if let Ok(mut guard) = agent_context_handle.lock() {
+            *guard = Some(shannon_tools::AgentToolContext {
+                client_config: client_config.clone(),
+            });
+        }
+
         // Validate and warn
         if let Err(e) = client_config.validate() {
             eprintln!("Warning: {e}");
@@ -443,7 +457,14 @@ fn run_noninteractive_query(query: &str, stream: bool, config: &CliConfig) -> Re
             shannon_core::api::LlmClient::new_unauthenticated(client_config)
         };
 
-        let permissions = shannon_core::permissions::PermissionManager::new();
+        let mut permissions = shannon_core::permissions::PermissionManager::new();
+        // Non-interactive mode: use FullAuto by default (allows all non-critical tools),
+        // or BypassPermissions with --yes flag (allows everything including critical).
+        if bypass_all {
+            permissions.set_approval_mode(shannon_core::permissions::ApprovalMode::BypassPermissions);
+        } else {
+            permissions.set_approval_mode(shannon_core::permissions::ApprovalMode::FullAuto);
+        }
         let state = StateManager::new();
 
         let base_engine = QueryEngine::with_defaults(client, tools, permissions, state);
@@ -482,6 +503,7 @@ fn run_noninteractive_query(query: &str, stream: bool, config: &CliConfig) -> Re
         let mut event_stream = engine.process_query(context, None).await;
 
         let mut response_text = String::new();
+        let mut tool_count = 0usize;
 
         while let Some(event_result) = event_stream.next().await {
             match event_result {
@@ -493,24 +515,48 @@ fn run_noninteractive_query(query: &str, stream: bool, config: &CliConfig) -> Re
                     response_text.push_str(&content);
                 }
                 Ok(QueryEvent::ToolUseRequest { tool_name, tool_input, .. }) => {
-                    eprintln!("[tool: {tool_name} {}]",
-                        serde_json::to_string_pretty(&tool_input).unwrap_or_default());
+                    tool_count += 1;
+                    // Show concise tool invocation — truncate large inputs
+                    let input_summary = match serde_json::to_string(&tool_input) {
+                        Ok(s) if s.len() > 200 => format!("{}…", &s[..200]),
+                        Ok(s) => s,
+                        Err(_) => "(invalid json)".to_string(),
+                    };
+                    eprintln!("[tool #{tool_count}: {tool_name}] {input_summary}");
                 }
                 Ok(QueryEvent::ToolUseResult { tool_name, result, is_error, .. }) => {
                     if is_error {
-                        eprintln!("[tool-error: {tool_name}] {result}");
+                        let err_summary = if result.len() > 300 {
+                            format!("{}…", &result[..300])
+                        } else {
+                            result
+                        };
+                        eprintln!("[tool-error: {tool_name}] {err_summary}");
                     } else {
                         eprintln!("[tool-done: {tool_name}]");
                     }
                 }
+                Ok(QueryEvent::TurnCompleted { turn_number, tokens_used, .. }) => {
+                    eprintln!("[turn {turn_number} completed, {tokens_used} tokens]");
+                }
                 Ok(QueryEvent::Usage { input_tokens, output_tokens, cost_usd, .. }) => {
-                    eprintln!(
-                        "[usage: {input_tokens} in + {output_tokens} out = ${cost_usd:.4}]"
-                    );
+                    let total = input_tokens + output_tokens;
+                    let total_fmt = if total >= 1000 {
+                        format!("{:.1}k", total as f64 / 1000.0)
+                    } else {
+                        total.to_string()
+                    };
+                    eprintln!("[usage: {total_fmt} tokens (${cost_usd:.4})]");
+                }
+                Ok(QueryEvent::Progress { message, .. }) => {
+                    eprintln!("[{message}]");
                 }
                 Ok(QueryEvent::Completed { .. }) => {
                     if !stream && !response_text.is_empty() {
                         println!("{response_text}");
+                    }
+                    if tool_count > 0 {
+                        eprintln!("[completed: {tool_count} tool(s) invoked]");
                     }
                 }
                 Ok(QueryEvent::Failed { error, .. }) => {
@@ -547,7 +593,7 @@ fn run_serve_command(port: u16, host: Option<String>, config: &CliConfig) -> Res
     rt.block_on(async {
         // Build tool registry with default tools.
         let mut tools = shannon_core::ToolRegistry::new();
-        register_default_tools(&mut tools)
+        let agent_context_handle = register_default_tools(&mut tools)
             .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
 
         // Load and register skills.
@@ -555,6 +601,13 @@ fn run_serve_command(port: u16, host: Option<String>, config: &CliConfig) -> Res
 
         // Build LLM client config via the shared ConfigBuilder pipeline.
         let client_config = build_llm_config_from_builder(config);
+
+        // Inject client config into AgentTool for sub-agent execution
+        if let Ok(mut guard) = agent_context_handle.lock() {
+            *guard = Some(shannon_tools::AgentToolContext {
+                client_config: client_config.clone(),
+            });
+        }
 
         let mut server = shannon_core::api_server::ShannonApiServer::new(client_config)
             .with_tools(tools)
@@ -598,7 +651,7 @@ fn main() -> Result<()> {
             false,
             HashMap::new(),
         );
-        return run_noninteractive_query(&prompt, true, &config);
+        return run_noninteractive_query(&prompt, true, &config, cli.yes);
     }
 
     // Bare prompt case: handle directly with explicit config
@@ -612,7 +665,7 @@ fn main() -> Result<()> {
             false,
             HashMap::new(),
         );
-        return run_noninteractive_query(&prompt, true, &config);
+        return run_noninteractive_query(&prompt, true, &config, cli.yes);
     }
 
     // Build configuration from CLI options (no more unsafe set_var calls)
@@ -752,7 +805,7 @@ fn main() -> Result<()> {
             no_stream,
             ..
         }) => {
-            run_noninteractive_query(&query, !no_stream, &config)?;
+            run_noninteractive_query(&query, !no_stream, &config, cli.yes)?;
         }
         Some(Commands::Serve { port, host }) => {
             run_serve_command(port, host.clone(), &config)?;

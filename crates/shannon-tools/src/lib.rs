@@ -59,7 +59,7 @@ pub use file::{ReadTool, WriteTool, EditTool, GlobTool, FileOperation};
 pub use system::{SystemTool, ShellCommand, SleepTool, BashTool, PowerShellTool, DockerSandbox, DockerSandboxConfig, SandboxMode};
 pub use git::{GitBranchTool, GitDiffTool, GitLogTool, GitStashTool, GitSafetyTool, AutoCommitTool};
 pub use web::{WebFetchTool, WebSearchTool, WebOperation};
-pub use agent::{AgentTool, AgentOperation};
+pub use agent::{AgentTool, AgentOperation, AgentToolContext};
 pub use task::{TaskTool, TaskOperation};
 pub use notebook::{NotebookEditTool, NotebookEditInput, NotebookEditOutput};
 pub use worktree::{WorktreeTool, EnterWorktreeInput, EnterWorktreeOutput, ExitWorktreeInput, ExitWorktreeOutput};
@@ -136,7 +136,9 @@ pub use shannon_core::{
 ///
 /// Some tools (plan mode) require shared state and are registered with sensible
 /// defaults. Callers can override by re-registering with custom instances after this call.
-pub fn register_default_tools(registry: &mut ToolRegistry) -> Result<(), Box<dyn std::error::Error>> {
+///
+/// Returns the AgentTool's context handle for late injection of LLM client config.
+pub fn register_default_tools(registry: &mut ToolRegistry) -> Result<std::sync::Arc<std::sync::Mutex<Option<AgentToolContext>>>, Box<dyn std::error::Error>> {
     // ── File operations ────────────────────────────────────────────────
     registry.register(Box::new(ReadTool::new()))?;
     registry.register(Box::new(WriteTool::new()))?;
@@ -165,7 +167,9 @@ pub fn register_default_tools(registry: &mut ToolRegistry) -> Result<(), Box<dyn
     registry.register(Box::new(GrepTool::new()))?;
 
     // ── Agent & team ───────────────────────────────────────────────────
-    registry.register(Box::new(AgentTool::new()))?;
+    let agent_tool = AgentTool::new();
+    let agent_context_handle = agent_tool.context_handle();
+    registry.register(Box::new(agent_tool))?;
     registry.register(Box::new(SendMessageTool::new()))?;
     registry.register(Box::new(TeamDeleteTool::new()))?;
 
@@ -223,5 +227,5 @@ pub fn register_default_tools(registry: &mut ToolRegistry) -> Result<(), Box<dyn
     registry.register(Box::new(ListMcpResourcesTool::new(mcp_manager.clone())))?;
     registry.register(Box::new(ReadMcpResourceTool::new(mcp_manager)))?;
 
-    Ok(())
+    Ok(agent_context_handle)
 }

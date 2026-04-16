@@ -254,7 +254,7 @@ impl Repl {
 
         // Create tool registry and register all tools
         let mut tool_registry = ToolRegistry::new();
-        register_default_tools(&mut tool_registry).map_err(|e| anyhow::anyhow!("Failed to register tools: {e}"))?;
+        let agent_context_handle = register_default_tools(&mut tool_registry).map_err(|e| anyhow::anyhow!("Failed to register tools: {e}"))?;
 
         // Load and register skills from shannon-skills as tools
         register_skills_as_tools(&mut tool_registry);
@@ -321,6 +321,13 @@ impl Repl {
 
         // Create LLM client
         let client_config = LlmClientConfig::default();
+
+        // Inject client config into AgentTool for sub-agent execution
+        if let Ok(mut guard) = agent_context_handle.lock() {
+            *guard = Some(shannon_tools::AgentToolContext {
+                client_config: client_config.clone(),
+            });
+        }
 
         // Validate config and show warning if not fully configured
         if let Err(e) = client_config.validate() {
