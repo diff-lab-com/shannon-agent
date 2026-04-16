@@ -163,6 +163,8 @@ pub struct PermissionPrompt {
     pub description: String,
     /// Whether this is a confirmation (already approved conceptually)
     pub is_confirmation: bool,
+    /// Optional diff preview for file edit/write operations
+    pub diff_preview: Option<String>,
 }
 
 impl PermissionPrompt {
@@ -180,6 +182,7 @@ impl PermissionPrompt {
             risk_level,
             description,
             is_confirmation: false,
+            diff_preview: None,
         }
     }
 
@@ -192,6 +195,7 @@ impl PermissionPrompt {
             risk_level: RiskLevel::Safe,
             description,
             is_confirmation: true,
+            diff_preview: None,
         }
     }
 
@@ -700,6 +704,7 @@ impl PermissionManager {
                 risk_level: RiskLevel::Critical,
                 description: format!("This tool is denied: {tool_name}"),
                 is_confirmation: false,
+                diff_preview: None,
             });
         }
 
@@ -728,6 +733,7 @@ impl PermissionManager {
             risk_level,
             description,
             is_confirmation: false,
+            diff_preview: None,
         })
     }
 
@@ -945,6 +951,7 @@ impl PermissionManager {
             risk_level,
             description,
             is_confirmation: false,
+            diff_preview: None,
         }))
     }
 }

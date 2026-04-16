@@ -81,6 +81,56 @@ fn hook_mgr() -> crate::hooks::HookManager {
     mgr
 }
 
+/// Generate a unified diff preview for a file edit operation.
+fn generate_diff_preview(path: &str, old: &str, new: &str) -> String {
+    let mut diff = format!("--- {path} (current)\n+++ {path} (proposed)\n");
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+
+    // Simple line-by-line diff: show removed (-) and added (+) lines
+    let max_lines = old_lines.len().max(new_lines.len());
+    let mut changes = 0u32;
+    let max_changes = 30; // Limit diff output size
+
+    for i in 0..max_lines {
+        if changes >= max_changes {
+            diff.push_str(&format!("... ({} more lines)\n", max_lines - i));
+            break;
+        }
+        let old_line = old_lines.get(i).copied();
+        let new_line = new_lines.get(i).copied();
+
+        match (old_line, new_line) {
+            (Some(o), Some(n)) if o == n => {}
+            (Some(_), None) => {
+                diff.push_str(&format!("-{}\n", old_lines[i]));
+                changes += 1;
+            }
+            (None, Some(_)) => {
+                diff.push_str(&format!("+{}\n", new_lines[i]));
+                changes += 1;
+            }
+            (Some(_), Some(_)) => {
+                diff.push_str(&format!("-{}\n", old_lines[i]));
+                diff.push_str(&format!("+{}\n", new_lines[i]));
+                changes += 2;
+            }
+            (None, None) => unreachable!(),
+        }
+    }
+
+    if changes == 0 && old_lines.len() != new_lines.len() {
+        // Length changed but no line-level diff caught
+        diff.push_str(&format!(
+            "@@ file size changed: {} -> {} lines @@\n",
+            old_lines.len(),
+            new_lines.len()
+        ));
+    }
+
+    diff
+}
+
 impl QueryEngine {
     /// Create a new query engine
     pub fn new(
@@ -370,6 +420,21 @@ impl QueryEngine {
             }
             (None, Some(ctx)) => Some(ctx),
             (prompt, None) => prompt,
+        };
+
+        // Inject CLAUDE.md / AGENTS.md / GEMINI.md project instructions
+        let system_prompt = {
+            let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let project_ctx = crate::project_instructions::load_full_context(&working_dir);
+            match (system_prompt, project_ctx) {
+                (Some(mut prompt), Some(ctx)) => {
+                    prompt.push_str("\n\n");
+                    prompt.push_str(&ctx.content);
+                    Some(prompt)
+                }
+                (None, Some(ctx)) => Some(ctx.content),
+                (prompt, None) => prompt,
+            }
         };
 
         // Clone existing conversation to preserve multi-turn context
@@ -690,7 +755,7 @@ impl QueryEngine {
                                                             // Auto-allowed (low risk or always-allowed)
                                                             // Fall through to check hooks
                                                         }
-                                                        Ok(Some(prompt)) => {
+                                                        Ok(Some(mut prompt)) => {
                                                             // Check if already denied
                                                             if prompt.risk_level
                                                                 == crate::permissions::RiskLevel::Critical
@@ -714,11 +779,40 @@ impl QueryEngine {
                                                             if let Some(ref req_tx) =
                                                                 permission_request_tx
                                                             {
+                                                                // Generate diff preview for file edit/write tools
+                                                                if matches!(tool_name.as_str(), "edit" | "write" | "EditTool" | "WriteTool") {
+                                                                    if let Some(path) = tool_input.get("file_path").and_then(|v| v.as_str()) {
+                                                                        let path_buf = std::path::PathBuf::from(path);
+                                                                        if path_buf.exists() {
+                                                                            if let Ok(old_content) = std::fs::read_to_string(&path_buf) {
+                                                                                let new_content = tool_input.get("content")
+                                                                                    .or_else(|| tool_input.get("new_string"))
+                                                                                    .and_then(|v| v.as_str())
+                                                                                    .unwrap_or("");
+                                                                                let diff = generate_diff_preview(path, &old_content, new_content);
+                                                                                prompt.diff_preview = Some(diff);
+                                                                            }
+                                                                        } else if tool_name == "write" || tool_name == "WriteTool" {
+                                                                            // New file — show that it's being created
+                                                                            if let Some(content) = tool_input.get("content").and_then(|v| v.as_str()) {
+                                                                                let preview = if content.len() > 500 {
+                                                                                    format!("+ Creating new file ({} bytes)\n{}\n... (truncated)", content.len(), &content[..500])
+                                                                                } else {
+                                                                                    format!("+ Creating new file\n{content}")
+                                                                                };
+                                                                                prompt.diff_preview = Some(preview);
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
                                                                 let (response_tx, mut response_rx) =
                                                                     mpsc::unbounded_channel();
+                                                                // Clone prompt for the request; keep a reference for deny message
+                                                                let prompt_desc = prompt.description.clone();
+                                                                let prompt_for_choice = prompt.clone();
                                                                 let _ = req_tx.send(
                                                                     super::types::PermissionRequest {
-                                                                        prompt: prompt.clone(),
+                                                                        prompt,
                                                                         response_tx,
                                                                     },
                                                                 );
@@ -730,7 +824,7 @@ impl QueryEngine {
                                                                     ) => {
                                                                         let denied_msg = format!(
                                                                             "Permission denied: {}",
-                                                                            prompt.description
+                                                                            prompt_desc
                                                                         );
                                                                         let _ = tx.send(Ok(QueryEvent::ToolUseResult {
                                                                             query_id,
@@ -756,7 +850,7 @@ impl QueryEngine {
                                                                             .expect("permissions rwlock poisoned")
                                                                             .process_permission_choice(
                                                                                 session_id_for_permissions,
-                                                                                &prompt,
+                                                                                &prompt_for_choice,
                                                                                 crate::permissions::PermissionChoice::AlwaysAllow,
                                                                             );
                                                                     }

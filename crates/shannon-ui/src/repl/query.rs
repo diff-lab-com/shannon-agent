@@ -81,6 +81,8 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
     let streaming_multi_progress: Arc<Mutex<Vec<(String, f64, ratatui::style::Color)>>> = Arc::new(Mutex::new(Vec::new()));
     let streaming_tokens: Arc<Mutex<(u64, u64)>> = Arc::new(Mutex::new((0, 0))); // (input, output)
     let streaming_budget: Arc<Mutex<Option<f64>>> = Arc::new(Mutex::new(None));
+    // Incremental delta: only new tokens since last UI render
+    let streaming_delta: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
 
     let buffer_clone = streaming_buffer.clone();
     let status_clone = streaming_status.clone();
@@ -90,6 +92,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
     let multi_progress_clone = streaming_multi_progress.clone();
     let tokens_clone = streaming_tokens.clone();
     let budget_clone = streaming_budget.clone();
+    let delta_clone = streaming_delta.clone();
     let permission_tx = repl.permission_req_tx.clone();
 
     // Spawn the query processing in a separate thread
@@ -113,6 +116,10 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                     response_text.push_str(&content);
                     if let Ok(mut buf) = buffer_clone.lock() {
                         *buf = response_text.clone();
+                    }
+                    // Push incremental delta for UI
+                    if let Ok(mut d) = delta_clone.lock() {
+                        d.push_str(&content);
                     }
                 }
                 Ok(QueryEvent::ToolUseRequest { tool_name, tool_input, .. }) => {
@@ -226,19 +233,29 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
     {
         let terminal_backend = CrosstermBackend::new(io::stdout());
         let mut polling_terminal = Terminal::new(terminal_backend)?;
-        let mut last_rendered_len = 0usize;
+        let mut rendered_text = String::new();
+        let mut needs_render = false;
 
         loop {
             let is_done = done_clone.lock().map(|g| *g).unwrap_or(false);
             let query_finished = is_done || query_handle.is_finished();
 
-            let current_text = streaming_buffer.lock().map(|g| g.clone()).unwrap_or_default();
             let current_status = streaming_status.lock().map(|g| g.clone()).unwrap_or_default();
 
-            if current_text.len() != last_rendered_len {
-                let rendered = repl.output_renderer.render_streaming(&current_text);
+            // Drain incremental delta instead of cloning entire buffer
+            {
+                let mut delta = streaming_delta.lock().unwrap_or_else(|e| e.into_inner());
+                if !delta.is_empty() {
+                    rendered_text.push_str(&delta);
+                    delta.clear();
+                    needs_render = true;
+                }
+            }
+
+            if needs_render {
+                let rendered = repl.output_renderer.render_streaming(&rendered_text);
                 repl.chat.update_message(assistant_msg_index, rendered);
-                last_rendered_len = current_text.len();
+                needs_render = false;
             }
 
             repl.state.status = current_status.clone();
@@ -321,6 +338,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                         query_handle.abort();
                         if let Ok(mut buf) = streaming_buffer.lock() {
                             buf.push_str("\n\n⚠️ Cancelled by user.");
+                            rendered_text = buf.clone();
                         }
                         if let Ok(mut s) = streaming_status.lock() {
                             *s = t!("status.cancelled_status").to_string();

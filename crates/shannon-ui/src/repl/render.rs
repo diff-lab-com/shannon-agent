@@ -91,9 +91,10 @@ pub fn render_permission_dialog(
     area: Rect,
     dialog: &shannon_core::permissions::PermissionPrompt,
 ) {
-    // Calculate dialog area (centered)
-    let dialog_width = 60.min(area.width.saturating_sub(4));
-    let dialog_height = 20.min(area.height.saturating_sub(4));
+    // Calculate dialog area (centered) — taller if diff preview present
+    let base_height: u16 = if dialog.diff_preview.is_some() { 30 } else { 20 };
+    let dialog_width = 70.min(area.width.saturating_sub(4));
+    let dialog_height = base_height.min(area.height.saturating_sub(4));
 
     let x = (area.width.saturating_sub(dialog_width)) / 2;
     let y = (area.height.saturating_sub(dialog_height)) / 2;
@@ -141,9 +142,37 @@ pub fn render_permission_dialog(
             Span::styled(&dialog.description, Style::default().fg(Color::White)),
         ]),
         Line::from(""),
-        Line::from("Input:"),
-        Line::from(serde_json::to_string_pretty(&dialog.tool_input).unwrap_or_else(|_| "(invalid)".to_string()).to_string()),
     ];
+
+    // Show diff preview for file edit/write, raw input for other tools
+    if let Some(ref diff) = dialog.diff_preview {
+        content_lines.push(Line::from(vec![
+            Span::styled("-- Diff Preview ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled("--------------------------", Style::default().fg(Color::DarkGray)),
+        ]));
+        let diff_lines: Vec<&str> = diff.lines().collect();
+        for line in diff_lines.iter().take(15) {
+            let color = if line.starts_with('-') && !line.starts_with("---") {
+                Color::Red
+            } else if line.starts_with('+') && !line.starts_with("+++") {
+                Color::Green
+            } else if line.starts_with('@') {
+                Color::Cyan
+            } else {
+                Color::White
+            };
+            content_lines.push(Line::from(Span::styled(line.to_string(), Style::default().fg(color))));
+        }
+        if diff_lines.len() > 15 {
+            content_lines.push(Line::from(Span::styled(
+                format!("... ({} more lines)", diff_lines.len().saturating_sub(15)),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+    } else {
+        content_lines.push(Line::from("Input:"));
+        content_lines.push(Line::from(serde_json::to_string_pretty(&dialog.tool_input).unwrap_or_else(|_| "(invalid)".to_string()).to_string()));
+    }
 
     // Add options
     content_lines.push(Line::from(""));
