@@ -253,6 +253,8 @@ pub struct ChatMessage {
     pub role: ChatRole,
     pub content: String,
     pub timestamp: chrono::DateTime<chrono::Utc>,
+    /// Optional inline image preview rendered as half-block characters
+    pub image_lines: Option<Vec<ratatui::text::Line<'static>>>,
 }
 
 /// Role of the chat message sender
@@ -279,12 +281,40 @@ impl ChatWidget {
             role,
             content,
             timestamp: chrono::Utc::now(),
+            image_lines: None,
         };
 
         let index = self.messages.len();
         self.messages.push_back(message);
 
         // Auto-scroll to bottom
+        if !self.messages.is_empty() {
+            self.scroll_offset = self.messages.len() - 1;
+        }
+
+        index
+    }
+
+    /// Add a message with an inline image preview.
+    ///
+    /// The `image_lines` are pre-rendered half-block character lines
+    /// from the `terminal_image` module.
+    pub fn add_message_with_image(
+        &mut self,
+        role: ChatRole,
+        content: String,
+        image_lines: Vec<ratatui::text::Line<'static>>,
+    ) -> usize {
+        let message = ChatMessage {
+            role,
+            content,
+            timestamp: chrono::Utc::now(),
+            image_lines: Some(image_lines),
+        };
+
+        let index = self.messages.len();
+        self.messages.push_back(message);
+
         if !self.messages.is_empty() {
             self.scroll_offset = self.messages.len() - 1;
         }
@@ -359,6 +389,13 @@ impl ChatWidget {
             ]));
 
             list_items.push(item);
+
+            // If the message has inline image preview lines, render them
+            if let Some(ref img_lines) = msg.image_lines {
+                for img_line in img_lines {
+                    list_items.push(ListItem::new(img_line.clone()));
+                }
+            }
         }
 
         let list = List::new(list_items)
@@ -865,6 +902,7 @@ mod tests {
             role: ChatRole::User,
             content: "Test message".to_string(),
             timestamp: chrono::Utc::now(),
+            image_lines: None,
         };
         assert_eq!(msg.content, "Test message");
         assert_eq!(msg.role, ChatRole::User);

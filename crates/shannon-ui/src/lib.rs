@@ -14,12 +14,17 @@ pub mod vim;
 pub mod repl_enhancement;
 pub mod skill_bridge;
 pub mod tool_format;
+pub mod terminal_image;
 
 pub use repl::{Repl, ReplState};
 pub use events::{Event, EventHandler};
 pub use render::Renderer;
 pub use render::render_diff;
-pub use widgets::{ChatWidget, ChatRole, PromptWidget, MainLayoutWidget};
+pub use widgets::{ChatWidget, ChatRole, ChatMessage, PromptWidget, MainLayoutWidget};
+pub use terminal_image::{
+    ImageProtocol, ImageRenderConfig,
+    detect_protocol, render_image_base64, render_image_bytes, image_placeholder,
+};
 pub use vim::{VimHandler, VimMode, VimAction};
 pub use adapter::{
     UiAdapter, UiResult, UiError, NullUiAdapter,

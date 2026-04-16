@@ -166,6 +166,9 @@ pub struct LlmClientConfig {
     pub fallback_base_url: Option<String>,
     /// Maximum number of automatic stream reconnection attempts (default: 3).
     pub max_stream_reconnects: u32,
+    /// Budget tokens for extended thinking mode (Anthropic-specific).
+    /// When set, enables extended thinking with the given token budget.
+    pub budget_tokens: Option<u32>,
 }
 
 impl Default for LlmClientConfig {
@@ -222,6 +225,7 @@ impl Default for LlmClientConfig {
             fallback_provider: None,
             fallback_base_url: None,
             max_stream_reconnects: 3,
+            budget_tokens: None,
         }
     }
 }
@@ -326,6 +330,7 @@ impl From<ShannonConfig> for LlmClientConfig {
             fallback_provider: None,
             fallback_base_url: None,
             max_stream_reconnects: 3,
+            budget_tokens: None,
         }
     }
 }
@@ -394,6 +399,7 @@ impl LlmClientConfig {
             fallback_provider: None,
             fallback_base_url: None,
             max_stream_reconnects: 3,
+            budget_tokens: None,
         }
     }
 
@@ -417,6 +423,7 @@ impl LlmClientConfig {
             fallback_provider: None,
             fallback_base_url: None,
             max_stream_reconnects: 3,
+            budget_tokens: None,
         }
     }
 
@@ -440,6 +447,7 @@ impl LlmClientConfig {
             fallback_provider: None,
             fallback_base_url: None,
             max_stream_reconnects: 3,
+            budget_tokens: None,
         }
     }
 
@@ -463,6 +471,7 @@ impl LlmClientConfig {
             fallback_provider: None,
             fallback_base_url: None,
             max_stream_reconnects: 3,
+            budget_tokens: None,
         }
     }
 
@@ -486,6 +495,7 @@ impl LlmClientConfig {
             fallback_provider: None,
             fallback_base_url: None,
             max_stream_reconnects: 3,
+            budget_tokens: None,
         }
     }
 
@@ -507,6 +517,7 @@ impl LlmClientConfig {
             fallback_provider: None,
             fallback_base_url: None,
             max_stream_reconnects: 3,
+            budget_tokens: None,
         }
     }
 
@@ -528,6 +539,7 @@ impl LlmClientConfig {
             fallback_provider: None,
             fallback_base_url: None,
             max_stream_reconnects: 3,
+            budget_tokens: None,
         }
     }
 
@@ -549,6 +561,7 @@ impl LlmClientConfig {
             fallback_provider: None,
             fallback_base_url: None,
             max_stream_reconnects: 3,
+            budget_tokens: None,
         }
     }
 
@@ -570,6 +583,7 @@ impl LlmClientConfig {
             fallback_provider: None,
             fallback_base_url: None,
             max_stream_reconnects: 3,
+            budget_tokens: None,
         }
     }
 }
@@ -601,6 +615,12 @@ pub enum ContentBlock {
     #[serde(rename = "image")]
     Image {
         source: ImageSource,
+    },
+
+    /// Thinking block for extended thinking mode (Anthropic-specific)
+    #[serde(rename = "thinking")]
+    Thinking {
+        thinking: String,
     },
 
     #[serde(rename = "tool_use")]
@@ -679,6 +699,10 @@ pub struct MessageRequest {
     pub top_k: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_sequences: Option<Vec<String>>,
+    /// Budget tokens for extended thinking (Anthropic-specific).
+    /// When set, enables extended thinking mode with the given token budget.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget_tokens: Option<u32>,
 }
 
 /// Tool definition for function calling
@@ -757,6 +781,10 @@ pub enum ContentDelta {
 
     #[serde(rename = "input_json_delta")]
     InputJsonDelta { partial_json: String },
+
+    /// Thinking delta for extended thinking mode (Anthropic-specific)
+    #[serde(rename = "thinking_delta")]
+    ThinkingDelta { thinking: String },
 }
 
 /// Message delta event data

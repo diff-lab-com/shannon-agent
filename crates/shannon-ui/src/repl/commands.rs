@@ -578,13 +578,23 @@ fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
     let input = args.trim();
     if input.is_empty() {
         repl.chat.add_message(ChatRole::System,
-            "Usage: /image <path> [optional prompt]\n       /image paste [prompt]\n\nAttach an image file or paste from clipboard. Supports PNG, JPG, GIF, WebP, BMP, SVG.".to_string());
+            "Usage: /image <path> [optional prompt]\n       /image paste [prompt]\n       /image url <url> [prompt]\n\nAttach an image file, paste from clipboard, or fetch from URL.\nSupports PNG, JPG, GIF, WebP, BMP, SVG.".to_string());
         return Ok(());
     }
 
     // Handle /image paste subcommand
     if input.starts_with("paste") {
         return handle_image_paste(repl, input[5..].trim());
+    }
+
+    // Handle /image url <url> subcommand
+    if input.starts_with("url ") {
+        return handle_image_url(repl, input[4..].trim());
+    }
+
+    // Auto-detect URL (starts with http:// or https://)
+    if input.starts_with("http://") || input.starts_with("https://") {
+        return handle_image_url(repl, input);
     }
 
     // Split path from optional prompt
@@ -662,7 +672,14 @@ fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
     ];
 
     engine.add_user_message_blocks(blocks);
-    repl.chat.add_message(ChatRole::User, format!("[Image attached: {}]", file_path.display()));
+    // Generate inline image preview
+    let preview_config = crate::terminal_image::ImageRenderConfig::default();
+    let preview_lines = crate::terminal_image::render_image_bytes(&bytes, &preview_config);
+    repl.chat.add_message_with_image(
+        ChatRole::User,
+        format!("[Image attached: {}]", file_path.display()),
+        preview_lines,
+    );
     repl.chat.add_message(ChatRole::System, t!("commands.image.image_sent").to_string());
 
     // Trigger query processing
@@ -748,7 +765,14 @@ fn handle_image_paste(repl: &mut Repl, prompt_args: &str) -> Result<()> {
                 },
             ];
             engine.add_user_message_blocks(blocks);
-            repl.chat.add_message(ChatRole::User, "[Image pasted from clipboard]".to_string());
+            // Generate inline image preview from clipboard bytes
+            let preview_config = crate::terminal_image::ImageRenderConfig::default();
+            let preview_lines = crate::terminal_image::render_image_bytes(&bytes, &preview_config);
+            repl.chat.add_message_with_image(
+                ChatRole::User,
+                "[Image pasted from clipboard]".to_string(),
+                preview_lines,
+            );
             repl.chat.add_message(ChatRole::System, t!("commands.image.clipboard_sent").to_string());
 
             super::query::handle_query(repl, "Please analyze the image I just shared from my clipboard.")?;
@@ -759,6 +783,117 @@ fn handle_image_paste(repl: &mut Repl, prompt_args: &str) -> Result<()> {
                  Install xclip (X11) or wl-clipboard (Wayland) for Linux, or pngpaste for macOS.".to_string());
         }
     }
+    Ok(())
+}
+
+/// Handle `/image url <url>` — fetch image from URL and send to API.
+fn handle_image_url(repl: &mut Repl, input: &str) -> Result<()> {
+    use base64::Engine;
+    use shannon_core::api::{ContentBlock, ImageSource};
+
+    // Split URL from optional prompt
+    let (url, prompt) = if input.starts_with("http://") || input.starts_with("https://") {
+        let mut parts = input.splitn(2, ' ');
+        let url = parts.next().unwrap_or("").to_string();
+        let prompt = parts.next().map(|p| p.trim().to_string())
+            .unwrap_or_else(|| "Describe this image.".to_string());
+        (url, prompt)
+    } else {
+        // Input starts after "url " prefix
+        let mut parts = input.splitn(2, ' ');
+        let url = parts.next().unwrap_or("").to_string();
+        let prompt = parts.next().map(|p| p.trim().to_string())
+            .unwrap_or_else(|| "Describe this image.".to_string());
+        (url, prompt)
+    };
+
+    if url.is_empty() {
+        repl.chat.add_message(ChatRole::System,
+            "Usage: /image url <url> [prompt]\n\nFetch an image from a URL and send it for analysis.".to_string());
+        return Ok(());
+    }
+
+    repl.chat.add_message(ChatRole::System, format!("Fetching image from {url}..."));
+
+    // Fetch the image using the async runtime
+    let fetch_result = repl.runtime.block_on(async {
+        match reqwest::get(&url).await {
+            Ok(resp) => {
+                if !resp.status().is_success() {
+                    return Err(format!("HTTP {}", resp.status()));
+                }
+                // Detect media type from Content-Type header
+                let media_type = resp.headers()
+                    .get("content-type")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_string();
+
+                let media_type = if media_type.starts_with("image/") {
+                    media_type
+                } else {
+                    match url.rsplit('.').next().unwrap_or("").to_lowercase().as_str() {
+                        "png" => "image/png".to_string(),
+                        "jpg" | "jpeg" => "image/jpeg".to_string(),
+                        "gif" => "image/gif".to_string(),
+                        "webp" => "image/webp".to_string(),
+                        "svg" => "image/svg+xml".to_string(),
+                        _ => "image/png".to_string(),
+                    }
+                };
+
+                match resp.bytes().await {
+                    Ok(b) => Ok((b.to_vec(), media_type)),
+                    Err(e) => Err(format!("Failed to read image data: {e}")),
+                }
+            }
+            Err(e) => Err(format!("Failed to fetch image: {e}")),
+        }
+    });
+
+    match fetch_result {
+        Ok((bytes, media_type)) => {
+            if bytes.len() < 10 {
+                repl.chat.add_message(ChatRole::System,
+                    "Response does not contain valid image data.".to_string());
+                return Ok(());
+            }
+
+            let engine = match repl.query_engine.as_mut() {
+                Some(e) => e,
+                None => {
+                    repl.chat.add_message(ChatRole::System, t!("commands.image.no_engine").to_string());
+                    return Ok(());
+                }
+            };
+
+            let base64_data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            let blocks = vec![
+                ContentBlock::Text { text: prompt },
+                ContentBlock::Image {
+                    source: ImageSource::base64(&media_type, base64_data),
+                },
+            ];
+
+            engine.add_user_message_blocks(blocks);
+
+            // Generate inline image preview
+            let preview_config = crate::terminal_image::ImageRenderConfig::default();
+            let preview_lines = crate::terminal_image::render_image_bytes(&bytes, &preview_config);
+            repl.chat.add_message_with_image(
+                ChatRole::User,
+                format!("[Image from URL: {url}]"),
+                preview_lines,
+            );
+
+            super::query::handle_query(repl, "Please analyze the image I just shared from the URL.")?;
+        }
+        Err(e) => {
+            repl.chat.add_message(ChatRole::System,
+                format!("Failed to fetch image: {e}"));
+        }
+    }
+
     Ok(())
 }
 
@@ -1970,7 +2105,7 @@ fn handle_team(repl: &mut Repl, args: &str) -> Result<()> {
             }
         }
         "run" => {
-            use shannon_agents::{MultiAgentSpawner, SpawnAgentConfig};
+            use shannon_agents::{MultiAgentSpawner, SpawnAgentConfig, shared_executor};
             if let Some(ref coordinator) = repl.team_coordinator {
                 let task_board = coordinator.task_board();
                 let ready_tasks = repl.runtime.block_on(task_board.list_ready_tasks());
@@ -1980,9 +2115,15 @@ fn handle_team(repl: &mut Repl, args: &str) -> Result<()> {
                 }
                 let agent_configs: Vec<SpawnAgentConfig> = ready_tasks
                     .iter().map(|t| SpawnAgentConfig::new(format!("agent-{}", t.id), t.subject.clone())).collect();
-                let config = shannon_agents::MultiAgentConfig::new(agent_configs);
+                let mut config = shannon_agents::MultiAgentConfig::new(agent_configs);
+                config.default_system_prompt = Some("You are a helpful AI coding assistant. Complete the assigned task concisely and accurately.".to_string());
+                // Create executor from the REPL's LLM client if available
+                let executor = repl.query_engine.as_ref().and_then(|engine| {
+                    let client = engine.client().clone();
+                    Some(shared_executor(client))
+                });
                 repl.chat.add_message(ChatRole::System, "Starting parallel execution...".to_string());
-                let result = repl.runtime.block_on(MultiAgentSpawner::spawn(config));
+                let result = repl.runtime.block_on(MultiAgentSpawner::spawn(config, executor));
                 let mut report = format!(
                     "Execution complete: {} succeeded, {} failed ({:.1}s)\n",
                     result.success_count, result.failure_count, result.total_duration.as_secs_f64(),
@@ -1993,6 +2134,14 @@ fn handle_team(repl: &mut Repl, args: &str) -> Result<()> {
                         ar.status, ar.agent_name, ar.duration.as_secs_f64(),
                         ar.error.as_ref().map(|e| format!(" — {e}")).unwrap_or_default(),
                     ));
+                    if let Some(ref output) = ar.output {
+                        let preview = if output.content.len() > 300 {
+                            format!("{}...", &output.content[..300])
+                        } else {
+                            output.content.clone()
+                        };
+                        report.push_str(&format!("    {}\n", preview.trim()));
+                    }
                 }
                 repl.chat.add_message(ChatRole::System, report);
             } else {
@@ -2150,7 +2299,7 @@ fn handle_agents(repl: &mut Repl, args: &str) -> Result<()> {
             }
         }
         "run-bg" => {
-            use shannon_agents::{MultiAgentSpawner, SpawnAgentConfig, MultiAgentConfig};
+            use shannon_agents::{MultiAgentSpawner, SpawnAgentConfig, MultiAgentConfig, shared_executor};
 
             let name = parts.get(1).copied().unwrap_or("");
             let task = parts.get(2).copied().unwrap_or("");
@@ -2161,13 +2310,34 @@ fn handle_agents(repl: &mut Repl, args: &str) -> Result<()> {
             let agent_config = SpawnAgentConfig::new(name.to_string(), task.to_string());
             let config = MultiAgentConfig::new(vec![agent_config]);
 
+            let executor = repl.query_engine.as_ref().and_then(|engine| {
+                let client = engine.client().clone();
+                Some(shared_executor(client))
+            });
+
             repl.chat.add_message(ChatRole::System, format!("Running agent '{name}'..."));
-            let result = repl.runtime.block_on(MultiAgentSpawner::spawn(config));
+            let result = repl.runtime.block_on(MultiAgentSpawner::spawn(config, executor));
             let status = if result.all_succeeded() { "completed" } else { "failed" };
-            repl.chat.add_message(ChatRole::System, format!(
-                "Agent '{}' {} in {:.1}s",
-                name, status, result.total_duration.as_secs_f64(),
-            ));
+
+            // Show output from agent if available
+            if let Some(ar) = result.agent_results.first() {
+                if let Some(ref output) = ar.output {
+                    let preview = if output.content.len() > 500 {
+                        format!("{}...", &output.content[..500])
+                    } else {
+                        output.content.clone()
+                    };
+                    repl.chat.add_message(ChatRole::System, format!(
+                        "Agent '{}' {} in {:.1}s:\n{}",
+                        name, status, result.total_duration.as_secs_f64(), preview,
+                    ));
+                } else {
+                    repl.chat.add_message(ChatRole::System, format!(
+                        "Agent '{}' {} in {:.1}s",
+                        name, status, result.total_duration.as_secs_f64(),
+                    ));
+                }
+            }
         }
         _ => {
             repl.chat.add_message(ChatRole::System, format!("Unknown subcommand: {subcommand}. Use /agents help."));

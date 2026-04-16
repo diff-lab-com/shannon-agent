@@ -702,6 +702,7 @@ mod e2e_client_tests {
             fallback_provider: None,
             fallback_base_url: None,
             max_stream_reconnects: 3,
+            budget_tokens: None,
         };
         LlmClient::new(config)
     }
@@ -984,6 +985,7 @@ mod retry_tests {
             fallback_provider: None,
             fallback_base_url: None,
             max_stream_reconnects: 3,
+            budget_tokens: None,
         };
         LlmClient::new(config)
     }
@@ -1005,6 +1007,7 @@ mod retry_tests {
             fallback_provider: Some(LlmProvider::Anthropic),
             fallback_base_url: Some(fallback.url()),
             max_stream_reconnects: 3,
+            budget_tokens: None,
         };
         LlmClient::new(config)
     }
@@ -1245,6 +1248,7 @@ mod query_pipeline_tests {
             fallback_provider: None,
             fallback_base_url: None,
             max_stream_reconnects: 3,
+            budget_tokens: None,
         };
         LlmClient::new(config)
     }
@@ -1876,6 +1880,7 @@ mod permission_flow_tests {
             fallback_provider: None,
             fallback_base_url: None,
             max_stream_reconnects: 3,
+            budget_tokens: None,
         };
         LlmClient::new(config)
     }
@@ -2001,6 +2006,7 @@ mod permission_flow_tests {
                 QueryEvent::ToolProgress { .. } => "ToolProgress",
                 QueryEvent::Completed { .. } => "Completed",
                 QueryEvent::Failed { .. } => "Failed",
+                QueryEvent::Thinking { .. } => "Thinking",
             }).collect::<Vec<_>>()
         );
     }

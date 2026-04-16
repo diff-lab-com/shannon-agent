@@ -426,6 +426,9 @@ pub enum QueryEvent {
         message: String,
     },
 
+    /// Thinking content from extended thinking mode
+    Thinking { query_id: Uuid, content: String },
+
     /// Usage statistics
     Usage {
         query_id: Uuid,

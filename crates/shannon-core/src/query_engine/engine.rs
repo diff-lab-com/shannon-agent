@@ -346,6 +346,11 @@ impl QueryEngine {
         self.conversation = ConversationState::default();
     }
 
+    /// Get a reference to the underlying LLM client.
+    pub fn client(&self) -> &LlmClient {
+        &self.client
+    }
+
     /// Replace the conversation history with new messages (e.g., after compaction)
     pub fn replace_conversation(&mut self, messages: Vec<Message>) {
         let turn_count = messages.iter().filter(|m| m.role == "user").count();
@@ -462,13 +467,20 @@ impl QueryEngine {
             }
 
             // Create a new client for this task, preserving provider from original config
-            let client_config = crate::api::LlmClientConfig {
-                api_key: client_api_key,
-                base_url: client_base_url,
-                model: client_model.clone(),
-                max_tokens: client_max_tokens,
-                provider: client_provider,
-                ..Default::default()
+            let client_config = {
+                let mut cfg = crate::api::LlmClientConfig {
+                    api_key: client_api_key,
+                    base_url: client_base_url,
+                    model: client_model.clone(),
+                    max_tokens: client_max_tokens,
+                    provider: client_provider,
+                    ..Default::default()
+                };
+                // Enable extended thinking with a budget if configured
+                if config.enable_thinking {
+                    cfg.budget_tokens = Some(10000);
+                }
+                cfg
             };
             let client = LlmClient::new(client_config);
 
@@ -550,6 +562,7 @@ impl QueryEngine {
                                     }).unwrap_or(50)
                                 }
                                 ContentBlock::Image { source } => source.data.len(),
+                                ContentBlock::Thinking { thinking } => thinking.len(),
                             }).sum::<usize>()
                         }
                     }).sum();
@@ -617,19 +630,25 @@ impl QueryEngine {
                                         StreamEvent::ContentBlockStart {
                                             content_block, ..
                                         } => {
-                                            if let ContentBlock::ToolUse {
+                                            match &content_block {
+                                                ContentBlock::ToolUse {
                                                     id,
                                                     name,
                                                     input,
-                                                } = &content_block {
-                                                current_tool_use =
-                                                    Some((id.clone(), name.clone()));
-                                                let _ = tx.send(Ok(QueryEvent::ToolUseRequest {
-                                                    query_id,
-                                                    tool_use_id: id.clone(),
-                                                    tool_name: name.clone(),
-                                                    tool_input: input.clone(),
-                                                }));
+                                                } => {
+                                                    current_tool_use =
+                                                        Some((id.clone(), name.clone()));
+                                                    let _ = tx.send(Ok(QueryEvent::ToolUseRequest {
+                                                        query_id,
+                                                        tool_use_id: id.clone(),
+                                                        tool_name: name.clone(),
+                                                        tool_input: input.clone(),
+                                                    }));
+                                                }
+                                                ContentBlock::Thinking { .. } => {
+                                                    // Thinking block started — deltas will arrive via ThinkingDelta
+                                                }
+                                                _ => {}
                                             }
                                         }
                                         StreamEvent::ContentBlockDelta { delta, .. } => {
@@ -643,6 +662,12 @@ impl QueryEngine {
                                                 }
                                                 ContentDelta::InputJsonDelta { partial_json } => {
                                                     accumulated_tool_input.push_str(&partial_json);
+                                                }
+                                                ContentDelta::ThinkingDelta { thinking } => {
+                                                    let _ = tx.send(Ok(QueryEvent::Thinking {
+                                                        query_id,
+                                                        content: thinking,
+                                                    }));
                                                 }
                                             }
                                         }

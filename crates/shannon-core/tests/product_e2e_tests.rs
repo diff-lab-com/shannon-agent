@@ -67,6 +67,7 @@ fn make_client(server: &ServerGuard, provider: LlmProvider) -> LlmClient {
         fallback_provider: None,
         fallback_base_url: None,
         max_stream_reconnects: 3,
+        budget_tokens: None,
     };
     LlmClient::new(config)
 }

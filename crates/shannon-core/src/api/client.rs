@@ -9,6 +9,7 @@ use super::streaming::MessageStream;
 use super::types::*;
 
 /// LLM API client with multi-provider and streaming support
+#[derive(Clone)]
 pub struct LlmClient {
     config: LlmClientConfig,
     client: Client,
@@ -136,6 +137,7 @@ impl LlmClient {
             top_p: None,
             top_k: None,
             stop_sequences: None,
+            budget_tokens: self.config.budget_tokens,
         };
 
         let url = self.endpoint_url();
@@ -212,6 +214,7 @@ impl LlmClient {
             top_p: None,
             top_k: None,
             stop_sequences: None,
+            budget_tokens: self.config.budget_tokens,
         };
 
         let url = self.endpoint_url();
@@ -275,6 +278,7 @@ impl LlmClient {
             top_p: None,
             top_k: None,
             stop_sequences: None,
+            budget_tokens: self.config.budget_tokens,
         };
 
         let url = self.endpoint_url();

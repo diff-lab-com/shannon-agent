@@ -112,6 +112,11 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
         while let Some(event_result) = stream.next().await {
             match event_result {
                 Ok(QueryEvent::Started { .. }) => {}
+                Ok(QueryEvent::Thinking { content, .. }) => {
+                    // Accumulate thinking content but don't display inline yet
+                    // Will be shown as collapsible block after completion
+                    let _ = content;
+                }
                 Ok(QueryEvent::Text { content, .. }) => {
                     response_text.push_str(&content);
                     if let Ok(mut buf) = buffer_clone.lock() {

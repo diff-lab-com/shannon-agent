@@ -489,6 +489,9 @@ impl Summarizer for RuleBasedSummarizer {
                             ContentBlock::Image { .. } => {
                                 summary_parts.push("Image (omitted from summary)".to_string());
                             }
+                            ContentBlock::Thinking { .. } => {
+                                // Thinking blocks are internal and omitted from summaries
+                            }
                         }
                     }
                 }
@@ -1276,6 +1279,9 @@ fn extract_text_content(msg: &Message) -> String {
                     ContentBlock::Image { .. } => {
                         parts.push("[Image]".to_string());
                     }
+                    ContentBlock::Thinking { .. } => {
+                        // Thinking blocks are internal and omitted
+                    }
                 }
             }
             parts.join("\n")
@@ -1326,6 +1332,7 @@ fn estimate_message_tokens(msg: &Message) -> usize {
                         }
                     }
                     ContentBlock::Image { .. } => total += 100, // rough image token estimate
+                    ContentBlock::Thinking { thinking } => total += thinking.len(),
                 }
             }
             total

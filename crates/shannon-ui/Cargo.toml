@@ -29,3 +29,5 @@ tracing = "0.1"
 dirs = "5.0"
 rust-i18n = { workspace = true }
 base64 = "0.22"
+image = { workspace = true }
+reqwest = { workspace = true }

@@ -340,6 +340,7 @@ mod tests {
             top_p: None,
             top_k: None,
             stop_sequences: None,
+            budget_tokens: None,
         };
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains("stream"));

@@ -13,6 +13,7 @@ mod task;
 mod error;
 mod sub_agent;
 mod multi_agent;
+mod executor;
 mod summary;
 
 pub use coordinator::{AgentCoordinator, CoordinatorConfig, AssignmentStrategy, CoordinatorEvent};
@@ -39,6 +40,9 @@ pub use multi_agent::{
 };
 pub use summary::{
     AgentExecutionSummary, SummaryStatus, SummaryGenerator, SuccessMetrics,
+};
+pub use executor::{
+    AgentExecutor, LlmAgentExecutor, MockAgentExecutor, shared_executor,
 };
 
 /// Version information for the agents crate

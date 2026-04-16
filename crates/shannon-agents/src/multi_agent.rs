@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
+use crate::executor::AgentExecutor;
 
 // ---------------------------------------------------------------------------
 // Configuration types
@@ -29,6 +30,9 @@ pub struct AgentConfig {
     pub name: String,
     /// Task description / prompt for the agent
     pub task: String,
+    /// Optional system prompt defining agent behavior
+    #[serde(default)]
+    pub system_prompt: Option<String>,
     /// Optional model override (e.g., "claude-sonnet-4-6")
     #[serde(default)]
     pub model: Option<String>,
@@ -46,6 +50,7 @@ impl AgentConfig {
         Self {
             name: name.into(),
             task: task.into(),
+            system_prompt: None,
             model: None,
             tools: None,
             depends_on: Vec::new(),
@@ -55,6 +60,12 @@ impl AgentConfig {
     /// Set an optional model override.
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = Some(model.into());
+        self
+    }
+
+    /// Set a system prompt defining agent behavior.
+    pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.system_prompt = Some(prompt.into());
         self
     }
 
@@ -85,6 +96,9 @@ pub struct MultiAgentConfig {
     /// If true, stop all remaining agents on first failure
     #[serde(default)]
     pub fail_fast: bool,
+    /// Default system prompt for agents that don't specify one
+    #[serde(default)]
+    pub default_system_prompt: Option<String>,
 }
 
 fn default_max_parallel() -> usize {
@@ -103,6 +117,7 @@ impl MultiAgentConfig {
             max_parallel: default_max_parallel(),
             timeout_secs: default_timeout_secs(),
             fail_fast: false,
+            default_system_prompt: None,
         }
     }
 
@@ -123,6 +138,12 @@ impl MultiAgentConfig {
         self.fail_fast = true;
         self
     }
+
+    /// Set the default system prompt for agents that don't specify one.
+    pub fn with_default_system_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.default_system_prompt = Some(prompt.into());
+        self
+    }
 }
 
 impl Default for MultiAgentConfig {
@@ -132,6 +153,7 @@ impl Default for MultiAgentConfig {
             max_parallel: default_max_parallel(),
             timeout_secs: default_timeout_secs(),
             fail_fast: false,
+            default_system_prompt: None,
         }
     }
 }
@@ -395,7 +417,10 @@ impl MultiAgentSpawner {
     /// 3. Executes each wave in parallel, respecting the `max_parallel` limit
     /// 4. Handles per-agent timeouts and fail-fast cancellation
     /// 5. Returns aggregated results
-    pub async fn spawn(config: MultiAgentConfig) -> MultiAgentResult {
+    pub async fn spawn(
+        config: MultiAgentConfig,
+        executor: Option<Arc<dyn AgentExecutor>>,
+    ) -> MultiAgentResult {
         let total_start = Instant::now();
 
         // Validate: empty agent list
@@ -496,6 +521,8 @@ impl MultiAgentSpawner {
                     let sem = semaphore.clone();
                     let cancel_flag = cancelled.clone();
                     let wave_timeout = timeout;
+                    let exec = executor.clone();
+                    let default_prompt = config.default_system_prompt.clone();
 
                     tokio::spawn(async move {
                         // Acquire semaphore permit (respects max_parallel)
@@ -509,7 +536,10 @@ impl MultiAgentSpawner {
                         let start = Instant::now();
 
                         // Execute with timeout
-                        let result = tokio::time::timeout(wave_timeout, Self::execute_agent(&agent))
+                        let result = tokio::time::timeout(
+                            wave_timeout,
+                            Self::execute_agent(&agent, exec.as_deref(), default_prompt.as_deref()),
+                        )
                             .await;
 
                         let duration = start.elapsed();
@@ -599,7 +629,7 @@ impl MultiAgentSpawner {
     /// Spawn multiple agents in a background tokio task.
     /// Returns a JoinHandle that can be awaited for the result.
     pub fn spawn_background(config: MultiAgentConfig) -> JoinHandle<MultiAgentResult> {
-        tokio::spawn(async move { Self::spawn(config).await })
+        tokio::spawn(async move { Self::spawn(config, None).await })
     }
 
     /// Build execution waves from topologically-sorted agents.
@@ -644,22 +674,43 @@ impl MultiAgentSpawner {
 
     /// Execute a single agent. In production this would launch a subprocess
     /// or call an AI API. For now it produces a synthetic ToolOutput.
-    async fn execute_agent(agent: &AgentConfig) -> Result<AgentResult, String> {
-        // Simulate agent work. In a real implementation, this would:
-        // - Launch a subprocess with the agent's configuration
-        // - Stream output back
-        // - Handle errors and timeouts
-        let _ = &agent.task;
+    async fn execute_agent(
+        agent: &AgentConfig,
+        executor: Option<&dyn AgentExecutor>,
+        default_system_prompt: Option<&str>,
+    ) -> Result<AgentResult, String> {
+        let start = Instant::now();
 
-        Ok(AgentResult::completed(
-            agent.name.clone(),
-            ToolOutput {
-                content: format!("Agent '{}' completed task successfully", agent.name),
-                is_error: false,
-                metadata: std::collections::HashMap::new(),
-            },
-            Duration::from_millis(1),
-        ))
+        let system_prompt = agent
+            .system_prompt
+            .as_deref()
+            .or(default_system_prompt)
+            .unwrap_or("You are a helpful AI assistant. Complete the task concisely.");
+
+        if let Some(exec) = executor {
+            // Real execution via injected executor (LLM-backed)
+            let result = exec
+                .execute(
+                    system_prompt,
+                    &agent.task,
+                    agent.model.as_deref(),
+                    agent.tools.as_deref(),
+                )
+                .await?;
+
+            Ok(AgentResult::completed(agent.name.clone(), result, start.elapsed()))
+        } else {
+            // No executor: return a stub result so tests still pass
+            Ok(AgentResult::completed(
+                agent.name.clone(),
+                ToolOutput {
+                    content: format!("Agent '{}' completed task (no executor configured)", agent.name),
+                    is_error: false,
+                    metadata: std::collections::HashMap::new(),
+                },
+                start.elapsed(),
+            ))
+        }
     }
 }
 
@@ -1070,7 +1121,7 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_empty_agents() {
         let config = MultiAgentConfig::new(vec![]);
-        let result = MultiAgentSpawner::spawn(config).await;
+        let result = MultiAgentSpawner::spawn(config, None).await;
         assert!(result.agent_results.is_empty());
         assert_eq!(result.success_count, 0);
         assert_eq!(result.failure_count, 0);
@@ -1081,7 +1132,7 @@ mod tests {
         let config = MultiAgentConfig::new(vec![
             AgentConfig::new("solo", "Do a thing"),
         ]);
-        let result = MultiAgentSpawner::spawn(config).await;
+        let result = MultiAgentSpawner::spawn(config, None).await;
         assert_eq!(result.agent_results.len(), 1);
         assert_eq!(result.success_count, 1);
         assert!(result.all_succeeded());
@@ -1094,7 +1145,7 @@ mod tests {
             AgentConfig::new("b", "task b"),
             AgentConfig::new("c", "task c"),
         ]);
-        let result = MultiAgentSpawner::spawn(config).await;
+        let result = MultiAgentSpawner::spawn(config, None).await;
         assert_eq!(result.agent_results.len(), 3);
         assert_eq!(result.success_count, 3);
         assert!(result.all_succeeded());
@@ -1107,7 +1158,7 @@ mod tests {
             AgentConfig::new("build", "Build").depends_on("setup"),
             AgentConfig::new("test", "Test").depends_on("build"),
         ]);
-        let result = MultiAgentSpawner::spawn(config).await;
+        let result = MultiAgentSpawner::spawn(config, None).await;
         assert_eq!(result.agent_results.len(), 3);
         assert!(result.all_succeeded());
         // Results should be in original config order
@@ -1122,7 +1173,7 @@ mod tests {
             AgentConfig::new("dup", "first"),
             AgentConfig::new("dup", "second"),
         ]);
-        let result = MultiAgentSpawner::spawn(config).await;
+        let result = MultiAgentSpawner::spawn(config, None).await;
         assert_eq!(result.failure_count, 1);
     }
 
@@ -1133,7 +1184,7 @@ mod tests {
             AgentConfig::new("b", "tb").depends_on("a"),
             AgentConfig::new("c", "tc"),
         ]);
-        let result = MultiAgentSpawner::spawn(config).await;
+        let result = MultiAgentSpawner::spawn(config, None).await;
         assert_eq!(result.agent_results.len(), 3);
         assert_eq!(result.failure_count, 3);
         assert_eq!(result.success_count, 0);
@@ -1144,7 +1195,7 @@ mod tests {
         let config = MultiAgentConfig::new(vec![
             AgentConfig::new("a", "ta").depends_on("ghost"),
         ]);
-        let result = MultiAgentSpawner::spawn(config).await;
+        let result = MultiAgentSpawner::spawn(config, None).await;
         assert_eq!(result.failure_count, 1);
         let err = result.agent_results[0].error.as_deref().unwrap();
         assert!(err.contains("unknown dependency"));
@@ -1159,7 +1210,7 @@ mod tests {
             .map(|i| AgentConfig::new(format!("agent-{i}"), format!("task {i}")))
             .collect();
         let config = MultiAgentConfig::new(agents).with_max_parallel(2);
-        let result = MultiAgentSpawner::spawn(config).await;
+        let result = MultiAgentSpawner::spawn(config, None).await;
         assert_eq!(result.agent_results.len(), 8);
         assert_eq!(result.success_count, 8);
     }
@@ -1175,7 +1226,7 @@ mod tests {
         ])
         .with_timeout(Duration::from_secs(5));
 
-        let result = MultiAgentSpawner::spawn(config).await;
+        let result = MultiAgentSpawner::spawn(config, None).await;
         assert_eq!(result.success_count, 1);
     }
 
@@ -1186,7 +1237,7 @@ mod tests {
             AgentConfig::new("a-first", "a"),
             AgentConfig::new("m-middle", "m").depends_on("a-first"),
         ]);
-        let result = MultiAgentSpawner::spawn(config).await;
+        let result = MultiAgentSpawner::spawn(config, None).await;
         // Results should be in original config order, not execution order
         assert_eq!(result.agent_results[0].agent_name, "z-last");
         assert_eq!(result.agent_results[1].agent_name, "a-first");
@@ -1212,7 +1263,7 @@ mod tests {
             AgentConfig::new("c", "right").depends_on("a"),
             AgentConfig::new("d", "join").depends_on("b").depends_on("c"),
         ]);
-        let result = MultiAgentSpawner::spawn(config).await;
+        let result = MultiAgentSpawner::spawn(config, None).await;
         assert!(result.all_succeeded());
         assert_eq!(result.success_count, 4);
     }
