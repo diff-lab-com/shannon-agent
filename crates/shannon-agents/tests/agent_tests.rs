@@ -772,6 +772,8 @@ mod teammate_extended_tests {
             model: Some("claude-sonnet-4-6".to_string()),
             system_prompt: Some("Be thorough.".to_string()),
             temperature: Some(0.7),
+            is_lead: false,
+            allowed_tools: vec![],
         };
 
         let teammate = Teammate::new("expert".to_string(), config);

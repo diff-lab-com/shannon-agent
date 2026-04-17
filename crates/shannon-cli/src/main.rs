@@ -214,6 +214,11 @@ struct Cli {
     #[arg(long, hide = true)]
     permission_mode: Option<String>,
 
+    /// Comma-separated list of allowed tool names for the agent (used with --team-agent).
+    /// If not set, all tools are available.
+    #[arg(long, hide = true)]
+    allowed_tools: Option<String>,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -718,6 +723,7 @@ fn run_team_agent_mode(
     system_prompt: Option<&str>,
     workdir: Option<&str>,
     permission_mode: Option<&str>,
+    allowed_tools: Option<&str>,
 ) -> Result<()> {
     // Change working directory if specified
     if let Some(dir) = workdir {
@@ -816,7 +822,31 @@ fn run_team_agent_mode(
             coordinator_channel.clone(),
             agent_name_owned.clone(),
         ))).ok();
+        tools.register(Box::new(shannon_agents::RemoteTeamTaskCreateTool::new(
+            coordinator_channel.clone(),
+        ))).ok();
+        tools.register(Box::new(shannon_agents::RemoteTeamTaskUpdateTool::new(
+            coordinator_channel.clone(),
+            agent_name_owned.clone(),
+        ))).ok();
+        tools.register(Box::new(shannon_agents::RemoteTeamTaskGetTool::new(
+            coordinator_channel.clone(),
+        ))).ok();
+        tools.register(Box::new(shannon_agents::RemoteTeamManifestTool::new(
+            coordinator_channel.clone(),
+        ))).ok();
         let coordinator_channel_for_loop = coordinator_channel.clone();
+
+        // Apply tool access restrictions from agent definition
+        if let Some(tools_list) = allowed_tools {
+            let allowed: Vec<String> = tools_list.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !allowed.is_empty() {
+                tools.set_allowed_tools(Some(allowed));
+            }
+        }
 
         let client = if client_config.provider.requires_auth() {
             shannon_core::api::LlmClient::new(client_config)
@@ -1056,6 +1086,7 @@ fn main() -> Result<()> {
             cli.system_prompt.as_deref(),
             cli.workdir.as_deref(),
             cli.permission_mode.as_deref(),
+            cli.allowed_tools.as_deref(),
         );
     }
 

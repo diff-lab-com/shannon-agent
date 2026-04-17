@@ -27,6 +27,12 @@ pub struct TeammateConfig {
     pub system_prompt: Option<String>,
     /// Temperature for AI responses (0.0 - 1.0)
     pub temperature: Option<f32>,
+    /// Whether this agent is the team lead (can disband team, add agents, approve plans)
+    #[serde(default)]
+    pub is_lead: bool,
+    /// If set, only these tool names are accessible to this agent (empty = all tools)
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
 }
 
 impl Default for TeammateConfig {
@@ -39,6 +45,8 @@ impl Default for TeammateConfig {
             model: None,
             system_prompt: None,
             temperature: None,
+            is_lead: false,
+            allowed_tools: Vec::new(),
         }
     }
 }

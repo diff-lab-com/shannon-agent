@@ -250,6 +250,12 @@ pub mod methods {
     pub const CLAIM_TASK: &str = "claim_task";
     pub const SEND_MESSAGE: &str = "send_message";
     pub const LIST_TASKS: &str = "list_tasks";
+    pub const CREATE_TASK: &str = "create_task";
+    pub const UPDATE_TASK: &str = "update_task";
+    pub const GET_TASK: &str = "get_task";
+    pub const TEAM_MANIFEST: &str = "team_manifest";
+    pub const DISBAND_TEAM: &str = "disband_team";
+    pub const ADD_AGENT: &str = "add_agent";
 }
 
 // ── Helper: line-delimited JSON transport framing ─────────────────

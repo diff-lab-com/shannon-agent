@@ -10,6 +10,7 @@ use crate::{
     worktree::{WorktreeConfig, WorktreeManager},
     TaskBoard,
 };
+use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use shannon_core::hooks::{HookEvent, HookManager};
 use std::collections::HashMap;
@@ -169,6 +170,8 @@ pub struct AgentCoordinator {
     /// Process manager for out-of-process agents (when agent_mode == Process).
     /// The event receiver is consumed by a background forwarding task.
     process_manager: Option<AgentProcessManager>,
+    /// Channel for RPC requests from process agents that need coordinator state.
+    rpc_request_rx: Option<mpsc::Receiver<(String, i64, String, serde_json::Value)>>,
 }
 
 /// A team of agents working together
@@ -282,6 +285,7 @@ impl AgentCoordinator {
             delivery_cancel,
             hook_manager: None,
             process_manager: None,
+            rpc_request_rx: None,
         };
 
         // Start the background inbox delivery loop
@@ -291,6 +295,10 @@ impl AgentCoordinator {
         if agent_mode == AgentMode::Process {
             let mut pm = AgentProcessManager::new();
             let event_rx = pm.take_event_receiver();
+
+            // Channel for RPC requests that need coordinator state
+            let (rpc_tx, rpc_rx) = mpsc::channel::<(String, i64, String, serde_json::Value)>(64);
+            coordinator.rpc_request_rx = Some(rpc_rx);
 
             // Spawn event forwarding task: translates AgentEvent → CoordinatorEvent
             tokio::spawn(async move {
@@ -357,6 +365,16 @@ impl AgentCoordinator {
                                 agent: agent_name,
                                 status: TeammateStatus::Idle,
                             })
+                        }
+                        AgentEvent::RpcRequest { agent_name, request_id, method, params } => {
+                            tracing::debug!(
+                                agent = %agent_name,
+                                method = %method,
+                                request_id,
+                                "Forwarding RPC request from agent"
+                            );
+                            let _ = rpc_tx.send((agent_name, request_id, method, params)).await;
+                            None
                         }
                     };
                     if let Some(event) = coord_event {
@@ -451,6 +469,11 @@ impl AgentCoordinator {
         // Clone fields needed for process spawning before config is moved
         let config_model = config.model.clone();
         let config_system_prompt = config.system_prompt.clone();
+        let config_allowed_tools = if config.allowed_tools.is_empty() {
+            None
+        } else {
+            Some(config.allowed_tools.clone())
+        };
 
         let teammate = Teammate::new(agent_name.clone(), config);
         team.members.insert(agent_name.clone(), teammate);
@@ -514,6 +537,7 @@ impl AgentCoordinator {
                     system_prompt: config_system_prompt,
                     agent_name: agent_name.clone(),
                     permission_mode: Some("bypassPermissions".to_string()),
+                    allowed_tools: config_allowed_tools,
                 };
 
                 match pm.spawn_agent(process_config).await {
@@ -1880,8 +1904,24 @@ impl AgentCoordinator {
         }
 
         // Remove team from memory
+        let member_names: Vec<String> = team.members.keys().cloned().collect();
         teams.remove(team_name);
         drop(teams);
+
+        // Clean up task board — remove tasks owned by disbanded team members
+        for member in &member_names {
+            let agent_tasks = self.task_board.get_agent_tasks(member).await;
+            for task in agent_tasks {
+                let _ = self.task_board.fail_task(task.id, "Team disbanded".to_string()).await;
+            }
+        }
+
+        // Clean up process agents for this team
+        if let Some(ref pm) = self.process_manager {
+            for member in &member_names {
+                let _ = pm.graceful_shutdown_agent(member, Duration::from_secs(5)).await;
+            }
+        }
 
         // Delete persisted files
         if let Some(ref persist) = self.persistence {
@@ -1898,6 +1938,255 @@ impl AgentCoordinator {
 
         tracing::info!(team = %team_name, "Team disbanded successfully");
         Ok(())
+    }
+
+    /// Poll for pending RPC requests from process agents and handle them.
+    /// Call this periodically from the main coordinator loop.
+    pub async fn poll_rpc_requests(&mut self) {
+        // Drain all pending requests first to avoid borrow conflicts
+        let pending: Vec<_> = {
+            let rpc_rx = match &mut self.rpc_request_rx {
+                Some(rx) => rx,
+                None => return,
+            };
+            let mut batch = Vec::new();
+            while let Ok(req) = rpc_rx.try_recv() {
+                batch.push(req);
+            }
+            batch
+        };
+
+        for (agent_name, request_id, method, params) in pending {
+            let result = self.handle_rpc_request(&agent_name, &method, &params).await;
+            if let Some(ref pm) = self.process_manager {
+                if let Err(e) = pm.send_rpc_response(&agent_name, request_id, result).await {
+                    tracing::warn!(
+                        agent = %agent_name,
+                        request_id,
+                        error = %e,
+                        "Failed to send RPC response to agent"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Check whether the given agent is a team lead in any team.
+    async fn is_team_lead(&self, agent_name: &str) -> bool {
+        let teams = self.teams.read().await;
+        for team in teams.values() {
+            if let Some(teammate) = team.members.get(agent_name) {
+                if teammate.config().is_lead {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Handle an RPC request from a process agent.
+    async fn handle_rpc_request(
+        &self,
+        caller: &str,
+        method: &str,
+        params: &serde_json::Value,
+    ) -> serde_json::Value {
+        match method {
+            "create_task" => {
+                let subject = params["subject"].as_str().unwrap_or_default();
+                let description = params["description"].as_str().unwrap_or_default();
+                let priority = params["priority"].as_str().unwrap_or("medium");
+                let priority = match priority {
+                    "low" => TaskPriority::Low,
+                    "high" => TaskPriority::High,
+                    "critical" => TaskPriority::Critical,
+                    _ => TaskPriority::Medium,
+                };
+
+                // Use the first available team
+                let teams = self.teams.read().await;
+                if let Some(team_name) = teams.keys().next() {
+                    let team_name = team_name.clone();
+                    drop(teams);
+
+                    match self.add_task(&team_name, subject.to_string(), description.to_string(), priority).await {
+                        Ok(task_id) => serde_json::json!({
+                            "task_id": task_id.to_string(),
+                            "status": "created"
+                        }),
+                        Err(e) => serde_json::json!({
+                            "error": e.to_string()
+                        }),
+                    }
+                } else {
+                    serde_json::json!({"error": "no team found"})
+                }
+            }
+            "update_task" => {
+                let task_id_str = params["task_id"].as_str().unwrap_or_default();
+                let status = params["status"].as_str().unwrap_or_default();
+
+                match Uuid::parse_str(task_id_str) {
+                    Ok(task_id) => {
+                        if !status.is_empty() {
+                            let new_status = match status {
+                                "pending" => TaskStatus::Pending,
+                                "in_progress" => TaskStatus::InProgress,
+                                "completed" => TaskStatus::Completed,
+                                "failed" => TaskStatus::Failed(String::new()),
+                                "blocked" => TaskStatus::Blocked,
+                                "cancelled" => TaskStatus::Cancelled,
+                                _ => TaskStatus::Pending,
+                            };
+                            match self.task_board.update_task_status(task_id, new_status).await {
+                                Ok(()) => serde_json::json!({"status": "updated"}),
+                                Err(e) => serde_json::json!({"error": e.to_string()}),
+                            }
+                        } else {
+                            serde_json::json!({"status": "no_changes"})
+                        }
+                    }
+                    Err(e) => serde_json::json!({"error": format!("invalid task_id: {e}")}),
+                }
+            }
+            "get_task" => {
+                let task_id_str = params["task_id"].as_str().unwrap_or_default();
+                match Uuid::parse_str(task_id_str) {
+                    Ok(task_id) => {
+                        match self.task_board.get_task(task_id).await {
+                            Ok(task) => serde_json::json!({
+                                "id": task.id.to_string(),
+                                "subject": task.subject,
+                                "description": task.description,
+                                "status": format!("{:?}", task.status),
+                                "priority": format!("{:?}", task.priority),
+                                "owner": task.owner,
+                            }),
+                            Err(e) => serde_json::json!({"error": e.to_string()}),
+                        }
+                    }
+                    Err(e) => serde_json::json!({"error": format!("invalid task_id: {e}")}),
+                }
+            }
+            "team_manifest" => {
+                let teams = self.teams.read().await;
+                if let Some(team_name) = teams.keys().next() {
+                    match self.team_manifest(team_name).await {
+                        Ok(manifest) => serde_json::json!({
+                            "name": manifest.name,
+                            "description": manifest.description,
+                            "members": manifest.members,
+                        }),
+                        Err(e) => serde_json::json!({"error": e.to_string()}),
+                    }
+                } else {
+                    serde_json::json!({"error": "no team found"})
+                }
+            }
+            "list_tasks" => {
+                let status_filter = params["status"].as_str().unwrap_or("");
+                let tasks = if status_filter.is_empty() {
+                    self.task_board.list_all_tasks().await
+                } else {
+                    let status = match status_filter {
+                        "pending" => TaskStatus::Pending,
+                        "in_progress" => TaskStatus::InProgress,
+                        "completed" => TaskStatus::Completed,
+                        "failed" => TaskStatus::Failed(String::new()),
+                        "blocked" => TaskStatus::Blocked,
+                        _ => TaskStatus::Pending,
+                    };
+                    self.task_board.list_tasks_by_status(status).await
+                };
+                let task_list: Vec<serde_json::Value> = tasks.iter().map(|t| {
+                    serde_json::json!({
+                        "id": t.id.to_string(),
+                        "subject": t.subject,
+                        "status": format!("{:?}", t.status),
+                        "priority": format!("{:?}", t.priority),
+                        "owner": t.owner,
+                    })
+                }).collect();
+                serde_json::json!({"tasks": task_list})
+            }
+            "claim_task" => {
+                let agent_name = params["agent_name"].as_str().unwrap_or_default();
+                let task_id_str = params["task_id"].as_str().unwrap_or("");
+
+                let teams = self.teams.read().await;
+                if let Some(team_name) = teams.keys().next() {
+                    let team_name = team_name.clone();
+                    drop(teams);
+
+                    if task_id_str.is_empty() {
+                        match self.self_claim_task_for_agent(&team_name, agent_name).await {
+                            Ok(Some(task_id)) => serde_json::json!({
+                                "task_id": task_id.to_string(),
+                                "status": "claimed"
+                            }),
+                            Ok(None) => serde_json::json!({"status": "no_tasks_available"}),
+                            Err(e) => serde_json::json!({"error": e.to_string()}),
+                        }
+                    } else {
+                        match Uuid::parse_str(task_id_str) {
+                            Ok(task_id) => {
+                                match self.self_claim_task(&team_name, agent_name, task_id).await {
+                                    Ok(task) => serde_json::json!({
+                                        "task_id": task.id.to_string(),
+                                        "subject": task.subject,
+                                        "status": "claimed"
+                                    }),
+                                    Err(e) => serde_json::json!({"error": e.to_string()}),
+                                }
+                            }
+                            Err(e) => serde_json::json!({"error": format!("invalid task_id: {e}")}),
+                        }
+                    }
+                } else {
+                    serde_json::json!({"error": "no team found"})
+                }
+            }
+            "disband_team" => {
+                // Lead-only operation
+                if !self.is_team_lead(caller).await {
+                    serde_json::json!({"error": "permission denied: only team leads can disband teams"})
+                } else {
+                    let team_name = params["team_name"].as_str().unwrap_or_default();
+                    if team_name.is_empty() {
+                        serde_json::json!({"error": "missing team_name"})
+                    } else {
+                        match self.disband_team(team_name).await {
+                            Ok(()) => serde_json::json!({"status": "disbanded"}),
+                            Err(e) => serde_json::json!({"error": e.to_string()}),
+                        }
+                    }
+                }
+            }
+            "add_agent" => {
+                // Lead-only operation
+                if !self.is_team_lead(caller).await {
+                    serde_json::json!({"error": "permission denied: only team leads can add agents"})
+                } else {
+                    let team_name = params["team_name"].as_str().unwrap_or_default();
+                    let new_agent_name = params["agent_name"].as_str().unwrap_or_default();
+                    let agent_type = params["agent_type"].as_str().unwrap_or("general-purpose");
+
+                    if team_name.is_empty() || new_agent_name.is_empty() {
+                        serde_json::json!({"error": "missing team_name or agent_name"})
+                    } else {
+                        let config = TeammateConfig {
+                            agent_type: agent_type.to_string(),
+                            ..Default::default()
+                        };
+                        match self.add_teammate(team_name, new_agent_name.to_string(), config).await {
+                            Ok(()) => serde_json::json!({"status": "added"}),
+                            Err(e) => serde_json::json!({"error": e.to_string()}),
+                        }
+                    }
+                }
+            }
+            _ => serde_json::json!({"error": format!("unknown method: {method}")}),
+        }
     }
 
     /// Gracefully shutdown the coordinator and all teams

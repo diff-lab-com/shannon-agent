@@ -228,6 +228,8 @@ impl SubAgentRegistry {
             model: Some(config.model.clone()),
             system_prompt: Some(config.system_prompt.clone()),
             temperature: None,
+            is_lead: false,
+            allowed_tools: vec![],
         };
 
         self.coordinator

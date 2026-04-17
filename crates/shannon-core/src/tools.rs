@@ -13,6 +13,8 @@ use std::collections::HashMap;
 /// Registry for managing available tools
 pub struct ToolRegistry {
     tools: HashMap<String, Box<dyn Tool>>,
+    /// If set, only these tool names are accessible. Empty = all tools.
+    allowed_tools: Option<Vec<String>>,
 }
 
 impl ToolRegistry {
@@ -20,6 +22,22 @@ impl ToolRegistry {
     pub fn new() -> Self {
         Self {
             tools: HashMap::new(),
+            allowed_tools: None,
+        }
+    }
+
+    /// Restrict the registry to only allow specific tools.
+    /// Pass an empty vec to allow all tools. Pass `None` to reset to no restriction.
+    /// Tools not in the allow list are invisible to `execute`, `list`, schema generation, etc.
+    pub fn set_allowed_tools(&mut self, allowed: Option<Vec<String>>) {
+        self.allowed_tools = allowed;
+    }
+
+    /// Check if a tool name is allowed by the current filter.
+    fn is_allowed(&self, name: &str) -> bool {
+        match &self.allowed_tools {
+            Some(allowed) => allowed.iter().any(|a| a == name),
+            None => true,
         }
     }
 
@@ -43,20 +61,29 @@ impl ToolRegistry {
         Ok(())
     }
 
-    /// Get a tool by name
+    /// Get a tool by name (respects the allowed_tools filter)
     pub fn get(&self, name: &str) -> Option<&dyn Tool> {
-        self.tools.get(name).map(|t| t.as_ref())
+        if self.is_allowed(name) {
+            self.tools.get(name).map(|t| t.as_ref())
+        } else {
+            None
+        }
     }
 
-    /// List all registered tool names
+    /// List all registered tool names (respects the allowed_tools filter)
     pub fn list(&self) -> Vec<String> {
-        self.tools.keys().cloned().collect()
+        self.tools
+            .keys()
+            .filter(|name| self.is_allowed(name))
+            .cloned()
+            .collect()
     }
 
     /// List all registered tools with their metadata (name, description, category, auth, schema).
     pub fn list_tools_info(&self) -> Vec<ToolInfo> {
         self.tools
             .values()
+            .filter(|t| self.is_allowed(t.name()))
             .map(|t| ToolInfo {
                 name: t.name().to_string(),
                 description: t.description().to_string(),
@@ -67,7 +94,7 @@ impl ToolRegistry {
             .collect()
     }
 
-    /// Execute a tool by name
+    /// Execute a tool by name (respects the allowed_tools filter)
     pub async fn execute(&self, name: &str, input: Value) -> ToolResult<ToolOutput> {
         let tool = self
             .get(name)
@@ -75,11 +102,12 @@ impl ToolRegistry {
         tool.execute(input).await
     }
 
-    /// Get all tools as JSON schema for Claude API
+    /// Get all tools as JSON schema for Claude API (respects the allowed_tools filter)
     pub fn to_json_schema(&self) -> Value {
         let tools: Vec<Value> = self
             .tools
             .values()
+            .filter(|t| self.is_allowed(t.name()))
             .map(|tool| {
                 serde_json::json!({
                     "name": tool.name(),
@@ -91,10 +119,11 @@ impl ToolRegistry {
         serde_json::json!(tools)
     }
 
-    /// Get all tools as ToolDefinition for Claude API
+    /// Get all tools as ToolDefinition for Claude API (respects the allowed_tools filter)
     pub fn to_tool_definitions(&self) -> Vec<crate::api::ToolDefinition> {
         self.tools
             .values()
+            .filter(|t| self.is_allowed(t.name()))
             .map(|tool| crate::api::ToolDefinition {
                 name: tool.name().to_string(),
                 description: tool.description().to_string(),

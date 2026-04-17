@@ -55,6 +55,9 @@ pub struct AgentProcessConfig {
     /// Permission/approval mode for the agent (e.g. "auto", "bypassPermissions").
     #[serde(default)]
     pub permission_mode: Option<String>,
+    /// If set, only these tool names are accessible to this agent.
+    #[serde(default)]
+    pub allowed_tools: Option<Vec<String>>,
 }
 
 /// Configuration for health monitoring and restart policy.
@@ -125,7 +128,6 @@ pub struct AgentHandle {
 }
 
 /// Events emitted by agent processes.
-#[derive(Debug, Clone)]
 pub enum AgentEvent {
     /// Agent process is ready.
     Ready {
@@ -164,6 +166,13 @@ pub enum AgentEvent {
     AgentRestarted {
         agent_name: String,
         restart_count: u32,
+    },
+    /// Agent sent an RPC request that needs a coordinator response.
+    RpcRequest {
+        agent_name: String,
+        request_id: i64,
+        method: String,
+        params: serde_json::Value,
     },
 }
 
@@ -218,9 +227,13 @@ impl AgentProcessManager {
         }
         if let Some(ref path) = config.worktree_path {
             cmd.arg("--workdir").arg(path);
+            cmd.current_dir(path);
         }
         if let Some(ref mode) = config.permission_mode {
             cmd.arg("--permission-mode").arg(mode);
+        }
+        if let Some(ref tools) = config.allowed_tools {
+            cmd.arg("--allowed-tools").arg(tools.join(","));
         }
         cmd.args(&config.args);
         cmd.envs(&config.env);
@@ -555,6 +568,7 @@ impl AgentProcessManager {
                                 }
                                 if let Some(ref path) = config.worktree_path {
                                     cmd.arg("--workdir").arg(path);
+                                    cmd.current_dir(path);
                                 }
                                 if let Some(ref mode) = config.permission_mode {
                                     cmd.arg("--permission-mode").arg(mode);
@@ -716,6 +730,28 @@ impl AgentProcessManager {
             // Dispatch based on method
             if let Some(method) = msg.method() {
                 match method {
+                    // RPC requests from agent (have an id, expect a response)
+                    protocol::methods::CREATE_TASK
+                    | protocol::methods::UPDATE_TASK
+                    | protocol::methods::GET_TASK
+                    | protocol::methods::TEAM_MANIFEST
+                    | protocol::methods::LIST_TASKS
+                    | protocol::methods::CLAIM_TASK
+                    | protocol::methods::DISBAND_TEAM
+                    | protocol::methods::ADD_AGENT => {
+                        let request_id = msg.id.as_ref().and_then(|id| match id {
+                            protocol::JsonRpcId::Number(n) => Some(*n),
+                            _ => None,
+                        });
+                        if let Some(request_id) = request_id {
+                            let _ = event_tx.send(AgentEvent::RpcRequest {
+                                agent_name: agent_name.clone(),
+                                request_id,
+                                method: method.to_string(),
+                                params: msg.params.clone().unwrap_or_default(),
+                            }).await;
+                        }
+                    }
                     protocol::methods::AGENT_READY => {
                         if let Ok(params) = serde_json::from_value::<AgentReadyParams>(
                             msg.params.unwrap_or_default()
@@ -788,6 +824,43 @@ impl AgentProcessManager {
             let _ = handle.child.kill().await;
         }
     }
+
+    /// Send a JSON-RPC response back to an agent process via its stdin.
+    pub async fn send_rpc_response(
+        &self,
+        agent_name: &str,
+        request_id: i64,
+        result: serde_json::Value,
+    ) -> Result<(), AgentProcessError> {
+        let mut agents = self.agents.write().await;
+        let handle = agents.get_mut(agent_name).ok_or_else(|| {
+            AgentProcessError::AgentNotFound(agent_name.to_string())
+        })?;
+
+        let response = JsonRpcMessage::response(
+            protocol::JsonRpcId::Number(request_id),
+            result,
+        );
+        let line = frame_message(&response).map_err(|e| AgentProcessError::SpawnFailed {
+            agent: agent_name.to_string(),
+            source: std::io::Error::new(std::io::ErrorKind::Other, e.to_string()),
+        })?;
+
+        use tokio::io::AsyncWriteExt;
+        handle.stdin.write_all(line.as_bytes()).await.map_err(|e| {
+            AgentProcessError::SpawnFailed {
+                agent: agent_name.to_string(),
+                source: e,
+            }
+        })?;
+        handle.stdin.flush().await.map_err(|e| {
+            AgentProcessError::SpawnFailed {
+                agent: agent_name.to_string(),
+                source: e,
+            }
+        })?;
+        Ok(())
+    }
 }
 
 /// Wrapper for shutdown params (avoids name collision with protocol::ShutdownParams).
@@ -833,6 +906,7 @@ mod tests {
             system_prompt: None,
             agent_name: "test-agent".to_string(),
             permission_mode: None,
+            allowed_tools: None,
         };
         let result = mgr.spawn_agent(config).await;
         assert!(result.is_err());

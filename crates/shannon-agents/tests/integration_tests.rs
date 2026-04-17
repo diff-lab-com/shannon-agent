@@ -1067,6 +1067,8 @@ mod teammate_tests {
             model: Some("claude-sonnet-4-6".to_string()),
             system_prompt: Some("Be thorough.".to_string()),
             temperature: Some(0.7),
+            is_lead: false,
+            allowed_tools: vec![],
         };
 
         let json = serde_json::to_string(&config).expect("serialize TeammateConfig");
@@ -1472,6 +1474,8 @@ mod teammate_metadata_tests {
             model: None,
             system_prompt: None,
             temperature: None,
+            is_lead: false,
+            allowed_tools: vec![],
         };
         Teammate::new("test-agent".to_string(), config)
     }
@@ -1529,6 +1533,8 @@ mod conversation_history_tests {
             model: None,
             system_prompt: Some("You are a test agent.".to_string()),
             temperature: None,
+            is_lead: false,
+            allowed_tools: vec![],
         };
         let executor = Arc::new(MockAgentExecutor::new("response text"));
         Teammate::with_executor("test-agent".to_string(), config, executor)
@@ -1543,6 +1549,8 @@ mod conversation_history_tests {
             model: None,
             system_prompt: None,
             temperature: None,
+            is_lead: false,
+            allowed_tools: vec![],
         };
         Teammate::new("test-agent".to_string(), config)
     }

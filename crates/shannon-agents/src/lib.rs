@@ -81,6 +81,9 @@ pub use remote_tools::{
     CoordinatorChannel,
     RemoteTeamTaskListTool, RemoteTeamTaskClaimTool,
     RemoteTeamNotifyIdleTool, RemoteSendMessageTool,
+    RemoteTeamTaskCreateTool, RemoteTeamTaskUpdateTool,
+    RemoteTeamTaskGetTool, RemoteTeamManifestTool,
+    RemoteDisbandTeamTool, RemoteAddAgentTool,
 };
 
 /// Version information for the agents crate
