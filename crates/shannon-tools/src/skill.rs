@@ -287,4 +287,5 @@ impl Tool for SkillTool {
             "required": ["skill"]
         })
     }
+    fn is_read_only(&self) -> bool {        true    }
 }

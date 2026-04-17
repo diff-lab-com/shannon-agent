@@ -895,6 +895,7 @@ impl Tool for GoToDefinitionTool {
     fn category(&self) -> &str {
         "lsp"
     }
+    fn is_read_only(&self) -> bool {        true    }
 }
 
 /// Find references tool
@@ -1035,6 +1036,7 @@ impl Tool for FindReferencesTool {
     fn category(&self) -> &str {
         "lsp"
     }
+    fn is_read_only(&self) -> bool {        true    }
 }
 
 /// Hover information tool
@@ -1166,6 +1168,7 @@ impl Tool for HoverTool {
     fn category(&self) -> &str {
         "lsp"
     }
+    fn is_read_only(&self) -> bool {        true    }
 }
 
 /// Document symbol tool
@@ -1289,6 +1292,7 @@ impl Tool for DocumentSymbolTool {
     fn category(&self) -> &str {
         "lsp"
     }
+    fn is_read_only(&self) -> bool {        true    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1465,6 +1469,7 @@ impl Tool for WorkspaceSymbolTool {
     fn category(&self) -> &str {
         "lsp"
     }
+    fn is_read_only(&self) -> bool {        true    }
 }
 
 /// Parse workspace symbol results.
@@ -1894,6 +1899,7 @@ impl Tool for CodeActionsTool {
     fn category(&self) -> &str {
         "lsp"
     }
+    fn is_read_only(&self) -> bool {        true    }
 }
 
 /// Parse code action results from LSP response.

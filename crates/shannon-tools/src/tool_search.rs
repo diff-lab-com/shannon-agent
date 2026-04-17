@@ -166,6 +166,7 @@ impl Tool for ToolSearchTool {
             },
         })
     }
+    fn is_read_only(&self) -> bool {        true    }
 }
 
 // ---------------------------------------------------------------------------

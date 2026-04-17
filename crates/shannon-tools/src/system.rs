@@ -1082,6 +1082,7 @@ impl Tool for SleepTool {
             },
         })
     }
+    fn is_read_only(&self) -> bool {        true    }
 }
 
 #[cfg(test)]

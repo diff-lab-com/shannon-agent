@@ -389,6 +389,7 @@ impl Tool for AskUserQuestionTool {
     fn category(&self) -> &str {
         "interaction"
     }
+    fn is_read_only(&self) -> bool {        true    }
 }
 
 // ---------------------------------------------------------------------------

@@ -102,6 +102,72 @@ impl ToolRegistry {
         tool.execute(input).await
     }
 
+    /// Check whether a registered tool is read-only.
+    ///
+    /// Returns `false` for unknown tools (conservative default — assume side effects).
+    pub fn is_tool_read_only(&self, name: &str) -> bool {
+        self.get(name).map(|t| t.is_read_only()).unwrap_or(false)
+    }
+
+    /// Check whether a registered tool is safe to run concurrently.
+    ///
+    /// Returns `false` for unknown tools.
+    pub fn is_tool_concurrency_safe(&self, name: &str) -> bool {
+        self.get(name).map(|t| t.is_concurrency_safe()).unwrap_or(false)
+    }
+
+    /// Partition a list of approved tool calls into execution batches.
+    ///
+    /// Walks through the tools in order and groups consecutive read-only /
+    /// concurrency-safe tools into parallel batches (capped at `max_parallel`).
+    /// Write tools each get their own serial batch.
+    ///
+    /// Returns an ordered list of batches that must be executed sequentially,
+    /// with each batch's tools safe to run in parallel.
+    pub fn partition_tool_calls(
+        &self,
+        tools: Vec<(String, String, Value)>, // (tool_use_id, tool_name, input)
+        max_parallel: usize,
+    ) -> Vec<ToolBatch> {
+        let mut batches: Vec<ToolBatch> = Vec::new();
+        let mut current_parallel: Vec<(String, String, Value)> = Vec::new();
+
+        let flush_parallel = |batches: &mut Vec<ToolBatch>, buf: &mut Vec<(String, String, Value)>| {
+            if !buf.is_empty() {
+                batches.push(ToolBatch::Parallel(std::mem::take(buf)));
+            }
+        };
+
+        for tool_call in tools {
+            let is_safe = self.is_tool_concurrency_safe(&tool_call.1);
+
+            if is_safe {
+                current_parallel.push(tool_call);
+                if current_parallel.len() >= max_parallel {
+                    flush_parallel(&mut batches, &mut current_parallel);
+                }
+            } else {
+                // Write tool: flush any accumulated parallel batch first
+                flush_parallel(&mut batches, &mut current_parallel);
+                batches.push(ToolBatch::Serial(tool_call));
+            }
+        }
+
+        flush_parallel(&mut batches, &mut current_parallel);
+        batches
+    }
+}
+
+/// A batch of tool calls produced by [`ToolRegistry::partition_tool_calls`].
+#[derive(Debug)]
+pub enum ToolBatch {
+    /// Tools safe to execute concurrently (read-only / concurrency-safe).
+    Parallel(Vec<(String, String, Value)>),
+    /// A single tool that must run alone (has side effects).
+    Serial((String, String, Value)),
+}
+
+impl ToolRegistry {
     /// Get all tools as JSON schema for Claude API (respects the allowed_tools filter)
     pub fn to_json_schema(&self) -> Value {
         let tools: Vec<Value> = self

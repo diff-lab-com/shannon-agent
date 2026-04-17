@@ -564,6 +564,7 @@ impl Tool for TaskListTool {
             }
         })
     }
+    fn is_read_only(&self) -> bool {        true    }
 }
 
 impl Default for TaskUpdateTool {
@@ -759,6 +760,7 @@ impl Tool for TaskGetTool {
             "required": ["task_id"]
         })
     }
+    fn is_read_only(&self) -> bool {        true    }
 }
 
 #[cfg(test)]

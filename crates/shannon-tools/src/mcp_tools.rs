@@ -128,6 +128,7 @@ impl Tool for ListMcpResourcesTool {
             metadata,
         })
     }
+    fn is_read_only(&self) -> bool {        true    }
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +237,7 @@ impl Tool for ReadMcpResourceTool {
             metadata,
         })
     }
+    fn is_read_only(&self) -> bool {        true    }
 }
 
 // ---------------------------------------------------------------------------

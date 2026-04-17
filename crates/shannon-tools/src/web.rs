@@ -202,6 +202,7 @@ impl Tool for WebFetchTool {
             "required": ["url"]
         })
     }
+    fn is_read_only(&self) -> bool {        true    }
 }
 
 // ---------------------------------------------------------------------------
@@ -551,6 +552,7 @@ impl Tool for WebSearchTool {
             "required": ["query"]
         })
     }
+    fn is_read_only(&self) -> bool {        true    }
 }
 
 // ---------------------------------------------------------------------------

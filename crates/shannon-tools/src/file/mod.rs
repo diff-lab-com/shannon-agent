@@ -116,6 +116,7 @@ impl Tool for ReadTool {
 
         read::execute(read_input).await
     }
+    fn is_read_only(&self) -> bool {        true    }
 }
 
 /// Write tool implementation
@@ -321,4 +322,5 @@ impl Tool for GlobTool {
 
         glob::execute(glob_input).await
     }
+    fn is_read_only(&self) -> bool {        true    }
 }

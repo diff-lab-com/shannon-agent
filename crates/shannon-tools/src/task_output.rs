@@ -193,6 +193,7 @@ impl Tool for TaskOutputTool {
             "required": ["task_id"]
         })
     }
+    fn is_read_only(&self) -> bool {        true    }
 }
 
 #[cfg(test)]

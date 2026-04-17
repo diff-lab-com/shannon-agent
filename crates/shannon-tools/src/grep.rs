@@ -433,6 +433,7 @@ impl Tool for GrepTool {
     fn category(&self) -> &str {
         "search"
     }
+    fn is_read_only(&self) -> bool {        true    }
 }
 
 impl Default for GrepTool {

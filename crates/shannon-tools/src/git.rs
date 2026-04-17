@@ -542,6 +542,7 @@ impl Tool for GitDiffTool {
     fn category(&self) -> &str {
         "git"
     }
+    fn is_read_only(&self) -> bool {        true    }
 }
 
 // ---------------------------------------------------------------------------
@@ -728,6 +729,7 @@ impl Tool for GitLogTool {
     fn category(&self) -> &str {
         "git"
     }
+    fn is_read_only(&self) -> bool {        true    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1240,6 +1242,7 @@ impl Tool for GitSafetyTool {
     fn category(&self) -> &str {
         "git"
     }
+    fn is_read_only(&self) -> bool {        true    }
 }
 
 // ---------------------------------------------------------------------------

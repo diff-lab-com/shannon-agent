@@ -332,4 +332,5 @@ impl Tool for McpResourceTool {
             "required": ["operation"]
         })
     }
+    fn is_read_only(&self) -> bool {        true    }
 }

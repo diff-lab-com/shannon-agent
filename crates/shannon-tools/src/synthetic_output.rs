@@ -95,6 +95,7 @@ impl Tool for StructuredOutputTool {
             metadata,
         })
     }
+    fn is_read_only(&self) -> bool {        true    }
 }
 
 #[cfg(test)]

@@ -950,22 +950,89 @@ impl QueryEngine {
                                                     approved_tools.push((tool_id, tool_name, effective_input));
                                                 }
 
-                                                // Phase 2: Execute approved tools (parallel when multiple)
-                                                if approved_tools.len() > 1 {
-                                                    let mut exec_handles = Vec::new();
-                                                    for (tool_id, tool_name, effective_input) in approved_tools {
-                                                        let tools_exec = tools.clone();
-                                                        let exec_name = tool_name.clone();
-                                                        let exec_input = effective_input.clone();
-                                                        let handle = tokio::spawn(async move {
-                                                            (tool_id, tool_name, effective_input, tools_exec.execute(&exec_name, exec_input).await)
-                                                        });
-                                                        exec_handles.push(handle);
-                                                    }
+                                                // Phase 2: Execute approved tools using read/write-aware batch scheduler.
+                                                //
+                                                // Read-only tools are grouped into parallel batches (max 10).
+                                                // Write tools execute one at a time to avoid race conditions.
+                                                {
+                                                    let batches = tools.partition_tool_calls(approved_tools, 10);
 
-                                                    for handle in exec_handles {
-                                                        match handle.await {
-                                                            Ok((tool_id, tool_name, effective_input, result)) => {
+                                                    for batch in batches {
+                                                        match batch {
+                                                            crate::tools::ToolBatch::Parallel(tool_calls) => {
+                                                                // Execute read-only tools concurrently
+                                                                let mut exec_handles = Vec::new();
+                                                                for (tool_id, tool_name, effective_input) in tool_calls {
+                                                                    let tools_exec = tools.clone();
+                                                                    let exec_name = tool_name.clone();
+                                                                    let exec_input = effective_input.clone();
+                                                                    let handle = tokio::spawn(async move {
+                                                                        (tool_id, tool_name, effective_input, tools_exec.execute(&exec_name, exec_input).await)
+                                                                    });
+                                                                    exec_handles.push(handle);
+                                                                }
+
+                                                                for handle in exec_handles {
+                                                                    match handle.await {
+                                                                        Ok((tool_id, tool_name, effective_input, result)) => {
+                                                                            // Run PostToolUse hooks
+                                                                            {
+                                                                                let output_val = match &result {
+                                                                                    Ok(o) => serde_json::Value::String(o.content.clone()),
+                                                                                    Err(e) => serde_json::Value::String(format!("Error: {e}")),
+                                                                                };
+                                                                                let post_event = crate::hooks::HookEvent::PostToolUse {
+                                                                                    tool_name: tool_name.clone(),
+                                                                                    input: effective_input,
+                                                                                    output: output_val,
+                                                                                };
+                                                                                let hm = hook_manager.read().await;
+                                                                                let _ = hm.run_hooks(&post_event).await;
+                                                                            }
+
+                                                                            match result {
+                                                                                Ok(output) => {
+                                                                                    let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                                        query_id,
+                                                                                        tool_use_id: tool_id.clone(),
+                                                                                        tool_name: tool_name.clone(),
+                                                                                        result: output.content.clone(),
+                                                                                        is_error: false,
+                                                                                    }));
+                                                                                    tool_results.push((tool_id, output.content.clone()));
+                                                                                }
+                                                                                Err(e) => {
+                                                                                    let error_msg = format!("Tool error: {e}");
+                                                                                    let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                                        query_id,
+                                                                                        tool_use_id: tool_id.clone(),
+                                                                                        tool_name,
+                                                                                        result: error_msg.clone(),
+                                                                                        is_error: true,
+                                                                                    }));
+                                                                                    tool_results.push((tool_id, error_msg));
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                        Err(e) => {
+                                                                            let error_msg = format!("Task join error: {e}");
+                                                                            let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                                query_id,
+                                                                                tool_use_id: String::new(),
+                                                                                tool_name: String::new(),
+                                                                                result: error_msg.clone(),
+                                                                                is_error: true,
+                                                                            }));
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                            crate::tools::ToolBatch::Serial((tool_id, tool_name, effective_input)) => {
+                                                                // Execute write tools sequentially (one at a time)
+                                                                let result = tools
+                                                                    .execute(&tool_name, effective_input.clone())
+                                                                    .await;
+
                                                                 // Run PostToolUse hooks
                                                                 {
                                                                     let output_val = match &result {
@@ -990,15 +1057,13 @@ impl QueryEngine {
                                                                             result: output.content.clone(),
                                                                             is_error: false,
                                                                         }));
-                                                                        tool_results
-                                                                            .push((tool_id, output.content.clone()));
+                                                                        tool_results.push((tool_id, output.content.clone()));
                                                                         if matches!(tool_name.as_str(), "Edit" | "Write") {
                                                                             file_edits_made = true;
                                                                         }
                                                                     }
                                                                     Err(e) => {
-                                                                        let error_msg =
-                                                                            format!("Tool error: {e}");
+                                                                        let error_msg = format!("Tool error: {e}");
                                                                         let _ = tx.send(Ok(QueryEvent::ToolUseResult {
                                                                             query_id,
                                                                             tool_use_id: tool_id.clone(),
@@ -1009,67 +1074,6 @@ impl QueryEngine {
                                                                         tool_results.push((tool_id, error_msg));
                                                                     }
                                                                 }
-                                                            }
-                                                            Err(e) => {
-                                                                let error_msg = format!("Task join error: {e}");
-                                                                let _ = tx.send(Ok(QueryEvent::ToolUseResult {
-                                                                    query_id,
-                                                                    tool_use_id: String::new(),
-                                                                    tool_name: String::new(),
-                                                                    result: error_msg.clone(),
-                                                                    is_error: true,
-                                                                }));
-                                                            }
-                                                        }
-                                                    }
-                                                } else {
-                                                    // Single tool: execute directly (no spawn overhead)
-                                                    for (tool_id, tool_name, effective_input) in approved_tools {
-                                                        let result = tools
-                                                            .execute(&tool_name, effective_input.clone())
-                                                            .await;
-
-                                                        // Run PostToolUse hooks
-                                                        {
-                                                            let output_val = match &result {
-                                                                Ok(o) => serde_json::Value::String(o.content.clone()),
-                                                                Err(e) => serde_json::Value::String(format!("Error: {e}")),
-                                                            };
-                                                            let post_event = crate::hooks::HookEvent::PostToolUse {
-                                                                tool_name: tool_name.clone(),
-                                                                input: effective_input,
-                                                                output: output_val,
-                                                            };
-                                                            let hm = hook_manager.read().await;
-                                                            let _ = hm.run_hooks(&post_event).await;
-                                                        }
-
-                                                        match result {
-                                                            Ok(output) => {
-                                                                let _ = tx.send(Ok(QueryEvent::ToolUseResult {
-                                                                    query_id,
-                                                                    tool_use_id: tool_id.clone(),
-                                                                    tool_name: tool_name.clone(),
-                                                                    result: output.content.clone(),
-                                                                    is_error: false,
-                                                                }));
-                                                                tool_results
-                                                                    .push((tool_id, output.content.clone()));
-                                                                if matches!(tool_name.as_str(), "Edit" | "Write") {
-                                                                    file_edits_made = true;
-                                                                }
-                                                            }
-                                                            Err(e) => {
-                                                                let error_msg =
-                                                                    format!("Tool error: {e}");
-                                                                let _ = tx.send(Ok(QueryEvent::ToolUseResult {
-                                                                    query_id,
-                                                                    tool_use_id: tool_id.clone(),
-                                                                    tool_name,
-                                                                    result: error_msg.clone(),
-                                                                    is_error: true,
-                                                                }));
-                                                                tool_results.push((tool_id, error_msg));
                                                             }
                                                         }
                                                     }
