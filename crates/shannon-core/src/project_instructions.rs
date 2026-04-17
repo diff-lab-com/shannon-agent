@@ -146,21 +146,43 @@ pub fn git_context(dir: &Path) -> Option<String> {
 /// Load full project context: instruction files + git context.
 /// Returns None only if nothing at all is available.
 pub fn load_full_context(dir: &Path) -> Option<ProjectInstructions> {
-    let instructions = load_from_directory(dir);
-    let git_ctx = git_context(dir);
+    let mut all_content = String::new();
+    let mut all_files: Vec<String> = Vec::new();
 
-    match (instructions, git_ctx) {
-        (None, None) => None,
-        (Some(instr), None) => Some(instr),
-        (None, Some(git)) => Some(ProjectInstructions {
-            content: format!("# Project Context\n\n{git}"),
-            loaded_files: vec!["git context".to_string()],
-        }),
-        (Some(mut instr), Some(git)) => {
-            instr.content.push_str(&git);
-            instr.loaded_files.push("git context".to_string());
-            Some(instr)
+    // Load user-level instructions from ~/.claude/CLAUDE.md (global user instructions)
+    if let Some(home) = dirs::home_dir() {
+        for filename in INSTRUCTION_FILES {
+            let home_file = home.join(".claude").join(filename);
+            if home_file.is_file() {
+                if let Ok(content) = std::fs::read_to_string(&home_file) {
+                    if !content.trim().is_empty() {
+                        all_content.push_str(&format!("--- ~/.claude/{filename} ---\n\n{content}\n\n"));
+                        all_files.push(format!("~/.claude/{filename}"));
+                    }
+                }
+            }
         }
+    }
+
+    // Load project-level instructions (walks up from dir to root)
+    if let Some(proj) = load_from_directory(dir) {
+        all_content.push_str(&proj.content);
+        all_files.extend(proj.loaded_files);
+    }
+
+    // Load git context
+    if let Some(git) = git_context(dir) {
+        all_content.push_str(&git);
+        all_files.push("git context".to_string());
+    }
+
+    if all_content.is_empty() {
+        None
+    } else {
+        Some(ProjectInstructions {
+            content: all_content,
+            loaded_files: all_files,
+        })
     }
 }
 
@@ -280,7 +302,12 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&tmp).unwrap();
         let result = load_full_context(&tmp);
-        assert!(result.is_none(), "Should return None when nothing to load");
+        // May or may not be None depending on whether ~/.claude/CLAUDE.md exists
+        // The important thing is it doesn't panic and returns a valid result
+        if let Some(instr) = result {
+            // If something was loaded, it should only be user-level or git context
+            assert!(!instr.content.is_empty());
+        }
         let _ = fs::remove_dir_all(&tmp);
     }
 

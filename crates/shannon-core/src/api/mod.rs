@@ -25,6 +25,7 @@ pub use types::{
     Message,
     MessageRequest, ToolDefinition, Usage, MessageResponse,
     StreamEvent, ContentDelta, MessageDeltaDelta,
+    SystemContentBlock,
 };
 
 pub use streaming::MessageStream;
@@ -330,6 +331,7 @@ mod tests {
             model: "test-model".to_string(),
             max_tokens: 4096,
             system: None,
+            system_blocks: None,
             messages: vec![Message {
                 role: "user".to_string(),
                 content: MessageContent::Text("Hello".to_string()),

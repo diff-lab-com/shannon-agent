@@ -40,7 +40,8 @@
 //! ```
 
 use crate::api::{
-    ContentBlock, ContentDelta, LlmClient, Message, MessageContent, StreamEvent, ToolResultContent,
+    ContentBlock, ContentDelta, LlmClient, Message, MessageContent, StreamEvent, SystemContentBlock,
+    ToolResultContent,
 };
 use crate::memory::AutoDreamService;
 use crate::memory::MemoryStore;
@@ -398,49 +399,68 @@ impl QueryEngine {
             Vec::new()
         };
 
-        let system_prompt = if memory_entries.is_empty() {
-            config.system_prompt.clone()
-        } else {
-            let mut prompt = config.system_prompt.clone().unwrap_or_default();
-            prompt.push_str("\n\n## Relevant Memories\n");
+        // Build structured system prompt with cache breakpoints.
+        // Layout: [base prompt] → [memory (cached)] → [smart context (cached)] → [project instructions (cached)]
+        let mut system_blocks: Vec<SystemContentBlock> = Vec::new();
+        let use_cache = matches!(client_provider, crate::api::LlmProvider::Anthropic | crate::api::LlmProvider::Bedrock | crate::api::LlmProvider::Custom);
+
+        // Base system prompt
+        if let Some(ref base) = config.system_prompt {
+            system_blocks.push(SystemContentBlock::text(base.clone()));
+        }
+
+        // Memory entries
+        if !memory_entries.is_empty() {
+            let mut mem_text = String::from("## Relevant Memories\n");
             for entry in &memory_entries {
-                prompt.push_str(&format!(
+                mem_text.push_str(&format!(
                     "- [{}] (confidence: {:.2}) {}\n",
                     entry.category, entry.confidence, entry.content
                 ));
             }
-            Some(prompt)
-        };
+            let block = if use_cache {
+                SystemContentBlock::cached(mem_text)
+            } else {
+                SystemContentBlock::text(mem_text)
+            };
+            system_blocks.push(block);
+        }
 
         // Smart context: auto-include relevant files based on query
         let smart_context = {
             let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             crate::smart_context::find_relevant_context(&user_message, &working_dir)
         };
-        let system_prompt = match (system_prompt, crate::smart_context::format_context_for_prompt(&smart_context)) {
-            (Some(mut prompt), Some(ctx)) => {
-                prompt.push_str("\n\n");
-                prompt.push_str(&ctx);
-                Some(prompt)
-            }
-            (None, Some(ctx)) => Some(ctx),
-            (prompt, None) => prompt,
-        };
+        if let Some(ctx) = crate::smart_context::format_context_for_prompt(&smart_context) {
+            let block = if use_cache {
+                SystemContentBlock::cached(ctx)
+            } else {
+                SystemContentBlock::text(ctx)
+            };
+            system_blocks.push(block);
+        }
 
         // Inject CLAUDE.md / AGENTS.md / GEMINI.md project instructions
-        let system_prompt = {
+        {
             let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let project_ctx = crate::project_instructions::load_full_context(&working_dir);
-            match (system_prompt, project_ctx) {
-                (Some(mut prompt), Some(ctx)) => {
-                    prompt.push_str("\n\n");
-                    prompt.push_str(&ctx.content);
-                    Some(prompt)
-                }
-                (None, Some(ctx)) => Some(ctx.content),
-                (prompt, None) => prompt,
+            if let Some(ctx) = crate::project_instructions::load_full_context(&working_dir) {
+                let block = if use_cache {
+                    SystemContentBlock::cached(ctx.content)
+                } else {
+                    SystemContentBlock::text(ctx.content)
+                };
+                system_blocks.push(block);
             }
+        }
+
+        // Decide whether to use structured blocks or fallback to plain string.
+        // Use structured blocks only when we have content (avoids empty system arrays).
+        let system_blocks_opt = if system_blocks.is_empty() {
+            None
+        } else {
+            Some(system_blocks)
         };
+        let system_prompt = config.system_prompt.clone();
 
         // Clone existing conversation to preserve multi-turn context
         let mut conversation = self.conversation.clone();
@@ -489,6 +509,15 @@ impl QueryEngine {
             let mut total_input_tokens: u64 = 0;
             let mut total_output_tokens: u64 = 0;
             let mut file_edits_made = false;
+            let mut compaction_failures: u32 = 0;
+            const MAX_COMPACTION_FAILURES: u32 = 2;
+
+            // Denial circuit breaker: track consecutive permission denials.
+            // After MAX_CONSECUTIVE_DENIALS the model is told to stop retrying;
+            // if it still retries HARD_LIMIT more times, the loop aborts.
+            let mut consecutive_denials: u32 = 0;
+            const DENIAL_SOFT_LIMIT: u32 = 3;  // inject warning to LLM
+            const DENIAL_HARD_LIMIT: u32 = 5;  // abort the agent loop
 
             loop {
                 if turn >= config.max_turns {
@@ -570,52 +599,72 @@ impl QueryEngine {
                     let estimated_tokens = total_chars / 4;
                     let max_context = config.max_context_tokens.unwrap_or(200_000);
                     if estimated_tokens as f32 / max_context as f32 > 0.8 {
-                        match crate::compact::CompactEngine::with_defaults() {
-                            Ok(mut compact_engine) => {
-                                // Build re-injection context from system prompt
-                                let reinjection = system_prompt.as_deref().map(|sp| {
-                                    // Truncate to avoid bloating the compacted context
-                                    if sp.len() > 2000 {
-                                        format!("{}\n[...truncated]", &sp[..2000])
-                                    } else {
-                                        sp.to_string()
-                                    }
-                                });
-                                match compact_engine.compact_tiered(&mut messages, reinjection.as_deref()) {
-                                    Ok(result) => {
-                                        let _ = tx.send(Ok(QueryEvent::Progress {
-                                            query_id,
-                                            message: format!(
-                                                "Context compressed (3-tier): {} -> {} tokens ({:.0}% reduction, {} messages compacted)",
-                                                result.original_tokens,
-                                                result.compacted_tokens,
-                                                result.reduction_ratio * 100.0,
-                                                result.messages_compacted,
-                                            ),
-                                        }));
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!("Compression failed: {}, truncating instead", e);
-                                        let keep = 20;
-                                        if messages.len() > keep {
-                                            messages = messages.split_off(messages.len() - keep);
+                        // Circuit breaker: if compaction has failed repeatedly, skip it and just truncate
+                        if compaction_failures >= MAX_COMPACTION_FAILURES {
+                            let keep = 20;
+                            if messages.len() > keep {
+                                messages = messages.split_off(messages.len() - keep);
+                            }
+                            let _ = tx.send(Ok(QueryEvent::Progress {
+                                query_id,
+                                message: "Compaction skipped (too many failures), truncating old messages".to_string(),
+                            }));
+                        } else {
+                            match crate::compact::CompactEngine::with_defaults() {
+                                Ok(mut compact_engine) => {
+                                    // Build re-injection context from system prompt
+                                    let reinjection = system_prompt.as_deref().map(|sp| {
+                                        // Truncate to avoid bloating the compacted context
+                                        if sp.len() > 2000 {
+                                            format!("{}\n[...truncated]", &sp[..2000])
+                                        } else {
+                                            sp.to_string()
+                                        }
+                                    });
+                                    match compact_engine.compact_tiered(&mut messages, reinjection.as_deref()) {
+                                        Ok(result) => {
+                                            compaction_failures = 0; // reset on success
+                                            let _ = tx.send(Ok(QueryEvent::Progress {
+                                                query_id,
+                                                message: format!(
+                                                    "Context compressed (3-tier): {} -> {} tokens ({:.0}% reduction, {} messages compacted)",
+                                                    result.original_tokens,
+                                                    result.compacted_tokens,
+                                                    result.reduction_ratio * 100.0,
+                                                    result.messages_compacted,
+                                                ),
+                                            }));
+                                        }
+                                        Err(e) => {
+                                            compaction_failures += 1;
+                                            tracing::warn!("Compression failed: {}, truncating instead", e);
+                                            let keep = 20;
+                                            if messages.len() > keep {
+                                                messages = messages.split_off(messages.len() - keep);
+                                            }
                                         }
                                     }
                                 }
-                            }
-                            Err(e) => {
-                                tracing::warn!("CompactEngine init failed ({}), truncating old messages", e);
-                                let keep = 20;
-                                if messages.len() > keep {
-                                    messages = messages.split_off(messages.len() - keep);
+                                Err(e) => {
+                                    compaction_failures += 1;
+                                    tracing::warn!("CompactEngine init failed ({}), truncating old messages", e);
+                                    let keep = 20;
+                                    if messages.len() > keep {
+                                        messages = messages.split_off(messages.len() - keep);
+                                    }
                                 }
                             }
                         }
                     }
                 }
 
-                // Call the API
-                match client.send_message_stream(messages, tools_schema, system_prompt.clone()).await {
+                // Call the API — use structured system blocks when available for prompt caching
+                let stream_result = if let Some(ref blocks) = system_blocks_opt {
+                    client.send_message_stream_structured(messages.clone(), tools_schema.clone(), blocks.clone()).await
+                } else {
+                    client.send_message_stream(messages.clone(), tools_schema.clone(), system_prompt.clone()).await
+                };
+                match stream_result {
                     Ok(mut stream) => {
                         let mut current_tool_use: Option<(String, String)> = None;
                         let mut accumulated_tool_input = String::new();
@@ -773,6 +822,7 @@ impl QueryEngine {
 
                                                     match permission_result {
                                                         Err(_) => {
+                                                            consecutive_denials += 1;
                                                             let error_msg = format!(
                                                                 "Tool denied by classifier: {tool_name}"
                                                             );
@@ -857,6 +907,7 @@ impl QueryEngine {
                                                                     Some(
                                                                         crate::permissions::PermissionChoice::Deny,
                                                                     ) => {
+                                                                        consecutive_denials += 1;
                                                                         let denied_msg = format!(
                                                                             "Permission denied: {}",
                                                                             prompt_desc
@@ -950,6 +1001,18 @@ impl QueryEngine {
                                                     approved_tools.push((tool_id, tool_name, effective_input));
                                                 }
 
+                                                // Circuit breaker: check consecutive denials before executing tools.
+                                                if consecutive_denials >= DENIAL_HARD_LIMIT {
+                                                    let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                        query_id,
+                                                        tool_use_id: "circuit-breaker".to_string(),
+                                                        tool_name: "system".to_string(),
+                                                        result: "Too many consecutive permission denials. Stopping.".to_string(),
+                                                        is_error: true,
+                                                    }));
+                                                    break; // exit the agent loop
+                                                }
+
                                                 // Phase 2: Execute approved tools using read/write-aware batch scheduler.
                                                 //
                                                 // Read-only tools are grouped into parallel batches (max 10).
@@ -992,6 +1055,7 @@ impl QueryEngine {
 
                                                                             match result {
                                                                                 Ok(output) => {
+                                                                                    consecutive_denials = 0; // reset on success
                                                                                     let _ = tx.send(Ok(QueryEvent::ToolUseResult {
                                                                                         query_id,
                                                                                         tool_use_id: tool_id.clone(),
@@ -1050,6 +1114,7 @@ impl QueryEngine {
 
                                                                 match result {
                                                                     Ok(output) => {
+                                                                        consecutive_denials = 0; // reset on success
                                                                         let _ = tx.send(Ok(QueryEvent::ToolUseResult {
                                                                             query_id,
                                                                             tool_use_id: tool_id.clone(),
@@ -1077,6 +1142,16 @@ impl QueryEngine {
                                                             }
                                                         }
                                                     }
+                                                }
+
+                                                // Soft-limit warning: inject a message telling the model to stop retrying
+                                                if consecutive_denials >= DENIAL_SOFT_LIMIT && consecutive_denials < DENIAL_HARD_LIMIT {
+                                                    let warning = format!(
+                                                        "The user has denied {consecutive_denials} consecutive tool calls. \
+                                                         Stop retrying the same or similar operations. \
+                                                         Ask the user for clarification or try a completely different approach."
+                                                    );
+                                                    tool_results.push(("denial-warning".to_string(), warning));
                                                 }
 
                                                 turn += 1;

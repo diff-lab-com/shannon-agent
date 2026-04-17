@@ -130,6 +130,7 @@ impl LlmClient {
             model: self.config.model.clone(),
             max_tokens: self.config.max_tokens,
             system,
+            system_blocks: None,
             messages,
             tools,
             stream: Some(true),
@@ -191,6 +192,73 @@ impl LlmClient {
         }
     }
 
+    /// Send a message with streaming response using structured system blocks.
+    ///
+    /// When available, this enables prompt caching by sending the system prompt
+    /// as an array of typed content blocks with cache breakpoints.
+    pub async fn send_message_stream_structured(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<ToolDefinition>>,
+        system_blocks: Vec<super::types::SystemContentBlock>,
+    ) -> Result<MessageStream, ApiError> {
+        let request_body = MessageRequest {
+            model: self.config.model.clone(),
+            max_tokens: self.config.max_tokens,
+            system: None,
+            system_blocks: Some(system_blocks),
+            messages,
+            tools,
+            stream: Some(true),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: self.config.budget_tokens,
+        };
+
+        let url = self.endpoint_url();
+        let headers = self.auth_headers();
+
+        let mut request = self
+            .client
+            .post(&url)
+            .header("content-type", "application/json")
+            .header("anthropic-version", "2023-06-01");
+
+        for (k, v) in &headers {
+            request = request.header(k.as_str(), v.as_str());
+        }
+
+        let body = super::adapter::serialize_request(&request_body, &self.config.provider);
+        request = request.json(&body);
+
+        let response = request
+            .send()
+            .await
+            .map_err(|e| match e.status() {
+                Some(reqwest::StatusCode::UNAUTHORIZED) => ApiError::AuthenticationFailed,
+                Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded,
+                Some(status) => ApiError::ApiError {
+                    status: status.as_u16(),
+                    message: format!("HTTP error: {e}"),
+                },
+                None => ApiError::HttpError(e),
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(ApiError::from_provider_response(
+                &self.config.provider,
+                status,
+                &error_text,
+            ));
+        }
+
+        Ok(super::streaming::sse_stream_from_response(response, self.config.provider.clone()))
+    }
+
     /// Send a streaming message with optional resumption via `Last-Event-ID`.
     ///
     /// If `last_event_id` is `Some`, the `Last-Event-ID` header is added to
@@ -207,6 +275,7 @@ impl LlmClient {
             model: self.config.model.clone(),
             max_tokens: self.config.max_tokens,
             system,
+            system_blocks: None,
             messages,
             tools,
             stream: Some(true),
@@ -271,6 +340,7 @@ impl LlmClient {
             model: self.config.model.clone(),
             max_tokens: self.config.max_tokens,
             system,
+            system_blocks: None,
             messages,
             tools,
             stream: Some(false),

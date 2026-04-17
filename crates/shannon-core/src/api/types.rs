@@ -686,6 +686,10 @@ pub struct MessageRequest {
     pub max_tokens: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
+    /// Structured system prompt with cache breakpoints (Anthropic only).
+    /// When set, takes precedence over `system` for Anthropic/Custom providers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_blocks: Option<Vec<SystemContentBlock>>,
     pub messages: Vec<Message>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<ToolDefinition>>,
@@ -703,6 +707,68 @@ pub struct MessageRequest {
     /// When set, enables extended thinking mode with the given token budget.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub budget_tokens: Option<u32>,
+}
+
+// ============================================================================
+// Prompt Caching Types
+// ============================================================================
+
+/// Cache control marker for Anthropic prompt caching.
+///
+/// Placed on content blocks to designate cache breakpoints. The API will
+/// cache everything up to and including the marked block, reusing it
+/// across requests when the prefix matches.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheControl {
+    #[serde(rename = "type")]
+    pub control_type: String,
+}
+
+impl CacheControl {
+    /// Create an ephemeral cache breakpoint (TTL = 5 min, or 1 hr for eligible users).
+    pub fn ephemeral() -> Self {
+        Self {
+            control_type: "ephemeral".to_string(),
+        }
+    }
+}
+
+/// A structured block within the system prompt, supporting cache breakpoints.
+///
+/// Anthropic's API accepts system prompts as an array of content blocks:
+/// ```json
+/// "system": [
+///   {"type": "text", "text": "...", "cache_control": {"type": "ephemeral"}},
+///   {"type": "text", "text": "..."}
+/// ]
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemContentBlock {
+    #[serde(rename = "type")]
+    pub block_type: String,
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<CacheControl>,
+}
+
+impl SystemContentBlock {
+    /// Create a plain text block without caching.
+    pub fn text(content: impl Into<String>) -> Self {
+        Self {
+            block_type: "text".to_string(),
+            text: content.into(),
+            cache_control: None,
+        }
+    }
+
+    /// Create a text block with an ephemeral cache breakpoint.
+    pub fn cached(content: impl Into<String>) -> Self {
+        Self {
+            block_type: "text".to_string(),
+            text: content.into(),
+            cache_control: Some(CacheControl::ephemeral()),
+        }
+    }
 }
 
 /// Tool definition for function calling

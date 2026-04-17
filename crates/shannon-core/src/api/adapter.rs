@@ -47,6 +47,15 @@ fn serialize_openai_request(request: &MessageRequest) -> Value {
             "role": "system",
             "content": system
         }));
+    } else if let Some(ref blocks) = request.system_blocks {
+        // Concatenate structured system blocks into a single string for OpenAI
+        let text: String = blocks.iter().map(|b| b.text.as_str()).collect::<Vec<&str>>().join("\n\n");
+        if !text.is_empty() {
+            messages.push(json!({
+                "role": "system",
+                "content": text
+            }));
+        }
     }
 
     // Convert messages
@@ -116,6 +125,14 @@ fn serialize_ollama_request(request: &MessageRequest) -> Value {
             "role": "system",
             "content": system
         }));
+    } else if let Some(ref blocks) = request.system_blocks {
+        let text: String = blocks.iter().map(|b| b.text.as_str()).collect::<Vec<&str>>().join("\n\n");
+        if !text.is_empty() {
+            messages.push(json!({
+                "role": "system",
+                "content": text
+            }));
+        }
     }
 
     for msg in &request.messages {
@@ -809,6 +826,13 @@ fn serialize_gemini_request(request: &MessageRequest) -> Value {
         body["systemInstruction"] = json!({
             "parts": [{ "text": system }]
         });
+    } else if let Some(ref blocks) = request.system_blocks {
+        let text: String = blocks.iter().map(|b| b.text.as_str()).collect::<Vec<&str>>().join("\n\n");
+        if !text.is_empty() {
+            body["systemInstruction"] = json!({
+                "parts": [{ "text": text }]
+            });
+        }
     }
 
     // Generation config
@@ -1098,6 +1122,7 @@ mod tests {
             model: "test-model".to_string(),
             max_tokens: 4096,
             system: Some("You are helpful.".to_string()),
+            system_blocks: None,
             messages: vec![Message {
                 role: "user".to_string(),
                 content: crate::api::types::MessageContent::Text("Hello".to_string()),
@@ -1671,6 +1696,7 @@ mod tests {
             model: "claude-3-5-sonnet".to_string(),
             max_tokens: 1024,
             system: None,
+            system_blocks: None,
             messages: vec![Message {
                 role: "user".to_string(),
                 content: MessageContent::Blocks(vec![
@@ -1712,6 +1738,7 @@ mod tests {
             model: "gpt-4o".to_string(),
             max_tokens: 1024,
             system: None,
+            system_blocks: None,
             messages: vec![Message {
                 role: "user".to_string(),
                 content: MessageContent::Blocks(vec![
@@ -1815,6 +1842,7 @@ mod tests {
             model: "gemini-2.0-flash".to_string(),
             max_tokens: 1024,
             system: None,
+            system_blocks: None,
             messages: vec![
                 Message { role: "user".to_string(), content: crate::api::types::MessageContent::Text("Hi".to_string()) },
                 Message { role: "assistant".to_string(), content: crate::api::types::MessageContent::Text("Hello!".to_string()) },
