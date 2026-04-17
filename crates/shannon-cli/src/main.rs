@@ -14,6 +14,7 @@ use shannon_tools::register_default_tools;
 use shannon_ui::Repl;
 use std::collections::HashMap;
 use std::io::Write;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use uuid::Uuid;
 
 /// CLI configuration passed explicitly instead of via environment variables.
@@ -190,6 +191,28 @@ struct Cli {
     /// With this flag, even critical tools are allowed (BypassPermissions).
     #[arg(short = 'y', long)]
     yes: bool,
+
+    /// Run as a team agent process (internal flag for multi-agent coordination).
+    /// Reads JSON-RPC from stdin, executes tasks using the full LLM + tool stack,
+    /// and writes JSON-RPC events to stdout.
+    #[arg(long, hide = true)]
+    team_agent: bool,
+
+    /// Agent name (used with --team-agent, must be unique within the team).
+    #[arg(long, hide = true)]
+    name: Option<String>,
+
+    /// System prompt for the agent (used with --team-agent).
+    #[arg(long, hide = true)]
+    system_prompt: Option<String>,
+
+    /// Working directory for the agent (used with --team-agent).
+    #[arg(long, hide = true)]
+    workdir: Option<String>,
+
+    /// Permission/approval mode for the agent (used with --team-agent).
+    #[arg(long, hide = true)]
+    permission_mode: Option<String>,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -635,12 +658,405 @@ fn run_serve_command(port: u16, host: Option<String>, config: &CliConfig) -> Res
     })
 }
 
+// ── Team Agent Mode ─────────────────────────────────────────────────
+
+/// Write a JSON-RPC message line to stdout.
+async fn agent_write_line(line: &str) {
+    let mut stdout = tokio::io::stdout();
+    if let Err(e) = stdout.write_all(line.as_bytes()).await {
+        tracing::error!("Failed to write to stdout: {e}");
+    }
+    if let Err(e) = stdout.flush().await {
+        tracing::error!("Failed to flush stdout: {e}");
+    }
+}
+
+/// Send a JSON-RPC notification to the coordinator.
+async fn agent_notify(method: &str, params: serde_json::Value) {
+    let msg = shannon_agents::JsonRpcMessage::notification(method, params);
+    match shannon_agents::frame_message(&msg) {
+        Ok(line) => agent_write_line(&line).await,
+        Err(e) => tracing::error!("Failed to frame notification: {e}"),
+    }
+}
+
+/// Send a JSON-RPC success response.
+async fn agent_respond(id: i64, result: serde_json::Value) {
+    let msg = shannon_agents::JsonRpcMessage::response(
+        shannon_agents::JsonRpcId::Number(id),
+        result,
+    );
+    match shannon_agents::frame_message(&msg) {
+        Ok(line) => agent_write_line(&line).await,
+        Err(e) => tracing::error!("Failed to frame response: {e}"),
+    }
+}
+
+/// Send a JSON-RPC error response.
+async fn agent_respond_error(id: i64, error: shannon_agents::JsonRpcError) {
+    let msg = shannon_agents::JsonRpcMessage::error_response(
+        shannon_agents::JsonRpcId::Number(id),
+        error,
+    );
+    match shannon_agents::frame_message(&msg) {
+        Ok(line) => agent_write_line(&line).await,
+        Err(e) => tracing::error!("Failed to frame error response: {e}"),
+    }
+}
+
+/// Run in team-agent mode: read JSON-RPC from stdin, execute tasks with full
+/// LLM + tool access, write JSON-RPC events to stdout.
+///
+/// This is the in-process counterpart of `shannon-agent` that reuses the main
+/// `shannon` binary. It gives agents full access to the query engine, tool
+/// registry, MCP servers, plugins, and the LLM client — everything the REPL
+/// has, minus the interactive UI.
+fn run_team_agent_mode(
+    name: &str,
+    model: Option<&str>,
+    provider: Option<&str>,
+    system_prompt: Option<&str>,
+    workdir: Option<&str>,
+    permission_mode: Option<&str>,
+) -> Result<()> {
+    // Change working directory if specified
+    if let Some(dir) = workdir {
+        std::env::set_current_dir(dir)
+            .map_err(|e| anyhow::anyhow!("Failed to set working directory: {e}"))?;
+    }
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        let config = build_cli_config(model, provider, None, None, None, false, HashMap::new());
+
+        // ── Build full tool registry (same as non-interactive query) ──
+        let mut tools = ToolRegistry::new();
+        let agent_context_handle = register_default_tools(&mut tools)
+            .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
+
+        shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
+
+        // Discover plugins
+        let mut plugin_manager = shannon_core::PluginManager::new();
+        match plugin_manager.discover_and_load_all().await {
+            Ok(loaded) if !loaded.is_empty() => {
+                tracing::info!("Loaded {} plugin(s)", loaded.len());
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!("Plugin discovery failed: {e}"),
+        }
+        shannon_core::register_plugin_tools(&plugin_manager, &mut tools);
+
+        // Discover MCP servers
+        {
+            let mut mcp_registry = shannon_core::mcp_advanced::McpServerRegistry::new();
+            let mcp_count = mcp_registry.load_from_default_paths();
+            if mcp_count > 0 {
+                tracing::info!("Discovered {mcp_count} MCP server(s)");
+                for mcp_config in mcp_registry.enabled_servers() {
+                    let description = format!(
+                        "Execute tool calls on MCP server '{}' ({})",
+                        mcp_config.name, mcp_config.transport_type
+                    );
+                    let input_schema = serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "tool_name": {"type": "string", "description": "Tool to call"},
+                            "arguments": {"type": "object", "description": "Arguments"}
+                        },
+                        "required": ["tool_name"]
+                    });
+                    let mcp_tool = shannon_core::McpToolAdapter::new(
+                        mcp_config.name.clone(),
+                        mcp_config.command.clone(),
+                        mcp_config.args.clone(),
+                        mcp_config.env.clone(),
+                        description,
+                        input_schema,
+                    );
+                    let _ = tools.register(Box::new(mcp_tool));
+                }
+            }
+        }
+
+        // ── Build LLM client ──
+        let client_config = build_llm_config_from_builder(&config);
+        if let Err(e) = client_config.validate() {
+            tracing::warn!("Config validation: {e}");
+        }
+
+        // Team context
+        match shannon_tools::AgentToolContext::new(client_config.clone()).await {
+            Ok(ctx) => {
+                if let Err(e) = shannon_tools::register_team_tools(&mut tools, ctx.coordinator.clone()) {
+                    tracing::warn!("Team tool registration failed: {e}");
+                }
+                if let Ok(mut guard) = agent_context_handle.lock() {
+                    *guard = Some(ctx);
+                }
+            }
+            Err(e) => tracing::warn!("Team context init failed (team features disabled): {e}"),
+        }
+
+        // ── Remote team tools (JSON-RPC to coordinator via stdin/stdout) ──
+        let coordinator_channel = shannon_agents::CoordinatorChannel::new();
+        let agent_name_owned = name.to_string();
+        tools.register(Box::new(shannon_agents::RemoteTeamTaskListTool::new(
+            coordinator_channel.clone(),
+        ))).ok();
+        tools.register(Box::new(shannon_agents::RemoteTeamTaskClaimTool::new(
+            coordinator_channel.clone(),
+            agent_name_owned.clone(),
+        ))).ok();
+        tools.register(Box::new(shannon_agents::RemoteTeamNotifyIdleTool::new(
+            coordinator_channel.clone(),
+            agent_name_owned.clone(),
+        ))).ok();
+        tools.register(Box::new(shannon_agents::RemoteSendMessageTool::new(
+            coordinator_channel.clone(),
+            agent_name_owned.clone(),
+        ))).ok();
+        let coordinator_channel_for_loop = coordinator_channel.clone();
+
+        let client = if client_config.provider.requires_auth() {
+            shannon_core::api::LlmClient::new(client_config)
+        } else {
+            shannon_core::api::LlmClient::new_unauthenticated(client_config)
+        };
+
+        let mut permissions = shannon_core::permissions::PermissionManager::new();
+        let approval_mode = match permission_mode {
+            Some("auto") => shannon_core::permissions::ApprovalMode::AutoEdit,
+            Some("plan") => shannon_core::permissions::ApprovalMode::Plan,
+            Some("full-auto") => shannon_core::permissions::ApprovalMode::FullAuto,
+            Some("dontAsk") => shannon_core::permissions::ApprovalMode::DontAsk,
+            Some("readonly") => shannon_core::permissions::ApprovalMode::Readonly,
+            _ => shannon_core::permissions::ApprovalMode::BypassPermissions,
+        };
+        permissions.set_approval_mode(approval_mode);
+        let state = StateManager::new();
+
+        let base_engine = QueryEngine::with_defaults(client, tools, permissions, state);
+
+        // Memory store
+        let mut engine = {
+            let memory_path = dirs::home_dir()
+                .map(|h| h.join(".shannon").join("memories"))
+                .unwrap_or_else(|| std::path::PathBuf::from(".shannon/memories"));
+            let mut mem_store = shannon_core::MemoryStore::new(memory_path);
+            let _ = mem_store.load();
+            base_engine.with_memory(mem_store)
+        };
+
+        // System prompt: project instructions + agent-specific prompt
+        if let Some(instructions) = shannon_core::project_instructions::load_from_cwd() {
+            engine.append_system_prompt(&instructions.content);
+        }
+        if let Some(prompt) = system_prompt {
+            if !prompt.is_empty() {
+                engine.append_system_prompt(prompt);
+            }
+        }
+
+        // ── Send agent_ready notification ──
+        let ready_params = serde_json::to_value(shannon_agents::AgentReadyParams {
+            agent_name: name.to_string(),
+            capabilities: vec!["general".to_string()],
+        }).unwrap();
+        agent_notify("agent_ready", ready_params).await;
+
+        // ── JSON-RPC main loop ──
+        let stdin = tokio::io::stdin();
+        let reader = BufReader::new(stdin);
+        let mut lines = reader.lines();
+
+        tracing::info!(name = %name, "Agent listening for JSON-RPC on stdin");
+
+        while let Ok(Some(line)) = lines.next_line().await {
+            let msg = match shannon_agents::parse_message(&line) {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to parse JSON-RPC");
+                    continue;
+                }
+            };
+
+            // Dispatch JSON-RPC responses to waiting remote tools
+            if msg.method().is_none() && msg.id.is_some() {
+                coordinator_channel_for_loop.dispatch_response(msg).await;
+                continue;
+            }
+
+            match msg.method() {
+                Some("execute_task") => {
+                    if let Some(params) = msg.params {
+                        match serde_json::from_value::<shannon_agents::ExecuteTaskParams>(params) {
+                            Ok(task_params) => {
+                                tracing::info!(
+                                    task_id = %task_params.task_id,
+                                    subject = %task_params.subject,
+                                    "Executing task"
+                                );
+
+                                // Send start progress
+                                let progress = serde_json::to_value(
+                                    shannon_agents::TaskProgressParams {
+                                        task_id: task_params.task_id.clone(),
+                                        chunk: format!("Starting: {}", task_params.subject),
+                                    }).unwrap();
+                                agent_notify("task_progress", progress).await;
+
+                                // Build query from task
+                                let task_desc = if task_params.description.is_empty() {
+                                    task_params.subject.clone()
+                                } else {
+                                    format!("{}\n\n{}", task_params.subject, task_params.description)
+                                };
+
+                                let context = QueryContext {
+                                    query_id: Uuid::new_v4(),
+                                    session_id: Uuid::new_v4(),
+                                    user_message: task_desc,
+                                    metadata: QueryMetadata {
+                                        timestamp: chrono::Utc::now(),
+                                        tools_allowed: true,
+                                        max_tokens: None,
+                                        model: config.model().unwrap_or_default(),
+                                        temperature: None,
+                                        top_p: None,
+                                    },
+                                };
+
+                                let mut event_stream = engine.process_query(context, None).await;
+                                let mut output = String::new();
+                                let mut success = true;
+
+                                while let Some(event_result) = event_stream.next().await {
+                                    match event_result {
+                                        Ok(QueryEvent::Text { content, .. }) => {
+                                            output.push_str(&content);
+                                            // Stream progress chunks
+                                            let chunk = serde_json::to_value(
+                                                shannon_agents::TaskProgressParams {
+                                                    task_id: task_params.task_id.clone(),
+                                                    chunk: content,
+                                                }).unwrap();
+                                            agent_notify("task_progress", chunk).await;
+                                        }
+                                        Ok(QueryEvent::ToolUseRequest { tool_name, .. }) => {
+                                            tracing::info!(tool = %tool_name, "Agent invoking tool");
+                                        }
+                                        Ok(QueryEvent::Completed { .. }) => {}
+                                        Ok(QueryEvent::Failed { error, .. }) => {
+                                            output.push_str(&format!("\nError: {error}"));
+                                            success = false;
+                                        }
+                                        Ok(_) => {}
+                                        Err(e) => {
+                                            output.push_str(&format!("\nStream error: {e}"));
+                                            success = false;
+                                        }
+                                    }
+                                }
+
+                                // Send task_complete
+                                let complete = serde_json::to_value(
+                                    shannon_agents::TaskCompleteParams {
+                                        task_id: task_params.task_id.clone(),
+                                        success,
+                                        output,
+                                    }).unwrap();
+                                agent_notify("task_complete", complete).await;
+
+                                // Report idle
+                                let idle = serde_json::to_value(
+                                    shannon_agents::AgentIdleParams {
+                                        agent_name: name.to_string(),
+                                        available_tasks_count: 0,
+                                    }).unwrap();
+                                agent_notify("agent_idle", idle).await;
+                            }
+                            Err(e) => {
+                                tracing::error!(error = %e, "Invalid execute_task params");
+                                if let Some(id) = &msg.id {
+                                    let rpc_id = match id {
+                                        shannon_agents::JsonRpcId::Number(n) => *n,
+                                        _ => -1,
+                                    };
+                                    agent_respond_error(
+                                        rpc_id,
+                                        shannon_agents::JsonRpcError::internal(e.to_string()),
+                                    ).await;
+                                }
+                            }
+                        }
+                    }
+                }
+                Some("shutdown") => {
+                    tracing::info!("Received shutdown, exiting");
+                    break;
+                }
+                Some("ping") => {
+                    if let Some(id) = &msg.id {
+                        let rpc_id = match id {
+                            shannon_agents::JsonRpcId::Number(n) => *n,
+                            _ => -1,
+                        };
+                        agent_respond(rpc_id, serde_json::json!({"status": "ok"})).await;
+                    }
+                }
+                Some(method) => {
+                    tracing::warn!(method = %method, "Unknown method");
+                    if let Some(id) = &msg.id {
+                        let rpc_id = match id {
+                            shannon_agents::JsonRpcId::Number(n) => *n,
+                            _ => -1,
+                        };
+                        agent_respond_error(
+                            rpc_id,
+                            shannon_agents::JsonRpcError::not_found(method),
+                        ).await;
+                    }
+                }
+                None => {
+                    tracing::debug!("Received response (ignoring)");
+                }
+            }
+        }
+
+        tracing::info!("Agent process exiting");
+        Ok(())
+    })
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Initialize i18n — override locale from --lang flag if provided
     if let Some(ref lang) = cli.lang {
         i18n::set_locale(lang);
+    }
+
+    // ── Team agent mode: JSON-RPC over stdin/stdout ──
+    // Must be handled before anything else — stdout is reserved for JSON-RPC.
+    if cli.team_agent {
+        let agent_name = cli.name.as_deref().unwrap_or("anonymous-agent");
+        // Initialize logging to stderr (stdout reserved for JSON-RPC)
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive("shannon_cli=info".parse().unwrap())
+            )
+            .init();
+        return run_team_agent_mode(
+            agent_name,
+            cli.model.as_deref(),
+            cli.provider.as_deref(),
+            cli.system_prompt.as_deref(),
+            cli.workdir.as_deref(),
+            cli.permission_mode.as_deref(),
+        );
     }
 
     // Pipe mode: read prompt from stdin
@@ -1773,5 +2189,79 @@ mod tests {
             assert_eq!(config.provider.as_deref(), Some("openai"));
             assert_eq!(config.max_tokens, Some(4096));
         }
+    }
+
+    // ── Team agent mode tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_cli_team_agent_flag() {
+        let cli = Cli::try_parse_from([
+            "shannon", "--team-agent", "--name", "worker-1",
+        ]).unwrap();
+        assert!(cli.team_agent);
+        assert_eq!(cli.name.as_deref(), Some("worker-1"));
+    }
+
+    #[test]
+    fn test_cli_team_agent_with_model() {
+        let cli = Cli::try_parse_from([
+            "shannon", "--team-agent", "--name", "worker-2",
+            "--model", "claude-sonnet-4", "--provider", "anthropic",
+        ]).unwrap();
+        assert!(cli.team_agent);
+        assert_eq!(cli.name.as_deref(), Some("worker-2"));
+        assert_eq!(cli.model.as_deref(), Some("claude-sonnet-4"));
+        assert_eq!(cli.provider.as_deref(), Some("anthropic"));
+    }
+
+    #[test]
+    fn test_cli_team_agent_with_system_prompt() {
+        let cli = Cli::try_parse_from([
+            "shannon", "--team-agent", "--name", "coder",
+            "--system-prompt", "You are a Rust expert",
+        ]).unwrap();
+        assert!(cli.team_agent);
+        assert_eq!(
+            cli.system_prompt.as_deref(),
+            Some("You are a Rust expert"),
+        );
+    }
+
+    #[test]
+    fn test_cli_team_agent_with_workdir() {
+        let cli = Cli::try_parse_from([
+            "shannon", "--team-agent", "--name", "worker",
+            "--workdir", "/tmp/worktree-1",
+        ]).unwrap();
+        assert!(cli.team_agent);
+        assert_eq!(cli.workdir.as_deref(), Some("/tmp/worktree-1"));
+    }
+
+    #[test]
+    fn test_cli_team_agent_all_options() {
+        let cli = Cli::try_parse_from([
+            "shannon",
+            "--team-agent",
+            "--name", "researcher",
+            "--model", "claude-opus-4",
+            "--provider", "anthropic",
+            "--system-prompt", "Research agent",
+            "--workdir", "/project/research",
+        ]).unwrap();
+        assert!(cli.team_agent);
+        assert_eq!(cli.name.as_deref(), Some("researcher"));
+        assert_eq!(cli.model.as_deref(), Some("claude-opus-4"));
+        assert_eq!(cli.provider.as_deref(), Some("anthropic"));
+        assert_eq!(cli.system_prompt.as_deref(), Some("Research agent"));
+        assert_eq!(cli.workdir.as_deref(), Some("/project/research"));
+    }
+
+    #[test]
+    fn test_cli_no_team_agent_by_default() {
+        let cli = Cli::try_parse_from(["shannon"]).unwrap();
+        assert!(!cli.team_agent);
+        assert!(cli.name.is_none());
+        assert!(cli.system_prompt.is_none());
+        assert!(cli.workdir.is_none());
     }
 }

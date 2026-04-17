@@ -5,15 +5,15 @@
 //! crash isolation, resource boundaries, and parallel execution.
 
 use crate::protocol::{
-    self, AgentReadyParams, AgentIdleParams, ClaimTaskParams, ClaimTaskResult,
-    ExecuteTaskParams, JsonRpcError, JsonRpcId, JsonRpcMessage, TaskCompleteParams,
-    TaskProgressParams, frame_message, parse_message,
+    self, AgentReadyParams, AgentIdleParams, ExecuteTaskParams, JsonRpcMessage,
+    TaskCompleteParams, TaskProgressParams, frame_message, parse_message,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{mpsc, oneshot, RwLock};
@@ -36,7 +36,7 @@ pub enum AgentProcessStatus {
 /// Configuration for spawning an agent process.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentProcessConfig {
-    /// Path to the `shannon-agent` binary.
+    /// Path to the `shannon` binary (run with `--team-agent` flag).
     pub binary_path: PathBuf,
     /// Command-line arguments to pass to the process.
     #[serde(default)]
@@ -52,6 +52,47 @@ pub struct AgentProcessConfig {
     pub system_prompt: Option<String>,
     /// Agent name (passed as `--name` argument).
     pub agent_name: String,
+    /// Permission/approval mode for the agent (e.g. "auto", "bypassPermissions").
+    #[serde(default)]
+    pub permission_mode: Option<String>,
+}
+
+/// Configuration for health monitoring and restart policy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthCheckConfig {
+    /// Interval between health checks in seconds. Default: 30.
+    #[serde(default = "default_health_interval")]
+    pub check_interval_secs: u64,
+    /// Timeout for ping response before marking agent unresponsive (seconds). Default: 10.
+    #[serde(default = "default_ping_timeout")]
+    pub ping_timeout_secs: u64,
+    /// Maximum restart attempts before giving up. Default: 3.
+    #[serde(default = "default_max_restarts")]
+    pub max_restart_attempts: u32,
+    /// Grace period before first health check after spawn (seconds). Default: 15.
+    #[serde(default = "default_grace_period")]
+    pub startup_grace_period_secs: u64,
+    /// Timeout for graceful shutdown before force-killing (seconds). Default: 10.
+    #[serde(default = "default_shutdown_timeout")]
+    pub graceful_shutdown_timeout_secs: u64,
+}
+
+fn default_health_interval() -> u64 { 30 }
+fn default_ping_timeout() -> u64 { 10 }
+fn default_max_restarts() -> u32 { 3 }
+fn default_grace_period() -> u64 { 15 }
+fn default_shutdown_timeout() -> u64 { 10 }
+
+impl Default for HealthCheckConfig {
+    fn default() -> Self {
+        Self {
+            check_interval_secs: default_health_interval(),
+            ping_timeout_secs: default_ping_timeout(),
+            max_restart_attempts: default_max_restarts(),
+            startup_grace_period_secs: default_grace_period(),
+            graceful_shutdown_timeout_secs: default_shutdown_timeout(),
+        }
+    }
 }
 
 /// A pending RPC response waiter.
@@ -75,6 +116,12 @@ pub struct AgentHandle {
     event_tx: mpsc::Sender<AgentEvent>,
     /// Kill handle sender — drop the child on shutdown.
     _kill_tx: oneshot::Sender<()>,
+    /// Original config used to spawn this agent (for restart).
+    config: AgentProcessConfig,
+    /// Number of times this agent has been restarted.
+    restart_count: u32,
+    /// Time of last successful communication (health tracking).
+    last_seen: Instant,
 }
 
 /// Events emitted by agent processes.
@@ -107,6 +154,16 @@ pub enum AgentEvent {
     ProcessExited {
         agent_name: String,
         exit_code: Option<i32>,
+    },
+    /// Health check failed for an agent.
+    HealthCheckFailed {
+        agent_name: String,
+        consecutive_failures: u32,
+    },
+    /// Agent was automatically restarted after a crash.
+    AgentRestarted {
+        agent_name: String,
+        restart_count: u32,
     },
 }
 
@@ -149,8 +206,9 @@ impl AgentProcessManager {
     ) -> Result<String, AgentProcessError> {
         let name = config.agent_name.clone();
 
-        // Build command
+        // Build command — uses `shannon --team-agent` to reuse the main binary
         let mut cmd = Command::new(&config.binary_path);
+        cmd.arg("--team-agent");
         cmd.arg("--name").arg(&name);
         if let Some(ref model) = config.model {
             cmd.arg("--model").arg(model);
@@ -160,6 +218,9 @@ impl AgentProcessManager {
         }
         if let Some(ref path) = config.worktree_path {
             cmd.arg("--workdir").arg(path);
+        }
+        if let Some(ref mode) = config.permission_mode {
+            cmd.arg("--permission-mode").arg(mode);
         }
         cmd.args(&config.args);
         cmd.envs(&config.env);
@@ -221,6 +282,9 @@ impl AgentProcessManager {
             pending_rpcs: HashMap::new(),
             event_tx: self.event_tx.clone(),
             _kill_tx: kill_tx,
+            config,
+            restart_count: 0,
+            last_seen: Instant::now(),
         };
 
         self.agents.write().await.insert(name.clone(), handle);
@@ -317,6 +381,283 @@ impl AgentProcessManager {
         }
     }
 
+    /// Gracefully shut down an agent: send `shutdown` notification, wait for
+    /// the process to exit, then force-kill after timeout.
+    pub async fn graceful_shutdown_agent(
+        &self,
+        agent_name: &str,
+        timeout: Duration,
+    ) -> Result<(), AgentProcessError> {
+        // Send shutdown notification (best-effort)
+        let _ = self.shutdown_agent(agent_name, "coordinator shutting down").await;
+
+        // Wait for the process to exit
+        let deadline = Instant::now() + timeout;
+        loop {
+            let agents = self.agents.read().await;
+            let running = agents.contains_key(agent_name);
+            drop(agents);
+
+            if !running {
+                tracing::info!(agent = %agent_name, "Agent exited gracefully");
+                return Ok(());
+            }
+
+            if Instant::now() >= deadline {
+                tracing::warn!(
+                    agent = %agent_name,
+                    ?timeout,
+                    "Agent did not exit within timeout, force-killing"
+                );
+                return self.kill_agent(agent_name).await;
+            }
+
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+
+    /// Restart a crashed agent using its stored configuration.
+    ///
+    /// Removes the old handle, respawns using the original config, and
+    /// increments the restart counter.
+    pub async fn restart_agent(
+        &self,
+        agent_name: &str,
+    ) -> Result<String, AgentProcessError> {
+        // Extract the stored config and restart count
+        let config = {
+            let mut agents = self.agents.write().await;
+            match agents.remove(agent_name) {
+                Some(handle) => {
+                    let restart_count = handle.restart_count + 1;
+                    let mut config = handle.config.clone();
+                    config.agent_name = handle.name.clone();
+                    (config, restart_count)
+                }
+                None => {
+                    return Err(AgentProcessError::AgentNotFound(agent_name.to_string()));
+                }
+            }
+        };
+
+        let (config, restart_count) = config;
+
+        tracing::info!(
+            agent = %agent_name,
+            restart_count,
+            "Restarting agent process"
+        );
+
+        // Respawn with same config
+        let name = self.spawn_agent(config).await?;
+
+        // Update restart count
+        {
+            let mut agents = self.agents.write().await;
+            if let Some(handle) = agents.get_mut(&name) {
+                handle.restart_count = restart_count;
+            }
+        }
+
+        let _ = self.event_tx.send(AgentEvent::AgentRestarted {
+            agent_name: name.clone(),
+            restart_count,
+        }).await;
+
+        Ok(name)
+    }
+
+    /// Start a background health monitoring task that periodically pings
+    /// agents and auto-restarts crashed ones.
+    pub fn start_health_monitor(&self, health_config: HealthCheckConfig) {
+        let agents = self.agents.clone();
+        let event_tx = self.event_tx.clone();
+        let check_interval = Duration::from_secs(health_config.check_interval_secs);
+        let max_restarts = health_config.max_restart_attempts;
+        let grace_period = Duration::from_secs(health_config.startup_grace_period_secs);
+
+        tokio::spawn(async move {
+            // Wait for initial grace period
+            tokio::time::sleep(grace_period).await;
+
+            let mut interval = tokio::time::interval(check_interval);
+            // Track consecutive ping failures per agent
+            let mut failures: HashMap<String, u32> = HashMap::new();
+
+            loop {
+                interval.tick().await;
+
+                let agent_names: Vec<String> = {
+                    let agents_guard = agents.read().await;
+                    agents_guard.keys().cloned().collect()
+                };
+
+                for agent_name in agent_names {
+                    // Use write lock since try_wait() needs &mut Child
+                    let mut agents_guard = agents.write().await;
+                    let Some(handle) = agents_guard.get_mut(&agent_name) else {
+                        continue;
+                    };
+
+                    // Skip agents that are already stopped/crashed
+                    if matches!(handle.status, AgentProcessStatus::Stopped | AgentProcessStatus::Crashed) {
+                        continue;
+                    }
+
+                    // Check if process is still alive
+                    let alive = !matches!(handle.child.try_wait(), Ok(Some(_)));
+                    drop(agents_guard);
+
+                    if !alive {
+                        tracing::warn!(agent = %agent_name, "Agent process is dead");
+                        let failure_count = failures.entry(agent_name.clone()).or_insert(0);
+                        *failure_count += 1;
+
+                        let _ = event_tx.send(AgentEvent::HealthCheckFailed {
+                            agent_name: agent_name.clone(),
+                            consecutive_failures: *failure_count,
+                        }).await;
+
+                        // Mark as crashed
+                        {
+                            let mut agents_guard = agents.write().await;
+                            if let Some(handle) = agents_guard.get_mut(&agent_name) {
+                                handle.status = AgentProcessStatus::Crashed;
+                            }
+                        }
+
+                        // Attempt auto-restart if under limit
+                        if *failure_count <= max_restarts {
+                            tracing::info!(
+                                agent = %agent_name,
+                                attempt = *failure_count,
+                                max = max_restarts,
+                                "Attempting auto-restart"
+                            );
+                            // Can't call self.restart_agent since we don't have &self
+                            // Instead, manually respawn using the stored config
+                            let mut agents_guard = agents.write().await;
+                            if let Some(old_handle) = agents_guard.remove(&agent_name) {
+                                let restart_count = old_handle.restart_count + 1;
+                                let config = old_handle.config.clone();
+                                drop(agents_guard);
+
+                                // Build and spawn new process
+                                let name = config.agent_name.clone();
+                                let mut cmd = Command::new(&config.binary_path);
+                                cmd.arg("--team-agent");
+                                cmd.arg("--name").arg(&name);
+                                if let Some(ref model) = config.model {
+                                    cmd.arg("--model").arg(model);
+                                }
+                                if let Some(ref prompt) = config.system_prompt {
+                                    cmd.arg("--system-prompt").arg(prompt);
+                                }
+                                if let Some(ref path) = config.worktree_path {
+                                    cmd.arg("--workdir").arg(path);
+                                }
+                                if let Some(ref mode) = config.permission_mode {
+                                    cmd.arg("--permission-mode").arg(mode);
+                                }
+                                cmd.args(&config.args);
+                                cmd.envs(&config.env);
+                                cmd.stdout(std::process::Stdio::piped())
+                                    .stdin(std::process::Stdio::piped())
+                                    .stderr(std::process::Stdio::piped());
+
+                                let (kill_tx, kill_rx) = oneshot::channel::<()>();
+
+                                match cmd.spawn() {
+                                    Ok(mut child) => {
+                                        let stdin = child.stdin.take();
+                                        let stdout = child.stdout.take();
+
+                                        match (stdin, stdout) {
+                                            (Some(stdin), Some(stdout)) => {
+                                                let evt_clone = event_tx.clone();
+                                                let name_reader = name.clone();
+                                                tokio::spawn(async move {
+                                                    Self::read_loop(stdout, evt_clone, name_reader).await;
+                                                });
+
+                                                let evt_exit = event_tx.clone();
+                                                let name_exit = name.clone();
+                                                tokio::spawn(async move {
+                                                    let _ = kill_rx.await;
+                                                    let _ = evt_exit.send(AgentEvent::ProcessExited {
+                                                        agent_name: name_exit,
+                                                        exit_code: None,
+                                                    }).await;
+                                                });
+
+                                                let handle = AgentHandle {
+                                                    child,
+                                                    stdin,
+                                                    name: name.clone(),
+                                                    status: AgentProcessStatus::Starting,
+                                                    pending_rpcs: HashMap::new(),
+                                                    event_tx: event_tx.clone(),
+                                                    _kill_tx: kill_tx,
+                                                    config,
+                                                    restart_count,
+                                                    last_seen: Instant::now(),
+                                                };
+
+                                                let mut agents_guard = agents.write().await;
+                                                agents_guard.insert(name.clone(), handle);
+
+                                                let _ = event_tx.send(AgentEvent::AgentRestarted {
+                                                    agent_name: name.clone(),
+                                                    restart_count,
+                                                }).await;
+
+                                                tracing::info!(
+                                                    agent = %name,
+                                                    restart_count,
+                                                    "Auto-restarted agent"
+                                                );
+                                            }
+                                            _ => {
+                                                tracing::error!(
+                                                    agent = %name,
+                                                    "Failed to capture stdin/stdout during restart"
+                                                );
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(
+                                            agent = %name,
+                                            error = %e,
+                                            "Failed to respawn agent"
+                                        );
+                                    }
+                                }
+                            }
+                        } else {
+                            tracing::error!(
+                                agent = %agent_name,
+                                failures = *failure_count,
+                                max = max_restarts,
+                                "Exceeded max restart attempts, giving up"
+                            );
+                        }
+                    } else {
+                        // Agent is alive, reset failure counter
+                        if let Some(f) = failures.get_mut(&agent_name) {
+                            *f = 0;
+                        }
+                        // Update last_seen
+                        let mut agents_guard = agents.write().await;
+                        if let Some(handle) = agents_guard.get_mut(&agent_name) {
+                            handle.last_seen = Instant::now();
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     /// Get the status of an agent.
     pub async fn agent_status(&self, agent_name: &str) -> Option<AgentProcessStatus> {
         let agents = self.agents.read().await;
@@ -337,6 +678,16 @@ impl AgentProcessManager {
     /// Try to receive an event without blocking.
     pub fn try_recv_event(&mut self) -> Option<AgentEvent> {
         self.event_rx.try_recv().ok()
+    }
+
+    /// Take the event receiver out, leaving a closed channel in its place.
+    ///
+    /// This allows the coordinator to own the event receiver in a separate task
+    /// while the process manager itself remains usable for command operations
+    /// (spawn, execute_task, shutdown).
+    pub fn take_event_receiver(&mut self) -> mpsc::Receiver<AgentEvent> {
+        let (_, rx) = mpsc::channel(1);
+        std::mem::replace(&mut self.event_rx, rx)
     }
 
     /// Read loop: reads lines from agent stdout, dispatches events and RPC responses.
@@ -474,13 +825,14 @@ mod tests {
     async fn test_spawn_nonexistent_binary() {
         let mgr = AgentProcessManager::new();
         let config = AgentProcessConfig {
-            binary_path: PathBuf::from("/nonexistent/shannon-agent"),
+            binary_path: PathBuf::from("/nonexistent/shannon"),
             args: vec![],
             env: HashMap::new(),
             worktree_path: None,
             model: None,
             system_prompt: None,
             agent_name: "test-agent".to_string(),
+            permission_mode: None,
         };
         let result = mgr.spawn_agent(config).await;
         assert!(result.is_err());

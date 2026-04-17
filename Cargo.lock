@@ -2549,6 +2549,7 @@ dependencies = [
  "rust-i18n",
  "serde",
  "serde_json",
+ "shannon-agents",
  "shannon-commands",
  "shannon-core",
  "shannon-skills",
@@ -2557,6 +2558,8 @@ dependencies = [
  "tokio",
  "tokio-test",
  "toml",
+ "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 

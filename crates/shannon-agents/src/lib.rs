@@ -21,6 +21,7 @@ mod persistence;
 mod agent_defs;
 mod process_manager;
 mod protocol;
+mod remote_tools;
 mod tmux;
 
 pub use coordinator::{AgentCoordinator, CoordinatorConfig, AssignmentStrategy, AgentMode, CoordinatorEvent, AgentInfo, TeamManifest, InboxSummary};
@@ -66,7 +67,7 @@ pub use executor::{
 pub use tmux::TmuxManager;
 pub use process_manager::{
     AgentProcessManager, AgentProcessConfig, AgentProcessStatus,
-    AgentProcessError, AgentEvent,
+    AgentProcessError, AgentEvent, HealthCheckConfig,
 };
 pub use protocol::{
     JsonRpcMessage, JsonRpcId, JsonRpcError,
@@ -75,6 +76,11 @@ pub use protocol::{
     AgentIdleParams, ClaimTaskParams, ClaimTaskResult,
     SendMessageParams, ListTasksParams, ListTasksResult, TaskSummary,
     frame_message, parse_message,
+};
+pub use remote_tools::{
+    CoordinatorChannel,
+    RemoteTeamTaskListTool, RemoteTeamTaskClaimTool,
+    RemoteTeamNotifyIdleTool, RemoteSendMessageTool,
 };
 
 /// Version information for the agents crate

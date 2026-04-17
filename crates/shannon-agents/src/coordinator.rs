@@ -4,6 +4,7 @@ use crate::{
     error::{AgentError, CoordinationError},
     message::{AgentMessage, MessageContent, MessageType, ProtocolMessage},
     persistence::{FilePersistence, InboxMessage, TeamConfigFile},
+    process_manager::{AgentProcessConfig, AgentProcessManager, AgentEvent},
     task::{AgentTask, TaskPriority, TaskStatus},
     teammate::{Teammate, TeammateConfig, TeammateStatus},
     worktree::{WorktreeConfig, WorktreeManager},
@@ -12,6 +13,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use shannon_core::hooks::{HookEvent, HookManager};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock, broadcast, watch};
 use uuid::Uuid;
@@ -164,6 +166,9 @@ pub struct AgentCoordinator {
     delivery_cancel: watch::Sender<bool>,
     /// Optional hook manager for firing team-related hooks
     hook_manager: Option<Arc<HookManager>>,
+    /// Process manager for out-of-process agents (when agent_mode == Process).
+    /// The event receiver is consumed by a background forwarding task.
+    process_manager: Option<AgentProcessManager>,
 }
 
 /// A team of agents working together
@@ -253,9 +258,13 @@ impl AgentCoordinator {
         });
 
         let delegate_mode = config.delegate_mode;
+        let agent_mode = config.agent_mode;
 
         // Cancellation channel for the inbox delivery loop
         let (delivery_cancel, mut delivery_cancel_rx) = watch::channel(false);
+
+        // Clone event_sender before moving into struct (needed for process manager forwarding)
+        let event_sender_for_pm = event_sender.clone();
 
         let mut coordinator = Self {
             config,
@@ -272,10 +281,92 @@ impl AgentCoordinator {
             _delivery_handle: None,
             delivery_cancel,
             hook_manager: None,
+            process_manager: None,
         };
 
         // Start the background inbox delivery loop
         coordinator.start_inbox_delivery_loop(&mut delivery_cancel_rx);
+
+        // If process mode is enabled, create the process manager and event forwarder
+        if agent_mode == AgentMode::Process {
+            let mut pm = AgentProcessManager::new();
+            let event_rx = pm.take_event_receiver();
+
+            // Spawn event forwarding task: translates AgentEvent → CoordinatorEvent
+            tokio::spawn(async move {
+                let mut rx = event_rx;
+                while let Some(agent_event) = rx.recv().await {
+                    let coord_event = match agent_event {
+                        AgentEvent::Ready { agent_name, capabilities: _ } => {
+                            tracing::info!(agent = %agent_name, "Process agent ready");
+                            None
+                        }
+                        AgentEvent::Progress { agent_name, task_id, chunk } => {
+                            Some(CoordinatorEvent::AgentOutput {
+                                team: String::new(), // filled by subscriber
+                                agent: agent_name,
+                                chunk: format!("[{}] {}", task_id, chunk),
+                            })
+                        }
+                        AgentEvent::TaskComplete { agent_name, task_id, success, output } => {
+                            if success {
+                                Some(CoordinatorEvent::TaskCompleted {
+                                    task_id: Uuid::parse_str(&task_id).unwrap_or(Uuid::nil()),
+                                    agent: agent_name,
+                                })
+                            } else {
+                                Some(CoordinatorEvent::TaskFailed {
+                                    task_id: Uuid::parse_str(&task_id).unwrap_or(Uuid::nil()),
+                                    agent: agent_name,
+                                    reason: output,
+                                })
+                            }
+                        }
+                        AgentEvent::Idle { agent_name, available_tasks_count: _ } => {
+                            Some(CoordinatorEvent::StatusChanged {
+                                agent: agent_name,
+                                status: TeammateStatus::Idle,
+                            })
+                        }
+                        AgentEvent::ProcessExited { agent_name, exit_code } => {
+                            tracing::warn!(
+                                agent = %agent_name,
+                                exit_code = ?exit_code,
+                                "Process agent exited"
+                            );
+                            Some(CoordinatorEvent::StatusChanged {
+                                agent: agent_name,
+                                status: TeammateStatus::Stopped,
+                            })
+                        }
+                        AgentEvent::HealthCheckFailed { agent_name, consecutive_failures } => {
+                            tracing::warn!(
+                                agent = %agent_name,
+                                failures = consecutive_failures,
+                                "Process agent health check failed"
+                            );
+                            None
+                        }
+                        AgentEvent::AgentRestarted { agent_name, restart_count } => {
+                            tracing::info!(
+                                agent = %agent_name,
+                                restart_count,
+                                "Process agent restarted"
+                            );
+                            Some(CoordinatorEvent::StatusChanged {
+                                agent: agent_name,
+                                status: TeammateStatus::Idle,
+                            })
+                        }
+                    };
+                    if let Some(event) = coord_event {
+                        let _ = event_sender_for_pm.send(event);
+                    }
+                }
+            });
+
+            coordinator.process_manager = Some(pm);
+        }
 
         Ok(coordinator)
     }
@@ -357,6 +448,10 @@ impl AgentCoordinator {
             None => format!("You are a team agent.{manifest_suffix}"),
         });
 
+        // Clone fields needed for process spawning before config is moved
+        let config_model = config.model.clone();
+        let config_system_prompt = config.system_prompt.clone();
+
         let teammate = Teammate::new(agent_name.clone(), config);
         team.members.insert(agent_name.clone(), teammate);
 
@@ -391,6 +486,55 @@ impl AgentCoordinator {
         }
 
         drop(teams);
+
+        // If in process mode, spawn an OS process for this agent
+        if self.config.agent_mode == AgentMode::Process {
+            if let Some(ref pm) = self.process_manager {
+                // Determine binary path: prefer the current executable (shannon CLI)
+                let binary_path = std::env::current_exe()
+                    .unwrap_or_else(|_| PathBuf::from("shannon"));
+
+                // Get worktree path if isolation is enabled
+                let worktree_path = {
+                    let teams = self.teams.read().await;
+                    match teams.get(team_name).and_then(|t| t.members.get(&agent_name)) {
+                        Some(agent) => agent.get_metadata("worktree_path").await
+                            .and_then(|v| v.as_str().map(|s| s.to_string()))
+                            .map(PathBuf::from),
+                        None => None,
+                    }
+                };
+
+                let process_config = AgentProcessConfig {
+                    binary_path,
+                    args: vec!["--team-agent".to_string()],
+                    env: HashMap::new(),
+                    worktree_path,
+                    model: config_model,
+                    system_prompt: config_system_prompt,
+                    agent_name: agent_name.clone(),
+                    permission_mode: Some("bypassPermissions".to_string()),
+                };
+
+                match pm.spawn_agent(process_config).await {
+                    Ok(_) => {
+                        tracing::info!(
+                            team = %team_name,
+                            agent = %agent_name,
+                            "Spawned process agent"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            team = %team_name,
+                            agent = %agent_name,
+                            error = %e,
+                            "Failed to spawn process agent"
+                        );
+                    }
+                }
+            }
+        }
 
         // Persist updated team config to disk
         self.persist_team(team_name).await;
