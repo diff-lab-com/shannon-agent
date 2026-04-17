@@ -385,6 +385,10 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
             }
             repl.current_turn += 1;
 
+            // Auto-memory: if the assistant response contains memory-worthy
+            // patterns, persist them to the memory store automatically.
+            auto_save_memory(repl, &response);
+
             repl.state.query_steps_done = steps;
             repl.state.query_steps_total = steps;
             repl.state.progress_bar_visible = false;
@@ -441,4 +445,129 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
     repl.state.multi_progress.clear();
 
     Ok(())
+}
+
+/// Auto-save memory: detect memory-worthy patterns in the assistant response
+/// and persist them to the memory store.
+///
+/// This runs after every successful query turn. It scans for explicit memory
+/// signals (e.g. the assistant saying "I'll remember that") and saves the
+/// relevant context. This is a lightweight heuristic — the full LLM-based
+/// `MemoryExtractor` handles deeper extraction when explicitly invoked.
+fn auto_save_memory(repl: &mut Repl, response: &str) {
+    let engine = match repl.query_engine.as_ref() {
+        Some(e) => e,
+        None => return,
+    };
+
+    let memory = match engine.memory() {
+        Some(m) => m,
+        None => return,
+    };
+
+    // Patterns that indicate the assistant is recording a memory
+    let memory_signals = [
+        "i'll remember that",
+        "i'll keep that in mind",
+        "saved to memory",
+        "noted. i'll remember",
+        "saved memory",
+        "i've saved this",
+        "memory saved",
+        "i've noted",
+        "stored in memory",
+        "committing to memory",
+        "i'll make a note of that",
+        "remembering:",
+        "saved:",
+        "i'll remember",
+    ];
+
+    let lower = response.to_lowercase();
+    let has_signal = memory_signals.iter().any(|sig| lower.contains(sig));
+    if !has_signal {
+        return;
+    }
+
+    // Extract the most relevant line(s) from the response
+    let content = extract_memory_content(response);
+    if content.is_empty() {
+        return;
+    }
+
+    let mut store = memory.write().unwrap();
+    let project = repl.state.working_directory.clone();
+
+    use shannon_core::memory::{MemoryEntry, MemoryCategory};
+    let entry = MemoryEntry {
+        id: uuid::Uuid::new_v4().to_string(),
+        content: content.clone(),
+        category: MemoryCategory::Preference,
+        project: project.clone(),
+        tags: vec!["auto-memory".to_string()],
+        confidence: 0.8,
+        created_at: chrono::Utc::now(),
+        accessed_at: chrono::Utc::now(),
+        access_count: 0,
+    };
+
+    let id = entry.id.clone();
+    let _ = store.add(entry);
+    if let Err(e) = store.save() {
+        tracing::debug!("Auto-memory save failed: {e}");
+        return;
+    }
+    drop(store);
+
+    // Also save as file for Claude Code-compatible persistence
+    let project_path = std::path::PathBuf::from(&project);
+    if let Err(e) = shannon_core::project_memory::save_memory_file(
+        &project_path,
+        &id,
+        &content,
+    ) {
+        tracing::debug!("Auto-memory file save skipped: {e}");
+    }
+
+    tracing::debug!("Auto-saved memory: {}...", &id[..8]);
+}
+
+/// Extract the most memory-worthy content from a response.
+/// Takes the sentence(s) around the memory signal.
+fn extract_memory_content(response: &str) -> String {
+    // Find lines that contain substantial content (not just the signal phrase)
+    let lines: Vec<&str> = response.lines().collect();
+    let mut content_lines: Vec<String> = Vec::new();
+
+    for line in &lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // Skip very short lines (likely just the signal phrase)
+        if trimmed.len() < 20 {
+            continue;
+        }
+        // Skip lines that are just formatting
+        if trimmed.starts_with('#') || trimmed.starts_with("---") || trimmed.starts_with("===") {
+            continue;
+        }
+        content_lines.push(trimmed.to_string());
+        // Cap at 5 lines to avoid saving the entire response
+        if content_lines.len() >= 5 {
+            break;
+        }
+    }
+
+    if content_lines.is_empty() {
+        return String::new();
+    }
+
+    let mut content = content_lines.join("\n");
+    // Cap at 500 chars
+    if content.len() > 500 {
+        content.truncate(500);
+        content.push_str("...");
+    }
+    content
 }

@@ -60,7 +60,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
     let is_plugin_command = repl.plugin_manager.get_plugin_commands()
         .iter().any(|c| c.name == cmd_name);
     // Commands handled in the match block but not in the global registry
-    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "route", "mcp", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "rewind", "notify", "create-pr", "patch", "sandbox", "find", "grep", "conv-search", "copy", "paste", "add", "watch", "bind", "project"];
+    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "route", "mcp", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "rewind", "notify", "create-pr", "patch", "sandbox", "find", "grep", "conv-search", "copy", "paste", "add", "watch", "bind", "project", "terminal-setup"];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
     if command_exists || is_plugin_command || is_repl_command {
@@ -85,6 +85,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "select-tools" | "tools" => handle_select_tools(repl)?,
             "debug" | "dbg" | "dev" => handle_debug(repl, args)?,
             "doctor" | "check" | "diagnostics" => handle_doctor(repl, args)?,
+            "terminal-setup" => handle_terminal_setup(repl)?,
             "compact" => handle_compact(repl, args)?,
             "cost" => handle_cost(repl, args)?,
             "permissions" | "perms" | "perm" => handle_permissions(repl, args)?,
@@ -3841,6 +3842,94 @@ fn handle_doctor(repl: &mut Repl, _args: &str) -> Result<()> {
     use shannon_commands::doctor_utils::{run_all_checks, format_doctor_report};
     let results = run_all_checks();
     let report = format_doctor_report(&results);
+    repl.chat.add_message(ChatRole::System, report);
+    Ok(())
+}
+
+/// /terminal-setup — check shell integration, key bindings, PATH, and terminal capabilities.
+fn handle_terminal_setup(repl: &mut Repl) -> Result<()> {
+    let mut report = String::from("Terminal Setup Check\n\n");
+
+    // 1. Shell detection
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string());
+    let shell_name = std::path::Path::new(&shell)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| shell.clone());
+    report.push_str(&format!("Shell: {} ({})\n", shell_name, shell));
+
+    // 2. Terminal type
+    let term = std::env::var("TERM").unwrap_or_else(|_| "not set".to_string());
+    report.push_str(&format!("TERM: {term}\n"));
+
+    // 3. Check if shannon is on PATH
+    let shannon_on_path = std::process::Command::new("which")
+        .arg("shannon")
+        .output()
+        .ok()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    report.push_str(&format!(
+        "shannon on PATH: {}\n",
+        if shannon_on_path { "yes" } else { "no — add shannon to your PATH" }
+    ));
+
+    // 4. Check for common terminal tools
+    for tool in &["git", "gh", "node"] {
+        let found = std::process::Command::new("which")
+            .arg(tool)
+            .output()
+            .ok()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        report.push_str(&format!(
+            "{tool}: {}\n",
+            if found { "found" } else { "not found" }
+        ));
+    }
+
+    // 5. Check shell integration markers
+    // Claude Code uses SHANNON_INTEGRATION_DIR or similar env vars
+    let has_integration = std::env::var("SHANNON_SHELL_INTEGRATION")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+    report.push_str(&format!(
+        "Shell integration: {}\n",
+        if has_integration {
+            "active"
+        } else {
+            "not detected — add `eval \"$(shannon init)\"` to your shell profile for inline diagnostics and key bindings"
+        }
+    ));
+
+    // 6. Check terminal dimensions
+    let (w, h) = crossterm::terminal::size().unwrap_or((0, 0));
+    report.push_str(&format!("Terminal size: {w}x{h}\n"));
+    if w < 80 {
+        report.push_str("  ⚠ Terminal width < 80 columns — UI may be cramped\n");
+    }
+
+    // 7. Color support
+    let colors = std::env::var("COLORTERM").unwrap_or_else(|_| "not set".to_string());
+    report.push_str(&format!("COLORTERM: {colors}\n"));
+
+    // 8. Key binding hint
+    report.push_str("\nKey bindings:\n");
+    report.push_str("  Enter      — submit input\n");
+    report.push_str("  Ctrl+C     — cancel current operation\n");
+    report.push_str("  Ctrl+D     — exit Shannon\n");
+    report.push_str("  Tab        — autocomplete\n");
+    report.push_str("  Up/Down    — navigate history\n");
+    report.push_str("  Escape     — enter/exit vim normal mode\n");
+
+    report.push_str("\nShell profile setup:\n");
+    match shell_name.as_str() {
+        "zsh" => report.push_str("  Add to ~/.zshrc:\n    eval \"$(shannon init zsh)\"\n"),
+        "bash" => report.push_str("  Add to ~/.bashrc:\n    eval \"$(shannon init bash)\"\n"),
+        "fish" => report.push_str("  Add to ~/.config/fish/config.fish:\n    shannon init fish | source\n"),
+        other => report.push_str(&format!("  Unknown shell '{other}'. Add the appropriate init line to your shell profile.\n")),
+    }
+
     repl.chat.add_message(ChatRole::System, report);
     Ok(())
 }

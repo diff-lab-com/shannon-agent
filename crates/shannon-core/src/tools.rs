@@ -10,16 +10,28 @@ pub use shannon_tool_interface::{Tool, ToolError, ToolOutput, ToolResult, ToolIn
 use serde_json::Value;
 use std::collections::HashMap;
 
+/// A cached tool result with creation timestamp for TTL expiry.
+#[derive(Clone)]
+struct CachedToolResult {
+    output: ToolOutput,
+    created_at: std::time::Instant,
+}
+
+/// Default cache TTL in seconds (5 minutes).
+const DEFAULT_CACHE_TTL_SECS: u64 = 300;
+
 /// Registry for managing available tools
 pub struct ToolRegistry {
     tools: HashMap<String, Box<dyn Tool>>,
     /// If set, only these tool names are accessible. Empty = all tools.
     allowed_tools: Option<Vec<String>>,
-    /// Cache for read-only tool results: (tool_name, input_hash) -> output.
+    /// Cache for read-only tool results: (tool_name, input_hash) -> cached output.
     /// Wrapped in Mutex for interior mutability so `execute` can stay `&self`.
-    result_cache: std::sync::Mutex<HashMap<(String, u64), ToolOutput>>,
+    result_cache: std::sync::Mutex<HashMap<(String, u64), CachedToolResult>>,
     /// Maximum number of cached entries (LRU eviction when exceeded)
     max_cache_entries: usize,
+    /// Cache TTL in seconds. Entries older than this are considered stale.
+    cache_ttl_secs: u64,
 }
 
 impl ToolRegistry {
@@ -30,7 +42,18 @@ impl ToolRegistry {
             allowed_tools: None,
             result_cache: std::sync::Mutex::new(HashMap::new()),
             max_cache_entries: 256,
+            cache_ttl_secs: DEFAULT_CACHE_TTL_SECS,
         }
+    }
+
+    /// Set the cache TTL in seconds.
+    pub fn set_cache_ttl(&mut self, ttl_secs: u64) {
+        self.cache_ttl_secs = ttl_secs;
+    }
+
+    /// Set the max cache entries.
+    pub fn set_max_cache_entries(&mut self, max: usize) {
+        self.max_cache_entries = max;
     }
 
     /// Restrict the registry to only allow specific tools.
@@ -103,9 +126,10 @@ impl ToolRegistry {
 
     /// Execute a tool by name (respects the allowed_tools filter).
     ///
-    /// Results from read-only tools are cached in memory. A subsequent call with
-    /// the same tool name and identical input JSON will return the cached result
-    /// without re-executing the tool.
+    /// Results from read-only tools are cached in memory with a TTL.
+    /// A subsequent call with the same tool name and identical input JSON
+    /// will return the cached result without re-executing the tool,
+    /// as long as the entry has not expired.
     pub async fn execute(&self, name: &str, input: Value) -> ToolResult<ToolOutput> {
         let tool = self
             .get(name)
@@ -120,11 +144,16 @@ impl ToolRegistry {
             None
         };
 
-        // Check cache for read-only tools
+        // Check cache for read-only tools (with TTL expiry)
         if let Some(hash) = input_hash {
             let cache_key = (name.to_string(), hash);
             if let Some(cached) = self.result_cache.lock().unwrap().get(&cache_key).cloned() {
-                return Ok(cached);
+                let elapsed = cached.created_at.elapsed().as_secs();
+                if elapsed < self.cache_ttl_secs {
+                    return Ok(cached.output);
+                }
+                // Entry expired — remove it
+                self.result_cache.lock().unwrap().remove(&cache_key);
             }
         }
 
@@ -144,7 +173,10 @@ impl ToolRegistry {
                         }
                     }
 
-                    cache.insert(cache_key, output.clone());
+                    cache.insert(cache_key, CachedToolResult {
+                        output: output.clone(),
+                        created_at: std::time::Instant::now(),
+                    });
                 }
             }
         }
@@ -165,9 +197,23 @@ impl ToolRegistry {
         self.result_cache.lock().unwrap().clear();
     }
 
-    /// Get the number of cached results.
+    /// Get the number of cached results (including potentially expired ones).
     pub fn cache_size(&self) -> usize {
         self.result_cache.lock().unwrap().len()
+    }
+
+    /// Invalidate cache entries that were created before the given instant.
+    /// Useful for clearing stale entries after file changes.
+    pub fn invalidate_older_than(&self, cutoff: std::time::Instant) {
+        let mut cache = self.result_cache.lock().unwrap();
+        cache.retain(|_, entry| entry.created_at > cutoff);
+    }
+
+    /// Evict all expired entries from the cache.
+    pub fn evict_expired(&self) {
+        let ttl = self.cache_ttl_secs;
+        let mut cache = self.result_cache.lock().unwrap();
+        cache.retain(|_, entry| entry.created_at.elapsed().as_secs() < ttl);
     }
 
     /// Check whether a registered tool is read-only.

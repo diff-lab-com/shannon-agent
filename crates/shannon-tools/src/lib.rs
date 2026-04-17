@@ -53,6 +53,7 @@ pub mod team_delete;
 pub mod synthetic_output;
 pub mod repl_tool;
 pub mod mcp_auth;
+pub mod schedule_wakeup;
 
 // Re-exports for convenience
 pub use file::{ReadTool, WriteTool, EditTool, GlobTool, FileOperation};
@@ -76,6 +77,7 @@ pub use todo::{
 };
 pub use skill::{SkillTool, SkillInvokeInput, SkillInvokeOutput};
 pub use cron::{CronTool, CronCreateInput, CronCreateOutput, CronDeleteInput, CronDeleteOutput, CronListInput, CronListOutput};
+pub use schedule_wakeup::{ScheduleWakeupTool, WakeupRequest, ScheduleWakeupInput, AUTONOMOUS_LOOP_SENTINEL};
 pub use plan_mode::{PlanModeState, EnterPlanModeTool, ExitPlanModeTool, new_plan_mode_state, is_plan_mode_active};
 pub use lsp::{
     GoToDefinitionTool, FindReferencesTool, HoverTool, DocumentSymbolTool,
@@ -212,6 +214,9 @@ pub fn register_default_tools(registry: &mut ToolRegistry) -> Result<std::sync::
 
     // ── Cron ───────────────────────────────────────────────────────────
     registry.register(Box::new(CronTool::new()))?;
+
+    // ── ScheduleWakeup (/loop dynamic pacing) ──────────────────────────
+    registry.register(Box::new(ScheduleWakeupTool::new()))?;
 
     // ── Config ─────────────────────────────────────────────────────────
     registry.register(Box::new(ConfigTool::new()))?;
