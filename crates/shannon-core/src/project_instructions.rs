@@ -186,6 +186,119 @@ pub fn load_full_context(dir: &Path) -> Option<ProjectInstructions> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// InstructionWatcher — lightweight mtime-based hot-reload
+// ---------------------------------------------------------------------------
+
+/// Tracks modification times of project instruction files and detects changes.
+///
+/// Uses a simple mtime comparison — no external file-watching dependencies needed.
+/// Call `check_and_reload()` before each query to detect changes and get updated
+/// instructions.
+#[derive(Debug)]
+pub struct InstructionWatcher {
+    /// The root directory to watch (project working directory).
+    watch_dir: PathBuf,
+    /// Map of file path → last known modification time.
+    mtimes: std::collections::HashMap<PathBuf, std::time::SystemTime>,
+    /// Cached combined instruction content (for when nothing changed).
+    cached_content: Option<String>,
+}
+
+impl InstructionWatcher {
+    /// Create a new watcher for the given working directory.
+    pub fn new(watch_dir: PathBuf) -> Self {
+        let mut watcher = Self {
+            watch_dir,
+            mtimes: std::collections::HashMap::new(),
+            cached_content: None,
+        };
+        // Initial scan
+        let _ = watcher.scan_mtimes();
+        watcher
+    }
+
+    /// Scan all instruction files and record their mtimes.
+    fn scan_mtimes(&mut self) -> std::collections::HashMap<PathBuf, std::time::SystemTime> {
+        let mut current_mtimes = std::collections::HashMap::new();
+
+        // Check home-level instructions
+        if let Some(home) = dirs::home_dir() {
+            for filename in INSTRUCTION_FILES {
+                let path = home.join(".claude").join(filename);
+                if path.is_file() {
+                    if let Ok(meta) = std::fs::metadata(&path) {
+                        if let Ok(mtime) = meta.modified() {
+                            current_mtimes.insert(path, mtime);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Walk up from watch_dir to root
+        let mut current = Some(self.watch_dir.clone());
+        while let Some(path) = current.take() {
+            for filename in INSTRUCTION_FILES {
+                let candidate = path.join(filename);
+                if candidate.is_file() {
+                    if let Ok(meta) = std::fs::metadata(&candidate) {
+                        if let Ok(mtime) = meta.modified() {
+                            current_mtimes.insert(candidate, mtime);
+                        }
+                    }
+                }
+            }
+            current = path.parent().map(|p| p.to_path_buf());
+        }
+
+        current_mtimes
+    }
+
+    /// Check if any instruction files have changed since the last check.
+    ///
+    /// Returns `Some((changed_files, new_content))` if files changed, `None` if unchanged.
+    pub fn check_and_reload(&mut self) -> Option<(Vec<String>, String)> {
+        let new_mtimes = self.scan_mtimes();
+
+        // Check if mtimes changed or files added/removed
+        let changed = new_mtimes.len() != self.mtimes.len()
+            || new_mtimes.iter().any(|(path, mtime)| {
+                self.mtimes.get(&*path).map_or(true, |old| old != mtime)
+            });
+
+        if !changed {
+            return None;
+        }
+
+        // Reload instructions
+        let changed_paths: Vec<String> = new_mtimes
+            .keys()
+            .filter(|p| {
+                self.mtimes.get(&**p).map_or(true, |old| {
+                    new_mtimes.get(&**p).map_or(false, |cur| cur != old)
+                })
+            })
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+
+        self.mtimes = new_mtimes;
+
+        let new_content = match load_full_context(&self.watch_dir) {
+            Some(instr) => instr.content,
+            None => String::new(),
+        };
+
+        self.cached_content = Some(new_content.clone());
+        Some((changed_paths, new_content))
+    }
+
+    /// Get the cached instruction content (reload first if needed).
+    pub fn cached_instructions(&self) -> Option<&str> {
+        self.cached_content.as_deref()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

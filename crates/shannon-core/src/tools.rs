@@ -15,6 +15,11 @@ pub struct ToolRegistry {
     tools: HashMap<String, Box<dyn Tool>>,
     /// If set, only these tool names are accessible. Empty = all tools.
     allowed_tools: Option<Vec<String>>,
+    /// Cache for read-only tool results: (tool_name, input_hash) -> output.
+    /// Wrapped in Mutex for interior mutability so `execute` can stay `&self`.
+    result_cache: std::sync::Mutex<HashMap<(String, u64), ToolOutput>>,
+    /// Maximum number of cached entries (LRU eviction when exceeded)
+    max_cache_entries: usize,
 }
 
 impl ToolRegistry {
@@ -23,6 +28,8 @@ impl ToolRegistry {
         Self {
             tools: HashMap::new(),
             allowed_tools: None,
+            result_cache: std::sync::Mutex::new(HashMap::new()),
+            max_cache_entries: 256,
         }
     }
 
@@ -94,12 +101,73 @@ impl ToolRegistry {
             .collect()
     }
 
-    /// Execute a tool by name (respects the allowed_tools filter)
+    /// Execute a tool by name (respects the allowed_tools filter).
+    ///
+    /// Results from read-only tools are cached in memory. A subsequent call with
+    /// the same tool name and identical input JSON will return the cached result
+    /// without re-executing the tool.
     pub async fn execute(&self, name: &str, input: Value) -> ToolResult<ToolOutput> {
         let tool = self
             .get(name)
             .ok_or_else(|| ToolError::NotFound(name.to_string()))?;
-        tool.execute(input).await
+
+        let is_read_only = tool.is_read_only();
+
+        // Compute hash before moving input into the tool
+        let input_hash = if is_read_only {
+            Some(Self::hash_input(&input))
+        } else {
+            None
+        };
+
+        // Check cache for read-only tools
+        if let Some(hash) = input_hash {
+            let cache_key = (name.to_string(), hash);
+            if let Some(cached) = self.result_cache.lock().unwrap().get(&cache_key).cloned() {
+                return Ok(cached);
+            }
+        }
+
+        let result = tool.execute(input).await;
+
+        // Cache successful results from read-only tools
+        if let Some(hash) = input_hash {
+            if let Ok(ref output) = result {
+                if !output.is_error {
+                    let cache_key = (name.to_string(), hash);
+                    let mut cache = self.result_cache.lock().unwrap();
+
+                    // Evict oldest entries if cache is full
+                    if cache.len() >= self.max_cache_entries {
+                        if let Some(key) = cache.keys().next().cloned() {
+                            cache.remove(&key);
+                        }
+                    }
+
+                    cache.insert(cache_key, output.clone());
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Hash tool input for cache key generation.
+    fn hash_input(input: &Value) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        input.to_string().hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Clear the tool result cache.
+    pub fn clear_cache(&self) {
+        self.result_cache.lock().unwrap().clear();
+    }
+
+    /// Get the number of cached results.
+    pub fn cache_size(&self) -> usize {
+        self.result_cache.lock().unwrap().len()
     }
 
     /// Check whether a registered tool is read-only.

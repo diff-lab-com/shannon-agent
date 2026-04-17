@@ -610,7 +610,7 @@ impl QueryEngine {
                                 message: "Compaction skipped (too many failures), truncating old messages".to_string(),
                             }));
                         } else {
-                            match crate::compact::CompactEngine::with_defaults() {
+                            match crate::compact::CompactEngine::with_ai_summarizer(client.clone()) {
                                 Ok(mut compact_engine) => {
                                     // Build re-injection context from system prompt
                                     let reinjection = system_prompt.as_deref().map(|sp| {
@@ -1342,13 +1342,17 @@ impl QueryEngine {
         Box::pin(stream)
     }
 
-    /// Get current conversation statistics
+    /// Get current conversation statistics.
+    ///
+    /// Token counts and cost are sourced from the cost tracker, which accumulates
+    /// actual API-reported usage (not estimates).
     pub fn conversation_stats(&self) -> ConversationStats {
+        let tracker = self.cost_tracker.read().expect("cost_tracker rwlock poisoned");
         ConversationStats {
             message_count: self.conversation.messages.len(),
             turn_count: self.conversation.turn_count,
-            total_tokens: self.conversation.total_tokens,
-            total_cost: self.conversation.total_cost,
+            total_tokens: tracker.total_input_tokens + tracker.total_output_tokens,
+            total_cost: tracker.total_cost_usd,
         }
     }
 
@@ -1368,6 +1372,15 @@ impl QueryEngine {
     /// Get a reference to the permission manager for reading/adjusting permissions.
     pub fn permissions(&self) -> &Arc<RwLock<PermissionManager>> {
         &self.permissions
+    }
+
+    /// Update conversation state with actual API-reported token usage.
+    ///
+    /// Called after each streaming response to keep `conversation.total_tokens`
+    /// and `conversation.total_cost` in sync with the cost tracker.
+    pub fn update_usage(&mut self, input_tokens: u64, output_tokens: u64, cost_usd: f64) {
+        self.conversation.total_tokens = input_tokens + output_tokens;
+        self.conversation.total_cost = cost_usd;
     }
 }
 

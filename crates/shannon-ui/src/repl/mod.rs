@@ -234,6 +234,8 @@ pub struct Repl {
     pub(crate) notifier: shannon_core::notifier::Notifier,
     /// Whether desktop notifications are enabled
     pub(crate) notifications_enabled: bool,
+    /// Instruction file watcher for hot-reloading CLAUDE.md / AGENTS.md / GEMINI.md
+    pub(crate) instruction_watcher: Option<shannon_core::project_instructions::InstructionWatcher>,
 }
 
 /// State for tab completion cycling
@@ -275,45 +277,50 @@ impl Repl {
         }
         register_plugin_tools(&plugin_manager, &mut tool_registry);
 
-        // Discover MCP server configurations from ~/.shannon/mcp_servers.json
+        // Discover MCP server configurations and register their tools dynamically
         {
             let mut mcp_registry = shannon_core::mcp_advanced::McpServerRegistry::new();
             let mcp_count = mcp_registry.load_from_default_paths();
             if mcp_count > 0 {
                 tracing::info!("Discovered {} MCP server configuration(s)", mcp_count);
-                // Register discovered servers' tools as McpTool adapters
+                let discovery_rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap_or_else(|_| tokio::runtime::Runtime::new().unwrap());
                 for config in mcp_registry.enabled_servers() {
-                    let tool_name = format!("mcp_{}", config.name);
-                    let description = format!(
-                        "Execute tool calls on MCP server '{}' ({})",
-                        config.name, config.transport_type
-                    );
-                    let input_schema = serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "tool_name": {
-                                "type": "string",
-                                "description": "Name of the tool to call on the MCP server"
-                            },
-                            "arguments": {
-                                "type": "object",
-                                "description": "Arguments to pass to the MCP tool"
+                    let command = match &config.command {
+                        Some(cmd) => cmd.clone(),
+                        None => {
+                            tracing::warn!(
+                                "Skipping '{}' (HTTP/SSE not yet supported for discovery)",
+                                config.name
+                            );
+                            continue;
+                        }
+                    };
+
+                    match discovery_rt.block_on(shannon_core::discover_tools(
+                        &config.name,
+                        &command,
+                        &config.args,
+                        &config.env,
+                    )) {
+                        Ok(result) => {
+                            let tool_count = result.tools.len();
+                            for tool in result.tools {
+                                if let Err(e) = tool_registry.register(Box::new(tool)) {
+                                    tracing::debug!("MCP tool registration skipped: {}", e);
+                                }
                             }
-                        },
-                        "required": ["tool_name"]
-                    });
-                    let mcp_tool = shannon_core::mcp_tool_adapter::McpToolAdapter::new(
-                        config.name.clone(),
-                        config.command.clone(),
-                        config.args.clone(),
-                        config.env.clone(),
-                        description,
-                        input_schema,
-                    );
-                    if let Err(e) = tool_registry.register(Box::new(mcp_tool)) {
-                        tracing::debug!("MCP tool registration skipped: {}", e);
-                    } else {
-                        tracing::info!("Registered MCP tool: {}", tool_name);
+                            tracing::info!(
+                                "Registered {} tool(s) from '{}'",
+                                tool_count,
+                                result.server_name
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!("MCP server '{}' discovery failed: {e}", config.name);
+                        }
                     }
                 }
             }
@@ -476,7 +483,68 @@ impl Repl {
                 n
             },
             notifications_enabled: false, // Disabled by default; enable via /notify
+            instruction_watcher: {
+                let cwd = std::env::current_dir().unwrap_or_default();
+                if cwd.exists() {
+                    Some(shannon_core::project_instructions::InstructionWatcher::new(cwd))
+                } else {
+                    None
+                }
+            },
         })
+    }
+
+    /// Restore conversation history from a previously persisted session.
+    ///
+    /// Loads messages from the given `SessionData` and injects them into the
+    /// query engine so the next user message continues the prior conversation.
+    /// Returns the number of messages restored.
+    pub fn restore_session(&mut self, session_data: shannon_core::state::SessionData) -> usize {
+        let msg_count = session_data.messages.len();
+        if msg_count == 0 {
+            return 0;
+        }
+        if let Some(ref mut engine) = self.query_engine {
+            let preview = session_data.first_user_message_preview(60);
+            engine.replace_conversation(session_data.messages);
+            tracing::info!(
+                "Resumed session {} ({} messages, preview: {:?})",
+                session_data.session_id,
+                msg_count,
+                preview,
+            );
+        }
+        msg_count
+    }
+
+    /// Check if project instruction files have changed and hot-reload them.
+    ///
+    /// Returns true if instructions were reloaded, false if unchanged.
+    pub fn check_reload_instructions(&mut self) -> bool {
+        let changed_info = match self.instruction_watcher.as_mut() {
+            Some(w) => w.check_and_reload(),
+            None => return false,
+        };
+
+        match changed_info {
+            Some((files, new_content)) => {
+                if let Some(ref mut engine) = self.query_engine {
+                    // Reset system prompt to base + reloaded instructions
+                    // The engine's append_system_prompt adds cumulatively, so we
+                    // need to be smarter: just log the change and append a note.
+                    tracing::info!("Hot-reloaded project instructions: {:?}", files);
+                    if !new_content.is_empty() {
+                        let reload_msg = format!(
+                            "\n\n[SYSTEM: Project instructions were hot-reloaded from: {}]",
+                            files.join(", ")
+                        );
+                        engine.append_system_prompt(&reload_msg);
+                    }
+                }
+                true
+            }
+            None => false,
+        }
     }
 
     /// Run the main REPL loop

@@ -19,6 +19,20 @@ pub enum PermissionError {
     NotFound(String),
 }
 
+/// Returns true if the tool name corresponds to a read-only operation (no side effects).
+/// Used by both `Readonly` mode enforcement and `Suggest` mode auto-approval.
+fn is_read_only_tool_name(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "read" | "read_file" | "search" | "grep" | "glob"
+            | "list_directory" | "list_dir" | "ls" | "file_tree" | "file_info"
+            | "git_log" | "git_diff" | "git_status" | "git_branch_show"
+            | "web_search" | "web_fetch"
+            | "lsp_hover" | "lsp_definition" | "lsp_references" | "lsp_diagnostics"
+            | "lsp_document_symbols" | "lsp_workspace_symbols"
+    )
+}
+
 /// Risk level of a tool operation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum RiskLevel {
@@ -119,7 +133,7 @@ impl ApprovalMode {
     /// Description of this mode for help text.
     pub fn description(&self) -> &'static str {
         match self {
-            Self::Suggest => "Ask for confirmation on every tool call",
+            Self::Suggest => "Auto-approve read-only tools; ask for write/bash operations",
             Self::Plan => "Plan first, then auto-approve within the approved plan",
             Self::AutoEdit => "Auto-approve file edits; ask for bash/other risky tools",
             Self::FullAuto => "Auto-approve everything except critical operations",
@@ -132,7 +146,11 @@ impl ApprovalMode {
     /// Whether a tool should be auto-approved under this mode.
     pub fn should_auto_approve(&self, tool_name: &str, risk_level: RiskLevel) -> bool {
         match self {
-            Self::Suggest | Self::Plan => false,
+            Self::Suggest => {
+                // Auto-approve read-only tools at Low/Safe risk (matching Claude Code behavior)
+                is_read_only_tool_name(tool_name) && risk_level <= RiskLevel::Low
+            }
+            Self::Plan => false,
             Self::AutoEdit => {
                 // Auto-approve file operations; ask for everything else
                 let is_file_tool = matches!(
@@ -824,14 +842,7 @@ impl PermissionManager {
             }
             ApprovalMode::Readonly => {
                 // Only allow read-only tools
-                let is_read_tool = matches!(
-                    tool_name,
-                    "read" | "search" | "grep" | "glob" | "list_directory"
-                        | "file_info" | "git_log" | "git_diff" | "git_status"
-                        | "web_search" | "web_fetch" | "lsp_hover" | "lsp_definition"
-                        | "lsp_references" | "lsp_diagnostics"
-                );
-                if is_read_tool {
+                if is_read_only_tool_name(tool_name) {
                     return Ok(None);
                 }
                 return Err(PermissionError::Denied(format!(
@@ -850,8 +861,13 @@ impl PermissionManager {
                 // Fall through to classifier for risk level and prompt creation
             }
             ApprovalMode::Suggest => {
-                // Always prompt unless always-allowed in memory
+                // Always-allowed in memory → auto-approve
                 if self.memory.is_always_allowed(session_id, tool_name) {
+                    return Ok(None);
+                }
+                // Auto-approve read-only tools (matching Claude Code behavior:
+                // Read, Glob, Grep, etc. don't need confirmation)
+                if is_read_only_tool_name(tool_name) {
                     return Ok(None);
                 }
                 // Fall through to classifier for risk level and prompt creation
@@ -1538,8 +1554,15 @@ mod tests {
     #[test]
     fn test_approval_mode_auto_approve_suggest() {
         let mode = ApprovalMode::Suggest;
+        // Read-only tools at Low risk should be auto-approved
+        assert!(mode.should_auto_approve("read", RiskLevel::Low));
+        assert!(mode.should_auto_approve("glob", RiskLevel::Low));
+        assert!(mode.should_auto_approve("grep", RiskLevel::Safe));
+        assert!(mode.should_auto_approve("search", RiskLevel::Low));
+        // Write/bash tools should NOT be auto-approved
         assert!(!mode.should_auto_approve("edit", RiskLevel::Low));
         assert!(!mode.should_auto_approve("bash", RiskLevel::Low));
+        assert!(!mode.should_auto_approve("write", RiskLevel::Medium));
     }
 
     #[test]

@@ -113,7 +113,7 @@ pub use settings::{Settings, SettingsManager, SettingsError};
 pub use hooks::{HookManager, HookEvent, HookResult, HookDecision, HookEventType, HookError};
 pub use plugins::{PluginManager, PluginManifest, PluginState, PluginError, Plugin, PluginStateFile};
 pub use plugin_tool::{PluginTool, register_plugin_tools};
-pub use mcp_tool_adapter::McpToolAdapter;
+pub use mcp_tool_adapter::{McpToolAdapter, discover_tools};
 pub use updater::{AutoUpdater, UpdateStatus, UpdaterConfig, ReleaseInfo, UpdateError};
 pub use memory::{
     MemoryStore, MemoryEntry, MemoryCategory, AutoDreamService, MemoryError,
@@ -188,7 +188,7 @@ pub use session_history::{
 };
 pub use streaming_tool_executor::{StreamingToolExecutor, TrackedTool, ToolStatus};
 pub use tool_execution::{ToolExecutionService, ToolExecutionResult, ToolProgress, ToolProgressStatus};
-pub use compact::{CompactEngine, CompactConfig, CompactResult, CompactStrategy, MessageGroup, CompactError};
+pub use compact::{CompactEngine, CompactConfig, CompactResult, CompactStrategy, MessageGroup, CompactError, AiSummarizer, RuleBasedSummarizer, Summarizer};
 pub use tool_hooks::{
     ToolHookChain, ToolHook, ToolHookResult, ToolHookDecision, ToolHookContext,
     ToolHookError, PermissionToolHook, LoggingToolHook, StopOnDenyHook,

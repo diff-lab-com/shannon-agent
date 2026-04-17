@@ -1,7 +1,7 @@
 //! Integration tests for MCP tool adapter.
 //!
 //! Tests:
-//! - McpToolAdapter construction and property access
+//! - McpToolAdapter construction and property access (per-tool naming)
 //! - Input schema validation
 //! - Tool trait method signatures
 //! - Registration into ToolRegistry
@@ -15,6 +15,7 @@ use shannon_core::Tool;
 fn test_mcp_adapter_construction() {
     let adapter = shannon_core::mcp_tool_adapter::McpToolAdapter::new(
         "test-server".to_string(),
+        "fetch".to_string(),
         Some("node".to_string()),
         vec!["server.js".to_string()],
         std::collections::HashMap::new(),
@@ -22,7 +23,7 @@ fn test_mcp_adapter_construction() {
         json!({"type": "object", "properties": {"query": {"type": "string"}}}),
     );
 
-    assert_eq!(adapter.name(), "mcp__test-server");
+    assert_eq!(adapter.name(), "mcp__test-server__fetch");
     assert_eq!(adapter.description(), "Test MCP tool");
     assert_eq!(
         adapter.input_schema()["type"],
@@ -39,6 +40,7 @@ fn test_mcp_adapter_with_env() {
 
     let adapter = shannon_core::mcp_tool_adapter::McpToolAdapter::new(
         "env-server".to_string(),
+        "search".to_string(),
         Some("python".to_string()),
         vec!["-m".to_string(), "mcp_server".to_string()],
         env,
@@ -46,7 +48,7 @@ fn test_mcp_adapter_with_env() {
         json!({"type": "object"}),
     );
 
-    assert_eq!(adapter.name(), "mcp__env-server");
+    assert_eq!(adapter.name(), "mcp__env-server__search");
 }
 
 /// Test: McpToolAdapter can be registered in ToolRegistry.
@@ -56,6 +58,7 @@ fn test_mcp_adapter_registration_in_tool_registry() {
 
     let adapter = shannon_core::mcp_tool_adapter::McpToolAdapter::new(
         "my-server".to_string(),
+        "echo".to_string(),
         Some("echo".to_string()),
         vec![],
         std::collections::HashMap::new(),
@@ -66,33 +69,35 @@ fn test_mcp_adapter_registration_in_tool_registry() {
     let result = registry.register(Box::new(adapter));
     assert!(result.is_ok());
 
-    // Verify the tool is registered
+    // Verify the tool is registered with per-tool naming
     let tools = registry.list_tools_info();
-    assert!(tools.iter().any(|t| t.name == "mcp__my-server"), "Tool should be registered as 'mcp_my-server'");
+    assert!(tools.iter().any(|t| t.name == "mcp__my-server__echo"), "Tool should be registered as 'mcp__my-server__echo'");
 }
 
-/// Test: Multiple MCP adapters can be registered.
+/// Test: Multiple MCP adapters from same server can be registered.
 #[test]
 fn test_multiple_mcp_adapters_registration() {
     let mut registry = ToolRegistry::new();
 
-    for i in 0..3 {
+    // Register multiple tools from the same MCP server
+    for tool_name in &["read", "write", "search"] {
         let adapter = shannon_core::mcp_tool_adapter::McpToolAdapter::new(
-            format!("server-{i}"),
+            "my-server".to_string(),
+            tool_name.to_string(),
             Some("test-cmd".to_string()),
             vec![],
             std::collections::HashMap::new(),
-            format!("Server {i}"),
+            format!("Tool {tool_name}"),
             json!({"type": "object"}),
         );
         let result = registry.register(Box::new(adapter));
-        assert!(result.is_ok(), "Registration of server-{i} should succeed");
+        assert!(result.is_ok(), "Registration of {tool_name} should succeed");
     }
 
     let tools = registry.list_tools_info();
-    assert!(tools.iter().any(|t| t.name == "mcp__server-0"));
-    assert!(tools.iter().any(|t| t.name == "mcp__server-1"));
-    assert!(tools.iter().any(|t| t.name == "mcp__server-2"));
+    assert!(tools.iter().any(|t| t.name == "mcp__my-server__read"));
+    assert!(tools.iter().any(|t| t.name == "mcp__my-server__write"));
+    assert!(tools.iter().any(|t| t.name == "mcp__my-server__search"));
 }
 
 /// Test: McpToolAdapter input_schema returns valid JSON Schema.
@@ -101,20 +106,17 @@ fn test_mcp_adapter_input_schema_structure() {
     let schema = json!({
         "type": "object",
         "properties": {
-            "tool_name": {
+            "url": {
                 "type": "string",
-                "description": "Name of the tool to call"
-            },
-            "arguments": {
-                "type": "object",
-                "description": "Arguments to pass"
+                "description": "URL to fetch"
             }
         },
-        "required": ["tool_name"]
+        "required": ["url"]
     });
 
     let adapter = shannon_core::mcp_tool_adapter::McpToolAdapter::new(
         "schema-test".to_string(),
+        "fetch".to_string(),
         Some("cmd".to_string()),
         vec![],
         std::collections::HashMap::new(),
@@ -124,8 +126,8 @@ fn test_mcp_adapter_input_schema_structure() {
 
     let returned_schema = adapter.input_schema();
     assert_eq!(returned_schema["type"], json!("object"));
-    assert_eq!(returned_schema["required"], json!(["tool_name"]));
-    assert!(returned_schema["properties"]["tool_name"].is_object());
+    assert_eq!(returned_schema["required"], json!(["url"]));
+    assert!(returned_schema["properties"]["url"].is_object());
 }
 
 /// Test: McpToolAdapter with complex command-line arguments.
@@ -133,6 +135,7 @@ fn test_mcp_adapter_input_schema_structure() {
 fn test_mcp_adapter_with_complex_args() {
     let adapter = shannon_core::mcp_tool_adapter::McpToolAdapter::new(
         "complex".to_string(),
+        "list_files".to_string(),
         Some("npx".to_string()),
         vec![
             "-y".to_string(),
@@ -144,7 +147,7 @@ fn test_mcp_adapter_with_complex_args() {
         json!({"type": "object"}),
     );
 
-    assert_eq!(adapter.name(), "mcp__complex");
+    assert_eq!(adapter.name(), "mcp__complex__list_files");
     assert_eq!(adapter.description(), "Filesystem server");
 }
 
@@ -153,6 +156,7 @@ fn test_mcp_adapter_with_complex_args() {
 fn test_mcp_adapter_no_command() {
     let adapter = shannon_core::mcp_tool_adapter::McpToolAdapter::new(
         "no-cmd".to_string(),
+        "tool".to_string(),
         None,
         vec![],
         std::collections::HashMap::new(),
@@ -160,15 +164,16 @@ fn test_mcp_adapter_no_command() {
         json!({"type": "object"}),
     );
 
-    assert_eq!(adapter.name(), "mcp__no-cmd");
+    assert_eq!(adapter.name(), "mcp__no-cmd__tool");
     assert_eq!(adapter.description(), "No command server");
 }
 
-/// Test: McpToolAdapter name follows mcp_{server_name} convention.
+/// Test: McpToolAdapter name follows mcp__{server}__{tool} convention.
 #[test]
 fn test_mcp_adapter_naming_convention() {
     let adapter = shannon_core::mcp_tool_adapter::McpToolAdapter::new(
         "my-filesystem-server".to_string(),
+        "read_file".to_string(),
         Some("node".to_string()),
         vec![],
         std::collections::HashMap::new(),
@@ -177,7 +182,7 @@ fn test_mcp_adapter_naming_convention() {
     );
 
     assert!(adapter.name().starts_with("mcp__"));
-    assert_eq!(adapter.name(), "mcp__my-filesystem-server");
+    assert_eq!(adapter.name(), "mcp__my-filesystem-server__read_file");
 }
 
 /// Test: McpToolAdapter with empty args and empty env.
@@ -185,6 +190,7 @@ fn test_mcp_adapter_naming_convention() {
 fn test_mcp_adapter_minimal() {
     let adapter = shannon_core::mcp_tool_adapter::McpToolAdapter::new(
         "minimal".to_string(),
+        "ping".to_string(),
         Some("echo".to_string()),
         vec![],
         std::collections::HashMap::new(),
@@ -192,7 +198,7 @@ fn test_mcp_adapter_minimal() {
         json!({"type": "object"}),
     );
 
-    assert_eq!(adapter.name(), "mcp__minimal");
+    assert_eq!(adapter.name(), "mcp__minimal__ping");
     let schema = adapter.input_schema();
     assert_eq!(schema["type"], json!("object"));
 }

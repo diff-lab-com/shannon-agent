@@ -1260,6 +1260,13 @@ pub struct AutoCommitInput {
     /// If true, stage all tracked changes (`git add -u`). Default: true.
     #[serde(default = "default_true")]
     pub add_all: bool,
+    /// Specific files to stage (relative paths). Mutually exclusive with add_all=true
+    /// — if both are set, specific files take priority.
+    #[serde(default)]
+    pub files: Vec<String>,
+    /// Optional co-author trailer, e.g. "Claude <noreply@anthropic.com>"
+    #[serde(default)]
+    pub co_author: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -1287,8 +1294,9 @@ impl Default for AutoCommitTool {
 impl AutoCommitTool {
     pub fn new() -> Self {
         Self {
-            description: "Auto-commit all current changes with a generated or provided commit message. \
-                Stages modified files, creates a commit, and returns the result."
+            description: "Smart git commit tool. Stages changes (all or specific files), generates \
+                semantic commit messages from diffs, and creates commits. Supports dry-run preview \
+                and co-author trailers. Shows git status and diff stats before committing."
                 .to_string(),
         }
     }
@@ -1328,12 +1336,55 @@ impl AutoCommitTool {
             .filter_map(|l| l.split_whitespace().next())
             .collect();
 
+        // Detect semantic commit type from file paths
+        let commit_type = Self::detect_commit_type(&files);
+
         if files.len() <= 3 {
             let file_list = files.join(", ");
-            format!("chore: update {file_list}")
+            format!("{commit_type}: update {file_list}")
         } else {
-            format!("chore: update {file_count} files ({summary_line})")
+            format!("{commit_type}: update {file_count} files ({summary_line})")
         }
+    }
+
+    /// Detect semantic commit type from the list of changed file paths.
+    fn detect_commit_type(files: &[&str]) -> &'static str {
+        let all_test = files.iter().all(|f| {
+            f.contains("/tests/") || f.contains("/test/") || f.starts_with("test") || f.contains("_test.") || f.contains(".test.")
+        });
+        if all_test && !files.is_empty() {
+            return "test";
+        }
+
+        let all_docs = files.iter().all(|f| {
+            f.ends_with(".md") || f.ends_with(".txt") || f.ends_with(".rst") || f.starts_with("docs/")
+        });
+        if all_docs && !files.is_empty() {
+            return "docs";
+        }
+
+        let any_style = files.iter().any(|f| {
+            f.ends_with(".css") || f.ends_with(".scss") || f.ends_with(".less") || f.contains("lint") || f.contains("fmt") || f.contains("clippy")
+        });
+        if any_style {
+            return "style";
+        }
+
+        let any_ci = files.iter().any(|f| {
+            f.starts_with(".github/") || f.contains("ci") || f.ends_with("Dockerfile") || f.ends_with(".yml") || f.ends_with(".yaml") || f.ends_with(".toml")
+        });
+        if any_ci {
+            return "ci";
+        }
+
+        let any_feat = files.iter().any(|f| {
+            f.contains("/src/") || f.contains("/lib/") || f.contains("/commands/") || f.contains("/tools/")
+        });
+        if any_feat {
+            return "feat";
+        }
+
+        "chore"
     }
 }
 
@@ -1364,6 +1415,15 @@ impl Tool for AutoCommitTool {
                     "type": "boolean",
                     "description": "Stage all tracked changes before committing.",
                     "default": true
+                },
+                "files": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Specific files to stage (relative paths). Overrides add_all if non-empty."
+                },
+                "co_author": {
+                    "type": "string",
+                    "description": "Optional co-author trailer, e.g. 'Claude <noreply@anthropic.com>'"
                 }
             }
         })
@@ -1378,8 +1438,16 @@ impl Tool for AutoCommitTool {
         // Check if we're in a git repo
         let _git_root = find_git_root(cwd)?;
 
-        // Check if working directory is dirty
-        if !is_working_dir_dirty(cwd)? {
+        // Gather current status
+        let (status_out, _, status_ok) = run_git(&["status", "--porcelain"], cwd)?;
+        if !status_ok {
+            return Ok(ToolOutput {
+                content: "Failed to check git status.".to_string(),
+                is_error: true,
+                metadata: HashMap::new(),
+            });
+        }
+        if status_out.trim().is_empty() {
             return Ok(ToolOutput {
                 content: "Nothing to commit — working directory is clean.".to_string(),
                 is_error: false,
@@ -1390,8 +1458,21 @@ impl Tool for AutoCommitTool {
         // Safety check: get current branch
         let branch = current_branch(cwd)?;
 
-        // Stage changes if requested
-        if parsed.add_all {
+        // Stage changes: specific files or all tracked
+        if !parsed.files.is_empty() {
+            // Stage specific files
+            let file_args: Vec<&str> = parsed.files.iter().map(|s| s.as_str()).collect();
+            let mut add_args = vec!["add"];
+            add_args.extend(&file_args);
+            let (_, stderr, success) = run_git(&add_args, cwd)?;
+            if !success {
+                return Ok(ToolOutput {
+                    content: format!("Failed to stage files: {stderr}"),
+                    is_error: true,
+                    metadata: HashMap::new(),
+                });
+            }
+        } else if parsed.add_all {
             let (_, stderr, success) = run_git(&["add", "-u"], cwd)?;
             if !success {
                 return Ok(ToolOutput {
@@ -1402,15 +1483,18 @@ impl Tool for AutoCommitTool {
             }
         }
 
+        // Get staged diff stats for commit context
+        let (stat, _, _) = run_git(&["diff", "--stat", "--cached"], cwd)?;
+
         // Dry run: show what would be committed
         if parsed.dry_run {
-            let (stat, _, _) = run_git(&["diff", "--stat", "--cached"], cwd)?;
             let message = parsed.message.clone().unwrap_or_else(|| {
                 Self::generate_message(cwd).unwrap_or_else(|_| "chore: update files".to_string())
             });
+            let co_author_line = parsed.co_author.as_deref().map(|c| format!("\nCo-Authored-By: {c}")).unwrap_or_default();
             return Ok(ToolOutput {
                 content: format!(
-                    "[dry-run] Would commit on branch '{branch}':\n{stat}\nMessage: {message}"
+                    "[dry-run] Would commit on branch '{branch}':\n{stat}\nMessage: {message}{co_author_line}"
                 ),
                 is_error: false,
                 metadata: HashMap::new(),
@@ -1423,9 +1507,15 @@ impl Tool for AutoCommitTool {
             None => Self::generate_message(cwd)?,
         };
 
+        // Build commit message with optional co-author trailer
+        let full_message = match &parsed.co_author {
+            Some(co) => format!("{message}\n\nCo-Authored-By: {co}"),
+            None => message.clone(),
+        };
+
         // Commit
         let (_, stderr, success) = run_git(
-            &["commit", "-m", &message],
+            &["commit", "-m", &full_message],
             cwd,
         )?;
         if !success {

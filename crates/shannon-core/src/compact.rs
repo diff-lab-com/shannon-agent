@@ -540,6 +540,179 @@ impl Summarizer for RuleBasedSummarizer {
     }
 }
 
+/// AI-powered summarizer that uses the LLM to generate intelligent conversation summaries.
+///
+/// Unlike [`RuleBasedSummarizer`] which simply truncates and concatenates, this summarizer
+/// sends the conversation to the LLM with a summarization prompt, producing a much more
+/// useful summary that preserves key context (decisions, code snippets, tool results).
+///
+/// Uses `tokio::runtime::Handle::block_on` internally since the [`Summarizer`] trait is sync.
+pub struct AiSummarizer {
+    client: crate::api::LlmClient,
+}
+
+impl AiSummarizer {
+    /// Create a new AI summarizer backed by the given LLM client.
+    pub fn new(client: crate::api::LlmClient) -> Self {
+        Self { client }
+    }
+
+    /// Build the summarization prompt from conversation messages.
+    fn build_summary_prompt(messages: &[Message], max_tokens: usize) -> String {
+        let mut parts = Vec::new();
+        for msg in messages {
+            let role = &msg.role;
+            match &msg.content {
+                MessageContent::Text(text) => {
+                    parts.push(format!("[{role}]: {}", truncate_text(text, 500)));
+                }
+                MessageContent::Blocks(blocks) => {
+                    for block in blocks {
+                        match block {
+                            ContentBlock::ToolUse { name, input, .. } => {
+                                let input_str =
+                                    serde_json::to_string(input).unwrap_or_default();
+                                parts.push(format!(
+                                    "[{role} tool_use]: {name}({})",
+                                    truncate_text(&input_str, 300)
+                                ));
+                            }
+                            ContentBlock::ToolResult { content, is_error, .. } => {
+                                let is_err = is_error.unwrap_or(false);
+                                let prefix = if is_err { "ERROR" } else { "result" };
+                                let text = match content {
+                                    Some(ToolResultContent::Single(s)) => truncate_text(s, 300),
+                                    Some(ToolResultContent::Multiple(blks)) => blks
+                                        .iter()
+                                        .filter_map(|b| match b {
+                                            ContentBlock::Text { text } => Some(text.as_str()),
+                                            _ => None,
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join(" ")
+                                        .chars()
+                                        .take(300)
+                                        .collect(),
+                                    None => "no content".to_string(),
+                                };
+                                parts.push(format!("[{role} {prefix}]: {text}"));
+                            }
+                            ContentBlock::Text { text } => {
+                                parts.push(format!("[{role}]: {}", truncate_text(text, 500)));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        format!(
+            "Summarize the following conversation concisely, preserving:\n\
+             - Key decisions and their reasoning\n\
+             - Important code snippets, file paths, and function names\n\
+             - Tool call results that are still relevant\n\
+             - Any errors encountered and their resolutions\n\
+             - Unresolved issues or pending tasks\n\n\
+             Conversation (target summary: ~{max_tokens} tokens):\n\
+             ---\n{}\n---\n\n\
+             Provide a concise but comprehensive summary:",
+            parts.join("\n")
+        )
+    }
+}
+
+impl Summarizer for AiSummarizer {
+    fn summarize(&self, messages: &[Message], max_tokens: usize) -> Result<String, CompactError> {
+        if messages.is_empty() {
+            return Err(CompactError::NoMessagesToCompact);
+        }
+
+        let prompt = Self::build_summary_prompt(messages, max_tokens);
+        let request_messages = vec![crate::api::Message {
+            role: "user".to_string(),
+            content: crate::api::MessageContent::Text(prompt),
+        }];
+
+        let rt = tokio::runtime::Handle::current();
+        let result = rt.block_on(async {
+            self.client
+                .send_message(request_messages, None, None)
+                .await
+                .map_err(|e| CompactError::SummarizationFailed(format!("AI summary failed: {e}")))
+        });
+
+        match result {
+            Ok(blocks) => {
+                let summary: String = blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                if summary.trim().is_empty() {
+                    Err(CompactError::SummarizationFailed(
+                        "AI returned empty summary".to_string(),
+                    ))
+                } else {
+                    Ok(summary)
+                }
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    fn micro_summarize(&self, message: &Message, max_tokens: usize) -> Result<String, CompactError> {
+        // For micro-compact, use a simpler prompt focused on a single message
+        let text = match &message.content {
+            MessageContent::Text(t) => t.clone(),
+            MessageContent::Blocks(blocks) => blocks
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        };
+
+        if text.trim().is_empty() {
+            return Err(CompactError::NoMessagesToCompact);
+        }
+
+        let prompt = format!(
+            "Compress this text to ~{max_tokens} tokens, keeping key information:\n\n{}",
+            truncate_text(&text, 3000)
+        );
+
+        let request_messages = vec![crate::api::Message {
+            role: "user".to_string(),
+            content: crate::api::MessageContent::Text(prompt),
+        }];
+
+        let rt = tokio::runtime::Handle::current();
+        rt.block_on(async {
+            self.client
+                .send_message(request_messages, None, None)
+                .await
+                .map(|blocks| {
+                    blocks
+                        .iter()
+                        .filter_map(|b| match b {
+                            ContentBlock::Text { text } => Some(text.as_str()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .map_err(|e| CompactError::SummarizationFailed(format!("AI micro-summary failed: {e}")))
+        })
+    }
+}
+
 // ============================================================================
 // Compact Engine
 // ============================================================================
@@ -565,6 +738,11 @@ impl CompactEngine {
     /// Create with default config and a rule-based summarizer (no AI needed)
     pub fn with_defaults() -> Result<Self, CompactError> {
         Self::new(CompactConfig::default(), Box::new(RuleBasedSummarizer::new()))
+    }
+
+    /// Create with an AI-powered summarizer for higher quality compression.
+    pub fn with_ai_summarizer(client: crate::api::LlmClient) -> Result<Self, CompactError> {
+        Self::new(CompactConfig::default(), Box::new(AiSummarizer::new(client)))
     }
 
     /// Get a reference to the config

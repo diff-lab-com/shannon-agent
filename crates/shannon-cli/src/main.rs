@@ -219,6 +219,19 @@ struct Cli {
     #[arg(long, hide = true)]
     allowed_tools: Option<String>,
 
+    /// Resume the most recent session, loading its conversation history.
+    /// With a prompt argument, continues the session in non-interactive mode.
+    #[arg(short = 'r', long)]
+    resume: bool,
+
+    /// Continue the most recent session (alias for --resume).
+    #[arg(short = 'c', long, alias = "cont")]
+    r#continue: bool,
+
+    /// Resume a specific session by its UUID (requires --resume or --continue).
+    #[arg(long)]
+    session: Option<String>,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -403,11 +416,46 @@ fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {
     LlmClientConfig::from(merged)
 }
 
+/// Load a session for resumption.
+///
+/// If `session_id_str` is provided, loads that specific session by UUID.
+/// Otherwise, loads the most recent session from the sessions directory.
+///
+/// Returns the loaded `SessionData` on success.
+fn load_resume_session(session_id_str: Option<&str>) -> Result<shannon_core::state::SessionData> {
+    use shannon_core::state::StateManager;
+    let state_mgr = StateManager::new();
+
+    if let Some(id_str) = session_id_str {
+        let uuid = uuid::Uuid::parse_str(id_str)
+            .map_err(|e| anyhow::anyhow!("Invalid session UUID '{id_str}': {e}"))?;
+        state_mgr
+            .load_session(&uuid)?
+            .ok_or_else(|| anyhow::anyhow!("Session {uuid} not found"))
+    } else {
+        let sessions = state_mgr.list_persisted_sessions()?;
+        let latest = sessions
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("No previous sessions found to resume"))?;
+        state_mgr
+            .load_session(&latest.session_id)?
+            .ok_or_else(|| anyhow::anyhow!("Session {} not found on disk", latest.session_id))
+    }
+}
+
 /// Run a non-interactive query, outputting results to stdout.
 /// `stream` controls whether text is streamed character-by-character.
 /// `config` holds explicit CLI configuration.
 /// `bypass_all` when true, skips all permission checks (BypassPermissions mode).
-fn run_noninteractive_query(query: &str, stream: bool, config: &CliConfig, bypass_all: bool) -> Result<()> {
+/// `resume_session` when provided, injects prior conversation history into the engine.
+fn run_noninteractive_query(
+    query: &str,
+    stream: bool,
+    config: &CliConfig,
+    bypass_all: bool,
+    resume_session: Option<shannon_core::state::SessionData>,
+) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
 
     rt.block_on(async {
@@ -432,34 +480,46 @@ fn run_noninteractive_query(query: &str, stream: bool, config: &CliConfig, bypas
         }
         shannon_core::register_plugin_tools(&plugin_manager, &mut tools);
 
-        // Discover MCP server configurations
+        // Discover MCP server configurations and register their tools dynamically
         {
             let mut mcp_registry = shannon_core::mcp_advanced::McpServerRegistry::new();
             let mcp_count = mcp_registry.load_from_default_paths();
             if mcp_count > 0 {
                 eprintln!("Discovered {mcp_count} MCP server(s)");
                 for config in mcp_registry.enabled_servers() {
-                    let description = format!(
-                        "Execute tool calls on MCP server '{}' ({})",
-                        config.name, config.transport_type
-                    );
-                    let input_schema = serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "tool_name": {"type": "string", "description": "Tool to call on MCP server"},
-                            "arguments": {"type": "object", "description": "Arguments for the MCP tool"}
-                        },
-                        "required": ["tool_name"]
-                    });
-                    let mcp_tool = shannon_core::McpToolAdapter::new(
-                        config.name.clone(),
-                        config.command.clone(),
-                        config.args.clone(),
-                        config.env.clone(),
-                        description,
-                        input_schema,
-                    );
-                    let _ = tools.register(Box::new(mcp_tool));
+                    let command = match &config.command {
+                        Some(cmd) => cmd.clone(),
+                        None => {
+                            eprintln!(
+                                "  Skipping '{}' (HTTP/SSE transport not yet supported for discovery)",
+                                config.name
+                            );
+                            continue;
+                        }
+                    };
+
+                    match shannon_core::discover_tools(
+                        &config.name,
+                        &command,
+                        &config.args,
+                        &config.env,
+                    )
+                    .await
+                    {
+                        Ok(result) => {
+                            let tool_count = result.tools.len();
+                            for tool in result.tools {
+                                let _ = tools.register(Box::new(tool));
+                            }
+                            eprintln!(
+                                "  Registered {} tool(s) from '{}'",
+                                tool_count, result.server_name
+                            );
+                        }
+                        Err(e) => {
+                            eprintln!("  Warning: MCP server '{}' discovery failed: {e}", config.name);
+                        }
+                    }
                 }
             }
         }
@@ -517,6 +577,13 @@ fn run_noninteractive_query(query: &str, stream: bool, config: &CliConfig, bypas
         // Auto-load project instructions (CLAUDE.md, AGENTS.md, GEMINI.md)
         if let Some(instructions) = shannon_core::project_instructions::load_from_cwd() {
             engine.append_system_prompt(&instructions.content);
+        }
+
+        // Restore prior conversation history if --resume was specified
+        if let Some(session_data) = resume_session {
+            let count = session_data.messages.len();
+            engine.replace_conversation(session_data.messages);
+            eprintln!("Resumed session ({count} messages loaded)");
         }
 
         let context = QueryContext {
@@ -753,34 +820,47 @@ fn run_team_agent_mode(
         }
         shannon_core::register_plugin_tools(&plugin_manager, &mut tools);
 
-        // Discover MCP servers
+        // Discover MCP servers and register their tools dynamically
         {
             let mut mcp_registry = shannon_core::mcp_advanced::McpServerRegistry::new();
             let mcp_count = mcp_registry.load_from_default_paths();
             if mcp_count > 0 {
                 tracing::info!("Discovered {mcp_count} MCP server(s)");
                 for mcp_config in mcp_registry.enabled_servers() {
-                    let description = format!(
-                        "Execute tool calls on MCP server '{}' ({})",
-                        mcp_config.name, mcp_config.transport_type
-                    );
-                    let input_schema = serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "tool_name": {"type": "string", "description": "Tool to call"},
-                            "arguments": {"type": "object", "description": "Arguments"}
-                        },
-                        "required": ["tool_name"]
-                    });
-                    let mcp_tool = shannon_core::McpToolAdapter::new(
-                        mcp_config.name.clone(),
-                        mcp_config.command.clone(),
-                        mcp_config.args.clone(),
-                        mcp_config.env.clone(),
-                        description,
-                        input_schema,
-                    );
-                    let _ = tools.register(Box::new(mcp_tool));
+                    let command = match &mcp_config.command {
+                        Some(cmd) => cmd.clone(),
+                        None => {
+                            tracing::warn!(
+                                "Skipping '{}' (HTTP/SSE transport not yet supported for discovery)",
+                                mcp_config.name
+                            );
+                            continue;
+                        }
+                    };
+
+                    match shannon_core::discover_tools(
+                        &mcp_config.name,
+                        &command,
+                        &mcp_config.args,
+                        &mcp_config.env,
+                    )
+                    .await
+                    {
+                        Ok(result) => {
+                            let tool_count = result.tools.len();
+                            for tool in result.tools {
+                                let _ = tools.register(Box::new(tool));
+                            }
+                            tracing::info!(
+                                "Registered {} tool(s) from '{}'",
+                                tool_count,
+                                result.server_name
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!("MCP server '{}' discovery failed: {e}", mcp_config.name);
+                        }
+                    }
                 }
             }
         }
@@ -1090,6 +1170,9 @@ fn main() -> Result<()> {
         );
     }
 
+    // Determine if session resume is requested (used by multiple code paths below)
+    let should_resume = cli.resume || cli.r#continue;
+
     // Pipe mode: read prompt from stdin
     if cli.pipe {
         let stdin_content = read_stdin();
@@ -1111,7 +1194,7 @@ fn main() -> Result<()> {
             false,
             HashMap::new(),
         );
-        return run_noninteractive_query(&prompt, true, &config, cli.yes);
+        return run_noninteractive_query(&prompt, true, &config, cli.yes, None);
     }
 
     // Bare prompt case: handle directly with explicit config
@@ -1125,7 +1208,12 @@ fn main() -> Result<()> {
             false,
             HashMap::new(),
         );
-        return run_noninteractive_query(&prompt, true, &config, cli.yes);
+        let resume_data = if should_resume {
+            load_resume_session(cli.session.as_deref()).ok()
+        } else {
+            None
+        };
+        return run_noninteractive_query(&prompt, true, &config, cli.yes, resume_data);
     }
 
     // Build configuration from CLI options (no more unsafe set_var calls)
@@ -1188,6 +1276,15 @@ fn main() -> Result<()> {
     match cli.command {
         None => {
             let mut repl = Repl::new().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            if should_resume {
+                match load_resume_session(cli.session.as_deref()) {
+                    Ok(session_data) => {
+                        let count = repl.restore_session(session_data);
+                        eprintln!("Resumed session ({count} messages loaded)");
+                    }
+                    Err(e) => eprintln!("Warning: could not resume session: {e}"),
+                }
+            }
             repl.run().map_err(|e| anyhow::anyhow!("{e:?}"))?;
         }
         Some(Commands::Repl { cwd, .. }) => {
@@ -1196,6 +1293,15 @@ fn main() -> Result<()> {
                     .map_err(|e| anyhow::anyhow!("Failed to set working directory: {e}"))?;
             }
             let mut repl = Repl::new().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            if should_resume {
+                match load_resume_session(cli.session.as_deref()) {
+                    Ok(session_data) => {
+                        let count = repl.restore_session(session_data);
+                        eprintln!("Resumed session ({count} messages loaded)");
+                    }
+                    Err(e) => eprintln!("Warning: could not resume session: {e}"),
+                }
+            }
             repl.run().map_err(|e| anyhow::anyhow!("{e:?}"))?;
         }
         Some(Commands::Version { verbose }) => {
@@ -1265,7 +1371,12 @@ fn main() -> Result<()> {
             no_stream,
             ..
         }) => {
-            run_noninteractive_query(&query, !no_stream, &config, cli.yes)?;
+            let resume_data = if should_resume {
+                load_resume_session(cli.session.as_deref()).ok()
+            } else {
+                None
+            };
+            run_noninteractive_query(&query, !no_stream, &config, cli.yes, resume_data)?;
         }
         Some(Commands::Serve { port, host }) => {
             run_serve_command(port, host.clone(), &config)?;
