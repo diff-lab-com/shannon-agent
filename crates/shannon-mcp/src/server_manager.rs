@@ -360,13 +360,21 @@ async fn discover_remote_pooled_tools(
                 .get("annotations")
                 .and_then(|a| serde_json::from_value(a.clone()).ok());
 
-            tools.push(PooledMcpToolAdapter::new(
+            // Parse per-tool output limit from _meta.maxResultSizeChars.
+            let max_output_chars: Option<usize> = tool_value
+                .get("_meta")
+                .and_then(|m| m.get("maxResultSizeChars"))
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize);
+
+            tools.push(PooledMcpToolAdapter::with_output_limit(
                 pool.clone(),
                 server_name.to_string(),
                 name,
                 description,
                 input_schema,
                 annotations,
+                max_output_chars,
             ));
         }
     }

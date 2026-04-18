@@ -1830,13 +1830,28 @@ impl McpProcessPool {
     ///
     /// Checks both stdio and remote handles. For stdio servers, attempts
     /// restart if unhealthy. For remote servers, re-initializes on failure.
+    /// Uses the pool's global `max_output_chars` limit.
     pub async fn call_tool(
         &self,
         server_name: &str,
         tool_name: &str,
         arguments: Value,
     ) -> ToolResult<ToolOutput> {
-        let max_chars = self.max_output_chars;
+        self.call_tool_with_limit(server_name, tool_name, arguments, self.max_output_chars).await
+    }
+
+    /// Call a tool with an explicit output limit (per-tool override).
+    ///
+    /// Same as `call_tool` but uses the provided `max_chars` instead of
+    /// the pool's global default. Use this when a tool specifies
+    /// `_meta.maxResultSizeChars` in its definition.
+    pub async fn call_tool_with_limit(
+        &self,
+        server_name: &str,
+        tool_name: &str,
+        arguments: Value,
+        max_chars: usize,
+    ) -> ToolResult<ToolOutput> {
 
         // Check remote handles first (simpler, no process management).
         if let Some(remote) = self.remote_handles.get(server_name) {
@@ -2012,6 +2027,20 @@ impl McpProcessPool {
         arguments: Value,
         on_progress: Arc<dyn Fn(f64, Option<f64>) + Send + Sync>,
     ) -> ToolResult<ToolOutput> {
+        self.call_tool_with_progress_and_limit(
+            server_name, tool_name, arguments, on_progress, self.max_output_chars,
+        ).await
+    }
+
+    /// Call a tool with progress reporting and an explicit output limit.
+    pub async fn call_tool_with_progress_and_limit(
+        &self,
+        server_name: &str,
+        tool_name: &str,
+        arguments: Value,
+        on_progress: Arc<dyn Fn(f64, Option<f64>) + Send + Sync>,
+        max_chars: usize,
+    ) -> ToolResult<ToolOutput> {
         let handle = self
             .handles
             .get(server_name)
@@ -2025,8 +2054,6 @@ impl McpProcessPool {
                 "MCP server '{server_name}' concurrency semaphore closed: {e}"
             ))
         })?;
-
-        let max_chars = self.max_output_chars;
 
         // Check health and restart if needed (same as call_tool)
         let state = handle.get_state().await;
@@ -2700,6 +2727,9 @@ pub struct PooledMcpToolAdapter {
     tool_name: String,
     /// Behavioral hints from the MCP server (readOnly, destructive, etc.).
     annotations: Option<crate::ToolAnnotations>,
+    /// Per-tool output limit in chars (from `_meta.maxResultSizeChars`).
+    /// Overrides the pool's global `max_output_chars` when set.
+    max_output_chars: Option<usize>,
 }
 
 impl PooledMcpToolAdapter {
@@ -2711,6 +2741,30 @@ impl PooledMcpToolAdapter {
         description: String,
         input_schema: Value,
         annotations: Option<crate::ToolAnnotations>,
+    ) -> Self {
+        Self::with_output_limit(
+            pool,
+            server_name,
+            remote_tool_name,
+            description,
+            input_schema,
+            annotations,
+            None,
+        )
+    }
+
+    /// Create a pooled tool adapter with an explicit per-tool output limit.
+    ///
+    /// `max_output_chars` overrides the pool's global limit for this specific tool.
+    /// Parse from `_meta.maxResultSizeChars` in the MCP tool definition.
+    pub fn with_output_limit(
+        pool: Arc<McpProcessPool>,
+        server_name: String,
+        remote_tool_name: String,
+        description: String,
+        input_schema: Value,
+        annotations: Option<crate::ToolAnnotations>,
+        max_output_chars: Option<usize>,
     ) -> Self {
         let tool_name = format!("mcp__{server_name}__{remote_tool_name}");
         // Truncate oversized descriptions to avoid wasting context tokens.
@@ -2731,12 +2785,16 @@ impl PooledMcpToolAdapter {
             input_schema,
             tool_name,
             annotations,
+            max_output_chars,
         }
     }
 
     /// Internal helper: calls the tool via the pool, using progress reporting
     /// when a progress callback is registered on the pool.
     async fn call_tool_inner(&self, input: Value) -> ToolResult<ToolOutput> {
+        // Use per-tool limit if set, otherwise use pool's global default.
+        let max_chars = self.max_output_chars.unwrap_or(self.pool.max_output_chars);
+
         let progress_cb = self.pool.progress_callback.lock().await;
         if let Some(ref cb) = *progress_cb {
             let tool_name = self.tool_name.clone();
@@ -2748,17 +2806,18 @@ impl PooledMcpToolAdapter {
             });
 
             self.pool
-                .call_tool_with_progress(
+                .call_tool_with_progress_and_limit(
                     &self.server_name,
                     &self.remote_tool_name,
                     input,
                     on_progress,
+                    max_chars,
                 )
                 .await
         } else {
             drop(progress_cb);
             self.pool
-                .call_tool(&self.server_name, &self.remote_tool_name, input)
+                .call_tool_with_limit(&self.server_name, &self.remote_tool_name, input, max_chars)
                 .await
         }
     }
@@ -3029,14 +3088,22 @@ pub async fn discover_pooled_tools(
                 .get("annotations")
                 .and_then(|a| serde_json::from_value(a.clone()).ok());
 
+            // Parse per-tool output limit from _meta.maxResultSizeChars.
+            let max_output_chars: Option<usize> = tool_value
+                .get("_meta")
+                .and_then(|m| m.get("maxResultSizeChars"))
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize);
+
             // Store the real schema for deferred retrieval if enabled.
-            let adapter = PooledMcpToolAdapter::new(
+            let adapter = PooledMcpToolAdapter::with_output_limit(
                 pool.clone(),
                 server_name.to_string(),
                 name.clone(),
                 description,
                 input_schema.clone(),
                 annotations,
+                max_output_chars,
             );
 
             // When deferred mode is on, store the real schema and let the adapter
