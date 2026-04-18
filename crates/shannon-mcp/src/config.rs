@@ -31,6 +31,64 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
 // ---------------------------------------------------------------------------
+// Header source: static string or dynamic shell command
+// ---------------------------------------------------------------------------
+
+/// A header value that is either a static string or dynamically generated
+/// by running a shell command.
+///
+/// In JSON config, headers accept either plain strings or objects:
+///
+/// ```json
+/// {
+///   "headers": {
+///     "X-Static": "fixed-value",
+///     "Authorization": { "command": "echo Bearer $(cat ~/.token)" }
+///   }
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum HeaderSource {
+    /// A static header value.
+    Static(String),
+    /// A shell command whose stdout becomes the header value.
+    Command { command: String },
+}
+
+impl HeaderSource {
+    /// Resolve the header value. For static values, returns immediately.
+    /// For commands, executes the shell command and returns its stdout (trimmed).
+    pub async fn resolve(&self) -> Result<String, String> {
+        match self {
+            HeaderSource::Static(s) => Ok(s.clone()),
+            HeaderSource::Command { command } => {
+                let output = tokio::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(command)
+                    .output()
+                    .await
+                    .map_err(|e| format!("Header command failed: {e}"))?;
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    return Err(format!(
+                        "Header command exited with {}: {stderr}",
+                        output.status
+                    ));
+                }
+                let value = String::from_utf8_lossy(&output.stdout);
+                Ok(value.trim().to_string())
+            }
+        }
+    }
+
+    /// Returns true if this is a dynamic (command-based) header.
+    pub fn is_dynamic(&self) -> bool {
+        matches!(self, HeaderSource::Command { .. })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Config types
 // ---------------------------------------------------------------------------
 
@@ -103,9 +161,9 @@ pub enum McpServerConfig {
     Sse {
         /// The SSE endpoint URL.
         url: String,
-        /// Optional HTTP headers.
+        /// Optional HTTP headers (supports static values or `{ "command": "..." }`).
         #[serde(default)]
-        headers: HashMap<String, String>,
+        headers: HashMap<String, HeaderSource>,
         /// Optional authentication configuration.
         #[serde(default)]
         auth: Option<McpAuthConfig>,
@@ -115,9 +173,9 @@ pub enum McpServerConfig {
     Http {
         /// The HTTP endpoint URL.
         url: String,
-        /// Optional HTTP headers.
+        /// Optional HTTP headers (supports static values or `{ "command": "..." }`).
         #[serde(default)]
-        headers: HashMap<String, String>,
+        headers: HashMap<String, HeaderSource>,
         /// Optional authentication configuration.
         #[serde(default)]
         auth: Option<McpAuthConfig>,
@@ -186,7 +244,7 @@ struct StdioRaw {
 #[derive(Deserialize)]
 struct UrlRaw {
     url: String,
-    headers: Option<HashMap<String, String>>,
+    headers: Option<HashMap<String, HeaderSource>>,
     auth: Option<McpAuthConfig>,
 }
 
@@ -325,14 +383,20 @@ pub fn expand_server_config(config: &mut McpServerConfig) {
         McpServerConfig::Sse { url, headers, auth } => {
             *url = expand_env_vars(url);
             for val in headers.values_mut() {
-                *val = expand_env_vars(val);
+                match val {
+                    HeaderSource::Static(s) => *s = expand_env_vars(s),
+                    HeaderSource::Command { command } => *command = expand_env_vars(command),
+                }
             }
             expand_auth_config(auth);
         }
         McpServerConfig::Http { url, headers, auth } => {
             *url = expand_env_vars(url);
             for val in headers.values_mut() {
-                *val = expand_env_vars(val);
+                match val {
+                    HeaderSource::Static(s) => *s = expand_env_vars(s),
+                    HeaderSource::Command { command } => *command = expand_env_vars(command),
+                }
             }
             expand_auth_config(auth);
         }

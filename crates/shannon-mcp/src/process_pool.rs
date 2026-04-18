@@ -35,7 +35,7 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{oneshot, Mutex, RwLock};
 use tracing::{debug, info, warn};
 use crate::auth::{AuthProvider, OAuth2Provider, discover_oauth_endpoints};
-use crate::config::McpAuthConfig;
+use crate::config::{McpAuthConfig, HeaderSource};
 
 /// Type alias for the async sampling callback.
 ///
@@ -1296,6 +1296,8 @@ struct RemoteMcpServerHandle {
     headers: HashMap<String, String>,
     /// Optional OAuth provider for dynamic Bearer token injection.
     auth_provider: Option<Arc<OAuth2Provider>>,
+    /// Shell commands to execute for dynamic headers (name → command).
+    header_commands: HashMap<String, String>,
     /// Current state.
     state: Arc<RwLock<ServerState>>,
     /// Capabilities advertised by the server during initialization.
@@ -1446,7 +1448,7 @@ impl RemoteMcpServerHandle {
         self.parse_jsonrpc_response(response).await
     }
 
-    /// Build and send an HTTP POST with all headers (static + dynamic auth).
+    /// Build and send an HTTP POST with all headers (static + dynamic + auth).
     async fn send_http_request(
         &self,
         request: &Value,
@@ -1455,6 +1457,29 @@ impl RemoteMcpServerHandle {
         let mut builder = self.client.post(&self.url);
         for (key, value) in &self.headers {
             builder = builder.header(key.as_str(), value.as_str());
+        }
+        // Resolve dynamic headers from shell commands.
+        for (name, command) in &self.header_commands {
+            let output = tokio::process::Command::new("sh")
+                .arg("-c")
+                .arg(command.as_str())
+                .output()
+                .await;
+            match output {
+                Ok(out) if out.status.success() => {
+                    let value = String::from_utf8_lossy(&out.stdout);
+                    builder = builder.header(name.as_str(), value.trim());
+                }
+                Ok(out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    warn!(server = %self.name, header = %name, error = %stderr,
+                          "Dynamic header command failed, skipping");
+                }
+                Err(e) => {
+                    warn!(server = %self.name, header = %name, error = %e,
+                          "Dynamic header command execution failed, skipping");
+                }
+            }
         }
         // Inject dynamic auth headers from OAuth provider.
         if let Some(provider) = &self.auth_provider {
@@ -1874,14 +1899,30 @@ impl McpProcessPool {
     /// the handle for tool calls. If `auth` is provided, resolves it:
     /// - API key: merged into static headers immediately
     /// - OAuth: stored as a dynamic provider that injects Bearer tokens
+    ///
+    /// Headers support `HeaderSource::Static` (used directly) and
+    /// `HeaderSource::Command` (executed at request time).
     pub async fn start_remote_server(
         &self,
         name: &str,
         url: &str,
-        headers: HashMap<String, String>,
+        header_sources: HashMap<String, HeaderSource>,
         auth: Option<McpAuthConfig>,
     ) -> Result<(), String> {
-        let mut resolved_headers = headers;
+        // Split headers into static and dynamic (command-based).
+        let mut resolved_headers = HashMap::new();
+        let mut header_commands = HashMap::new();
+        for (key, source) in header_sources {
+            match source {
+                HeaderSource::Static(value) => {
+                    resolved_headers.insert(key, value);
+                }
+                HeaderSource::Command { command } => {
+                    header_commands.insert(key, command);
+                }
+            }
+        }
+
         let mut auth_provider: Option<Arc<OAuth2Provider>> = None;
 
         match auth {
@@ -1925,6 +1966,7 @@ impl McpProcessPool {
             client: reqwest::Client::new(),
             headers: resolved_headers,
             auth_provider,
+            header_commands,
             state: Arc::new(RwLock::new(ServerState::Starting)),
             capabilities: Arc::new(RwLock::new(None)),
             protocol_version: Arc::new(RwLock::new(String::new())),

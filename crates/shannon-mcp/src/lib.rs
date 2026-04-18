@@ -76,6 +76,7 @@ pub use resources::{
 };
 pub use config::{
     McpConfig, McpServerConfig, McpAuthConfig, ConfigError,
+    HeaderSource,
     expand_env_vars, expand_server_config,
     discover_config, config_search_paths,
 };
