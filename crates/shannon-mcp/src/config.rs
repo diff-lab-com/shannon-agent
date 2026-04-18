@@ -1,0 +1,727 @@
+//! MCP server configuration discovery and parsing.
+//!
+//! Supports Claude Code-compatible config file formats:
+//!
+//! - **Project-level**: `.mcp.json` in the project root
+//! - **User-level**: `~/.claude/settings.json` (Claude Code) and `~/.shannon/settings.json`
+//!
+//! Config files use the `mcpServers` key to define MCP server entries:
+//!
+//! ```json
+//! {
+//!   "mcpServers": {
+//!     "my-server": {
+//!       "command": "npx",
+//!       "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path"],
+//!       "env": { "API_KEY": "${MY_API_KEY}" }
+//!     },
+//!     "remote-server": {
+//!       "url": "http://localhost:3000/mcp"
+//!     }
+//!   }
+//! }
+//! ```
+//!
+//! Environment variable expansion (`${VAR}`) is supported in `env` values,
+//! `command`, `args`, and `url` fields (see [`expand_env_vars`]).
+
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use tracing::{debug, info, warn};
+
+// ---------------------------------------------------------------------------
+// Config types
+// ---------------------------------------------------------------------------
+
+/// Top-level config file structure for `.mcp.json` and `settings.json`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct McpConfig {
+    /// MCP server definitions keyed by server name.
+    #[serde(default, rename = "mcpServers")]
+    pub mcp_servers: HashMap<String, McpServerConfig>,
+}
+
+/// Configuration for a single MCP server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum McpServerConfig {
+    /// Stdio-based server: spawn a local process.
+    #[serde(rename = "stdio")]
+    Stdio {
+        /// The command to execute.
+        command: String,
+        /// Command-line arguments.
+        #[serde(default)]
+        args: Vec<String>,
+        /// Environment variables to set (supports `${VAR}` expansion).
+        #[serde(default)]
+        env: HashMap<String, String>,
+    },
+    /// SSE-based server: connect to an HTTP SSE endpoint.
+    #[serde(rename = "sse")]
+    Sse {
+        /// The SSE endpoint URL.
+        url: String,
+        /// Optional HTTP headers.
+        #[serde(default)]
+        headers: HashMap<String, String>,
+    },
+    /// HTTP-based server: REST-style JSON-RPC.
+    #[serde(rename = "http")]
+    Http {
+        /// The HTTP endpoint URL.
+        url: String,
+        /// Optional HTTP headers.
+        #[serde(default)]
+        headers: HashMap<String, String>,
+    },
+    /// WebSocket-based server.
+    #[serde(rename = "websocket")]
+    WebSocket {
+        /// The WebSocket endpoint URL.
+        url: String,
+    },
+}
+
+/// Inline (untagged) config that auto-detects the server type.
+///
+/// If `command` is present → Stdio.
+/// If `url` is present → Sse (default for URLs).
+/// Otherwise falls back to Stdio with an empty command (will fail gracefully).
+impl McpServerConfig {
+    /// Parse from a JSON value using flexible detection.
+    pub fn from_json_value(value: serde_json::Value) -> Result<Self, ConfigError> {
+        // If "type" is explicitly set, use tagged deserialization
+        if value.get("type").is_some() {
+            return serde_json::from_value(value)
+                .map_err(|e| ConfigError::ParseError(format!("Invalid server config: {e}")));
+        }
+
+        // Auto-detect: command → Stdio, url → Sse
+        if value.get("command").is_some() {
+            let raw: StdioRaw = serde_json::from_value(value)
+                .map_err(|e| ConfigError::ParseError(format!("Invalid stdio config: {e}")))?;
+            return Ok(McpServerConfig::Stdio {
+                command: raw.command,
+                args: raw.args.unwrap_or_default(),
+                env: raw.env.unwrap_or_default(),
+            });
+        }
+
+        if value.get("url").is_some() {
+            let raw: UrlRaw = serde_json::from_value(value)
+                .map_err(|e| ConfigError::ParseError(format!("Invalid URL config: {e}")))?;
+            // Default URL-based servers to SSE
+            return Ok(McpServerConfig::Sse {
+                url: raw.url,
+                headers: raw.headers.unwrap_or_default(),
+            });
+        }
+
+        Err(ConfigError::ParseError(
+            "Server config must have 'command' or 'url' field".to_string(),
+        ))
+    }
+}
+
+/// Helper structs for flexible JSON parsing.
+#[derive(Deserialize)]
+struct StdioRaw {
+    command: String,
+    args: Option<Vec<String>>,
+    env: Option<HashMap<String, String>>,
+}
+
+#[derive(Deserialize)]
+struct UrlRaw {
+    url: String,
+    headers: Option<HashMap<String, String>>,
+}
+
+/// Errors that can occur during config discovery and parsing.
+#[derive(thiserror::Error, Debug)]
+pub enum ConfigError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("JSON parse error: {0}")]
+    Json(#[from] serde_json::Error),
+
+    #[error("parse error: {0}")]
+    ParseError(String),
+
+    #[error("no config files found")]
+    NoConfig,
+}
+
+// ---------------------------------------------------------------------------
+// Environment variable expansion (D2)
+// ---------------------------------------------------------------------------
+
+/// Expand `${VAR}` and `${VAR:-default}` patterns in a string.
+///
+/// - `${VAR}` → value of env var `VAR`, or empty string if not set
+/// - `${VAR:-default}` → value of env var `VAR`, or `default` if not set
+/// - `${VAR:?error}` → value of env var `VAR`, or return error if not set
+pub fn expand_env_vars(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '$' && chars.peek() == Some(&'{') {
+            chars.next(); // consume '{'
+            let mut var_name = String::new();
+            let mut modifier = String::new();
+            let mut in_modifier = false;
+
+            loop {
+                match chars.peek() {
+                    Some('}') => {
+                        chars.next();
+                        break;
+                    }
+                    Some(':') if !in_modifier => {
+                        chars.next();
+                        in_modifier = true;
+                        // Check for modifier type
+                        if chars.peek() == Some(&'-') {
+                            chars.next();
+                        } else if chars.peek() == Some(&'?') {
+                            chars.next();
+                            modifier.push('?');
+                        }
+                        continue;
+                    }
+                    Some(c) => {
+                        if in_modifier {
+                            modifier.push(*c);
+                        } else {
+                            var_name.push(*c);
+                        }
+                        chars.next();
+                    }
+                    None => break,
+                }
+            }
+
+            if var_name.is_empty() {
+                result.push_str("${");
+                if in_modifier {
+                    result.push(':');
+                }
+                result.push_str(&modifier);
+                result.push('}');
+                continue;
+            }
+
+            let value = match std::env::var(&var_name) {
+                Ok(v) => v,
+                Err(_) => {
+                    if modifier.starts_with('?') {
+                        let err_msg = if modifier.len() > 1 {
+                            &modifier[1..]
+                        } else {
+                            "required env var not set"
+                        };
+                        warn!(
+                            var = %var_name,
+                            error = err_msg,
+                            "Required environment variable not set"
+                        );
+                        // Return the original pattern so it's visible in logs
+                        format!("${{{}:{}}}", var_name, modifier)
+                    } else if !modifier.is_empty() {
+                        // Default value (after :-)
+                        modifier.clone()
+                    } else {
+                        String::new()
+                    }
+                }
+            };
+            result.push_str(&value);
+        } else {
+            result.push(ch);
+        }
+    }
+
+    result
+}
+
+/// Expand env vars in all values of a server config (D2).
+pub fn expand_server_config(config: &mut McpServerConfig) {
+    match config {
+        McpServerConfig::Stdio {
+            command,
+            args,
+            env,
+        } => {
+            *command = expand_env_vars(command);
+            for arg in args.iter_mut() {
+                *arg = expand_env_vars(arg);
+            }
+            for val in env.values_mut() {
+                *val = expand_env_vars(val);
+            }
+        }
+        McpServerConfig::Sse { url, headers } => {
+            *url = expand_env_vars(url);
+            for val in headers.values_mut() {
+                *val = expand_env_vars(val);
+            }
+        }
+        McpServerConfig::Http { url, headers } => {
+            *url = expand_env_vars(url);
+            for val in headers.values_mut() {
+                *val = expand_env_vars(val);
+            }
+        }
+        McpServerConfig::WebSocket { url } => {
+            *url = expand_env_vars(url);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Config discovery (D1)
+// ---------------------------------------------------------------------------
+
+/// Search paths for MCP config files, in priority order.
+pub fn config_search_paths(project_dir: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    // 1. Project-level: .mcp.json in the project root
+    paths.push(project_dir.join(".mcp.json"));
+
+    // 2. Project-level: .claude/settings.json (Claude Code compatibility)
+    paths.push(project_dir.join(".claude").join("settings.json"));
+
+    // 3. Project-level: .shannon/settings.json
+    paths.push(project_dir.join(".shannon").join("settings.json"));
+
+    // 4. User-level: ~/.claude/settings.json (Claude Code compatibility)
+    if let Some(home) = dirs_home() {
+        paths.push(home.join(".claude").join("settings.json"));
+    }
+
+    // 5. User-level: ~/.shannon/settings.json
+    if let Some(home) = dirs_home() {
+        paths.push(home.join(".shannon").join("settings.json"));
+    }
+
+    paths
+}
+
+/// Get the user's home directory.
+fn dirs_home() -> Option<PathBuf> {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()
+        .map(PathBuf::from)
+}
+
+/// Discover and load MCP config from all config file locations.
+///
+/// Merges configs from all found files, with earlier (project-level) entries
+/// taking precedence over later (user-level) entries for the same server name.
+pub fn discover_config(project_dir: &Path) -> Result<McpConfig, ConfigError> {
+    let search_paths = config_search_paths(project_dir);
+    let mut merged = McpConfig::default();
+    let mut found_any = false;
+
+    for path in &search_paths {
+        match load_config_file(path) {
+            Ok(config) => {
+                info!(
+                    path = %path.display(),
+                    servers = config.mcp_servers.len(),
+                    "Loaded MCP config"
+                );
+                // Earlier configs take precedence — only insert if not already present
+                for (name, server_conf) in config.mcp_servers {
+                    if !merged.mcp_servers.contains_key(&name) {
+                        merged.mcp_servers.insert(name, server_conf);
+                    }
+                }
+                found_any = true;
+            }
+            Err(ConfigError::Io(_)) => {
+                debug!(path = %path.display(), "Config file not found, skipping");
+            }
+            Err(e) => {
+                warn!(path = %path.display(), error = %e, "Failed to parse config file");
+            }
+        }
+    }
+
+    if !found_any {
+        debug!("No MCP config files found");
+    }
+
+    // Apply env var expansion to all server configs
+    for server_conf in merged.mcp_servers.values_mut() {
+        expand_server_config(server_conf);
+    }
+
+    Ok(merged)
+}
+
+/// Load a single config file.
+fn load_config_file(path: &Path) -> Result<McpConfig, ConfigError> {
+    let content = std::fs::read_to_string(path)?;
+
+    // Try to parse as raw JSON to handle the flexible server config format
+    let raw: serde_json::Value = serde_json::from_str(&content)?;
+
+    let mcp_servers_value = match raw.get("mcpServers") {
+        Some(v) => v,
+        None => {
+            // No mcpServers key — check if this looks like a settings.json
+            // that might have other keys but no MCP config
+            debug!(
+                path = %path.display(),
+                "No 'mcpServers' key found in config file"
+            );
+            return Ok(McpConfig::default());
+        }
+    };
+
+    let mcp_servers_obj = mcp_servers_value
+        .as_object()
+        .ok_or_else(|| ConfigError::ParseError("'mcpServers' must be an object".to_string()))?;
+
+    let mut servers = HashMap::new();
+
+    for (name, server_value) in mcp_servers_obj {
+        match McpServerConfig::from_json_value(server_value.clone()) {
+            Ok(config) => {
+                debug!(server = %name, "Parsed MCP server config");
+                servers.insert(name.clone(), config);
+            }
+            Err(e) => {
+                warn!(server = %name, error = %e, "Failed to parse server config, skipping");
+            }
+        }
+    }
+
+    Ok(McpConfig {
+        mcp_servers: servers,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Env var expansion tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_expand_simple_var() {
+        unsafe { std::env::set_var("TEST_MCP_KEY", "hello"); }
+        assert_eq!(expand_env_vars("${TEST_MCP_KEY}"), "hello");
+        unsafe { std::env::remove_var("TEST_MCP_KEY"); }
+    }
+
+    #[test]
+    fn test_expand_missing_var_empty() {
+        unsafe { std::env::remove_var("TEST_MCP_MISSING_VAR"); }
+        assert_eq!(expand_env_vars("${TEST_MCP_MISSING_VAR}"), "");
+    }
+
+    #[test]
+    fn test_expand_default_value() {
+        unsafe { std::env::remove_var("TEST_MCP_NO_SUCH_VAR"); }
+        assert_eq!(
+            expand_env_vars("${TEST_MCP_NO_SUCH_VAR:-fallback}"),
+            "fallback"
+        );
+    }
+
+    #[test]
+    fn test_expand_var_present_ignores_default() {
+        unsafe { std::env::set_var("TEST_MCP_EXISTS", "actual"); }
+        assert_eq!(
+            expand_env_vars("${TEST_MCP_EXISTS:-fallback}"),
+            "actual"
+        );
+        unsafe { std::env::remove_var("TEST_MCP_EXISTS"); }
+    }
+
+    #[test]
+    fn test_expand_in_string() {
+        unsafe { std::env::set_var("TEST_MCP_HOST", "localhost"); }
+        assert_eq!(
+            expand_env_vars("http://${TEST_MCP_HOST}:3000"),
+            "http://localhost:3000"
+        );
+        unsafe { std::env::remove_var("TEST_MCP_HOST"); }
+    }
+
+    #[test]
+    fn test_expand_no_vars() {
+        assert_eq!(expand_env_vars("plain text"), "plain text");
+    }
+
+    #[test]
+    fn test_expand_empty_name() {
+        // ${} with empty name should be preserved
+        assert_eq!(expand_env_vars("${}"), "${}");
+    }
+
+    // ── Config parsing tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_stdio_config() {
+        let json = serde_json::json!({
+            "command": "npx",
+            "args": ["-y", "some-package"],
+            "env": {"KEY": "value"}
+        });
+
+        let config = McpServerConfig::from_json_value(json).unwrap();
+        match config {
+            McpServerConfig::Stdio {
+                command,
+                args,
+                env,
+            } => {
+                assert_eq!(command, "npx");
+                assert_eq!(args, vec!["-y", "some-package"]);
+                assert_eq!(env.get("KEY").unwrap(), "value");
+            }
+            _ => panic!("Expected Stdio config"),
+        }
+    }
+
+    #[test]
+    fn test_parse_url_config() {
+        let json = serde_json::json!({
+            "url": "http://localhost:3000/mcp"
+        });
+
+        let config = McpServerConfig::from_json_value(json).unwrap();
+        match config {
+            McpServerConfig::Sse { url, .. } => {
+                assert_eq!(url, "http://localhost:3000/mcp");
+            }
+            _ => panic!("Expected Sse config"),
+        }
+    }
+
+    #[test]
+    fn test_parse_explicit_type_sse() {
+        let json = serde_json::json!({
+            "type": "sse",
+            "url": "http://localhost:3000/sse"
+        });
+
+        let config = McpServerConfig::from_json_value(json).unwrap();
+        match config {
+            McpServerConfig::Sse { url, .. } => {
+                assert_eq!(url, "http://localhost:3000/sse");
+            }
+            _ => panic!("Expected Sse config"),
+        }
+    }
+
+    #[test]
+    fn test_parse_explicit_type_http() {
+        let json = serde_json::json!({
+            "type": "http",
+            "url": "http://localhost:3000/api"
+        });
+
+        let config = McpServerConfig::from_json_value(json).unwrap();
+        match config {
+            McpServerConfig::Http { url, .. } => {
+                assert_eq!(url, "http://localhost:3000/api");
+            }
+            _ => panic!("Expected Http config"),
+        }
+    }
+
+    #[test]
+    fn test_parse_full_mcp_json() {
+        let json = serde_json::json!({
+            "mcpServers": {
+                "filesystem": {
+                    "command": "npx",
+                    "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+                    "env": {"ROOT": "/tmp"}
+                },
+                "remote": {
+                    "url": "http://localhost:4000"
+                }
+            }
+        });
+
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let path = temp.path().to_path_buf();
+        std::fs::write(&path, serde_json::to_string(&json).unwrap()).unwrap();
+
+        let config = load_config_file(&path).unwrap();
+        assert_eq!(config.mcp_servers.len(), 2);
+        assert!(config.mcp_servers.contains_key("filesystem"));
+        assert!(config.mcp_servers.contains_key("remote"));
+    }
+
+    #[test]
+    fn test_parse_settings_json_without_mcp() {
+        let json = serde_json::json!({
+            "theme": "dark",
+            "editor": "vim"
+        });
+
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let path = temp.path().to_path_buf();
+        std::fs::write(&path, serde_json::to_string(&json).unwrap()).unwrap();
+
+        let config = load_config_file(&path).unwrap();
+        assert!(config.mcp_servers.is_empty());
+    }
+
+    #[test]
+    fn test_env_expansion_in_config() {
+        unsafe { std::env::set_var("TEST_MCP_EXPAND_PATH", "/expanded/path"); }
+        let json = serde_json::json!({
+            "mcpServers": {
+                "test": {
+                    "command": "node",
+                    "args": ["${TEST_MCP_EXPAND_PATH}/server.js"],
+                    "env": {"ROOT": "${TEST_MCP_EXPAND_PATH}/root"}
+                }
+            }
+        });
+
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let path = temp.path().to_path_buf();
+        std::fs::write(&path, serde_json::to_string(&json).unwrap()).unwrap();
+
+        let mut config = load_config_file(&path).unwrap();
+
+        // Manually expand — discover_config does this automatically but
+        // load_config_file is a private helper that skips expansion.
+        for server_conf in config.mcp_servers.values_mut() {
+            expand_server_config(server_conf);
+        }
+
+        let server = config.mcp_servers.get("test").unwrap();
+
+        match server {
+            McpServerConfig::Stdio {
+                command,
+                args,
+                env,
+            } => {
+                assert_eq!(command, "node");
+                assert_eq!(args[0], "/expanded/path/server.js");
+                assert_eq!(env.get("ROOT").unwrap(), "/expanded/path/root");
+            }
+            _ => panic!("Expected Stdio"),
+        }
+        unsafe { std::env::remove_var("TEST_MCP_EXPAND_PATH"); }
+    }
+
+    #[test]
+    fn test_discover_config_no_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = discover_config(temp.path()).unwrap();
+        assert!(config.mcp_servers.is_empty());
+    }
+
+    #[test]
+    fn test_discover_config_merges() {
+        let temp = tempfile::tempdir().unwrap();
+
+        // Write project-level .mcp.json
+        let project_config = serde_json::json!({
+            "mcpServers": {
+                "project-server": {
+                    "command": "node",
+                    "args": ["project.js"]
+                }
+            }
+        });
+        std::fs::write(
+            temp.path().join(".mcp.json"),
+            serde_json::to_string(&project_config).unwrap(),
+        )
+        .unwrap();
+
+        let config = discover_config(temp.path()).unwrap();
+        assert_eq!(config.mcp_servers.len(), 1);
+        assert!(config.mcp_servers.contains_key("project-server"));
+    }
+
+    #[test]
+    fn test_config_search_paths_order() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = config_search_paths(temp.path());
+
+        // Project .mcp.json should be first
+        assert!(paths[0].ends_with(".mcp.json"));
+        // Should have at least 3 paths (project .mcp.json, .claude/settings.json, .shannon/settings.json)
+        assert!(paths.len() >= 3);
+    }
+
+    // ── Expand server config tests ──────────────────────────────────────
+
+    #[test]
+    fn test_expand_stdio_config() {
+        unsafe { std::env::set_var("TEST_MCP_MY_CMD", "/usr/bin/my-cmd"); }
+        unsafe { std::env::set_var("TEST_MCP_SECRET", "abc123"); }
+
+        let mut config = McpServerConfig::Stdio {
+            command: "${TEST_MCP_MY_CMD}".to_string(),
+            args: vec!["--key".to_string(), "${TEST_MCP_SECRET}".to_string()],
+            env: {
+                let mut m = HashMap::new();
+                m.insert("API_KEY".to_string(), "${TEST_MCP_SECRET}".to_string());
+                m
+            },
+        };
+
+        expand_server_config(&mut config);
+
+        match config {
+            McpServerConfig::Stdio {
+                command,
+                args,
+                env,
+            } => {
+                assert_eq!(command, "/usr/bin/my-cmd");
+                assert_eq!(args[1], "abc123");
+                assert_eq!(env.get("API_KEY").unwrap(), "abc123");
+            }
+            _ => panic!("Expected Stdio"),
+        }
+
+        unsafe { std::env::remove_var("TEST_MCP_MY_CMD"); }
+        unsafe { std::env::remove_var("TEST_MCP_SECRET"); }
+    }
+
+    #[test]
+    fn test_expand_url_config() {
+        unsafe { std::env::set_var("TEST_MCP_SVC_HOST", "my-server.example.com"); }
+
+        let mut config = McpServerConfig::Sse {
+            url: "https://${TEST_MCP_SVC_HOST}/sse".to_string(),
+            headers: HashMap::new(),
+        };
+
+        expand_server_config(&mut config);
+
+        match config {
+            McpServerConfig::Sse { url, .. } => {
+                assert_eq!(url, "https://my-server.example.com/sse");
+            }
+            _ => panic!("Expected Sse"),
+        }
+
+        unsafe { std::env::remove_var("TEST_MCP_SVC_HOST"); }
+    }
+}

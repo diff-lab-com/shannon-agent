@@ -40,6 +40,8 @@ pub mod protocol;
 pub mod transport;
 pub mod auth;
 pub mod resources;
+pub mod config;
+pub mod server_manager;
 
 pub use protocol::{
     JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, JsonRpcNotification,
@@ -61,6 +63,14 @@ pub use resources::{
     ResourceDescriptor, ListResourcesInput, ListResourcesOutput,
     ReadResourceInput, ReadResourceOutput, ResourceReadContent,
     McpResourceManager, McpResourceClient, McpClientAdapter,
+};
+pub use config::{
+    McpConfig, McpServerConfig, ConfigError,
+    expand_env_vars, expand_server_config,
+    discover_config, config_search_paths,
+};
+pub use server_manager::{
+    McpDiscoveryResult, discover_all_servers,
 };
 
 /// Current MCP protocol version supported by this implementation

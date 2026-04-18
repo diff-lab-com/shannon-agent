@@ -7,6 +7,7 @@
 
 pub use shannon_tool_interface::{Tool, ToolError, ToolOutput, ToolResult, ToolInfo};
 
+use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -20,11 +21,113 @@ struct CachedToolResult {
 /// Default cache TTL in seconds (5 minutes).
 const DEFAULT_CACHE_TTL_SECS: u64 = 300;
 
+// ---------------------------------------------------------------------------
+// Glob-based tool filter
+// ---------------------------------------------------------------------------
+
+/// A single compiled allow/deny pattern for tool names.
+struct ToolPattern {
+    /// Compiled regex derived from a glob pattern.
+    regex: Regex,
+    /// `true` means this is an exclude (deny) pattern.
+    is_exclude: bool,
+}
+
+/// A set of compiled allow/deny patterns for tool name filtering.
+///
+/// Supports glob-style patterns where `*` matches any characters and `?`
+/// matches a single character. Patterns prefixed with `!` are deny rules
+/// and take precedence over allow rules.
+///
+/// # Matching logic
+///
+/// A tool name is **allowed** if:
+/// 1. No allow patterns exist (empty filter = allow all), OR
+/// 2. It matches at least one allow pattern.
+///
+/// A tool name is **denied** if:
+/// 1. It matches any deny (exclude) pattern, regardless of allow matches.
+struct ToolFilter {
+    patterns: Vec<ToolPattern>,
+}
+
+impl ToolFilter {
+    /// Build a filter from a list of glob-style patterns.
+    ///
+    /// Each pattern may optionally be prefixed with `!` to indicate a deny rule.
+    /// Glob syntax: `*` = any chars, `?` = single char.
+    fn from_patterns(patterns: Vec<String>) -> Self {
+        let compiled: Vec<ToolPattern> = patterns
+            .into_iter()
+            .filter_map(|p| {
+                let (is_exclude, pat) = if let Some(rest) = p.strip_prefix('!') {
+                    (true, rest.to_string())
+                } else {
+                    (false, p)
+                };
+                glob_to_regex(&pat)
+                    .ok()
+                    .map(|regex| ToolPattern { regex, is_exclude })
+            })
+            .collect();
+        Self { patterns: compiled }
+    }
+
+    /// Returns `true` if the tool name passes the filter.
+    fn is_allowed(&self, name: &str) -> bool {
+        let has_includes = self.patterns.iter().any(|p| !p.is_exclude);
+
+        // Deny patterns take absolute precedence.
+        if self.patterns.iter().any(|p| p.is_exclude && p.regex.is_match(name)) {
+            return false;
+        }
+
+        if !has_includes {
+            // No include patterns → everything not denied is allowed.
+            return true;
+        }
+
+        // Must match at least one include pattern.
+        self.patterns
+            .iter()
+            .any(|p| !p.is_exclude && p.regex.is_match(name))
+    }
+}
+
+/// Convert a glob pattern to a compiled regex.
+///
+/// - `*` → `.*`
+/// - `?` → `.`
+/// - All other regex meta-characters are escaped.
+/// - The pattern is anchored (`^...$`).
+fn glob_to_regex(pattern: &str) -> Result<Regex, regex::Error> {
+    let mut regex_str = String::with_capacity(pattern.len() * 2);
+    regex_str.push('^');
+    for ch in pattern.chars() {
+        match ch {
+            '*' => regex_str.push_str(".*"),
+            '?' => regex_str.push('.'),
+            // Escape regex meta-characters
+            '.' | '^' | '$' | '+' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '\\' => {
+                regex_str.push('\\');
+                regex_str.push(ch);
+            }
+            _ => regex_str.push(ch),
+        }
+    }
+    regex_str.push('$');
+    Regex::new(&regex_str)
+}
+
+// ---------------------------------------------------------------------------
+// ToolRegistry
+// ---------------------------------------------------------------------------
+
 /// Registry for managing available tools
 pub struct ToolRegistry {
     tools: HashMap<String, Box<dyn Tool>>,
-    /// If set, only these tool names are accessible. Empty = all tools.
-    allowed_tools: Option<Vec<String>>,
+    /// Optional glob-based allow/deny filter for tool access.
+    tool_filter: Option<ToolFilter>,
     /// Cache for read-only tool results: (tool_name, input_hash) -> cached output.
     /// Wrapped in Mutex for interior mutability so `execute` can stay `&self`.
     result_cache: std::sync::Mutex<HashMap<(String, u64), CachedToolResult>>,
@@ -39,7 +142,7 @@ impl ToolRegistry {
     pub fn new() -> Self {
         Self {
             tools: HashMap::new(),
-            allowed_tools: None,
+            tool_filter: None,
             result_cache: std::sync::Mutex::new(HashMap::new()),
             max_cache_entries: 256,
             cache_ttl_secs: DEFAULT_CACHE_TTL_SECS,
@@ -57,16 +160,30 @@ impl ToolRegistry {
     }
 
     /// Restrict the registry to only allow specific tools.
-    /// Pass an empty vec to allow all tools. Pass `None` to reset to no restriction.
-    /// Tools not in the allow list are invisible to `execute`, `list`, schema generation, etc.
+    ///
+    /// Supports glob patterns: `*` matches any characters, `?` matches one.
+    /// Prefix a pattern with `!` to exclude matching tools.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Only allow MCP tools and bash, deny internal MCP tools
+    /// registry.set_allowed_tools(Some(vec![
+    ///     "mcp__*".into(),
+    ///     "Bash".into(),
+    ///     "!mcp__internal__*".into(),
+    /// ]));
+    /// ```
+    ///
+    /// Pass `None` to remove all restrictions (allow everything).
     pub fn set_allowed_tools(&mut self, allowed: Option<Vec<String>>) {
-        self.allowed_tools = allowed;
+        self.tool_filter = allowed.map(ToolFilter::from_patterns);
     }
 
     /// Check if a tool name is allowed by the current filter.
     fn is_allowed(&self, name: &str) -> bool {
-        match &self.allowed_tools {
-            Some(allowed) => allowed.iter().any(|a| a == name),
+        match &self.tool_filter {
+            Some(filter) => filter.is_allowed(name),
             None => true,
         }
     }
@@ -687,5 +804,85 @@ mod tests {
         assert!(!result.is_error);
         assert_eq!(result.metadata.get("execution_time_ms"), Some(&json!(100)));
         assert_eq!(result.metadata.get("timestamp"), Some(&json!("2024-01-01T00:00:00Z")));
+    }
+
+    // ── Glob-based allow/deny filter tests ────────────────────────────────
+
+    #[tokio::test]
+    async fn test_glob_filter_wildcard() {
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(DummyTool { name: "mcp__server__tool1".into() })).unwrap();
+        registry.register(Box::new(DummyTool { name: "mcp__server__tool2".into() })).unwrap();
+        registry.register(Box::new(DummyTool { name: "Bash".into() })).unwrap();
+
+        registry.set_allowed_tools(Some(vec!["mcp__*".into()]));
+        let names = registry.list();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"mcp__server__tool1".to_string()));
+        assert!(names.contains(&"mcp__server__tool2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_glob_filter_exact_name() {
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(DummyTool { name: "Bash".into() })).unwrap();
+        registry.register(Box::new(DummyTool { name: "Read".into() })).unwrap();
+
+        registry.set_allowed_tools(Some(vec!["Bash".into()]));
+        assert!(registry.get("Bash").is_some());
+        assert!(registry.get("Read").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_glob_filter_exclude() {
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(DummyTool { name: "mcp__public__tool".into() })).unwrap();
+        registry.register(Box::new(DummyTool { name: "mcp__internal__secret".into() })).unwrap();
+
+        registry.set_allowed_tools(Some(vec![
+            "mcp__*".into(),
+            "!mcp__internal__*".into(),
+        ]));
+        let names = registry.list();
+        assert_eq!(names.len(), 1);
+        assert!(names.contains(&"mcp__public__tool".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_glob_filter_question_mark() {
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(DummyTool { name: "tool_a".into() })).unwrap();
+        registry.register(Box::new(DummyTool { name: "tool_b".into() })).unwrap();
+        registry.register(Box::new(DummyTool { name: "tool_ab".into() })).unwrap();
+
+        // ? matches exactly one character
+        registry.set_allowed_tools(Some(vec!["tool_?".into()]));
+        let names = registry.list();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"tool_a".to_string()));
+        assert!(names.contains(&"tool_b".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_glob_filter_none_allows_all() {
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(DummyTool { name: "a".into() })).unwrap();
+        registry.register(Box::new(DummyTool { name: "b".into() })).unwrap();
+
+        registry.set_allowed_tools(None);
+        assert_eq!(registry.list().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_glob_filter_only_excludes() {
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(DummyTool { name: "mcp__secret".into() })).unwrap();
+        registry.register(Box::new(DummyTool { name: "Bash".into() })).unwrap();
+
+        // Only exclude patterns → everything not denied is allowed
+        registry.set_allowed_tools(Some(vec!["!mcp__*".into()]));
+        let names = registry.list();
+        assert_eq!(names.len(), 1);
+        assert!(names.contains(&"Bash".to_string()));
     }
 }
