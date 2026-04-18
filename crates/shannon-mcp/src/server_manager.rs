@@ -101,8 +101,8 @@ pub async fn discover_all_servers_pooled(
                     }
                 }
             }
-            McpServerConfig::Sse { url, headers, .. } => {
-                match pool.start_remote_server(name, url, headers.clone()).await {
+            McpServerConfig::Sse { url, headers, auth } => {
+                match pool.start_remote_server(name, url, headers.clone(), auth.clone()).await {
                     Ok(()) => {
                         // Discover tools from the remote server.
                         match discover_remote_pooled_tools(pool.clone(), name).await {
@@ -135,8 +135,8 @@ pub async fn discover_all_servers_pooled(
                     }
                 }
             }
-            McpServerConfig::Http { url, headers, .. } => {
-                match pool.start_remote_server(name, url, headers.clone()).await {
+            McpServerConfig::Http { url, headers, auth } => {
+                match pool.start_remote_server(name, url, headers.clone(), auth.clone()).await {
                     Ok(()) => {
                         match discover_remote_pooled_tools(pool.clone(), name).await {
                             Ok(discovered) => {
@@ -253,14 +253,14 @@ pub fn discover_all_servers_pooled_nonblocking(
                 McpServerConfig::Stdio { command, args, env } => {
                     discover_pooled_tools(pool.clone(), &server_name, &command, &args, &env).await
                 }
-                McpServerConfig::Sse { url, headers, .. } => {
-                    match pool.start_remote_server(&server_name, &url, headers.clone()).await {
+                McpServerConfig::Sse { url, headers, auth } => {
+                    match pool.start_remote_server(&server_name, &url, headers.clone(), auth).await {
                         Ok(()) => discover_remote_pooled_tools(pool.clone(), &server_name).await,
                         Err(e) => Err(e),
                     }
                 }
-                McpServerConfig::Http { url, headers, .. } => {
-                    match pool.start_remote_server(&server_name, &url, headers.clone()).await {
+                McpServerConfig::Http { url, headers, auth } => {
+                    match pool.start_remote_server(&server_name, &url, headers.clone(), auth).await {
                         Ok(()) => discover_remote_pooled_tools(pool.clone(), &server_name).await,
                         Err(e) => Err(e),
                     }

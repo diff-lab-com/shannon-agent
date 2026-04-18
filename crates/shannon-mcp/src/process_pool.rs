@@ -34,6 +34,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{oneshot, Mutex, RwLock};
 use tracing::{debug, info, warn};
+use crate::auth::{AuthProvider, OAuth2Provider, discover_oauth_endpoints};
+use crate::config::McpAuthConfig;
 
 /// Type alias for the async sampling callback.
 ///
@@ -1292,6 +1294,8 @@ struct RemoteMcpServerHandle {
     client: reqwest::Client,
     /// Extra headers to include in every request (e.g., auth).
     headers: HashMap<String, String>,
+    /// Optional OAuth provider for dynamic Bearer token injection.
+    auth_provider: Option<Arc<OAuth2Provider>>,
     /// Current state.
     state: Arc<RwLock<ServerState>>,
     /// Capabilities advertised by the server during initialization.
@@ -1393,21 +1397,43 @@ impl RemoteMcpServerHandle {
             "params": params,
         });
 
-        let mut builder = self.client.post(&self.url);
-        for (key, value) in &self.headers {
-            builder = builder.header(key.as_str(), value.as_str());
-        }
+        let response = self.send_http_request(&request, timeout).await?;
 
-        let response = tokio::time::timeout(
-            timeout,
-            builder
-                .header("Content-Type", "application/json")
-                .json(&request)
-                .send(),
-        )
-        .await
-        .map_err(|_| format!("Remote MCP server '{}' request timed out after {:?}", self.name, timeout))?
-        .map_err(|e| format!("Remote MCP server '{}' HTTP request failed: {}", self.name, e))?;
+        // Handle 401 — attempt token refresh once and retry.
+        if response.status().as_u16() == 401 {
+            if let Some(provider) = &self.auth_provider {
+                info!(server = %self.name, "Got 401, attempting OAuth token refresh");
+                if provider.refresh_token().await.is_ok() {
+                    // Retry with refreshed token.
+                    let retry = self.send_http_request(&request, timeout).await?;
+                    if !retry.status().is_success() {
+                        return Err(format!(
+                            "Remote MCP server '{}' returned HTTP {} after token refresh",
+                            self.name,
+                            retry.status()
+                        ));
+                    }
+                    return self.parse_jsonrpc_response(retry).await;
+                }
+            }
+
+            // Auto-discovery: try RFC 9728/8414 OAuth metadata for helpful guidance.
+            let discovery_hint = match discover_oauth_endpoints(&self.url).await {
+                Ok(d) => format!(
+                    "\n\nOAuth endpoints discovered for '{}':\n  \
+                     Authorization: {}\n  \
+                     Token: {}\n\n\
+                     Add an OAuth auth config to your MCP server configuration to authenticate.",
+                    self.name, d.authorization_endpoint, d.token_endpoint
+                ),
+                Err(_) => " Configure OAuth or API key auth for this server.".to_string(),
+            };
+
+            return Err(format!(
+                "Remote MCP server '{}' returned HTTP 401 (unauthorized).{discovery_hint}",
+                self.name
+            ));
+        }
 
         if !response.status().is_success() {
             return Err(format!(
@@ -1416,6 +1442,48 @@ impl RemoteMcpServerHandle {
                 response.status()
             ));
         }
+
+        self.parse_jsonrpc_response(response).await
+    }
+
+    /// Build and send an HTTP POST with all headers (static + dynamic auth).
+    async fn send_http_request(
+        &self,
+        request: &Value,
+        timeout: Duration,
+    ) -> Result<reqwest::Response, String> {
+        let mut builder = self.client.post(&self.url);
+        for (key, value) in &self.headers {
+            builder = builder.header(key.as_str(), value.as_str());
+        }
+        // Inject dynamic auth headers from OAuth provider.
+        if let Some(provider) = &self.auth_provider {
+            let mut auth_headers = HashMap::new();
+            if let Err(e) = provider.add_auth_headers(&mut auth_headers).await {
+                warn!(server = %self.name, error = %e, "Failed to inject OAuth headers");
+            }
+            for (key, value) in auth_headers {
+                builder = builder.header(key.as_str(), value.as_str());
+            }
+        }
+
+        tokio::time::timeout(
+            timeout,
+            builder
+                .header("Content-Type", "application/json")
+                .json(&request)
+                .send(),
+        )
+        .await
+        .map_err(|_| format!("Remote MCP server '{}' request timed out after {:?}", self.name, timeout))?
+        .map_err(|e| format!("Remote MCP server '{}' HTTP request failed: {}", self.name, e))
+    }
+
+    /// Parse a successful HTTP response as JSON-RPC.
+    async fn parse_jsonrpc_response(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<Value, String> {
 
         let body: Value = response
             .json()
@@ -1445,6 +1513,16 @@ impl RemoteMcpServerHandle {
         let mut builder = self.client.post(&self.url);
         for (key, value) in &self.headers {
             builder = builder.header(key.as_str(), value.as_str());
+        }
+        // Inject dynamic auth headers.
+        if let Some(provider) = &self.auth_provider {
+            let mut auth_headers = HashMap::new();
+            if let Err(e) = provider.add_auth_headers(&mut auth_headers).await {
+                debug!(server = %self.name, error = %e, "Failed to inject OAuth headers in notification");
+            }
+            for (key, value) in auth_headers {
+                builder = builder.header(key.as_str(), value.as_str());
+            }
         }
 
         builder
@@ -1793,18 +1871,60 @@ impl McpProcessPool {
     /// Start a remote MCP server (HTTP/SSE transport) and add it to the pool.
     ///
     /// Connects to the remote URL, sends `initialize` handshake, and stores
-    /// the handle for tool calls.
+    /// the handle for tool calls. If `auth` is provided, resolves it:
+    /// - API key: merged into static headers immediately
+    /// - OAuth: stored as a dynamic provider that injects Bearer tokens
     pub async fn start_remote_server(
         &self,
         name: &str,
         url: &str,
         headers: HashMap<String, String>,
+        auth: Option<McpAuthConfig>,
     ) -> Result<(), String> {
+        let mut resolved_headers = headers;
+        let mut auth_provider: Option<Arc<OAuth2Provider>> = None;
+
+        match auth {
+            Some(McpAuthConfig::ApiKey { key, header, prefix }) => {
+                let header_name = header.as_deref().unwrap_or("X-API-Key");
+                let value = match prefix {
+                    Some(p) => format!("{p} {key}"),
+                    None => key,
+                };
+                resolved_headers.insert(header_name.to_string(), value);
+                info!(server = %name, "Configured API key auth for remote MCP server");
+            }
+            Some(McpAuthConfig::OAuth {
+                client_id,
+                client_secret,
+                auth_url,
+                token_url,
+                redirect_url,
+                scopes,
+            }) => {
+                let provider = OAuth2Provider::new(
+                    client_id,
+                    auth_url,
+                    token_url,
+                    redirect_url,
+                )
+                .with_scopes(scopes);
+                let provider = match client_secret {
+                    Some(secret) => provider.with_client_secret(secret),
+                    None => provider,
+                };
+                auth_provider = Some(Arc::new(provider));
+                info!(server = %name, "Configured OAuth auth for remote MCP server");
+            }
+            None => {}
+        }
+
         let handle = Arc::new(RemoteMcpServerHandle {
             name: name.to_string(),
             url: url.to_string(),
             client: reqwest::Client::new(),
-            headers,
+            headers: resolved_headers,
+            auth_provider,
             state: Arc::new(RwLock::new(ServerState::Starting)),
             capabilities: Arc::new(RwLock::new(None)),
             protocol_version: Arc::new(RwLock::new(String::new())),
@@ -2599,10 +2719,10 @@ impl McpProcessPool {
                     // Note: detecting config changes for existing servers would require
                     // storing the original config — a future enhancement.
                 }
-                crate::config::McpServerConfig::Sse { url, headers, .. }
-                | crate::config::McpServerConfig::Http { url, headers, .. } => {
+                crate::config::McpServerConfig::Sse { url, headers, auth }
+                | crate::config::McpServerConfig::Http { url, headers, auth } => {
                     if !is_current {
-                        self.start_remote_server(name, url, headers.clone()).await?;
+                        self.start_remote_server(name, url, headers.clone(), auth.clone()).await?;
                         changes.push(format!("Started remote server '{name}'"));
                     }
                 }
