@@ -50,6 +50,7 @@ pub use protocol::{
     RequestMethod, ResponseMethod, NotificationMethod,
     Tool, ToolAnnotations, Resource, ResourceTemplate, Prompt, PromptArgument,
     McpCapabilities, ServerCapabilities, ClientCapabilities,
+    CompletionsCapability,
     ToolContent, ResourceContent, ContentBlock,
     CompletionRequest, CompletionRef, CompletionResult, Completion, CompletionValue,
     LoggingLevel,
@@ -61,6 +62,7 @@ pub use protocol::{
     SamplingCapability, SamplingMessageRole, SamplingMessage, SamplingContent,
     ModelHint, ModelPreferences, SamplingParams,
     CreateMessageRequest, CreateMessageResult, StopReason,
+    ElicitationRequest, ElicitationResult, ElicitationAction,
 };
 pub use transport::{Transport, TransportError, StdioTransport, SseTransport, HttpTransport, WebSocketTransport};
 pub use client::{McpClient, McpClientError};
@@ -83,7 +85,7 @@ pub use server_manager::{
 };
 pub use process_pool::{
     McpProcessPool, PooledMcpToolAdapter, PooledDiscoveryResult,
-    discover_pooled_tools, ServerState, ServerStatus,
+    discover_pooled_tools, make_sampling_provider, ServerState, ServerStatus,
 };
 
 /// Current MCP protocol version supported by this implementation

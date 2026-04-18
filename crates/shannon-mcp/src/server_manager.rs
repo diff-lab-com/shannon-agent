@@ -101,19 +101,72 @@ pub async fn discover_all_servers_pooled(
                     }
                 }
             }
-            McpServerConfig::Sse { url, .. } => {
-                warn!(
-                    server = %name,
-                    url = %url,
-                    "SSE transport not yet supported for pooled discovery"
-                );
+            McpServerConfig::Sse { url, headers, .. } => {
+                match pool.start_remote_server(name, url, headers.clone()).await {
+                    Ok(()) => {
+                        // Discover tools from the remote server.
+                        match discover_remote_pooled_tools(pool.clone(), name).await {
+                            Ok(discovered) => {
+                                let tool_count = discovered.tools.len();
+                                info!(
+                                    server = %name,
+                                    tools = tool_count,
+                                    "Remote MCP server tools discovered (SSE)"
+                                );
+                                servers.push((name.clone(), tool_count));
+                                tools.extend(discovered.tools);
+                            }
+                            Err(e) => {
+                                error!(
+                                    server = %name,
+                                    error = %e,
+                                    "Failed to discover remote MCP server tools (SSE)"
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!(
+                            server = %name,
+                            url = %url,
+                            error = %e,
+                            "Failed to start remote MCP server (SSE)"
+                        );
+                    }
+                }
             }
-            McpServerConfig::Http { url, .. } => {
-                warn!(
-                    server = %name,
-                    url = %url,
-                    "HTTP transport not yet supported for pooled discovery"
-                );
+            McpServerConfig::Http { url, headers, .. } => {
+                match pool.start_remote_server(name, url, headers.clone()).await {
+                    Ok(()) => {
+                        match discover_remote_pooled_tools(pool.clone(), name).await {
+                            Ok(discovered) => {
+                                let tool_count = discovered.tools.len();
+                                info!(
+                                    server = %name,
+                                    tools = tool_count,
+                                    "Remote MCP server tools discovered (HTTP)"
+                                );
+                                servers.push((name.clone(), tool_count));
+                                tools.extend(discovered.tools);
+                            }
+                            Err(e) => {
+                                error!(
+                                    server = %name,
+                                    error = %e,
+                                    "Failed to discover remote MCP server tools (HTTP)"
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!(
+                            server = %name,
+                            url = %url,
+                            error = %e,
+                            "Failed to start remote MCP server (HTTP)"
+                        );
+                    }
+                }
             }
             McpServerConfig::WebSocket { url, .. } => {
                 warn!(
@@ -125,7 +178,10 @@ pub async fn discover_all_servers_pooled(
         }
     }
 
-    pool.start_health_checks();
+    let pool_for_health = pool.clone();
+    tokio::spawn(async move {
+        pool_for_health.start_health_checks().await;
+    });
 
     info!(
         servers = servers.len(),
@@ -143,6 +199,77 @@ pub async fn discover_all_servers_pooled(
 // ---------------------------------------------------------------------------
 // Legacy discovery (one-shot processes)
 // ---------------------------------------------------------------------------
+
+/// Discover tools from a remote (HTTP/SSE) server already started in the pool.
+///
+/// Sends `tools/list` via the pool's persistent connection and returns
+/// pooled adapters for each discovered tool.
+async fn discover_remote_pooled_tools(
+    pool: Arc<McpProcessPool>,
+    server_name: &str,
+) -> Result<crate::process_pool::PooledDiscoveryResult, String> {
+    use crate::process_pool::{PooledMcpToolAdapter, PooledDiscoveryResult};
+
+    // Check capabilities before attempting tools/list.
+    if !pool.has_tools(server_name).await {
+        tracing::debug!(
+            server = %server_name,
+            "Remote server does not advertise tools capability; skipping tools/list"
+        );
+        return Ok(PooledDiscoveryResult {
+            server_name: server_name.to_string(),
+            tools: Vec::new(),
+        });
+    }
+
+    // Send tools/list via the pool's send_server_request.
+    let response = pool
+        .send_server_request(server_name, "tools/list", serde_json::json!({}))
+        .await?;
+
+    let mut tools = Vec::new();
+
+    if let Some(tools_array) = response
+        .get("result")
+        .and_then(|r| r.get("tools"))
+        .and_then(|t| t.as_array())
+    {
+        for tool_value in tools_array {
+            let name = tool_value
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let description = tool_value
+                .get("description")
+                .and_then(|d| d.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("MCP tool: {name}"));
+            let input_schema = tool_value
+                .get("inputSchema")
+                .cloned()
+                .unwrap_or(serde_json::json!({"type": "object"}));
+
+            let annotations: Option<crate::ToolAnnotations> = tool_value
+                .get("annotations")
+                .and_then(|a| serde_json::from_value(a.clone()).ok());
+
+            tools.push(PooledMcpToolAdapter::new(
+                pool.clone(),
+                server_name.to_string(),
+                name,
+                description,
+                input_schema,
+                annotations,
+            ));
+        }
+    }
+
+    Ok(PooledDiscoveryResult {
+        server_name: server_name.to_string(),
+        tools,
+    })
+}
 
 /// Result of discovering all MCP servers from config.
 pub struct McpDiscoveryResult {
@@ -249,19 +376,12 @@ async fn discover_server_tools(
 
             Ok(result.tools)
         }
-        McpServerConfig::Sse { url, .. } => {
+        McpServerConfig::Sse { url, .. } | McpServerConfig::Http { url, .. } => {
+            // Remote servers require persistent connections — use pooled discovery instead.
             warn!(
                 server = %name,
                 url = %url,
-                "SSE transport MCP servers not yet supported for auto-discovery"
-            );
-            Ok(Vec::new())
-        }
-        McpServerConfig::Http { url, .. } => {
-            warn!(
-                server = %name,
-                url = %url,
-                "HTTP transport MCP servers not yet supported for auto-discovery"
+                "Remote MCP servers require pooled discovery; skipping in legacy path"
             );
             Ok(Vec::new())
         }
@@ -269,7 +389,7 @@ async fn discover_server_tools(
             warn!(
                 server = %name,
                 url = %url,
-                "WebSocket transport MCP servers not yet supported for auto-discovery"
+                "WebSocket transport not yet supported for auto-discovery"
             );
             Ok(Vec::new())
         }

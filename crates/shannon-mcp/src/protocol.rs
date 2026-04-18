@@ -328,7 +328,13 @@ pub struct ServerCapabilities {
     pub prompts: Option<PromptsCapability>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logging: Option<LoggingCapability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completions: Option<CompletionsCapability>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionsCapability {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -684,4 +690,44 @@ pub struct Root {
 #[serde(rename_all = "camelCase")]
 pub struct ListRootsResult {
     pub roots: Vec<Root>,
+}
+
+// ---------------------------------------------------------------------------
+// Elicitation (server → client user prompts)
+// ---------------------------------------------------------------------------
+
+/// Request from server to elicit information from the user.
+///
+/// Spec: <https://spec.modelcontextprotocol.io/specification/2024-11-05/basic/utilities/elicitation/>
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElicitationRequest {
+    /// Human-readable message to present to the user.
+    pub message: String,
+    /// Optional JSON Schema describing the requested input structure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_schema: Option<serde_json::Value>,
+}
+
+/// Result of an elicitation request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElicitationResult {
+    /// The action the user took.
+    pub action: ElicitationAction,
+    /// The user's input, present only when action is `Accept`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<serde_json::Value>,
+}
+
+/// User response to an elicitation prompt.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ElicitationAction {
+    /// User accepted and provided input.
+    Accept,
+    /// User declined to provide input.
+    Decline,
+    /// Request was cancelled (e.g. timeout, dismiss).
+    Cancel,
 }

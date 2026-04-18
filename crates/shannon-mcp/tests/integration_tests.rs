@@ -542,6 +542,7 @@ fn test_server_capabilities_full() {
         logging: Some(LoggingCapability {
             level: "info".to_string()
         }),
+        ..Default::default()
     };
 
     let json = serde_json::to_string(&caps).unwrap();

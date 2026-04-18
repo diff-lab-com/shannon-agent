@@ -715,6 +715,7 @@ mod tests {
             resources: Some(ResourcesCapability { subscribe: false, list_changed: false }),
             prompts: Some(PromptsCapability { list_changed: false }),
             logging: None,
+            ..Default::default()
         };
         *client.server_capabilities.lock().await = Some(caps.clone());
 

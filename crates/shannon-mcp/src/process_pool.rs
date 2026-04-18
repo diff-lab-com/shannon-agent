@@ -37,10 +37,22 @@ use tracing::{debug, info, warn};
 /// Type alias for the async sampling callback.
 ///
 /// Takes a `CreateMessageRequest` and returns a `CreateMessageResult`.
-type SamplingProvider = Arc<
+pub(crate) type SamplingProvider = Arc<
     dyn Fn(
             crate::CreateMessageRequest,
         ) -> Pin<Box<dyn Future<Output = Result<crate::CreateMessageResult, String>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Provider for elicitation requests (server → client user prompts).
+///
+/// Takes an [`ElicitationRequest`] and returns an [`ElicitationResult`].
+/// Typically wired to a TUI prompt or auto-declined in non-interactive mode.
+pub(crate) type ElicitationProvider = Arc<
+    dyn Fn(
+            crate::ElicitationRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<crate::ElicitationResult, String>> + Send>>
         + Send
         + Sync,
 >;
@@ -70,56 +82,175 @@ const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 60;
 /// which covers virtually all realistic tool executions.
 const DEFAULT_TOOL_TIMEOUT_SECS: u64 = 600;
 
-/// Truncate a tool result string to [`MAX_TOOL_RESULT_CHARS`].
+/// Compress a tool result string to fit within [`MAX_TOOL_RESULT_CHARS`].
 ///
-/// For JSON content, preserves opening structure and adds a truncation notice.
-/// For plain text, cuts at the last newline boundary within budget when possible.
+/// Uses format-aware strategies instead of simple truncation:
+/// - **JSON arrays**: show first N items + item count summary
+/// - **JSON objects**: show all keys with truncated values
+/// - **Stack traces / line-based text**: show first/last lines + line count
+/// - **Long text**: paragraph-aware truncation
+///
+/// For content that is already within budget, returns it unchanged.
 fn truncate_tool_result(content: &str) -> String {
     if content.len() <= MAX_TOOL_RESULT_CHARS {
         return content.to_string();
     }
 
     let original_len = content.len();
-
-    // Try to detect JSON and preserve structure
     let trimmed = content.trim();
-    if trimmed.starts_with('{') || trimmed.starts_with('[') {
-        // JSON-like content: truncate at char boundary, add notice
-        let mut end = MAX_TOOL_RESULT_CHARS;
-        while !content.is_char_boundary(end) && end > 0 {
-            end -= 1;
+
+    // Strategy 1: Try JSON-aware compression for JSON content.
+    if trimmed.starts_with('[') || trimmed.starts_with('{') {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            let compressed = compress_json(&value, MAX_TOOL_RESULT_CHARS);
+            let pct = ((original_len - compressed.len()) as f64 / original_len as f64) * 100.0;
+            return format!(
+                "{}\n\n[compressed: showed ~{} of ~{} chars ({:.0}% omitted)]",
+                compressed,
+                compressed.len(),
+                original_len,
+                pct,
+            );
         }
-        let truncated = &content[..end];
-        // Try to cut at a reasonable boundary (comma or newline)
-        let cut = truncated
-            .rfind(|c: char| c == '\n' || c == ',')
-            .unwrap_or(end);
-        let cut = if content.is_char_boundary(cut) { cut } else { end };
-        format!(
-            "{}\n\n[...truncated: showed {} of {} chars ({:.0}% omitted)]",
-            &content[..cut],
-            cut,
-            original_len,
-            ((original_len - cut) as f64 / original_len as f64) * 100.0,
-        )
-    } else {
-        // Plain text: try to cut at newline boundary
-        let mut end = MAX_TOOL_RESULT_CHARS;
-        while !content.is_char_boundary(end) && end > 0 {
-            end -= 1;
+    }
+
+    // Strategy 2: Line-based compression for structured text (stack traces, logs).
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.len() > 20 {
+        let head_budget = MAX_TOOL_RESULT_CHARS / 2;
+        let tail_budget = MAX_TOOL_RESULT_CHARS / 2;
+
+        let mut head_lines = Vec::new();
+        let mut head_len = 0;
+        for line in &lines {
+            if head_len + line.len() + 1 > head_budget {
+                break;
+            }
+            head_lines.push(*line);
+            head_len += line.len() + 1;
         }
-        let truncated = &content[..end];
-        let cut = truncated
-            .rfind('\n')
-            .unwrap_or(end);
-        let cut = if content.is_char_boundary(cut) { cut } else { end };
-        format!(
-            "{}\n\n[...truncated: showed {} of {} chars ({:.0}% omitted)]",
-            &content[..cut],
-            cut,
+
+        let mut tail_lines = Vec::new();
+        let mut tail_len = 0;
+        for line in lines.iter().rev() {
+            if tail_len + line.len() + 1 > tail_budget {
+                break;
+            }
+            tail_lines.push(*line);
+            tail_len += line.len() + 1;
+        }
+        tail_lines.reverse();
+
+        let omitted_lines = lines.len() - head_lines.len() - tail_lines.len();
+        let head_text = head_lines.join("\n");
+        let tail_text = tail_lines.join("\n");
+        let pct = ((original_len - head_text.len() - tail_text.len()) as f64 / original_len as f64) * 100.0;
+
+        return format!(
+            "{}\n\n... [{} lines omitted] ...\n\n{}\n\n[compressed: showed ~{} of ~{} chars ({:.0}% omitted)]",
+            head_text,
+            omitted_lines,
+            tail_text,
+            head_text.len() + tail_text.len(),
             original_len,
-            ((original_len - cut) as f64 / original_len as f64) * 100.0,
-        )
+            pct,
+        );
+    }
+
+    // Strategy 3: Paragraph-aware truncation for prose text.
+    let mut end = MAX_TOOL_RESULT_CHARS;
+    while !content.is_char_boundary(end) && end > 0 {
+        end -= 1;
+    }
+    // Try to cut at a paragraph boundary (double newline).
+    let truncated = &content[..end];
+    let cut = truncated
+        .rfind("\n\n")
+        .map(|pos| pos)
+        .or_else(|| truncated.rfind('\n'))
+        .unwrap_or(end);
+    let cut = if content.is_char_boundary(cut) { cut } else { end };
+    let pct = ((original_len - cut) as f64 / original_len as f64) * 100.0;
+    format!(
+        "{}\n\n[compressed: showed ~{} of ~{} chars ({:.0}% omitted)]",
+        &content[..cut],
+        cut,
+        original_len,
+        pct,
+    )
+}
+
+/// Format-aware JSON compression.
+///
+/// - Arrays: show first N items + summary of remaining count.
+/// - Objects: show all keys with truncated values.
+/// - Primitives: pass through.
+fn compress_json(value: &serde_json::Value, budget: usize) -> String {
+    match value {
+        serde_json::Value::Array(items) => {
+            if items.is_empty() {
+                return "[]".to_string();
+            }
+            // Determine how many items fit in budget.
+            let mut result = String::from("[\n");
+            let mut shown = 0;
+            for item in items {
+                let item_str = format!("  {},\n", serde_json::to_string(item).unwrap_or_default());
+                if result.len() + item_str.len() + 50 > budget {
+                    break;
+                }
+                result.push_str(&item_str);
+                shown += 1;
+            }
+            let remaining = items.len() - shown;
+            if remaining > 0 {
+                result.push_str(&format!(
+                    "  // ... {} more items\n",
+                    remaining
+                ));
+            }
+            result.push(']');
+            result
+        }
+        serde_json::Value::Object(map) => {
+            if map.is_empty() {
+                return "{}".to_string();
+            }
+            let mut result = String::from("{\n");
+            let value_budget = 200; // max chars per value
+            for (key, val) in map {
+                let val_str = serde_json::to_string(val).unwrap_or_default();
+                let display_val = if val_str.len() > value_budget {
+                    let mut v_end = value_budget;
+                    while !val_str.is_char_boundary(v_end) && v_end > 0 {
+                        v_end -= 1;
+                    }
+                    format!("{}...\"", &val_str[..v_end])
+                } else {
+                    val_str
+                };
+                let line = format!("  \"{}\": {},\n", key, display_val);
+                if result.len() + line.len() + 10 > budget {
+                    result.push_str(&format!("  // ... {} more keys\n", map.len() - result.lines().count() + 1));
+                    break;
+                }
+                result.push_str(&line);
+            }
+            result.push('}');
+            result
+        }
+        _ => {
+            let s = serde_json::to_string(value).unwrap_or_default();
+            if s.len() <= budget {
+                s
+            } else {
+                let mut end = budget;
+                while !s.is_char_boundary(end) && end > 0 {
+                    end -= 1;
+                }
+                format!("{}...", &s[..end])
+            }
+        }
     }
 }
 
@@ -280,6 +411,12 @@ struct McpServerHandle {
     roots_provider: Arc<Mutex<Option<Arc<dyn Fn() -> Vec<crate::Root> + Send + Sync>>>>,
     /// Provider for LLM sampling (used to respond to `sampling/createMessage` from servers).
     sampling_provider: Arc<Mutex<Option<SamplingProvider>>>,
+    /// Provider for elicitation (used to respond to `elicitation/create` from servers).
+    elicitation_provider: Arc<Mutex<Option<ElicitationProvider>>>,
+    /// Capabilities advertised by the server during initialization.
+    capabilities: Arc<RwLock<Option<crate::ServerCapabilities>>>,
+    /// Negotiated protocol version.
+    protocol_version: Arc<RwLock<String>>,
 }
 
 impl McpServerHandle {
@@ -333,8 +470,9 @@ impl McpServerHandle {
         let stdin_clone = self.stdin.clone();
         let roots_provider = self.roots_provider.clone();
         let sampling_provider = self.sampling_provider.clone();
+        let elicitation_provider = self.elicitation_provider.clone();
         let handle = tokio::spawn(async move {
-            Self::read_responses(reader, &pending, &server_name, &notification_tx, stdin_clone, roots_provider, sampling_provider).await;
+            Self::read_responses(reader, &pending, &server_name, &notification_tx, stdin_clone, roots_provider, sampling_provider, elicitation_provider).await;
         });
         *self.reader_task.lock().await = Some(handle);
 
@@ -357,6 +495,35 @@ impl McpServerHandle {
             "MCP server initialized"
         );
 
+        // Parse capabilities from init response.
+        if let Some(result) = init_response.get("result") {
+            if let Ok(caps) = serde_json::from_value::<crate::ServerCapabilities>(
+                result.get("capabilities").cloned().unwrap_or(serde_json::json!({})),
+            ) {
+                debug!(
+                    server = %self.name,
+                    has_tools = caps.tools.is_some(),
+                    has_resources = caps.resources.is_some(),
+                    has_prompts = caps.prompts.is_some(),
+                    "MCP server capabilities"
+                );
+                *self.capabilities.write().await = Some(caps);
+            }
+
+            // Store negotiated protocol version.
+            if let Some(version) = result.get("protocolVersion").and_then(|v| v.as_str()) {
+                *self.protocol_version.write().await = version.to_string();
+                if version != crate::MCP_PROTOCOL_VERSION {
+                    warn!(
+                        server = %self.name,
+                        server_version = %version,
+                        our_version = %crate::MCP_PROTOCOL_VERSION,
+                        "Protocol version mismatch with MCP server"
+                    );
+                }
+            }
+        }
+
         // Send initialized notification (no id, no response expected)
         self.send_notification("notifications/initialized", serde_json::json!({}))
             .await?;
@@ -376,6 +543,7 @@ impl McpServerHandle {
         stdin: Arc<Mutex<Option<ChildStdin>>>,
         roots_provider: Arc<Mutex<Option<Arc<dyn Fn() -> Vec<crate::Root> + Send + Sync>>>>,
         sampling_provider: Arc<Mutex<Option<SamplingProvider>>>,
+        elicitation_provider: Arc<Mutex<Option<ElicitationProvider>>>,
     ) {
         let mut lines = reader.lines();
         while let Ok(Some(line)) = lines.next_line().await {
@@ -459,6 +627,50 @@ impl McpServerHandle {
                         "jsonrpc": "2.0",
                         "id": req_id,
                         "error": { "code": -32601, "message": "Sampling not supported" },
+                    })
+                };
+                drop(provider);
+
+                let mut stdin_guard = stdin.lock().await;
+                if let Some(ref mut writer) = *stdin_guard {
+                    let mut msg = serde_json::to_string(&response_value).unwrap_or_default();
+                    msg.push('\n');
+                    let _ = writer.write_all(msg.as_bytes()).await;
+                    let _ = writer.flush().await;
+                }
+            }
+            // Handle elicitation/create server→client request.
+            else if value.get("method").and_then(|m| m.as_str()) == Some("elicitation/create")
+                && value.get("id").is_some()
+            {
+                let req_id = value.get("id").cloned();
+                let provider = elicitation_provider.lock().await;
+                let response_value = if let Some(ref handler) = *provider {
+                    let params = value.get("params").cloned().unwrap_or(serde_json::json!({}));
+                    match serde_json::from_value::<crate::ElicitationRequest>(params) {
+                        Ok(req) => match handler(req).await {
+                            Ok(result) => serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "id": req_id,
+                                "result": result,
+                            }),
+                            Err(e) => serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "id": req_id,
+                                "error": { "code": -32603, "message": e },
+                            }),
+                        },
+                        Err(e) => serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": req_id,
+                            "error": { "code": -32602, "message": format!("Invalid params: {e}") },
+                        }),
+                    }
+                } else {
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "error": { "code": -32601, "message": "Elicitation not supported" },
                     })
                 };
                 drop(provider);
@@ -856,6 +1068,289 @@ impl McpServerHandle {
 }
 
 // ---------------------------------------------------------------------------
+// Remote Server Handle (HTTP/SSE transports)
+// ---------------------------------------------------------------------------
+
+/// Manages a remote MCP server connection via HTTP.
+///
+/// Unlike `McpServerHandle` (which manages a child process over stdio),
+/// this handle sends JSON-RPC requests via HTTP POST and parses responses.
+/// No process management, no background reader task, no pending request map.
+struct RemoteMcpServerHandle {
+    /// Server name (for logging).
+    name: String,
+    /// Server URL endpoint.
+    url: String,
+    /// HTTP client (reused for connection pooling).
+    client: reqwest::Client,
+    /// Extra headers to include in every request (e.g., auth).
+    headers: HashMap<String, String>,
+    /// Current state.
+    state: Arc<RwLock<ServerState>>,
+    /// Capabilities advertised by the server during initialization.
+    capabilities: Arc<RwLock<Option<crate::ServerCapabilities>>>,
+    /// Negotiated protocol version.
+    protocol_version: Arc<RwLock<String>>,
+    /// Next JSON-RPC request id.
+    next_id: AtomicU64,
+    /// Total number of tool call requests.
+    request_count: AtomicU64,
+    /// Total number of failed tool calls.
+    error_count: AtomicU64,
+    /// How many times this server has been restarted (re-initialized).
+    restart_count: Arc<AtomicU64>,
+    /// Maximum restart attempts.
+    max_restarts: u32,
+    /// When the server was last started successfully.
+    started_at: Arc<RwLock<Option<Instant>>>,
+    /// Request timeout (for regular JSON-RPC requests).
+    request_timeout: Duration,
+    /// Tool call timeout (for tools/call).
+    tool_timeout: Duration,
+}
+
+impl RemoteMcpServerHandle {
+    /// Initialize the remote server: send `initialize` + `notifications/initialized`.
+    async fn start(&self) -> Result<(), String> {
+        *self.state.write().await = ServerState::Starting;
+
+        let init_response = self
+            .send_request_with_timeout(
+                "initialize",
+                serde_json::json!({
+                    "protocolVersion": crate::MCP_PROTOCOL_VERSION,
+                    "capabilities": {
+                        "roots": { "listChanged": true },
+                        "sampling": {}
+                    },
+                    "clientInfo": {"name": "shannon-code", "version": "0.1.0"}
+                }),
+                self.request_timeout,
+            )
+            .await?;
+
+        // Parse capabilities from init response.
+        if let Some(result) = init_response.get("result") {
+            if let Ok(caps) = serde_json::from_value::<crate::ServerCapabilities>(
+                result.get("capabilities").cloned().unwrap_or(serde_json::json!({})),
+            ) {
+                debug!(
+                    server = %self.name,
+                    has_tools = caps.tools.is_some(),
+                    has_resources = caps.resources.is_some(),
+                    has_prompts = caps.prompts.is_some(),
+                    "Remote MCP server capabilities"
+                );
+                *self.capabilities.write().await = Some(caps);
+            }
+
+            // Store negotiated protocol version.
+            if let Some(version) = result.get("protocolVersion").and_then(|v| v.as_str()) {
+                *self.protocol_version.write().await = version.to_string();
+                if version != crate::MCP_PROTOCOL_VERSION {
+                    warn!(
+                        server = %self.name,
+                        server_version = %version,
+                        our_version = %crate::MCP_PROTOCOL_VERSION,
+                        "Protocol version mismatch with remote MCP server"
+                    );
+                }
+            }
+        }
+
+        // Send initialized notification (fire-and-forget POST).
+        let _ = self
+            .send_notification("notifications/initialized", serde_json::json!({}))
+            .await;
+
+        *self.state.write().await = ServerState::Healthy;
+        *self.started_at.write().await = Some(Instant::now());
+        info!(server = %self.name, url = %self.url, "Remote MCP server is healthy");
+        Ok(())
+    }
+
+    /// Send a JSON-RPC request via HTTP POST and wait for the response.
+    async fn send_request_with_timeout(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, String> {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params,
+        });
+
+        let mut builder = self.client.post(&self.url);
+        for (key, value) in &self.headers {
+            builder = builder.header(key.as_str(), value.as_str());
+        }
+
+        let response = tokio::time::timeout(
+            timeout,
+            builder
+                .header("Content-Type", "application/json")
+                .json(&request)
+                .send(),
+        )
+        .await
+        .map_err(|_| format!("Remote MCP server '{}' request timed out after {:?}", self.name, timeout))?
+        .map_err(|e| format!("Remote MCP server '{}' HTTP request failed: {}", self.name, e))?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "Remote MCP server '{}' returned HTTP {}",
+                self.name,
+                response.status()
+            ));
+        }
+
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|e| format!("Remote MCP server '{}' response parse error: {}", self.name, e))?;
+
+        // Check for JSON-RPC error.
+        if let Some(error) = body.get("error") {
+            let msg = error
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Unknown error");
+            return Err(format!("Remote MCP server '{}' error: {}", self.name, msg));
+        }
+
+        Ok(body)
+    }
+
+    /// Send a JSON-RPC notification (no id, no response expected).
+    async fn send_notification(&self, method: &str, params: Value) -> Result<(), String> {
+        let notification = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+        });
+
+        let mut builder = self.client.post(&self.url);
+        for (key, value) in &self.headers {
+            builder = builder.header(key.as_str(), value.as_str());
+        }
+
+        builder
+            .header("Content-Type", "application/json")
+            .json(&notification)
+            .send()
+            .await
+            .map_err(|e| {
+                format!(
+                    "Remote MCP server '{}' notification failed: {}",
+                    self.name, e
+                )
+            })?;
+
+        Ok(())
+    }
+
+    /// Call a tool on this remote server via `tools/call`.
+    async fn call_tool(&self, tool_name: &str, arguments: Value) -> ToolResult<ToolOutput> {
+        // Check state.
+        {
+            let state = self.state.read().await;
+            if !matches!(*state, ServerState::Healthy) {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "Remote MCP server '{}' is not healthy (state: {:?})",
+                    self.name, *state
+                )));
+            }
+        }
+
+        self.request_count.fetch_add(1, Ordering::Relaxed);
+
+        let response = self
+            .send_request_with_timeout(
+                "tools/call",
+                serde_json::json!({
+                    "name": tool_name,
+                    "arguments": arguments,
+                }),
+                self.tool_timeout,
+            )
+            .await
+            .map_err(|e| {
+                self.error_count.fetch_add(1, Ordering::Relaxed);
+                ToolError::ExecutionFailed(e)
+            })?;
+
+        // Parse the response content (same logic as stdio handle).
+        if let Some(result) = response.get("result") {
+            if let Some(content_array) = result.get("content").and_then(|c| c.as_array()) {
+                let is_error = result
+                    .get("isError")
+                    .and_then(|e| e.as_bool())
+                    .unwrap_or(false);
+
+                if is_error {
+                    let normalized = normalize_error_content(content_array);
+                    if !normalized.is_empty() {
+                        let content = truncate_tool_result(&normalized);
+                        return Ok(ToolOutput::error(content));
+                    }
+                } else {
+                    let texts: Vec<String> = content_array
+                        .iter()
+                        .filter_map(|block| {
+                            if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                block.get("text").and_then(|t| t.as_str()).map(|s| s.to_string())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                    if !texts.is_empty() {
+                        let content = truncate_tool_result(&texts.join("\n"));
+                        return Ok(ToolOutput::success(content));
+                    }
+                }
+            }
+            return Ok(ToolOutput::success(truncate_tool_result(&result.to_string())));
+        }
+
+        Ok(ToolOutput::success(truncate_tool_result(&response.to_string())))
+    }
+
+    /// Get the current state.
+    async fn get_state(&self) -> ServerState {
+        self.state.read().await.clone()
+    }
+
+    /// Get detailed status including metrics.
+    async fn get_status(&self) -> ServerStatus {
+        let state = self.state.read().await.clone();
+        let started_at = *self.started_at.read().await;
+        let now = Instant::now();
+
+        ServerStatus {
+            name: self.name.clone(),
+            uptime: started_at.map(|t| now.duration_since(t)),
+            state,
+            request_count: self.request_count.load(Ordering::Relaxed),
+            error_count: self.error_count.load(Ordering::Relaxed),
+            restart_count: self.restart_count.load(Ordering::Relaxed),
+            last_health_check: None,
+        }
+    }
+
+    /// Reset state for restart.
+    async fn reset(&self) {
+        *self.state.write().await = ServerState::Stopped;
+        *self.started_at.write().await = None;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Process Pool
 // ---------------------------------------------------------------------------
 
@@ -864,8 +1359,10 @@ impl McpServerHandle {
 /// The pool keeps server processes alive across multiple tool calls,
 /// handles health monitoring, automatic restarts, and graceful shutdown.
 pub struct McpProcessPool {
-    /// Server handles keyed by server name.
+    /// Server handles keyed by server name (stdio transport).
     handles: DashMap<String, Arc<McpServerHandle>>,
+    /// Remote server handles keyed by server name (HTTP/SSE transport).
+    remote_handles: DashMap<String, Arc<RemoteMcpServerHandle>>,
     /// Health check interval.
     health_interval: Duration,
     /// Maximum restart attempts.
@@ -888,6 +1385,15 @@ pub struct McpProcessPool {
     roots_provider: Arc<Mutex<Option<Arc<dyn Fn() -> Vec<crate::Root> + Send + Sync>>>>,
     /// Provider for LLM sampling. Called when a server sends `sampling/createMessage`.
     sampling_provider: Arc<Mutex<Option<SamplingProvider>>>,
+    /// Provider for elicitation. Called when a server sends `elicitation/create`.
+    elicitation_provider: Arc<Mutex<Option<ElicitationProvider>>>,
+    /// TTL-based cache for read-only tool results.
+    tool_cache: Arc<RwLock<HashMap<String, (String, Instant)>>>,
+    /// TTL for cached tool results (default: 60 seconds).
+    cache_ttl: Duration,
+    /// Callback invoked when an MCP server sends `notifications/progress`.
+    /// Receives `(tool_name, progress, total)`.
+    progress_callback: Arc<Mutex<Option<Arc<dyn Fn(&str, f64, Option<f64>) + Send + Sync>>>>,
 }
 
 impl McpProcessPool {
@@ -896,6 +1402,7 @@ impl McpProcessPool {
         let (notification_tx, notification_rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             handles: DashMap::new(),
+            remote_handles: DashMap::new(),
             health_interval: Duration::from_secs(60),
             max_restarts: 5,
             request_timeout: Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
@@ -907,6 +1414,10 @@ impl McpProcessPool {
             on_tools_changed: Arc::new(Mutex::new(None)),
             roots_provider: Arc::new(Mutex::new(None)),
             sampling_provider: Arc::new(Mutex::new(None)),
+            elicitation_provider: Arc::new(Mutex::new(None)),
+            tool_cache: Arc::new(RwLock::new(HashMap::new())),
+            cache_ttl: Duration::from_secs(60),
+            progress_callback: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -969,6 +1480,9 @@ impl McpProcessPool {
             notification_tx: self.notification_tx.clone(),
             roots_provider: self.roots_provider.clone(),
             sampling_provider: self.sampling_provider.clone(),
+            elicitation_provider: self.elicitation_provider.clone(),
+            capabilities: Arc::new(RwLock::new(None)),
+            protocol_version: Arc::new(RwLock::new(String::new())),
         });
 
         handle.start().await?;
@@ -976,15 +1490,80 @@ impl McpProcessPool {
         Ok(())
     }
 
+    /// Start a remote MCP server (HTTP/SSE transport) and add it to the pool.
+    ///
+    /// Connects to the remote URL, sends `initialize` handshake, and stores
+    /// the handle for tool calls.
+    pub async fn start_remote_server(
+        &self,
+        name: &str,
+        url: &str,
+        headers: HashMap<String, String>,
+    ) -> Result<(), String> {
+        let handle = Arc::new(RemoteMcpServerHandle {
+            name: name.to_string(),
+            url: url.to_string(),
+            client: reqwest::Client::new(),
+            headers,
+            state: Arc::new(RwLock::new(ServerState::Starting)),
+            capabilities: Arc::new(RwLock::new(None)),
+            protocol_version: Arc::new(RwLock::new(String::new())),
+            next_id: AtomicU64::new(1),
+            request_count: AtomicU64::new(0),
+            error_count: AtomicU64::new(0),
+            restart_count: Arc::new(AtomicU64::new(0)),
+            max_restarts: self.max_restarts,
+            started_at: Arc::new(RwLock::new(None)),
+            request_timeout: self.request_timeout,
+            tool_timeout: self.tool_timeout,
+        });
+
+        handle.start().await?;
+        self.remote_handles.insert(name.to_string(), handle);
+        Ok(())
+    }
+
     /// Call a tool on a server in the pool.
     ///
-    /// If the server is unhealthy, attempts to restart it first.
+    /// Checks both stdio and remote handles. For stdio servers, attempts
+    /// restart if unhealthy. For remote servers, re-initializes on failure.
     pub async fn call_tool(
         &self,
         server_name: &str,
         tool_name: &str,
         arguments: Value,
     ) -> ToolResult<ToolOutput> {
+        // Check remote handles first (simpler, no process management).
+        if let Some(remote) = self.remote_handles.get(server_name) {
+            let remote = remote.clone();
+            let state = remote.get_state().await;
+            if matches!(state, ServerState::Healthy) {
+                return match remote.call_tool(tool_name, arguments).await {
+                    Ok(output) => Ok(output),
+                    Err(e) => {
+                        *remote.state.write().await =
+                            ServerState::Unhealthy(e.to_string());
+                        // Attempt re-initialization.
+                        let restarts = remote.restart_count.fetch_add(1, Ordering::Relaxed) as u32;
+                        if restarts < remote.max_restarts {
+                            remote.reset().await;
+                            if let Err(reinit_err) = remote.start().await {
+                                warn!(server = %server_name, error = %reinit_err, "Remote server re-init failed");
+                            }
+                        }
+                        Err(e)
+                    }
+                };
+            }
+            // Try re-initializing.
+            remote.reset().await;
+            remote.start().await.map_err(|e| {
+                ToolError::ExecutionFailed(format!("Remote MCP server '{server_name}' restart failed: {e}"))
+            })?;
+            return remote.call_tool(tool_name, arguments).await;
+        }
+
+        // Stdio handle.
         let handle = self
             .handles
             .get(server_name)
@@ -1119,11 +1698,48 @@ impl McpProcessPool {
 
     /// Send a ping to a specific server.
     pub async fn ping(&self, server_name: &str) -> Result<(), String> {
+        // Check remote handles first.
+        if let Some(remote) = self.remote_handles.get(server_name) {
+            let remote = remote.clone();
+            match remote
+                .send_request_with_timeout("ping", serde_json::json!({}), remote.request_timeout)
+                .await
+            {
+                Ok(_) => {
+                    *remote.state.write().await = ServerState::Healthy;
+                    Ok(())
+                }
+                Err(e) => {
+                    *remote.state.write().await = ServerState::Unhealthy(e.clone());
+                    Err(e)
+                }
+            }
+        } else {
+            let handle = self
+                .handles
+                .get(server_name)
+                .ok_or_else(|| format!("MCP server '{server_name}' not in pool"))?;
+            handle.ping().await
+        }
+    }
+
+    /// Send a JSON-RPC request to a server (works for both stdio and remote).
+    pub(crate) async fn send_server_request(
+        &self,
+        server_name: &str,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, String> {
+        if let Some(remote) = self.remote_handles.get(server_name) {
+            return remote
+                .send_request_with_timeout(method, params, remote.request_timeout)
+                .await;
+        }
         let handle = self
             .handles
             .get(server_name)
             .ok_or_else(|| format!("MCP server '{server_name}' not in pool"))?;
-        handle.ping().await
+        handle.send_request(method, params).await
     }
 
     /// List prompts from a specific server via `prompts/list`.
@@ -1131,11 +1747,10 @@ impl McpProcessPool {
         &self,
         server_name: &str,
     ) -> Result<Vec<crate::Prompt>, String> {
-        let handle = self
-            .handles
-            .get(server_name)
-            .ok_or_else(|| format!("MCP server '{server_name}' not in pool"))?;
-        let response = handle.send_request("prompts/list", serde_json::json!({})).await?;
+        if !self.has_prompts(server_name).await {
+            return Err(format!("Server '{server_name}' does not support prompts"));
+        }
+        let response = self.send_server_request(server_name, "prompts/list", serde_json::json!({})).await?;
         let prompts_value = response
             .get("result")
             .and_then(|r| r.get("prompts"))
@@ -1145,9 +1760,11 @@ impl McpProcessPool {
             .map_err(|e| format!("Failed to parse prompts list: {e}"))
     }
 
-    /// List prompts from all connected servers.
+    /// List prompts from all connected servers (stdio + remote).
     pub async fn list_all_prompts(&self) -> Vec<(String, Vec<crate::Prompt>)> {
         let mut result = Vec::new();
+
+        // Stdio handles.
         for entry in self.handles.iter() {
             let name = entry.key().clone();
             let handle = entry.value();
@@ -1165,6 +1782,26 @@ impl McpProcessPool {
                 }
             }
         }
+
+        // Remote handles.
+        for entry in self.remote_handles.iter() {
+            let name = entry.key().clone();
+            let remote = entry.value();
+            if let Ok(response) = remote
+                .send_request_with_timeout("prompts/list", serde_json::json!({}), remote.request_timeout)
+                .await
+            {
+                let prompts_value = response
+                    .get("result")
+                    .and_then(|r| r.get("prompts"))
+                    .cloned()
+                    .unwrap_or(serde_json::json!([]));
+                if let Ok(parsed) = serde_json::from_value(prompts_value) {
+                    result.push((name, parsed));
+                }
+            }
+        }
+
         result
     }
 
@@ -1175,15 +1812,14 @@ impl McpProcessPool {
         prompt_name: &str,
         arguments: Option<std::collections::HashMap<String, String>>,
     ) -> Result<Value, String> {
-        let handle = self
-            .handles
-            .get(server_name)
-            .ok_or_else(|| format!("MCP server '{server_name}' not in pool"))?;
+        if !self.has_prompts(server_name).await {
+            return Err(format!("Server '{server_name}' does not support prompts"));
+        }
         let params = serde_json::json!({
             "name": prompt_name,
             "arguments": arguments.unwrap_or_default(),
         });
-        let response = handle.send_request("prompts/get", params).await?;
+        let response = self.send_server_request(server_name, "prompts/get", params).await?;
         response.get("result").cloned().ok_or_else(|| {
             format!("MCP server '{server_name}' returned no result for prompt '{prompt_name}'")
         })
@@ -1191,20 +1827,30 @@ impl McpProcessPool {
 
     /// Get the state of a specific server.
     pub async fn server_state(&self, server_name: &str) -> Option<ServerState> {
+        if let Some(remote) = self.remote_handles.get(server_name) {
+            return Some(remote.get_state().await);
+        }
         let handle = self.handles.get(server_name)?;
         Some(handle.get_state().await)
     }
 
     /// Get detailed status of a specific server, including metrics.
     pub async fn server_status(&self, server_name: &str) -> Option<ServerStatus> {
+        if let Some(remote) = self.remote_handles.get(server_name) {
+            return Some(remote.get_status().await);
+        }
         let handle = self.handles.get(server_name)?;
         Some(handle.get_status().await)
     }
 
-    /// List all server names and their states.
+    /// List all server names and their states (stdio + remote).
     pub async fn list_servers(&self) -> Vec<(String, ServerState)> {
         let mut result = Vec::new();
         for entry in self.handles.iter() {
+            let state = entry.value().get_state().await;
+            result.push((entry.key().clone(), state));
+        }
+        for entry in self.remote_handles.iter() {
             let state = entry.value().get_state().await;
             result.push((entry.key().clone(), state));
         }
@@ -1319,6 +1965,94 @@ impl McpProcessPool {
         *self.sampling_provider.lock().await = Some(provider);
     }
 
+    /// Set the elicitation provider for handling `elicitation/create` requests.
+    ///
+    /// The provider receives an [`ElicitationRequest`] and returns an
+    /// [`ElicitationResult`]. If no provider is set, servers receive a
+    /// "method not found" error when they attempt elicitation.
+    pub async fn set_elicitation_provider(&self, provider: ElicitationProvider) {
+        *self.elicitation_provider.lock().await = Some(provider);
+    }
+
+    /// Set the TTL for tool result caching (default: 60 seconds).
+    pub fn set_cache_ttl(&mut self, ttl: Duration) {
+        self.cache_ttl = ttl;
+    }
+
+    /// Set a callback invoked when MCP servers send `notifications/progress`.
+    ///
+    /// The callback receives `(tool_name, progress, total)` where `total` may
+    /// be `None` if the server did not include it.
+    pub async fn set_progress_callback(
+        &self,
+        callback: Arc<dyn Fn(&str, f64, Option<f64>) + Send + Sync>,
+    ) {
+        *self.progress_callback.lock().await = Some(callback);
+    }
+
+    /// Request completions from a server that supports the completions capability.
+    ///
+    /// Sends `completion/complete` to the server and returns the result.
+    pub async fn complete(
+        &self,
+        server_name: &str,
+        ref_type: &str,
+        ref_uri: Option<&str>,
+        ref_name: Option<&str>,
+        argument_name: &str,
+        argument_value: &str,
+    ) -> Result<crate::CompletionResult, String> {
+        let params = serde_json::json!({
+            "ref": {
+                "type": ref_type,
+                "uri": ref_uri,
+                "name": ref_name,
+            },
+            "argument": {
+                "name": argument_name,
+                "value": argument_value,
+            }
+        });
+
+        let response = self
+            .send_server_request(server_name, "completion/complete", params)
+            .await?;
+
+        serde_json::from_value::<crate::CompletionResult>(
+            response.get("result").cloned().unwrap_or(serde_json::json!({})),
+        )
+        .map_err(|e| format!("Failed to parse completion result: {e}"))
+    }
+
+    /// Clear all cached tool results.
+    pub async fn clear_cache(&self) {
+        self.tool_cache.write().await.clear();
+    }
+
+    /// Clear cached results for a specific server.
+    pub async fn clear_server_cache(&self, server_name: &str) {
+        let prefix = format!("{server_name}:");
+        let mut cache = self.tool_cache.write().await;
+        cache.retain(|k, _| !k.starts_with(&prefix));
+    }
+
+    /// Look up a cached tool result. Returns `None` if not cached or expired.
+    async fn get_cached(&self, key: &str) -> Option<String> {
+        let cache = self.tool_cache.read().await;
+        if let Some((value, timestamp)) = cache.get(key) {
+            if timestamp.elapsed() < self.cache_ttl {
+                return Some(value.clone());
+            }
+        }
+        None
+    }
+
+    /// Store a tool result in the cache.
+    async fn put_cached(&self, key: &str, value: String) {
+        let mut cache = self.tool_cache.write().await;
+        cache.insert(key.to_string(), (value, Instant::now()));
+    }
+
     /// Start a background task that listens for server notifications
     /// and dispatches them to the appropriate callback.
     ///
@@ -1327,6 +2061,7 @@ impl McpProcessPool {
     pub fn start_notification_handler(&self) {
         let rx = self.notification_rx.clone();
         let on_tools_changed = self.on_tools_changed.clone();
+        let tool_cache = self.tool_cache.clone();
 
         tokio::spawn(async move {
             loop {
@@ -1346,6 +2081,12 @@ impl McpProcessPool {
                                     server = %server_name,
                                     "Received tools/list_changed notification"
                                 );
+                                // Invalidate cached results for this server.
+                                {
+                                    let prefix = format!("{server_name}:");
+                                    let mut cache = tool_cache.write().await;
+                                    cache.retain(|k, _| !k.starts_with(&prefix));
+                                }
                                 let guard = on_tools_changed.lock().await;
                                 if let Some(ref cb) = *guard {
                                     cb(&server_name);
@@ -1369,18 +2110,64 @@ impl McpProcessPool {
         });
     }
 
-    /// Gracefully shut down all servers.
+    /// Gracefully shut down all servers (stdio + remote).
     pub async fn shutdown_all(&self) {
         info!("Shutting down all MCP servers");
         for entry in self.handles.iter() {
             entry.value().shutdown().await;
         }
         self.handles.clear();
+        self.remote_handles.clear();
     }
 
-    /// Get the number of servers in the pool.
+    /// Get the number of servers in the pool (stdio + remote).
     pub fn server_count(&self) -> usize {
-        self.handles.len()
+        self.handles.len() + self.remote_handles.len()
+    }
+
+    /// Check whether a server supports the `tools` capability.
+    pub async fn has_tools(&self, server_name: &str) -> bool {
+        self.get_capabilities(server_name)
+            .await
+            .map_or(false, |c| c.tools.is_some())
+    }
+
+    /// Check whether a server supports the `resources` capability.
+    pub async fn has_resources(&self, server_name: &str) -> bool {
+        self.get_capabilities(server_name)
+            .await
+            .map_or(false, |c| c.resources.is_some())
+    }
+
+    /// Check whether a server supports the `prompts` capability.
+    pub async fn has_prompts(&self, server_name: &str) -> bool {
+        self.get_capabilities(server_name)
+            .await
+            .map_or(false, |c| c.prompts.is_some())
+    }
+
+    /// Get the negotiated protocol version for a server.
+    pub async fn server_protocol_version(&self, server_name: &str) -> Option<String> {
+        if let Some(handle) = self.handles.get(server_name) {
+            let v = handle.protocol_version.read().await;
+            if v.is_empty() { None } else { Some(v.clone()) }
+        } else if let Some(handle) = self.remote_handles.get(server_name) {
+            let v = handle.protocol_version.read().await;
+            if v.is_empty() { None } else { Some(v.clone()) }
+        } else {
+            None
+        }
+    }
+
+    /// Retrieve the stored capabilities for a server (stdio or remote).
+    async fn get_capabilities(&self, server_name: &str) -> Option<crate::ServerCapabilities> {
+        if let Some(handle) = self.handles.get(server_name) {
+            handle.capabilities.read().await.clone()
+        } else if let Some(handle) = self.remote_handles.get(server_name) {
+            handle.capabilities.read().await.clone()
+        } else {
+            None
+        }
     }
 }
 
@@ -1447,6 +2234,53 @@ impl PooledMcpToolAdapter {
             annotations,
         }
     }
+
+    /// Internal helper: calls the tool via the pool, using progress reporting
+    /// when a progress callback is registered on the pool.
+    async fn call_tool_inner(&self, input: Value) -> ToolResult<ToolOutput> {
+        let progress_cb = self.pool.progress_callback.lock().await;
+        if let Some(ref cb) = *progress_cb {
+            let tool_name = self.tool_name.clone();
+            let cb = cb.clone();
+            drop(progress_cb);
+
+            let on_progress = Arc::new(move |progress: f64, total: Option<f64>| {
+                cb(&tool_name, progress, total);
+            });
+
+            self.pool
+                .call_tool_with_progress(
+                    &self.server_name,
+                    &self.remote_tool_name,
+                    input,
+                    on_progress,
+                )
+                .await
+        } else {
+            drop(progress_cb);
+            self.pool
+                .call_tool(&self.server_name, &self.remote_tool_name, input)
+                .await
+        }
+    }
+
+    /// Produce a deterministic, sorted JSON string for cache key stability.
+    fn sorted_args(input: &Value) -> String {
+        match input {
+            Value::Object(map) => {
+                let mut pairs: Vec<(String, String)> = map
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.to_string()))
+                    .collect();
+                pairs.sort_by(|a, b| a.0.cmp(&b.0));
+                pairs.into_iter()
+                    .map(|(k, v)| format!("{k}:{v}"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            }
+            other => other.to_string(),
+        }
+    }
 }
 
 impl std::fmt::Debug for PooledMcpToolAdapter {
@@ -1473,9 +2307,34 @@ impl Tool for PooledMcpToolAdapter {
     }
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
-        self.pool
-            .call_tool(&self.server_name, &self.remote_tool_name, input)
-            .await
+        // Check cache for read-only tools.
+        if self.is_read_only() {
+            let cache_key = format!(
+                "{}:{}:{}",
+                self.server_name,
+                self.remote_tool_name,
+                Self::sorted_args(&input)
+            );
+            if let Some(cached) = self.pool.get_cached(&cache_key).await {
+                debug!(
+                    server = %self.server_name,
+                    tool = %self.remote_tool_name,
+                    "Returning cached tool result"
+                );
+                return Ok(ToolOutput::success(cached));
+            }
+
+            let result = self.call_tool_inner(input.clone()).await?;
+
+            // Store in cache on success.
+            if !result.is_error {
+                self.pool.put_cached(&cache_key, result.content.clone()).await;
+            }
+
+            return Ok(result);
+        }
+
+        self.call_tool_inner(input).await
     }
 
     fn requires_auth(&self) -> bool {
@@ -1518,6 +2377,75 @@ pub struct PooledDiscoveryResult {
     pub tools: Vec<PooledMcpToolAdapter>,
 }
 
+// ---------------------------------------------------------------------------
+// Sampling provider bridge
+// ---------------------------------------------------------------------------
+
+/// Create a sampling provider that delegates to an [`shannon_core::api::client::LlmClient`].
+///
+/// This wires MCP `sampling/createMessage` requests through to Shannon's LLM
+/// backend. The provider:
+/// - Converts `SamplingMessageRole` → LLM message roles (`"user"` / `"assistant"`)
+/// - Converts `SamplingContent` → LLM content types
+/// - Passes `system_prompt` through as the system message
+/// - Logs each request for observability
+///
+/// Returns a `SamplingProvider` suitable for [`McpProcessPool::set_sampling_provider`].
+pub fn make_sampling_provider(
+    client: std::sync::Arc<shannon_core::api::client::LlmClient>,
+) -> SamplingProvider {
+    use shannon_core::api::types::{ContentBlock, Message, MessageContent};
+    use crate::{CreateMessageRequest, CreateMessageResult, SamplingContent, SamplingMessageRole};
+
+    Arc::new(move |req: CreateMessageRequest| {
+        let client = client.clone();
+        Box::pin(async move {
+            tracing::info!(
+                messages = req.messages.len(),
+                model_hint = ?req.model_preferences.as_ref().and_then(|p| p.hints.as_ref().and_then(|h| h.first().and_then(|h| h.name.as_deref()))),
+                "MCP sampling request"
+            );
+
+            // Convert sampling messages → LLM messages.
+            let messages: Vec<Message> = req.messages.into_iter().map(|msg| {
+                let role = match msg.role {
+                    SamplingMessageRole::User => "user".to_string(),
+                    SamplingMessageRole::Assistant => "assistant".to_string(),
+                };
+                let content = match msg.content {
+                    SamplingContent::Text { text } => MessageContent::Text(text),
+                    SamplingContent::Image { data, mime_type } => {
+                        MessageContent::Blocks(vec![ContentBlock::Image {
+                            source: shannon_core::api::types::ImageSource::base64(mime_type, data),
+                        }])
+                    }
+                };
+                Message { role, content }
+            }).collect();
+
+            let response = client
+                .send_message(messages, None, req.system_prompt)
+                .await
+                .map_err(|e| format!("Sampling LLM call failed: {e}"))?;
+
+            // Extract text from response content blocks.
+            let mut text = String::new();
+            for block in &response {
+                if let ContentBlock::Text { text: t } = block {
+                    text.push_str(t);
+                }
+            }
+
+            Ok(CreateMessageResult {
+                role: SamplingMessageRole::Assistant,
+                model: "shannon-code".to_string(),
+                content: SamplingContent::Text { text },
+                stop_reason: Some(crate::StopReason::EndTurn),
+            })
+        })
+    })
+}
+
 /// Discover tools from an MCP server using the persistent pool.
 ///
 /// Starts the server in the pool, sends `initialize` + `tools/list`,
@@ -1531,6 +2459,18 @@ pub async fn discover_pooled_tools(
 ) -> Result<PooledDiscoveryResult, String> {
     // Start the server in the pool (handles initialize handshake)
     pool.start_server(server_name, command, args, env).await?;
+
+    // Check capabilities before attempting tools/list.
+    if !pool.has_tools(server_name).await {
+        debug!(
+            server = %server_name,
+            "Server does not advertise tools capability; skipping tools/list"
+        );
+        return Ok(PooledDiscoveryResult {
+            server_name: server_name.to_string(),
+            tools: Vec::new(),
+        });
+    }
 
     // Now send tools/list via the pool's persistent connection
     let handle = pool
@@ -1669,7 +2609,7 @@ mod tests {
         let content = "line\n".repeat(10_000); // 50,000 chars
         let result = truncate_tool_result(&content);
         assert!(result.len() <= MAX_TOOL_RESULT_CHARS + 200); // +200 for notice
-        assert!(result.contains("[...truncated:"));
+        assert!(result.contains("[compressed:") || result.contains("[...truncated:"));
         assert!(result.contains("50"));
         assert!(result.contains("chars"));
         // Should cut at a newline boundary
@@ -1682,7 +2622,7 @@ mod tests {
         let content = format!("[{}]", items.join(",\n"));
         let result = truncate_tool_result(&content);
         assert!(result.len() <= MAX_TOOL_RESULT_CHARS + 200);
-        assert!(result.contains("[...truncated:"));
+        assert!(result.contains("[compressed:") || result.contains("[...truncated:"));
     }
 
     #[test]
@@ -1691,7 +2631,7 @@ mod tests {
         let content = "日本語テスト\n".repeat(10_000);
         let result = truncate_tool_result(&content);
         // Should not panic on char boundary
-        assert!(result.contains("[...truncated:"));
+        assert!(result.contains("[compressed:") || result.contains("[...truncated:"));
     }
 
     #[test]
