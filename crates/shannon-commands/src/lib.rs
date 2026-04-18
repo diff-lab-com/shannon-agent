@@ -28,7 +28,7 @@ mod builtin;
 pub use command::{
     Command, CommandBase, PromptCommand, LocalCommand, LocalJSXCommand,
     CommandResult, CommandAvailability, CommandSource,
-    Executable, PluginExecutable,
+    Executable, PluginExecutable, ExecutionContext,
 };
 pub use registry::CommandRegistry;
 pub use parser::{CommandParser, ParsedCommand};

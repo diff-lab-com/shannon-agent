@@ -110,6 +110,14 @@ pub trait Tool: Send + Sync {
     fn is_concurrency_safe(&self) -> bool {
         self.is_read_only()
     }
+
+    /// Whether this tool may perform destructive operations (irreversible changes).
+    ///
+    /// Destructive tools always require user confirmation, even in auto-approve modes.
+    /// MCP servers signal this via `annotations.destructiveHint`.
+    fn is_destructive(&self) -> bool {
+        false
+    }
 }
 
 /// Metadata about a registered tool, used for tool discovery.

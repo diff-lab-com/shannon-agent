@@ -183,6 +183,9 @@ pub struct PermissionPrompt {
     pub is_confirmation: bool,
     /// Optional diff preview for file edit/write operations
     pub diff_preview: Option<String>,
+    /// Whether this tool is flagged as destructive (MCP `destructiveHint`).
+    /// Destructive tools always require confirmation and show a warning.
+    pub is_destructive: bool,
 }
 
 impl PermissionPrompt {
@@ -201,6 +204,7 @@ impl PermissionPrompt {
             description,
             is_confirmation: false,
             diff_preview: None,
+            is_destructive: false,
         }
     }
 
@@ -214,6 +218,7 @@ impl PermissionPrompt {
             description,
             is_confirmation: true,
             diff_preview: None,
+            is_destructive: false,
         }
     }
 
@@ -482,6 +487,10 @@ pub struct PermissionManager {
 
     /// Sessions with an approved plan (for Plan mode auto-approval).
     plan_approved_sessions: HashSet<uuid::Uuid>,
+
+    /// Tools flagged as destructive via MCP `annotations.destructiveHint`.
+    /// These always require user confirmation, even in auto-approve modes.
+    destructive_tools: HashSet<String>,
 }
 
 impl PermissionManager {
@@ -496,6 +505,7 @@ impl PermissionManager {
             classifier: crate::permission_classifier::PermissionClassifier::new(),
             approval_mode: ApprovalMode::default(),
             plan_approved_sessions: HashSet::new(),
+            destructive_tools: HashSet::new(),
         };
 
         // Register default tool policies for common tools
@@ -584,6 +594,18 @@ impl PermissionManager {
     /// Set the required permission for a tool
     pub fn set_tool_permission(&mut self, tool_name: String, permission: Permission) {
         self.tool_permissions.insert(tool_name, permission);
+    }
+
+    /// Register a tool as destructive (from MCP `annotations.destructiveHint`).
+    ///
+    /// Destructive tools always require user confirmation.
+    pub fn register_destructive_tool(&mut self, tool_name: String) {
+        self.destructive_tools.insert(tool_name);
+    }
+
+    /// Check whether a tool is flagged as destructive.
+    pub fn is_tool_destructive(&self, tool_name: &str) -> bool {
+        self.destructive_tools.contains(tool_name)
     }
 
     /// Check if a session has a required permission
@@ -723,6 +745,7 @@ impl PermissionManager {
                 description: format!("This tool is denied: {tool_name}"),
                 is_confirmation: false,
                 diff_preview: None,
+                is_destructive: self.is_tool_destructive(tool_name),
             });
         }
 
@@ -744,6 +767,13 @@ impl PermissionManager {
             )
         };
 
+        let is_destructive = self.is_tool_destructive(tool_name);
+        let description = if is_destructive {
+            format!("[DESTRUCTIVE] {description}")
+        } else {
+            description
+        };
+
         Some(PermissionPrompt {
             id: uuid::Uuid::new_v4(),
             tool_name: tool_name.to_string(),
@@ -752,6 +782,7 @@ impl PermissionManager {
             description,
             is_confirmation: false,
             diff_preview: None,
+            is_destructive,
         })
     }
 
@@ -858,6 +889,10 @@ impl PermissionManager {
                 if self.memory.is_always_allowed(session_id, tool_name) {
                     return Ok(None);
                 }
+                // Destructive tools always require confirmation
+                if self.is_tool_destructive(tool_name) {
+                    return Ok(self.create_permission_prompt(tool_name, tool_input, session_id));
+                }
                 // Fall through to classifier for risk level and prompt creation
             }
             ApprovalMode::Suggest => {
@@ -870,6 +905,10 @@ impl PermissionManager {
                 if is_read_only_tool_name(tool_name) {
                     return Ok(None);
                 }
+                // Destructive tools always require confirmation
+                if self.is_tool_destructive(tool_name) {
+                    return Ok(self.create_permission_prompt(tool_name, tool_input, session_id));
+                }
                 // Fall through to classifier for risk level and prompt creation
             }
             ApprovalMode::AutoEdit | ApprovalMode::FullAuto => {
@@ -880,6 +919,11 @@ impl PermissionManager {
                 // Check memory for always-allowed
                 if self.memory.is_always_allowed(session_id, tool_name) {
                     return Ok(None);
+                }
+
+                // Destructive tools always require confirmation
+                if self.is_tool_destructive(tool_name) {
+                    return Ok(self.create_permission_prompt(tool_name, tool_input, session_id));
                 }
 
                 // If the mode says auto-approve, do it
@@ -954,10 +998,13 @@ impl PermissionManager {
         }
 
         let policy = self.tool_policies.get(tool_name);
+        let is_destructive = self.is_tool_destructive(tool_name);
         let description = if let Some(p) = policy {
-            format!("{}: {}", p.description, Self::format_input_summary(tool_input))
+            let desc = format!("{}: {}", p.description, Self::format_input_summary(tool_input));
+            if is_destructive { format!("[DESTRUCTIVE] {desc}") } else { desc }
         } else {
-            format!("Execute tool '{}': {}", tool_name, Self::format_input_summary(tool_input))
+            let desc = format!("Execute tool '{}': {}", tool_name, Self::format_input_summary(tool_input));
+            if is_destructive { format!("[DESTRUCTIVE] {desc}") } else { desc }
         };
 
         Ok(Some(PermissionPrompt {
@@ -968,6 +1015,7 @@ impl PermissionManager {
             description,
             is_confirmation: false,
             diff_preview: None,
+            is_destructive,
         }))
     }
 }

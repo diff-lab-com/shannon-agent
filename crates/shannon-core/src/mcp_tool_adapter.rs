@@ -219,12 +219,25 @@ impl Tool for McpToolAdapter {
     }
 }
 
+/// A discovered MCP prompt with its argument schema.
+#[derive(Debug, Clone)]
+pub struct PromptInfo {
+    /// Prompt name.
+    pub name: String,
+    /// Human-readable description.
+    pub description: String,
+    /// Argument names (for command template).
+    pub argument_names: Vec<String>,
+}
+
 /// Result of discovering tools from an MCP server.
 pub struct DiscoveryResult {
     /// The server name.
     pub server_name: String,
     /// List of discovered tool adapters ready to register.
     pub tools: Vec<McpToolAdapter>,
+    /// List of discovered prompts from the server.
+    pub prompts: Vec<PromptInfo>,
 }
 
 /// Discover tools from an MCP server via stdio transport.
@@ -283,11 +296,18 @@ pub async fn discover_tools(
         "method": "tools/list",
         "params": {}
     });
+    let prompts_list_request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "prompts/list",
+        "params": {}
+    });
 
     let request_json = format!(
-        "{}\n{}\n",
+        "{}\n{}\n{}\n",
         serde_json::to_string(&init_request).unwrap_or_default(),
-        serde_json::to_string(&tools_list_request).unwrap_or_default()
+        serde_json::to_string(&tools_list_request).unwrap_or_default(),
+        serde_json::to_string(&prompts_list_request).unwrap_or_default()
     );
 
     use tokio::io::AsyncWriteExt;
@@ -322,10 +342,14 @@ pub async fn discover_tools(
     // Find the tools/list response (JSON-RPC response with id=2)
     let mut discovered_tools: Vec<McpToolAdapter> = Vec::new();
 
+    let mut discovered_prompts: Vec<PromptInfo> = Vec::new();
+
     for line in stdout.lines() {
         if let Ok(response) = serde_json::from_str::<Value>(line) {
-            // Only process the tools/list response (id=2)
-            if response.get("id").and_then(|v| v.as_u64()) == Some(2) {
+            let id = response.get("id").and_then(|v| v.as_u64());
+
+            // Process tools/list response (id=2)
+            if id == Some(2) {
                 if let Some(tools_array) = response
                     .get("result")
                     .and_then(|r| r.get("tools"))
@@ -359,12 +383,50 @@ pub async fn discover_tools(
                     }
                 }
             }
+
+            // Process prompts/list response (id=3)
+            if id == Some(3) {
+                if let Some(prompts_array) = response
+                    .get("result")
+                    .and_then(|r| r.get("prompts"))
+                    .and_then(|p| p.as_array())
+                {
+                    for prompt_value in prompts_array {
+                        let name = prompt_value
+                            .get("name")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        let description = prompt_value
+                            .get("description")
+                            .and_then(|d| d.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let argument_names = prompt_value
+                            .get("arguments")
+                            .and_then(|a| a.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|arg| arg.get("name").and_then(|n| n.as_str()).map(String::from))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+
+                        discovered_prompts.push(PromptInfo {
+                            name,
+                            description,
+                            argument_names,
+                        });
+                    }
+                }
+            }
         }
     }
 
     Ok(DiscoveryResult {
         server_name: server_name.to_string(),
         tools: discovered_tools,
+        prompts: discovered_prompts,
     })
 }
 

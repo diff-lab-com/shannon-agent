@@ -25,6 +25,7 @@ use ratatui::{
     backend::CrosstermBackend,
     Terminal,
 };
+use std::collections::HashMap;
 use std::io;
 use tokio::runtime::Runtime;
 
@@ -35,11 +36,12 @@ use shannon_core::{
     permissions::PermissionManager,
     plugin_tool::register_plugin_tools,
     plugins::PluginManager,
+    PromptInfo,
     query_engine::QueryEngine,
     state::StateManager,
     tools::ToolRegistry,
 };
-use shannon_commands::{CommandRegistry, CommandParser, builtin_commands, SharedExecutor};
+use shannon_commands::{Command, CommandBase, CommandRegistry, CommandParser, ExecutionContext, PromptCommand, builtin_commands, SharedExecutor};
 
 // Tool registration
 use shannon_tools::register_default_tools;
@@ -277,7 +279,11 @@ impl Repl {
         }
         register_plugin_tools(&plugin_manager, &mut tool_registry);
 
-        // Discover MCP server configurations and register their tools dynamically
+        // Discover MCP server configurations and register their tools dynamically.
+        // Servers are batched to avoid file descriptor exhaustion:
+        //   - Local (stdio) servers: batches of 3
+        //   - Remote (http/sse) servers: batches of 20
+        let mut discovered_mcp_prompts: Vec<(String, PromptInfo)> = Vec::new();
         {
             let mut mcp_registry = shannon_core::mcp_advanced::McpServerRegistry::new();
             let mcp_count = mcp_registry.load_from_default_paths();
@@ -287,6 +293,11 @@ impl Repl {
                     .enable_all()
                     .build()
                     .unwrap_or_else(|_| tokio::runtime::Runtime::new().unwrap());
+
+                // Classify servers into local (stdio) and remote (http/sse) buckets
+                let mut local_servers: Vec<(String, String, Vec<String>, HashMap<String, String>)> = Vec::new();
+                let mut remote_servers: Vec<(String, String, Vec<String>, HashMap<String, String>)> = Vec::new();
+
                 for config in mcp_registry.enabled_servers() {
                     let command = match &config.command {
                         Some(cmd) => cmd.clone(),
@@ -298,28 +309,82 @@ impl Repl {
                             continue;
                         }
                     };
+                    let entry = (config.name.clone(), command, config.args.clone(), config.env.clone());
+                    match config.transport_type {
+                        shannon_core::mcp_advanced::TransportType::Stdio => local_servers.push(entry),
+                        _ => remote_servers.push(entry),
+                    }
+                }
 
-                    match discovery_rt.block_on(shannon_core::discover_tools(
-                        &config.name,
-                        &command,
-                        &config.args,
-                        &config.env,
-                    )) {
-                        Ok(result) => {
-                            let tool_count = result.tools.len();
-                            for tool in result.tools {
-                                if let Err(e) = tool_registry.register(Box::new(tool)) {
-                                    tracing::debug!("MCP tool registration skipped: {}", e);
+                const LOCAL_BATCH_SIZE: usize = 3;
+                const REMOTE_BATCH_SIZE: usize = 20;
+
+                // Discover local (stdio) servers in batches
+                for batch in local_servers.chunks(LOCAL_BATCH_SIZE) {
+                    let futures: Vec<_> = batch
+                        .iter()
+                        .map(|(name, cmd, args, env)| {
+                            shannon_core::discover_tools(name, cmd, args, env)
+                        })
+                        .collect();
+                    let results = discovery_rt.block_on(futures::future::join_all(futures));
+                    for (result, (name, _, _, _)) in results.into_iter().zip(batch.iter()) {
+                        match result {
+                            Ok(discovery) => {
+                                let tool_count = discovery.tools.len();
+                                for tool in discovery.tools {
+                                    if let Err(e) = tool_registry.register(Box::new(tool)) {
+                                        tracing::debug!("MCP tool registration skipped: {}", e);
+                                    }
                                 }
+                                let server = discovery.server_name.clone();
+                                for prompt in discovery.prompts {
+                                    discovered_mcp_prompts.push((server.clone(), prompt));
+                                }
+                                tracing::info!(
+                                    "Registered {} tool(s) from '{}'",
+                                    tool_count,
+                                    discovery.server_name
+                                );
                             }
-                            tracing::info!(
-                                "Registered {} tool(s) from '{}'",
-                                tool_count,
-                                result.server_name
-                            );
+                            Err(e) => {
+                                tracing::warn!("MCP server '{}' discovery failed: {e}", name);
+                            }
                         }
-                        Err(e) => {
-                            tracing::warn!("MCP server '{}' discovery failed: {e}", config.name);
+                    }
+                }
+
+                // Discover remote (http/sse) servers in batches
+                for batch in remote_servers.chunks(REMOTE_BATCH_SIZE) {
+                    let futures: Vec<_> = batch
+                        .iter()
+                        .map(|(name, cmd, args, env)| {
+                            shannon_core::discover_tools(name, cmd, args, env)
+                        })
+                        .collect();
+                    let results = discovery_rt.block_on(futures::future::join_all(futures));
+                    for (result, (name, _, _, _)) in results.into_iter().zip(batch.iter()) {
+                        match result {
+                            Ok(discovery) => {
+                                let tool_count = discovery.tools.len();
+                                for tool in discovery.tools {
+                                    if let Err(e) = tool_registry.register(Box::new(tool)) {
+                                        tracing::debug!("MCP tool registration skipped: {}", e);
+                                    }
+                                }
+                                let server = discovery.server_name.clone();
+                                for prompt in discovery.prompts {
+                                    discovered_mcp_prompts.push((server.clone(), prompt));
+                                }
+                                tracing::info!(
+                                    "Registered {} tool(s) from '{}'",
+                                    tool_count,
+                                    discovery.server_name
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!("MCP server '{}' discovery failed: {e}", name);
+                            }
                         }
                     }
                 }
@@ -373,7 +438,12 @@ impl Repl {
         };
 
         // Create permission manager
-        let permission_manager = PermissionManager::new();
+        let mut permission_manager = PermissionManager::new();
+
+        // Register destructive MCP tools with permission manager
+        for name in tool_registry.destructive_tool_names() {
+            permission_manager.register_destructive_tool(name);
+        }
 
         // Create state manager
         let state_manager = StateManager::new();
@@ -434,6 +504,53 @@ impl Repl {
         let command_registry = runtime.block_on(async {
             let registry = CommandRegistry::new();
             builtin_commands::register_all(&registry);
+
+            // Register MCP prompts as slash commands: /mcp__{server}__{prompt}
+            for (server, prompt) in &discovered_mcp_prompts {
+                let cmd_name = format!("mcp__{}__{}", server, prompt.name);
+                let arg_hint = if prompt.argument_names.is_empty() {
+                    None
+                } else {
+                    Some(prompt.argument_names.join(", "))
+                };
+                let prompt_template = format!(
+                    "Use the get_mcp_prompt tool to retrieve and execute the '{}' prompt from the '{}' MCP server with these arguments: {{args}}",
+                    prompt.name, server
+                );
+                let command = Command::Prompt(Box::new(PromptCommand {
+                    base: CommandBase {
+                        name: cmd_name,
+                        aliases: Vec::new(),
+                        description: prompt.description.clone(),
+                        has_user_specified_description: false,
+                        availability: vec![shannon_commands::CommandAvailability::All],
+                        source: shannon_commands::CommandSource::Builtin,
+                        is_enabled: true,
+                        is_hidden: false,
+                        argument_hint: arg_hint,
+                        when_to_use: None,
+                        version: None,
+                        disable_model_invocation: false,
+                        user_invocable: true,
+                        is_workflow: false,
+                        immediate: false,
+                        is_sensitive: false,
+                        user_facing_name: None,
+                    },
+                    progress_message: format!("Loading MCP prompt '{}' from '{}'", prompt.name, server),
+                    content_length: 0,
+                    arg_names: prompt.argument_names.clone(),
+                    allowed_tools: vec!["get_mcp_prompt".to_string()],
+                    model: None,
+                    hooks: HashMap::new(),
+                    context: ExecutionContext::Inline,
+                    agent: None,
+                    paths: Vec::new(),
+                    prompt_template: Some(prompt_template),
+                }));
+                registry.register_sync(command);
+            }
+
             registry
         });
 

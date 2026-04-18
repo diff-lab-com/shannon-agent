@@ -45,6 +45,137 @@ type SamplingProvider = Arc<
         + Sync,
 >;
 
+/// Maximum length for MCP tool descriptions (in characters).
+///
+/// Some servers dump 15-60KB into `tool.description`, wasting ~15K tokens per turn.
+/// Claude Code caps at 2,048 chars; we match that.
+const MAX_TOOL_DESCRIPTION_CHARS: usize = 2048;
+
+/// Maximum length for MCP tool results (in characters).
+///
+/// Some MCP tools return 100KB+ responses. Sending all of that to the LLM wastes
+/// tokens and degrades response quality. Claude Code truncates at ~25K chars.
+const MAX_TOOL_RESULT_CHARS: usize = 25_000;
+
+/// Default timeout for establishing a new MCP server connection (initialize handshake).
+const DEFAULT_CONNECTION_TIMEOUT_SECS: u64 = 30;
+
+/// Default timeout for regular JSON-RPC requests (tools/list, ping, etc.).
+const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 60;
+
+/// Default timeout for tool call requests (tools/call).
+///
+/// Tool calls can be long-running (e.g. file search, code analysis).
+/// Claude Code uses a very generous timeout (~27.8h); we use 10 minutes
+/// which covers virtually all realistic tool executions.
+const DEFAULT_TOOL_TIMEOUT_SECS: u64 = 600;
+
+/// Truncate a tool result string to [`MAX_TOOL_RESULT_CHARS`].
+///
+/// For JSON content, preserves opening structure and adds a truncation notice.
+/// For plain text, cuts at the last newline boundary within budget when possible.
+fn truncate_tool_result(content: &str) -> String {
+    if content.len() <= MAX_TOOL_RESULT_CHARS {
+        return content.to_string();
+    }
+
+    let original_len = content.len();
+
+    // Try to detect JSON and preserve structure
+    let trimmed = content.trim();
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        // JSON-like content: truncate at char boundary, add notice
+        let mut end = MAX_TOOL_RESULT_CHARS;
+        while !content.is_char_boundary(end) && end > 0 {
+            end -= 1;
+        }
+        let truncated = &content[..end];
+        // Try to cut at a reasonable boundary (comma or newline)
+        let cut = truncated
+            .rfind(|c: char| c == '\n' || c == ',')
+            .unwrap_or(end);
+        let cut = if content.is_char_boundary(cut) { cut } else { end };
+        format!(
+            "{}\n\n[...truncated: showed {} of {} chars ({:.0}% omitted)]",
+            &content[..cut],
+            cut,
+            original_len,
+            ((original_len - cut) as f64 / original_len as f64) * 100.0,
+        )
+    } else {
+        // Plain text: try to cut at newline boundary
+        let mut end = MAX_TOOL_RESULT_CHARS;
+        while !content.is_char_boundary(end) && end > 0 {
+            end -= 1;
+        }
+        let truncated = &content[..end];
+        let cut = truncated
+            .rfind('\n')
+            .unwrap_or(end);
+        let cut = if content.is_char_boundary(cut) { cut } else { end };
+        format!(
+            "{}\n\n[...truncated: showed {} of {} chars ({:.0}% omitted)]",
+            &content[..cut],
+            cut,
+            original_len,
+            ((original_len - cut) as f64 / original_len as f64) * 100.0,
+        )
+    }
+}
+
+/// Normalize multi-element error content into a single coherent error message.
+///
+/// MCP servers can return errors with multiple content blocks of different types
+/// (text, images, embedded resources). This function extracts all blocks into a
+/// single string, summarizing non-text content.
+fn normalize_error_content(content_array: &[serde_json::Value]) -> String {
+    content_array
+        .iter()
+        .map(|block| {
+            match block.get("type").and_then(|t| t.as_str()) {
+                Some("text") => block
+                    .get("text")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                Some("image") => {
+                    let mime = block.get("mimeType")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("image/unknown");
+                    format!("[{mime} image]")
+                }
+                Some("resource") => {
+                    let uri = block.get("resource")
+                        .and_then(|r| r.get("uri"))
+                        .and_then(|u| u.as_str())
+                        .unwrap_or("unknown");
+                    let text = block.get("resource")
+                        .and_then(|r| r.get("text"))
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("");
+                    if text.is_empty() {
+                        format!("[resource: {uri}]")
+                    } else {
+                        format!("[resource: {uri}]\n{text}")
+                    }
+                }
+                other => {
+                    let text = block.get("text")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("");
+                    if text.is_empty() {
+                        format!("[{} block]", other.unwrap_or("unknown"))
+                    } else {
+                        text.to_string()
+                    }
+                }
+            }
+        })
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 // ---------------------------------------------------------------------------
 // Server state
 // ---------------------------------------------------------------------------
@@ -129,8 +260,12 @@ struct McpServerHandle {
     max_restarts: u32,
     /// Health check interval.
     health_interval: Duration,
-    /// Request timeout.
+    /// Request timeout (for regular JSON-RPC requests like tools/list, ping).
     request_timeout: Duration,
+    /// Connection timeout (for initialize handshake during startup).
+    connection_timeout: Duration,
+    /// Tool call timeout (for tools/call which can be long-running).
+    tool_timeout: Duration,
     /// When the server was last started successfully.
     started_at: Arc<RwLock<Option<Instant>>>,
     /// Total number of tool call requests.
@@ -203,17 +338,17 @@ impl McpServerHandle {
         });
         *self.reader_task.lock().await = Some(handle);
 
-        // Send initialize request
+        // Send initialize request (uses connection timeout, not regular request timeout)
         *self.state.write().await = ServerState::Starting;
         let init_response = self
-            .send_request("initialize", serde_json::json!({
+            .send_request_with_timeout("initialize", serde_json::json!({
                 "protocolVersion": "2024-11-05",
                 "capabilities": {
                     "roots": { "listChanged": true },
                     "sampling": {}
                 },
                 "clientInfo": {"name": "shannon-code", "version": "0.1.0"}
-            }))
+            }), self.connection_timeout)
             .await?;
 
         debug!(
@@ -386,7 +521,17 @@ impl McpServerHandle {
 
     /// Send a JSON-RPC request and wait for the response.
     async fn send_request(&self, method: &str, params: Value) -> Result<Value, String> {
-        self.send_request_with_progress(method, params, None, None).await
+        self.send_request_with_progress(method, params, None, None, self.request_timeout).await
+    }
+
+    /// Send a JSON-RPC request with a specific timeout.
+    async fn send_request_with_timeout(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, String> {
+        self.send_request_with_progress(method, params, None, None, timeout).await
     }
 
     /// Send a JSON-RPC request with optional progress reporting.
@@ -400,6 +545,7 @@ impl McpServerHandle {
         params: Value,
         progress_token: Option<Value>,
         on_progress: Option<Arc<dyn Fn(f64, Option<f64>) + Send + Sync>>,
+        timeout: Duration,
     ) -> Result<Value, String> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
@@ -463,7 +609,7 @@ impl McpServerHandle {
         }
 
         // Wait for response with timeout
-        match tokio::time::timeout(self.request_timeout, rx).await {
+        match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(response)) => {
                 // Check for JSON-RPC error
                 if let Some(error) = response.get("error") {
@@ -577,6 +723,7 @@ impl McpServerHandle {
                 }),
                 progress_token,
                 progress_cb,
+                self.tool_timeout,
             )
             .await
             .map_err(|e| {
@@ -587,36 +734,42 @@ impl McpServerHandle {
         // Parse the response content
         if let Some(result) = response.get("result") {
             if let Some(content_array) = result.get("content").and_then(|c| c.as_array()) {
-                // Extract text from content blocks
-                let texts: Vec<String> = content_array
-                    .iter()
-                    .filter_map(|block| {
-                        if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-                            block.get("text").and_then(|t| t.as_str()).map(|s| s.to_string())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
+                let is_error = result
+                    .get("isError")
+                    .and_then(|e| e.as_bool())
+                    .unwrap_or(false);
 
-                if !texts.is_empty() {
-                    let is_error = result
-                        .get("isError")
-                        .and_then(|e| e.as_bool())
-                        .unwrap_or(false);
-                    let content = texts.join("\n");
-                    return if is_error {
-                        Ok(ToolOutput::error(content))
-                    } else {
-                        Ok(ToolOutput::success(content))
-                    };
+                if is_error {
+                    // For errors, include ALL content blocks to preserve full error context.
+                    let normalized = normalize_error_content(content_array);
+                    if !normalized.is_empty() {
+                        let content = truncate_tool_result(&normalized);
+                        return Ok(ToolOutput::error(content));
+                    }
+                } else {
+                    // For success, extract only text blocks (current behavior)
+                    let texts: Vec<String> = content_array
+                        .iter()
+                        .filter_map(|block| {
+                            if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                block.get("text").and_then(|t| t.as_str()).map(|s| s.to_string())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                    if !texts.is_empty() {
+                        let content = truncate_tool_result(&texts.join("\n"));
+                        return Ok(ToolOutput::success(content));
+                    }
                 }
             }
-            // Fallback: return the result as JSON string
-            return Ok(ToolOutput::success(result.to_string()));
+            // Fallback: return the result as JSON string (also truncated)
+            return Ok(ToolOutput::success(truncate_tool_result(&result.to_string())));
         }
 
-        Ok(ToolOutput::success(response.to_string()))
+        Ok(ToolOutput::success(truncate_tool_result(&response.to_string())))
     }
 
     /// Send a ping to check server health.
@@ -717,8 +870,12 @@ pub struct McpProcessPool {
     health_interval: Duration,
     /// Maximum restart attempts.
     max_restarts: u32,
-    /// Request timeout.
+    /// Request timeout (for regular JSON-RPC requests).
     request_timeout: Duration,
+    /// Connection timeout (for initialize handshake).
+    connection_timeout: Duration,
+    /// Tool call timeout (for tools/call).
+    tool_timeout: Duration,
     /// Background health check task handle.
     health_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     /// Notification receiver — servers forward JSON-RPC notifications here.
@@ -741,7 +898,9 @@ impl McpProcessPool {
             handles: DashMap::new(),
             health_interval: Duration::from_secs(60),
             max_restarts: 5,
-            request_timeout: Duration::from_secs(30),
+            request_timeout: Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
+            connection_timeout: Duration::from_secs(DEFAULT_CONNECTION_TIMEOUT_SECS),
+            tool_timeout: Duration::from_secs(DEFAULT_TOOL_TIMEOUT_SECS),
             health_task: Arc::new(Mutex::new(None)),
             notification_rx: Arc::new(Mutex::new(notification_rx)),
             notification_tx,
@@ -764,6 +923,16 @@ impl McpProcessPool {
     /// Set the request timeout.
     pub fn set_request_timeout(&mut self, timeout: Duration) {
         self.request_timeout = timeout;
+    }
+
+    /// Set the connection timeout (for initialize handshake).
+    pub fn set_connection_timeout(&mut self, timeout: Duration) {
+        self.connection_timeout = timeout;
+    }
+
+    /// Set the tool call timeout (for tools/call).
+    pub fn set_tool_timeout(&mut self, timeout: Duration) {
+        self.tool_timeout = timeout;
     }
 
     /// Start an MCP server and add it to the pool.
@@ -791,6 +960,8 @@ impl McpProcessPool {
             max_restarts: self.max_restarts,
             health_interval: self.health_interval,
             request_timeout: self.request_timeout,
+            connection_timeout: self.connection_timeout,
+            tool_timeout: self.tool_timeout,
             started_at: Arc::new(RwLock::new(None)),
             request_count: AtomicU64::new(0),
             error_count: AtomicU64::new(0),
@@ -1256,6 +1427,16 @@ impl PooledMcpToolAdapter {
         annotations: Option<crate::ToolAnnotations>,
     ) -> Self {
         let tool_name = format!("mcp__{server_name}__{remote_tool_name}");
+        // Truncate oversized descriptions to avoid wasting context tokens.
+        let description = if description.len() > MAX_TOOL_DESCRIPTION_CHARS {
+            let mut end = MAX_TOOL_DESCRIPTION_CHARS;
+            while !description.is_char_boundary(end) && end > 0 {
+                end -= 1;
+            }
+            format!("{}…", &description[..end])
+        } else {
+            description
+        };
         Self {
             pool,
             server_name,
@@ -1317,6 +1498,12 @@ impl Tool for PooledMcpToolAdapter {
             .as_ref()
             .map_or(false, |a| a.read_only_hint || a.idempotent_hint)
     }
+
+    fn is_destructive(&self) -> bool {
+        self.annotations
+            .as_ref()
+            .map_or(false, |a| a.destructive_hint)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1371,8 +1558,8 @@ pub async fn discover_pooled_tools(
             let description = tool_value
                 .get("description")
                 .and_then(|d| d.as_str())
-                .unwrap_or(&format!("MCP tool: {name}"))
-                .to_string();
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("MCP tool: {name}"));
             let input_schema = tool_value
                 .get("inputSchema")
                 .cloned()
@@ -1436,6 +1623,139 @@ mod tests {
             None,
         );
         assert_eq!(adapter.description(), "Search the web");
+    }
+
+    #[test]
+    fn test_tool_description_truncation() {
+        let long_desc = "x".repeat(5000);
+        let pool = Arc::new(McpProcessPool::new());
+        let adapter = PooledMcpToolAdapter::new(
+            pool,
+            "srv".to_string(),
+            "tool".to_string(),
+            long_desc,
+            serde_json::json!({"type": "object"}),
+            None,
+        );
+        let desc = adapter.description();
+        assert!(desc.chars().count() <= MAX_TOOL_DESCRIPTION_CHARS + 1, "description should be truncated to ~2048 chars");
+        assert!(desc.ends_with('…'));
+    }
+
+    #[test]
+    fn test_tool_description_short_not_truncated() {
+        let short_desc = "A short description".to_string();
+        let pool = Arc::new(McpProcessPool::new());
+        let adapter = PooledMcpToolAdapter::new(
+            pool,
+            "srv".to_string(),
+            "tool".to_string(),
+            short_desc.clone(),
+            serde_json::json!({"type": "object"}),
+            None,
+        );
+        assert_eq!(adapter.description(), short_desc);
+    }
+
+    #[test]
+    fn test_tool_result_not_truncated_under_limit() {
+        let content = "x".repeat(100);
+        let result = truncate_tool_result(&content);
+        assert_eq!(result, content);
+    }
+
+    #[test]
+    fn test_tool_result_truncated_plain_text() {
+        let content = "line\n".repeat(10_000); // 50,000 chars
+        let result = truncate_tool_result(&content);
+        assert!(result.len() <= MAX_TOOL_RESULT_CHARS + 200); // +200 for notice
+        assert!(result.contains("[...truncated:"));
+        assert!(result.contains("50"));
+        assert!(result.contains("chars"));
+        // Should cut at a newline boundary
+        assert!(result.lines().count() < 10_000);
+    }
+
+    #[test]
+    fn test_tool_result_truncated_json() {
+        let items: Vec<String> = (0..5000).map(|i| format!(r#"{{"id": {}, "data": "item {}"}}"#, i, i)).collect();
+        let content = format!("[{}]", items.join(",\n"));
+        let result = truncate_tool_result(&content);
+        assert!(result.len() <= MAX_TOOL_RESULT_CHARS + 200);
+        assert!(result.contains("[...truncated:"));
+    }
+
+    #[test]
+    fn test_tool_result_truncation_preserves_unicode() {
+        // String with multi-byte chars
+        let content = "日本語テスト\n".repeat(10_000);
+        let result = truncate_tool_result(&content);
+        // Should not panic on char boundary
+        assert!(result.contains("[...truncated:"));
+    }
+
+    #[test]
+    fn test_normalize_error_content_text_only() {
+        let blocks = vec![
+            serde_json::json!({"type": "text", "text": "Error: file not found"}),
+        ];
+        assert_eq!(normalize_error_content(&blocks), "Error: file not found");
+    }
+
+    #[test]
+    fn test_normalize_error_content_multi_text() {
+        let blocks = vec![
+            serde_json::json!({"type": "text", "text": "Error: connection failed"}),
+            serde_json::json!({"type": "text", "text": "Retry after 30 seconds"}),
+        ];
+        assert_eq!(
+            normalize_error_content(&blocks),
+            "Error: connection failed\nRetry after 30 seconds"
+        );
+    }
+
+    #[test]
+    fn test_normalize_error_content_with_image() {
+        let blocks = vec![
+            serde_json::json!({"type": "text", "text": "Screenshot of error:"}),
+            serde_json::json!({"type": "image", "mimeType": "image/png", "data": "..."}),
+        ];
+        let result = normalize_error_content(&blocks);
+        assert!(result.contains("Screenshot of error:"));
+        assert!(result.contains("[image/png image]"));
+    }
+
+    #[test]
+    fn test_normalize_error_content_with_resource() {
+        let blocks = vec![
+            serde_json::json!({"type": "text", "text": "Server returned:"}),
+            serde_json::json!({
+                "type": "resource",
+                "resource": {
+                    "uri": "file:///var/log/error.log",
+                    "mimeType": "text/plain",
+                    "text": "Stack trace here"
+                }
+            }),
+        ];
+        let result = normalize_error_content(&blocks);
+        assert!(result.contains("[resource: file:///var/log/error.log]"));
+        assert!(result.contains("Stack trace here"));
+    }
+
+    #[test]
+    fn test_normalize_error_content_empty_blocks() {
+        let blocks: Vec<serde_json::Value> = vec![];
+        assert_eq!(normalize_error_content(&blocks), "");
+    }
+
+    #[test]
+    fn test_normalize_error_content_unknown_type() {
+        let blocks = vec![
+            serde_json::json!({"type": "audio", "data": "..."}),
+        ];
+        let result = normalize_error_content(&blocks);
+        assert_eq!(result, "[audio block]");
     }
 
     #[test]

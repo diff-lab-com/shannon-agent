@@ -347,6 +347,23 @@ impl ToolRegistry {
         self.get(name).map(|t| t.is_concurrency_safe()).unwrap_or(false)
     }
 
+    /// Check whether a registered tool may perform destructive operations.
+    ///
+    /// Destructive tools always require user confirmation regardless of approval mode.
+    /// Returns `false` for unknown tools (non-MCP tools default to non-destructive).
+    pub fn is_tool_destructive(&self, name: &str) -> bool {
+        self.get(name).map(|t| t.is_destructive()).unwrap_or(false)
+    }
+
+    /// Return the names of all registered tools flagged as destructive.
+    pub fn destructive_tool_names(&self) -> Vec<String> {
+        self.tools
+            .values()
+            .filter(|t| t.is_destructive())
+            .map(|t| t.name().to_string())
+            .collect()
+    }
+
     /// Partition a list of approved tool calls into execution batches.
     ///
     /// Walks through the tools in order and groups consecutive read-only /

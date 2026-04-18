@@ -470,6 +470,144 @@ impl TokenStorage for MemoryTokenStorage {
     }
 }
 
+// ---------------------------------------------------------------------------
+// OAuth Discovery Chain (RFC 9728 + RFC 8414)
+// ---------------------------------------------------------------------------
+
+/// Result of OAuth metadata discovery.
+#[derive(Debug, Clone)]
+pub struct OAuthDiscoveryResult {
+    /// Authorization endpoint URL (RFC 6749).
+    pub authorization_endpoint: String,
+    /// Token endpoint URL (RFC 6749).
+    pub token_endpoint: String,
+    /// Scopes supported by the authorization server.
+    pub scopes_supported: Vec<String>,
+}
+
+/// Extract the origin from a URL (scheme + host + port).
+fn extract_origin(raw_url: &str) -> Result<String, AuthError> {
+    // Minimal URL parsing: find scheme://, then host[:port], up to next /
+    if !raw_url.contains("://") {
+        return Err(AuthError::Configuration(
+            format!("Invalid URL (no scheme): {raw_url}")
+        ));
+    }
+    let after_scheme = &raw_url[raw_url.find("://").unwrap() + 3..];
+    let origin_end = after_scheme.find('/').unwrap_or(after_scheme.len());
+    let scheme = &raw_url[..raw_url.find("://").unwrap() + 3];
+    Ok(format!("{}{}", scheme, &after_scheme[..origin_end]))
+}
+
+/// Fetch JSON metadata from a URL. Returns None on any failure.
+async fn fetch_metadata_json(url: &str) -> Option<serde_json::Value> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .ok()?;
+
+    let resp = client.get(url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    resp.json::<serde_json::Value>().await.ok()
+}
+
+/// Try RFC 8414 Authorization Server Metadata at a given origin.
+fn parse_auth_server_metadata(metadata: &serde_json::Value) -> Option<OAuthDiscoveryResult> {
+    let auth_endpoint = metadata.get("authorization_endpoint")?.as_str()?;
+    let token_endpoint = metadata.get("token_endpoint")?.as_str()?;
+
+    // RFC 8414 §3: authorization_endpoint MUST be HTTPS for native apps
+    if !auth_endpoint.starts_with("https://") && !auth_endpoint.starts_with("http://localhost") {
+        return None;
+    }
+
+    Some(OAuthDiscoveryResult {
+        authorization_endpoint: auth_endpoint.to_string(),
+        token_endpoint: token_endpoint.to_string(),
+        scopes_supported: metadata
+            .get("scopes_supported")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    })
+}
+
+/// Discover OAuth endpoints using RFC 9728 Protected Resource Metadata
+/// and RFC 8414 Authorization Server Metadata.
+///
+/// Discovery chain:
+/// 1. RFC 9728: Fetch `{origin}/.well-known/oauth-protected-resource`
+///    to find the authorization server(s).
+/// 2. RFC 8414: For each authorization server, fetch
+///    `{auth_origin}/.well-known/oauth-authorization-server` for endpoints.
+/// 3. RFC 8414 direct: Try `{resource_origin}/.well-known/oauth-authorization-server`
+///    in case the resource server is also the authorization server.
+/// 4. Fallback: return an error — caller should use explicit config.
+pub async fn discover_oauth_endpoints(
+    server_url: &str,
+) -> Result<OAuthDiscoveryResult, AuthError> {
+    let origin = extract_origin(server_url)?;
+
+    info!("Starting OAuth discovery for server: {server_url}");
+
+    // Step 1: RFC 9728 Protected Resource Metadata
+    let resource_metadata_url =
+        format!("{origin}/.well-known/oauth-protected-resource");
+
+    if let Some(metadata) = fetch_metadata_json(&resource_metadata_url).await {
+        info!("Found RFC 9728 Protected Resource Metadata");
+
+        // authorization_servers is an array of authorization server URLs
+        if let Some(auth_servers) = metadata
+            .get("authorization_servers")
+            .and_then(|v| v.as_array())
+        {
+            for server_value in auth_servers {
+                if let Some(auth_server_url) = server_value.as_str() {
+                    // Step 2: RFC 8414 Authorization Server Metadata
+                    let auth_origin = extract_origin(auth_server_url)?;
+                    let auth_metadata_url =
+                        format!("{auth_origin}/.well-known/oauth-authorization-server");
+
+                    if let Some(auth_metadata) = fetch_metadata_json(&auth_metadata_url).await {
+                        if let Some(result) = parse_auth_server_metadata(&auth_metadata) {
+                            info!(
+                                "Discovered OAuth endpoints via RFC 9728→8414: auth={}",
+                                result.authorization_endpoint
+                            );
+                            return Ok(result);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Step 3: RFC 8414 direct at the resource origin
+    let direct_metadata_url =
+        format!("{origin}/.well-known/oauth-authorization-server");
+
+    if let Some(metadata) = fetch_metadata_json(&direct_metadata_url).await {
+        if let Some(result) = parse_auth_server_metadata(&metadata) {
+            info!(
+                "Discovered OAuth endpoints via RFC 8414 direct: auth={}",
+                result.authorization_endpoint
+            );
+            return Ok(result);
+        }
+    }
+
+    Err(AuthError::Configuration(format!(
+        "OAuth discovery failed for '{server_url}': no metadata found at well-known endpoints"
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -549,5 +687,83 @@ mod tests {
         assert!(provider.is_valid().await);
         let token = provider.get_token().await.unwrap();
         assert_eq!(token, "valid_token");
+    }
+
+    // ── OAuth Discovery Tests ──────────────────────────────────────────
+    #[test]
+    fn test_extract_origin() {
+        assert_eq!(
+            super::extract_origin("https://api.example.com/mcp/sse").unwrap(),
+            "https://api.example.com"
+        );
+        assert_eq!(
+            super::extract_origin("https://api.example.com:8443/path").unwrap(),
+            "https://api.example.com:8443"
+        );
+        assert_eq!(
+            super::extract_origin("http://localhost:3000/mcp").unwrap(),
+            "http://localhost:3000"
+        );
+        assert_eq!(
+            super::extract_origin("https://api.example.com").unwrap(),
+            "https://api.example.com"
+        );
+        assert!(super::extract_origin("not-a-url").is_err());
+    }
+
+    #[test]
+    fn test_parse_auth_server_metadata() {
+        let metadata = serde_json::json!({
+            "authorization_endpoint": "https://auth.example.com/authorize",
+            "token_endpoint": "https://auth.example.com/token",
+            "scopes_supported": ["read", "write"]
+        });
+        let result = super::parse_auth_server_metadata(&metadata).unwrap();
+        assert_eq!(result.authorization_endpoint, "https://auth.example.com/authorize");
+        assert_eq!(result.token_endpoint, "https://auth.example.com/token");
+        assert_eq!(result.scopes_supported, vec!["read", "write"]);
+    }
+
+    #[test]
+    fn test_parse_auth_server_metadata_missing_fields() {
+        let metadata = serde_json::json!({
+            "token_endpoint": "https://auth.example.com/token"
+        });
+        assert!(super::parse_auth_server_metadata(&metadata).is_none());
+    }
+
+    #[test]
+    fn test_parse_auth_server_metadata_non_https_rejected() {
+        let metadata = serde_json::json!({
+            "authorization_endpoint": "http://auth.example.com/authorize",
+            "token_endpoint": "https://auth.example.com/token"
+        });
+        // Non-HTTPS, non-localhost should be rejected
+        assert!(super::parse_auth_server_metadata(&metadata).is_none());
+    }
+
+    #[test]
+    fn test_parse_auth_server_metadata_localhost_allowed() {
+        let metadata = serde_json::json!({
+            "authorization_endpoint": "http://localhost:8080/authorize",
+            "token_endpoint": "http://localhost:8080/token"
+        });
+        let result = super::parse_auth_server_metadata(&metadata).unwrap();
+        assert_eq!(result.authorization_endpoint, "http://localhost:8080/authorize");
+    }
+
+    #[tokio::test]
+    async fn test_discover_oauth_endpoints_invalid_url() {
+        let result = super::discover_oauth_endpoints("not-a-url").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_discover_oauth_endpoints_no_server() {
+        // Use a URL that won't have any OAuth metadata
+        let result = super::discover_oauth_endpoints("https://127.0.0.1:1/mcp").await;
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("no metadata found") || msg.contains("connection refused") || msg.contains("discovery failed"));
     }
 }

@@ -286,6 +286,32 @@ impl McpServerConfig {
 
         Ok(())
     }
+
+    /// Compute a content-based signature for deduplication.
+    ///
+    /// Two configs pointing to the same server should produce the same signature
+    /// even if they have different names (e.g., plugin-provided vs manually configured).
+    /// - Stdio: `stdio:{command} {args}`
+    /// - HTTP/SSE: `http:{url}` or `sse:{url}`
+    pub fn content_signature(&self) -> String {
+        match self.transport_type {
+            TransportType::Stdio => {
+                let cmd = self.command.as_deref().unwrap_or("");
+                let args = self.args.join(" ");
+                if args.is_empty() {
+                    format!("stdio:{cmd}")
+                } else {
+                    format!("stdio:{cmd} {args}")
+                }
+            }
+            TransportType::Http => {
+                format!("http:{}", self.url.as_deref().unwrap_or(""))
+            }
+            TransportType::Sse => {
+                format!("sse:{}", self.url.as_deref().unwrap_or(""))
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -712,6 +738,8 @@ impl ElicitationHandler {
 pub struct McpServerRegistry {
     /// Map of server name to configuration
     servers: HashMap<String, McpServerConfig>,
+    /// Content signatures for deduplication (command+args for stdio, url for remote)
+    signatures: std::collections::HashSet<String>,
 }
 
 impl McpServerRegistry {
@@ -719,10 +747,14 @@ impl McpServerRegistry {
     pub fn new() -> Self {
         Self {
             servers: HashMap::new(),
+            signatures: std::collections::HashSet::new(),
         }
     }
 
     /// Register a new MCP server configuration.
+    ///
+    /// Skips if a server with the same content signature already exists
+    /// (different name but same command/args or URL).
     pub fn register(&mut self, config: McpServerConfig) -> Result<(), McpAdvancedError> {
         config.validate()?;
         if self.servers.contains_key(&config.name) {
@@ -730,15 +762,26 @@ impl McpServerRegistry {
                 config.name.clone(),
             ));
         }
+        let sig = config.content_signature();
+        if self.signatures.contains(&sig) {
+            tracing::debug!(
+                "Skipping MCP server '{}': content signature already registered ({})",
+                config.name, sig
+            );
+            return Ok(());
+        }
+        self.signatures.insert(sig);
         self.servers.insert(config.name.clone(), config);
         Ok(())
     }
 
     /// Unregister an MCP server by name.
     pub fn unregister(&mut self, name: &str) -> Result<McpServerConfig, McpAdvancedError> {
-        self.servers
+        let config = self.servers
             .remove(name)
-            .ok_or_else(|| McpAdvancedError::ServerNotFound(name.to_string()))
+            .ok_or_else(|| McpAdvancedError::ServerNotFound(name.to_string()))?;
+        self.signatures.remove(&config.content_signature());
+        Ok(config)
     }
 
     /// Get a server configuration by name.
@@ -765,6 +808,11 @@ impl McpServerRegistry {
         if !self.servers.contains_key(name) {
             return Err(McpAdvancedError::ServerNotFound(name.to_string()));
         }
+        // Remove old signature, add new one
+        if let Some(old) = self.servers.get(name) {
+            self.signatures.remove(&old.content_signature());
+        }
+        self.signatures.insert(config.content_signature());
         self.servers.insert(name.to_string(), config);
         Ok(())
     }
@@ -1327,6 +1375,51 @@ mod tests {
             result.unwrap_err(),
             McpAdvancedError::ServerAlreadyRegistered(_)
         ));
+    }
+
+    #[test]
+    fn test_content_signature_stdio() {
+        let mut config = McpServerConfig::new_stdio("test", "npx");
+        config.args = vec!["-y".to_string(), "@modelcontextprotocol/server".to_string()];
+        assert_eq!(config.content_signature(), "stdio:npx -y @modelcontextprotocol/server");
+    }
+
+    #[test]
+    fn test_content_signature_http() {
+        let config = McpServerConfig::new_http("test", "https://api.example.com/mcp");
+        assert_eq!(config.content_signature(), "http:https://api.example.com/mcp");
+    }
+
+    #[test]
+    fn test_content_based_dedup() {
+        let mut registry = McpServerRegistry::new();
+
+        // Register a manual config
+        let mut manual = McpServerConfig::new_stdio("manual-fetch", "npx");
+        manual.args = vec!["-y".to_string(), "@modelcontextprotocol/server-fetch".to_string()];
+        registry.register(manual).unwrap();
+        assert_eq!(registry.count(), 1);
+
+        // Plugin provides same server under different name — should be silently skipped
+        let mut plugin = McpServerConfig::new_stdio("plugin-fetch", "npx");
+        plugin.args = vec!["-y".to_string(), "@modelcontextprotocol/server-fetch".to_string()];
+        let result = registry.register(plugin);
+        assert!(result.is_ok()); // not an error, just skipped
+        assert_eq!(registry.count(), 1); // still only 1
+        assert!(registry.contains("manual-fetch"));
+        assert!(!registry.contains("plugin-fetch"));
+    }
+
+    #[test]
+    fn test_content_dedup_different_servers_allowed() {
+        let mut registry = McpServerRegistry::new();
+        let mut fetch = McpServerConfig::new_stdio("fetch", "npx");
+        fetch.args = vec!["-y".to_string(), "@mcp/server-fetch".to_string()];
+        let mut memory = McpServerConfig::new_stdio("memory", "npx");
+        memory.args = vec!["-y".to_string(), "@mcp/server-memory".to_string()];
+        registry.register(fetch).unwrap();
+        registry.register(memory).unwrap();
+        assert_eq!(registry.count(), 2); // different args → both registered
     }
 
     #[test]
