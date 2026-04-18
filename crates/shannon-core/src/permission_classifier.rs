@@ -885,6 +885,86 @@ impl PermissionClassifier {
 
     // -- Private helpers --------------------------------------------------
 
+    /// Classify an MCP tool (name starts with `mcp__`).
+    ///
+    /// Uses the tool name structure `mcp__{server}__{tool}` and common
+    /// naming conventions to infer risk. Destructive-sounding verbs
+    /// (`delete`, `remove`, `destroy`, `execute`, `run`) get higher
+    /// scrutiny; read-only verbs (`get`, `list`, `search`, `read`,
+    /// `fetch`) are auto-allowed.
+    fn classify_mcp_tool(&self, tool_name: &str) -> ClassificationResult {
+        // Extract the remote tool name (last segment after mcp__server__)
+        let remote_name = tool_name
+            .split("__")
+            .nth(2)
+            .unwrap_or(tool_name);
+
+        let lower = remote_name.to_lowercase();
+
+        // Read-only / retrieval patterns — auto-allow
+        let read_verbs = [
+            "get", "list", "search", "find", "read", "fetch",
+            "query", "describe", "inspect", "analyze", "view",
+            "check", "validate", "resolve", "lookup", "browse",
+            "understand", "extract",
+        ];
+        if read_verbs.iter().any(|v| lower.starts_with(v)) {
+            return ClassificationResult {
+                decision: RuleDecision::Allow,
+                confidence: 0.8,
+                reason: format!("MCP tool '{tool_name}' appears read-only ('{remote_name}')"),
+                matched_rule: None,
+                risk_level: RiskLevel::Low,
+            };
+        }
+
+        // Destructive patterns — require confirmation
+        let destructive_verbs = [
+            "delete", "remove", "destroy", "drop", "purge",
+            "execute", "run", "eval", "exec", "system",
+        ];
+        if destructive_verbs.iter().any(|v| lower.starts_with(v)) {
+            return ClassificationResult {
+                decision: RuleDecision::Ask,
+                confidence: 0.85,
+                reason: format!(
+                    "MCP tool '{tool_name}' may be destructive ('{remote_name}') — requiring approval"
+                ),
+                matched_rule: None,
+                risk_level: RiskLevel::High,
+            };
+        }
+
+        // Write / mutation patterns — medium risk
+        let write_verbs = [
+            "create", "write", "update", "save", "put", "post",
+            "patch", "set", "add", "insert", "upload", "send",
+            "store", "edit", "modify", "install",
+        ];
+        if write_verbs.iter().any(|v| lower.starts_with(v)) {
+            return ClassificationResult {
+                decision: RuleDecision::Ask,
+                confidence: 0.75,
+                reason: format!(
+                    "MCP tool '{tool_name}' may be state-changing ('{remote_name}') — requiring approval"
+                ),
+                matched_rule: None,
+                risk_level: RiskLevel::Medium,
+            };
+        }
+
+        // Unknown MCP tool — ask by default (conservative)
+        ClassificationResult {
+            decision: RuleDecision::Ask,
+            confidence: 0.5,
+            reason: format!(
+                "MCP tool '{tool_name}' — unknown risk profile, requiring approval"
+            ),
+            matched_rule: None,
+            risk_level: RiskLevel::Medium,
+        }
+    }
+
     /// Default classification when no rules match.
     fn default_classification(&self, tool_name: &str, input_str: &str) -> ClassificationResult {
         // Read-only tools are low risk
@@ -949,6 +1029,11 @@ impl PermissionClassifier {
         // Bash gets special treatment -- check for dangerous patterns
         if tool_name == "Bash" {
             return self.classify_bash_command(input_str);
+        }
+
+        // MCP tools (mcp__server__tool) — classify by name patterns
+        if tool_name.starts_with("mcp__") {
+            return self.classify_mcp_tool(tool_name);
         }
 
         // Everything else requires confirmation by default

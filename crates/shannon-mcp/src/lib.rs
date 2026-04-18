@@ -86,6 +86,7 @@ pub use server_manager::{
 pub use process_pool::{
     McpProcessPool, PooledMcpToolAdapter, PooledDiscoveryResult,
     discover_pooled_tools, make_sampling_provider, ServerState, ServerStatus,
+    ChunkResult,
 };
 
 /// Current MCP protocol version supported by this implementation

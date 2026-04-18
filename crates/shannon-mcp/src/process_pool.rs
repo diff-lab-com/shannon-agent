@@ -57,6 +57,178 @@ pub(crate) type ElicitationProvider = Arc<
         + Sync,
 >;
 
+// ---------------------------------------------------------------------------
+// Tool permission helpers
+// ---------------------------------------------------------------------------
+
+/// Simple glob pattern matching supporting `*` (any chars) and `?` (single char).
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = text.chars().collect();
+    glob_match_impl(&p, &t, 0, 0)
+}
+
+fn glob_match_impl(p: &[char], t: &[char], pi: usize, ti: usize) -> bool {
+    if pi == p.len() {
+        return ti == t.len();
+    }
+    if p[pi] == '*' {
+        // '*' matches zero or more characters
+        return glob_match_impl(p, t, pi + 1, ti) // match zero chars
+            || (ti < t.len() && glob_match_impl(p, t, pi, ti + 1)); // consume one char
+    }
+    if ti < t.len() && (p[pi] == '?' || p[pi] == t[ti]) {
+        return glob_match_impl(p, t, pi + 1, ti + 1);
+    }
+    false
+}
+
+/// Check whether a tool name is permitted by the given allow/deny patterns.
+///
+/// Pattern syntax:
+/// - `mcp__fetch__*`  — allow all tools from the `fetch` server
+/// - `!mcp__internal__*` — deny all tools from the `internal` server
+/// - Empty patterns list → everything is allowed (default)
+fn is_tool_allowed_by_patterns(tool_name: &str, patterns: &[String]) -> bool {
+    if patterns.is_empty() {
+        return true; // No restrictions configured → allow all
+    }
+
+    let mut has_allow_patterns = false;
+    let mut denied = false;
+    let mut explicitly_allowed = false;
+
+    for pattern in patterns {
+        if let Some(deny_pattern) = pattern.strip_prefix('!') {
+            // Deny rule — check first
+            if glob_match(deny_pattern, tool_name) {
+                denied = true;
+            }
+        } else {
+            has_allow_patterns = true;
+            if glob_match(pattern, tool_name) {
+                explicitly_allowed = true;
+            }
+        }
+    }
+
+    if denied {
+        return false;
+    }
+
+    if has_allow_patterns {
+        return explicitly_allowed;
+    }
+
+    // Only deny patterns were specified and this tool wasn't denied → allow
+    true
+}
+
+// ---------------------------------------------------------------------------
+// Tool result chunking store
+// ---------------------------------------------------------------------------
+
+/// Stores oversized tool results so they can be retrieved in chunks later.
+///
+/// When a tool result is compressed or truncated, the full content is stored
+/// here with a unique chunk ID. The LLM can then request the full result
+/// or the next chunk if needed.
+struct ToolResultStore {
+    /// Full results keyed by chunk ID.
+    results: DashMap<String, StoredResult>,
+    /// Maximum age for stored results (auto-evicted).
+    max_age: Duration,
+}
+
+/// A stored tool result with metadata.
+struct StoredResult {
+    /// The full content.
+    full_content: String,
+    /// Tool name that produced this result.
+    tool_name: String,
+    /// When this result was stored.
+    stored_at: Instant,
+}
+
+impl ToolResultStore {
+    fn new() -> Self {
+        Self {
+            results: DashMap::new(),
+            max_age: Duration::from_secs(300), // 5 minutes
+        }
+    }
+
+    /// Store a result and return its chunk ID.
+    fn store(&self, tool_name: &str, full_content: String) -> String {
+        let id = format!("chunk_{}", uuid::Uuid::new_v4().as_simple());
+        self.results.insert(
+            id.clone(),
+            StoredResult {
+                full_content,
+                tool_name: tool_name.to_string(),
+                stored_at: Instant::now(),
+            },
+        );
+        id
+    }
+
+    /// Get the full content for a chunk ID.
+    fn get_full(&self, chunk_id: &str) -> Option<(String, String)> {
+        self.results.get(chunk_id).map(|r| {
+            (r.tool_name.clone(), r.full_content.clone())
+        })
+    }
+
+    /// Get a specific chunk (offset, length) of a stored result.
+    fn get_chunk(&self, chunk_id: &str, offset: usize, max_chars: usize) -> Option<ChunkResult> {
+        self.results.get(chunk_id).map(|r| {
+            let content = &r.full_content;
+            let total_len = content.len();
+            if offset >= total_len {
+                return ChunkResult {
+                    content: String::new(),
+                    offset,
+                    total_len,
+                    has_more: false,
+                    tool_name: r.tool_name.clone(),
+                };
+            }
+            // Find safe char boundary
+            let mut end = (offset + max_chars).min(total_len);
+            while !content.is_char_boundary(end) && end > offset {
+                end -= 1;
+            }
+            let has_more = end < total_len;
+            ChunkResult {
+                content: content[offset..end].to_string(),
+                offset: end,
+                total_len,
+                has_more,
+                tool_name: r.tool_name.clone(),
+            }
+        })
+    }
+
+    /// Evict expired results.
+    fn evict_expired(&self) {
+        self.results.retain(|_, v| v.stored_at.elapsed() < self.max_age);
+    }
+}
+
+/// Result of retrieving a chunk from the store.
+pub struct ChunkResult {
+    /// Content of this chunk.
+    pub content: String,
+    /// Byte offset for the next chunk request.
+    pub offset: usize,
+    /// Total byte length of the full stored result.
+    pub total_len: usize,
+    /// Whether more content remains after this chunk.
+    pub has_more: bool,
+    /// Tool name that produced this result.
+    pub tool_name: String,
+}
+
 /// Maximum length for MCP tool descriptions (in characters).
 ///
 /// Some servers dump 15-60KB into `tool.description`, wasting ~15K tokens per turn.
@@ -417,6 +589,8 @@ struct McpServerHandle {
     capabilities: Arc<RwLock<Option<crate::ServerCapabilities>>>,
     /// Negotiated protocol version.
     protocol_version: Arc<RwLock<String>>,
+    /// Semaphore limiting concurrent tool calls to this server.
+    concurrency_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl McpServerHandle {
@@ -457,6 +631,7 @@ impl McpServerHandle {
         let stdout = child.stdout.take().ok_or_else(|| {
             format!("MCP server '{}' stdout not available", self.name)
         })?;
+        let stderr = child.stderr.take(); // Optional — some servers don't produce stderr
 
         // Store child and stdin
         *self.child.lock().await = Some(child);
@@ -475,6 +650,30 @@ impl McpServerHandle {
             Self::read_responses(reader, &pending, &server_name, &notification_tx, stdin_clone, roots_provider, sampling_provider, elicitation_provider).await;
         });
         *self.reader_task.lock().await = Some(handle);
+
+        // Start stderr reader for smart routing of server diagnostics.
+        if let Some(stderr_stream) = stderr {
+            let stderr_name = self.name.clone();
+            tokio::spawn(async move {
+                let reader = BufReader::new(stderr_stream);
+                let mut lines = reader.lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let line = line.trim().to_string();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    let lower = line.to_lowercase();
+                    // Route based on content severity
+                    if lower.contains("error") || lower.contains("fatal") || lower.contains("panic") {
+                        warn!(server = %stderr_name, stderr = %line, "MCP server stderr");
+                    } else if lower.contains("warn") {
+                        warn!(server = %stderr_name, stderr = %line, "MCP server stderr (warning)");
+                    } else {
+                        debug!(server = %stderr_name, stderr = %line, "MCP server stderr");
+                    }
+                }
+            });
+        }
 
         // Send initialize request (uses connection timeout, not regular request timeout)
         *self.state.write().await = ServerState::Starting;
@@ -1028,25 +1227,13 @@ impl McpServerHandle {
         info!(server = %self.name, "Shutting down MCP server");
         *self.state.write().await = ServerState::Stopped;
 
-        // Close stdin to signal the process
+        // Close stdin to signal the process (graceful shutdown signal).
         {
             let mut stdin_guard = self.stdin.lock().await;
             *stdin_guard = None;
         }
 
-        // Give the process a moment to exit gracefully
-        let child_arc = self.child.clone();
-        let name = self.name.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            let mut child_guard = child_arc.lock().await;
-            if let Some(ref mut child) = *child_guard {
-                let _ = child.kill().await;
-                warn!(server = %name, "Force-killed MCP server process");
-            }
-        });
-
-        // Cancel reader task
+        // Cancel reader task first — stops processing incoming messages.
         {
             let mut reader_guard = self.reader_task.lock().await;
             if let Some(handle) = reader_guard.take() {
@@ -1054,11 +1241,30 @@ impl McpServerHandle {
             }
         }
 
-        // Clear pending requests
+        // Clear pending requests (respond to any waiters with an error).
         self.pending.clear();
 
-        // Remove child
-        *self.child.lock().await = None;
+        // Graceful shutdown: give process 2s to exit, then SIGKILL + reap.
+        let child_arc = self.child.clone();
+        let name = self.name.clone();
+        tokio::spawn(async move {
+            let mut child_guard = child_arc.lock().await;
+            // Take the child out of the option — we now own it.
+            if let Some(mut child) = child_guard.take() {
+                // Try waiting for graceful exit first
+                match tokio::time::timeout(Duration::from_secs(2), child.wait()).await {
+                    Ok(Ok(_status)) => {
+                        debug!(server = %name, "MCP server exited gracefully");
+                    }
+                    _ => {
+                        // Force kill and reap to prevent zombie
+                        let _ = child.kill().await;
+                        let _ = child.wait().await;
+                        warn!(server = %name, "Force-killed MCP server process (zombie reaped)");
+                    }
+                }
+            }
+        });
     }
 
     /// Get the current state.
@@ -1107,6 +1313,8 @@ struct RemoteMcpServerHandle {
     request_timeout: Duration,
     /// Tool call timeout (for tools/call).
     tool_timeout: Duration,
+    /// Semaphore limiting concurrent tool calls to this server.
+    concurrency_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl RemoteMcpServerHandle {
@@ -1394,6 +1602,15 @@ pub struct McpProcessPool {
     /// Callback invoked when an MCP server sends `notifications/progress`.
     /// Receives `(tool_name, progress, total)`.
     progress_callback: Arc<Mutex<Option<Arc<dyn Fn(&str, f64, Option<f64>) + Send + Sync>>>>,
+    /// Glob patterns for tool allowlisting (from `allowedTools` config).
+    /// Empty = all tools allowed. `!` prefix = deny.
+    allowed_patterns: Arc<RwLock<Vec<String>>>,
+    /// Maximum concurrent tool calls per server (default: 8).
+    max_concurrent_per_server: u32,
+    /// Maximum tool result size in characters (default: 1_000_000 = ~1MB).
+    max_output_chars: usize,
+    /// Store for oversized tool results, enabling chunked retrieval.
+    result_store: Arc<ToolResultStore>,
 }
 
 impl McpProcessPool {
@@ -1418,6 +1635,10 @@ impl McpProcessPool {
             tool_cache: Arc::new(RwLock::new(HashMap::new())),
             cache_ttl: Duration::from_secs(60),
             progress_callback: Arc::new(Mutex::new(None)),
+            allowed_patterns: Arc::new(RwLock::new(Vec::new())),
+            max_concurrent_per_server: 8,
+            max_output_chars: 1_000_000,
+            result_store: Arc::new(ToolResultStore::new()),
         }
     }
 
@@ -1444,6 +1665,41 @@ impl McpProcessPool {
     /// Set the tool call timeout (for tools/call).
     pub fn set_tool_timeout(&mut self, timeout: Duration) {
         self.tool_timeout = timeout;
+    }
+
+    /// Set glob patterns for tool allowlisting.
+    ///
+    /// Pattern syntax:
+    /// - `"mcp__fetch__*"` — allow all tools from the `fetch` server
+    /// - `"!mcp__internal__*"` — deny all tools from the `internal` server
+    /// - Empty list = all tools allowed (default)
+    pub async fn set_allowed_patterns(&self, patterns: Vec<String>) {
+        *self.allowed_patterns.write().await = patterns;
+    }
+
+    /// Check whether a specific tool name is permitted by the allowlist patterns.
+    pub async fn is_tool_allowed(&self, tool_name: &str) -> bool {
+        let patterns = self.allowed_patterns.read().await;
+        is_tool_allowed_by_patterns(tool_name, &patterns)
+    }
+
+    /// Retrieve the full stored content for a truncated tool result.
+    ///
+    /// Returns `None` if the chunk ID doesn't exist or has expired.
+    pub async fn get_stored_result(&self, chunk_id: &str) -> Option<(String, String)> {
+        self.result_store.get_full(chunk_id)
+    }
+
+    /// Retrieve a chunk of a stored tool result for incremental reading.
+    ///
+    /// Returns `None` if the chunk ID doesn't exist or has expired.
+    pub async fn get_result_chunk(
+        &self,
+        chunk_id: &str,
+        offset: usize,
+        max_chars: usize,
+    ) -> Option<ChunkResult> {
+        self.result_store.get_chunk(chunk_id, offset, max_chars)
     }
 
     /// Start an MCP server and add it to the pool.
@@ -1483,6 +1739,9 @@ impl McpProcessPool {
             elicitation_provider: self.elicitation_provider.clone(),
             capabilities: Arc::new(RwLock::new(None)),
             protocol_version: Arc::new(RwLock::new(String::new())),
+            concurrency_semaphore: Arc::new(tokio::sync::Semaphore::new(
+                self.max_concurrent_per_server as usize,
+            )),
         });
 
         handle.start().await?;
@@ -1516,6 +1775,9 @@ impl McpProcessPool {
             started_at: Arc::new(RwLock::new(None)),
             request_timeout: self.request_timeout,
             tool_timeout: self.tool_timeout,
+            concurrency_semaphore: Arc::new(tokio::sync::Semaphore::new(
+                self.max_concurrent_per_server as usize,
+            )),
         });
 
         handle.start().await?;
@@ -1533,17 +1795,24 @@ impl McpProcessPool {
         tool_name: &str,
         arguments: Value,
     ) -> ToolResult<ToolOutput> {
+        let max_chars = self.max_output_chars;
+
         // Check remote handles first (simpler, no process management).
         if let Some(remote) = self.remote_handles.get(server_name) {
             let remote = remote.clone();
+            let _permit = remote.concurrency_semaphore.acquire().await.map_err(|e| {
+                ToolError::ExecutionFailed(format!(
+                    "MCP server '{server_name}' concurrency semaphore closed: {e}"
+                ))
+            })?;
+
             let state = remote.get_state().await;
             if matches!(state, ServerState::Healthy) {
                 return match remote.call_tool(tool_name, arguments).await {
-                    Ok(output) => Ok(output),
+                    Ok(output) => Ok(self.enforce_output_limit(output, max_chars, &format!("mcp__{server_name}__{tool_name}"))),
                     Err(e) => {
                         *remote.state.write().await =
                             ServerState::Unhealthy(e.to_string());
-                        // Attempt re-initialization.
                         let restarts = remote.restart_count.fetch_add(1, Ordering::Relaxed) as u32;
                         if restarts < remote.max_restarts {
                             remote.reset().await;
@@ -1560,7 +1829,8 @@ impl McpProcessPool {
             remote.start().await.map_err(|e| {
                 ToolError::ExecutionFailed(format!("Remote MCP server '{server_name}' restart failed: {e}"))
             })?;
-            return remote.call_tool(tool_name, arguments).await;
+            return remote.call_tool(tool_name, arguments).await
+                .map(|o| self.enforce_output_limit(o, max_chars, &format!("mcp__{server_name}__{tool_name}")));
         }
 
         // Stdio handle.
@@ -1571,6 +1841,12 @@ impl McpProcessPool {
                 ToolError::NotFound(format!("MCP server '{server_name}' not in pool"))
             })?
             .clone();
+
+        let _permit = handle.concurrency_semaphore.acquire().await.map_err(|e| {
+            ToolError::ExecutionFailed(format!(
+                "MCP server '{server_name}' concurrency semaphore closed: {e}"
+            ))
+        })?;
 
         // Check health and restart if needed
         let state = handle.get_state().await;
@@ -1594,20 +1870,44 @@ impl McpProcessPool {
                 )));
             }
             ServerState::Starting => {
-                // Wait briefly for startup to complete
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
 
         match handle.call_tool(tool_name, arguments).await {
-            Ok(output) => Ok(output),
+            Ok(output) => Ok(self.enforce_output_limit(output, max_chars, &format!("mcp__{server_name}__{tool_name}"))),
             Err(e) => {
-                // Mark as unhealthy on failure
                 *handle.state.write().await =
                     ServerState::Unhealthy(e.to_string());
                 Err(e)
             }
         }
+    }
+
+    /// Enforce maximum output size by truncating oversized results.
+    /// Enforce maximum output size by truncating oversized results.
+    /// Stores the full content in the result store for later retrieval.
+    fn enforce_output_limit(&self, mut output: ToolOutput, max_chars: usize, tool_name: &str) -> ToolOutput {
+        if output.content.len() > max_chars {
+            let full_content = output.content.clone();
+            let truncated_len = full_content.len();
+
+            // Store the full content for chunked retrieval
+            let chunk_id = self.result_store.store(tool_name, full_content);
+
+            // Truncate at char boundary
+            let mut end = max_chars;
+            while !output.content.is_char_boundary(end) && end > 0 {
+                end -= 1;
+            }
+            output.content.truncate(end);
+            output.content.push_str(&format!(
+                "\n\n[...truncated: showed ~{:.0}K of ~{:.0}K chars | full result: chunk_id={chunk_id}]",
+                max_chars as f64 / 1024.0,
+                truncated_len as f64 / 1024.0,
+            ));
+        }
+        output
     }
 
     /// Call a tool on a server with progress reporting.
@@ -1630,6 +1930,14 @@ impl McpProcessPool {
                 ToolError::NotFound(format!("MCP server '{server_name}' not in pool"))
             })?
             .clone();
+
+        let _permit = handle.concurrency_semaphore.acquire().await.map_err(|e| {
+            ToolError::ExecutionFailed(format!(
+                "MCP server '{server_name}' concurrency semaphore closed: {e}"
+            ))
+        })?;
+
+        let max_chars = self.max_output_chars;
 
         // Check health and restart if needed (same as call_tool)
         let state = handle.get_state().await;
@@ -1661,7 +1969,7 @@ impl McpProcessPool {
             .call_tool_with_progress(tool_name, arguments, Some(on_progress))
             .await
         {
-            Ok(output) => Ok(output),
+            Ok(output) => Ok(self.enforce_output_limit(output, max_chars, &format!("mcp__{server_name}__{tool_name}"))),
             Err(e) => {
                 *handle.state.write().await = ServerState::Unhealthy(e.to_string());
                 Err(e)
@@ -2120,6 +2428,91 @@ impl McpProcessPool {
         self.remote_handles.clear();
     }
 
+    /// Stop a specific server by name.
+    pub async fn stop_server(&self, name: &str) -> Result<(), String> {
+        if let Some((_, handle)) = self.handles.remove(name) {
+            handle.shutdown().await;
+            info!(server = %name, "Stopped MCP server");
+            return Ok(());
+        }
+        if self.remote_handles.remove(name).is_some() {
+            info!(server = %name, "Removed remote MCP server");
+            return Ok(());
+        }
+        Err(format!("MCP server '{name}' not found"))
+    }
+
+    /// Reload server configuration — diff against current state and apply changes.
+    ///
+    /// - New servers in `config` are started
+    /// - Servers no longer in `config` are stopped
+    /// - Changed servers (different command/args/url) are restarted
+    /// - `allowed_tools` patterns are updated
+    pub async fn reload_from_config(
+        &self,
+        config: &crate::config::McpConfig,
+    ) -> Result<Vec<String>, String> {
+        let mut changes: Vec<String> = Vec::new();
+        let config_servers: std::collections::HashSet<&str> =
+            config.mcp_servers.keys().map(|s| s.as_str()).collect();
+
+        // Collect current server names
+        let current_stdio: std::collections::HashSet<String> =
+            self.handles.iter().map(|e| e.key().clone()).collect();
+        let current_remote: std::collections::HashSet<String> =
+            self.remote_handles.iter().map(|e| e.key().clone()).collect();
+
+        // Stop servers no longer in config
+        for name in current_stdio.iter().chain(current_remote.iter()) {
+            if !config_servers.contains(name.as_str()) {
+                self.stop_server(name).await?;
+                changes.push(format!("Removed server '{name}'"));
+            }
+        }
+
+        // Start new servers and restart changed ones
+        for (name, server_config) in &config.mcp_servers {
+            let is_current = current_stdio.contains(name) || current_remote.contains(name);
+
+            match server_config {
+                crate::config::McpServerConfig::Stdio { command, args, env } => {
+                    if !is_current {
+                        self.start_server(name, command, args, env).await?;
+                        changes.push(format!("Started stdio server '{name}'"));
+                    }
+                    // Note: detecting config changes for existing servers would require
+                    // storing the original config — a future enhancement.
+                }
+                crate::config::McpServerConfig::Sse { url, headers, .. }
+                | crate::config::McpServerConfig::Http { url, headers, .. } => {
+                    if !is_current {
+                        self.start_remote_server(name, url, headers.clone()).await?;
+                        changes.push(format!("Started remote server '{name}'"));
+                    }
+                }
+                crate::config::McpServerConfig::WebSocket { .. } => {
+                    if !is_current {
+                        changes.push(format!(
+                            "Skipped WebSocket server '{name}' (not yet supported)"
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Update allowed tools patterns
+        if !config.allowed_tools.is_empty() {
+            self.set_allowed_patterns(config.allowed_tools.clone()).await;
+            changes.push(format!(
+                "Updated allowed tools: {} pattern(s)",
+                config.allowed_tools.len()
+            ));
+        }
+
+        info!(changes = changes.len(), "Config reload completed");
+        Ok(changes)
+    }
+
     /// Get the number of servers in the pool (stdio + remote).
     pub fn server_count(&self) -> usize {
         self.handles.len() + self.remote_handles.len()
@@ -2167,6 +2560,23 @@ impl McpProcessPool {
             handle.capabilities.read().await.clone()
         } else {
             None
+        }
+    }
+}
+
+impl Drop for McpProcessPool {
+    fn drop(&mut self) {
+        // Best-effort cleanup: kill child processes to prevent zombies.
+        // Since Drop can't be async, we synchronously iterate and kill.
+        for entry in self.handles.iter() {
+            let handle = entry.value();
+            if let Ok(mut child_guard) = handle.child.try_lock() {
+                if let Some(ref mut child) = *child_guard {
+                    // start_kill() is sync and sends SIGKILL immediately.
+                    let _ = child.start_kill();
+                }
+                *child_guard = None;
+            }
         }
     }
 }
@@ -2307,6 +2717,14 @@ impl Tool for PooledMcpToolAdapter {
     }
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
+        // Check tool permission against allowlist patterns.
+        if !self.pool.is_tool_allowed(&self.tool_name).await {
+            return Err(ToolError::ExecutionFailed(format!(
+                "Tool '{}' is not in the allowed tools list",
+                self.tool_name
+            )));
+        }
+
         // Check cache for read-only tools.
         if self.is_read_only() {
             let cache_key = format!(
@@ -2836,6 +3254,109 @@ mod tests {
         assert!(!adapter.is_concurrency_safe());
     }
 
+    // -- Tool permission tests --------------------------------------------
+
+    #[test]
+    fn test_glob_match_exact() {
+        assert!(glob_match("mcp__fetch__fetch", "mcp__fetch__fetch"));
+        assert!(!glob_match("mcp__fetch__fetch", "mcp__fetch__search"));
+    }
+
+    #[test]
+    fn test_glob_match_star() {
+        assert!(glob_match("mcp__fetch__*", "mcp__fetch__fetch"));
+        assert!(glob_match("mcp__fetch__*", "mcp__fetch__search"));
+        assert!(glob_match("mcp__*", "mcp__fetch__fetch"));
+        assert!(!glob_match("mcp__fetch__*", "mcp__other__tool"));
+    }
+
+    #[test]
+    fn test_glob_match_question() {
+        assert!(glob_match("mcp__x__?", "mcp__x__a"));
+        assert!(!glob_match("mcp__x__?", "mcp__x__ab"));
+    }
+
+    #[test]
+    fn test_is_tool_allowed_empty_patterns() {
+        assert!(is_tool_allowed_by_patterns("mcp__anything__tool", &[]));
+    }
+
+    #[test]
+    fn test_is_tool_allowed_allow_pattern() {
+        let patterns = vec!["mcp__fetch__*".to_string()];
+        assert!(is_tool_allowed_by_patterns("mcp__fetch__fetch", &patterns));
+        assert!(!is_tool_allowed_by_patterns("mcp__other__tool", &patterns));
+    }
+
+    #[test]
+    fn test_is_tool_allowed_deny_pattern() {
+        let patterns = vec!["!mcp__internal__*".to_string()];
+        assert!(!is_tool_allowed_by_patterns("mcp__internal__secret", &patterns));
+        assert!(is_tool_allowed_by_patterns("mcp__fetch__fetch", &patterns));
+    }
+
+    #[test]
+    fn test_is_tool_allowed_mixed_patterns() {
+        let patterns = vec![
+            "mcp__fetch__*".to_string(),
+            "mcp__memory__*".to_string(),
+            "!mcp__internal__*".to_string(),
+        ];
+        assert!(is_tool_allowed_by_patterns("mcp__fetch__fetch", &patterns));
+        assert!(is_tool_allowed_by_patterns("mcp__memory__create", &patterns));
+        assert!(!is_tool_allowed_by_patterns("mcp__internal__secret", &patterns));
+        assert!(!is_tool_allowed_by_patterns("mcp__other__tool", &patterns));
+    }
+
+    #[test]
+    fn test_is_tool_allowed_deny_overrides_allow() {
+        let patterns = vec![
+            "mcp__*".to_string(),
+            "!mcp__internal__*".to_string(),
+        ];
+        assert!(is_tool_allowed_by_patterns("mcp__fetch__fetch", &patterns));
+        assert!(!is_tool_allowed_by_patterns("mcp__internal__tool", &patterns));
+    }
+
+    #[tokio::test]
+    async fn test_pool_allowed_patterns() {
+        let pool = McpProcessPool::new();
+        assert!(pool.is_tool_allowed("mcp__anything__tool").await);
+
+        pool.set_allowed_patterns(vec!["mcp__fetch__*".to_string()]).await;
+        assert!(pool.is_tool_allowed("mcp__fetch__fetch").await);
+        assert!(!pool.is_tool_allowed("mcp__other__tool").await);
+    }
+
+    #[test]
+    fn test_enforce_output_limit_under() {
+        let pool = McpProcessPool::new();
+        let output = ToolOutput::success("hello world".to_string());
+        let limited = pool.enforce_output_limit(output, 1000, "mcp__test__tool");
+        assert_eq!(limited.content, "hello world");
+    }
+
+    #[test]
+    fn test_enforce_output_limit_over() {
+        let pool = McpProcessPool::new();
+        let long_content = "a".repeat(2000);
+        let output = ToolOutput::success(long_content);
+        let limited = pool.enforce_output_limit(output, 1000, "mcp__test__tool");
+        assert!(limited.content.len() < 1200); // 1000 + truncation notice + chunk_id
+        assert!(limited.content.contains("[...truncated:"));
+    }
+
+    #[test]
+    fn test_enforce_output_limit_preserves_unicode() {
+        let pool = McpProcessPool::new();
+        // Unicode chars at boundary
+        let content = "日本語".repeat(500); // Each char is 3 bytes
+        let output = ToolOutput::success(content);
+        let limited = pool.enforce_output_limit(output, 100, "mcp__test__tool");
+        // Should not panic on char boundary
+        assert!(limited.content.contains("[...truncated:") || limited.content.len() <= 200);
+    }
+
     #[tokio::test]
     async fn test_server_status_not_found() {
         let pool = McpProcessPool::new();
@@ -2849,6 +3370,74 @@ mod tests {
         let pool = McpProcessPool::new();
         pool.stop_health_checks().await;
         assert_eq!(pool.server_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_tool_result_store_roundtrip() {
+        let pool = McpProcessPool::new();
+        // Trigger enforce_output_limit with content that exceeds the limit.
+        let long_content = "x".repeat(2000);
+        let output = ToolOutput::success(long_content.clone());
+        let limited = pool.enforce_output_limit(output, 100, "mcp__srv__tool");
+
+        // Should contain a chunk_id in the truncation notice.
+        assert!(limited.content.contains("[...truncated:"));
+        let chunk_id = limited.content
+            .split("chunk_id=")
+            .nth(1)
+            .and_then(|s| s.split(']').next())
+            .expect("should have chunk_id")
+            .to_string();
+
+        // Retrieve full content.
+        let (tool_name, full) = pool.get_stored_result(&chunk_id)
+            .await
+            .expect("should find stored result");
+        assert_eq!(tool_name, "mcp__srv__tool");
+        assert_eq!(full, long_content);
+    }
+
+    #[tokio::test]
+    async fn test_tool_result_store_chunking() {
+        let pool = McpProcessPool::new();
+        let long_content = "abcdefghij".repeat(100); // 1000 chars
+        let output = ToolOutput::success(long_content.clone());
+        let limited = pool.enforce_output_limit(output, 50, "mcp__srv__tool");
+
+        let chunk_id = limited.content
+            .split("chunk_id=")
+            .nth(1)
+            .and_then(|s| s.split(']').next())
+            .expect("should have chunk_id")
+            .to_string();
+
+        // Get first chunk.
+        let chunk = pool.get_result_chunk(&chunk_id, 0, 100)
+            .await
+            .expect("should get chunk");
+        assert_eq!(chunk.content.len(), 100);
+        assert!(chunk.has_more);
+        assert_eq!(chunk.total_len, 1000);
+
+        // Get second chunk.
+        let chunk2 = pool.get_result_chunk(&chunk_id, chunk.offset, 100)
+            .await
+            .expect("should get chunk 2");
+        assert!(chunk2.has_more);
+
+        // Get beyond end.
+        let chunk_end = pool.get_result_chunk(&chunk_id, 2000, 100)
+            .await
+            .expect("should handle past-end");
+        assert!(!chunk_end.has_more);
+        assert!(chunk_end.content.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_tool_result_store_missing() {
+        let pool = McpProcessPool::new();
+        assert!(pool.get_stored_result("nonexistent").await.is_none());
+        assert!(pool.get_result_chunk("nonexistent", 0, 100).await.is_none());
     }
 
     #[tokio::test]
