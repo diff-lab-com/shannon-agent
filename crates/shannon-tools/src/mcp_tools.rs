@@ -421,6 +421,108 @@ impl Tool for GetPromptTool {
 }
 
 // ---------------------------------------------------------------------------
+// McpToolSearchTool
+// ---------------------------------------------------------------------------
+
+/// Tool that retrieves the full input schema for an MCP tool on demand.
+///
+/// When deferred tool schema loading is enabled, MCP tools register with
+/// minimal schemas to reduce context usage. This tool allows the LLM to
+/// fetch the full parameter specification before calling the actual tool.
+///
+/// Input: `{ "tool_name": "mcp__fetch__fetch" }`
+/// Output: The full JSON Schema for that tool's input parameters.
+pub struct McpToolSearchTool {
+    pool: Arc<shannon_mcp::McpProcessPool>,
+    description: String,
+}
+
+impl McpToolSearchTool {
+    /// Create a new tool search tool backed by the given process pool.
+    pub fn new(pool: Arc<shannon_mcp::McpProcessPool>) -> Self {
+        Self {
+            pool,
+            description: "Search for an MCP tool's full parameter schema by tool name. \
+                          Use this before calling any mcp__ tool to discover its required \
+                          and optional parameters. Input: {\"tool_name\": \"mcp__server__tool\"}"
+                .to_string(),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for McpToolSearchTool {
+    fn name(&self) -> &str {
+        "mcp__tool_search"
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "tool_name": {
+                    "type": "string",
+                    "description": "Full tool name (e.g., \"mcp__fetch__fetch\") to retrieve the schema for."
+                }
+            },
+            "required": ["tool_name"]
+        })
+    }
+
+    fn category(&self) -> &str {
+        "mcp"
+    }
+
+    async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
+        let tool_name = input
+            .get("tool_name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidInput("Missing 'tool_name' parameter".to_string()))?;
+
+        match self.pool.get_deferred_schema(tool_name) {
+            Some(schema) => {
+                let schema_str = serde_json::to_string_pretty(&schema)
+                    .unwrap_or_else(|_| schema.to_string());
+                Ok(ToolOutput::success(schema_str))
+            }
+            None => {
+                // List available tools to help the LLM discover valid names.
+                let available = self.pool.deferred_schema_tool_names();
+                if available.is_empty() {
+                    Ok(ToolOutput::error(format!(
+                        "No deferred schema found for '{tool_name}'. \
+                         Deferred tool loading may not be enabled, or this is not an MCP tool."
+                    )))
+                } else {
+                    let mut suggestions: Vec<&str> = available
+                        .iter()
+                        .filter(|t| t.contains(tool_name) || tool_name.contains(t.as_str()))
+                        .map(|t| t.as_str())
+                        .collect();
+                    suggestions.sort();
+                    if suggestions.is_empty() {
+                        suggestions = available.iter().take(10).map(|t| t.as_str()).collect();
+                    }
+                    Ok(ToolOutput::error(format!(
+                        "No deferred schema found for '{tool_name}'. \
+                         Similar tools: {}",
+                        suggestions.join(", ")
+                    )))
+                }
+            }
+        }
+    }
+
+    fn is_read_only(&self) -> bool {
+        true
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

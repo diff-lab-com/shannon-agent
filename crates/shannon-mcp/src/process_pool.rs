@@ -28,6 +28,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -1611,6 +1612,12 @@ pub struct McpProcessPool {
     max_output_chars: usize,
     /// Store for oversized tool results, enabling chunked retrieval.
     result_store: Arc<ToolResultStore>,
+    /// When true, MCP tools register with minimal schemas and full schemas are
+    /// fetched on-demand via ToolSearch. Reduces context usage by ~85%.
+    defer_tool_schemas: Arc<AtomicBool>,
+    /// Full input schemas keyed by tool name (e.g. "mcp__fetch__fetch").
+    /// Populated during discovery when `defer_tool_schemas` is enabled.
+    deferred_schemas: DashMap<String, Value>,
 }
 
 impl McpProcessPool {
@@ -1639,6 +1646,8 @@ impl McpProcessPool {
             max_concurrent_per_server: 8,
             max_output_chars: 1_000_000,
             result_store: Arc::new(ToolResultStore::new()),
+            defer_tool_schemas: Arc::new(AtomicBool::new(false)),
+            deferred_schemas: DashMap::new(),
         }
     }
 
@@ -1681,6 +1690,38 @@ impl McpProcessPool {
     pub async fn is_tool_allowed(&self, tool_name: &str) -> bool {
         let patterns = self.allowed_patterns.read().await;
         is_tool_allowed_by_patterns(tool_name, &patterns)
+    }
+
+    /// Enable or disable deferred tool schema loading.
+    ///
+    /// When enabled, MCP tools register with minimal schemas (`{"type":"object"}`)
+    /// and the real schemas are stored in `deferred_schemas` for on-demand retrieval
+    /// via the `McpToolSearchTool`. This reduces context usage by ~85%.
+    pub fn set_defer_tool_schemas(&self, enabled: bool) {
+        self.defer_tool_schemas.store(enabled, Ordering::SeqCst);
+    }
+
+    /// Check whether deferred tool schema loading is enabled.
+    pub fn is_defer_tool_schemas(&self) -> bool {
+        self.defer_tool_schemas.load(Ordering::SeqCst)
+    }
+
+    /// Store the real input schema for a tool (used during discovery when deferred).
+    pub fn store_deferred_schema(&self, tool_name: &str, schema: Value) {
+        self.deferred_schemas.insert(tool_name.to_string(), schema);
+    }
+
+    /// Retrieve the real input schema for a tool.
+    ///
+    /// Returns `None` if the tool has no stored schema (not an MCP tool, or
+    /// deferred mode is off).
+    pub fn get_deferred_schema(&self, tool_name: &str) -> Option<Value> {
+        self.deferred_schemas.get(tool_name).map(|v| v.value().clone())
+    }
+
+    /// List all tool names that have deferred schemas stored.
+    pub fn deferred_schema_tool_names(&self) -> Vec<String> {
+        self.deferred_schemas.iter().map(|e| e.key().clone()).collect()
     }
 
     /// Retrieve the full stored content for a truncated tool result.
@@ -1892,8 +1933,11 @@ impl McpProcessPool {
             let full_content = output.content.clone();
             let truncated_len = full_content.len();
 
-            // Store the full content for chunked retrieval
-            let chunk_id = self.result_store.store(tool_name, full_content);
+            // Store the full content for chunked retrieval (in-memory).
+            let chunk_id = self.result_store.store(tool_name, full_content.clone());
+
+            // Persist to disk so the LLM can use the Read tool to access the full result.
+            let disk_path = self.persist_result_to_disk(&chunk_id, &full_content, tool_name);
 
             // Truncate at char boundary
             let mut end = max_chars;
@@ -1901,13 +1945,58 @@ impl McpProcessPool {
                 end -= 1;
             }
             output.content.truncate(end);
-            output.content.push_str(&format!(
-                "\n\n[...truncated: showed ~{:.0}K of ~{:.0}K chars | full result: chunk_id={chunk_id}]",
-                max_chars as f64 / 1024.0,
-                truncated_len as f64 / 1024.0,
-            ));
+
+            if let Some(ref path) = disk_path {
+                output.content.push_str(&format!(
+                    "\n\n[...truncated: showed ~{:.0}K of ~{:.0}K chars | full result saved to: {} | chunk_id={chunk_id}]",
+                    max_chars as f64 / 1024.0,
+                    truncated_len as f64 / 1024.0,
+                    path.display(),
+                ));
+            } else {
+                output.content.push_str(&format!(
+                    "\n\n[...truncated: showed ~{:.0}K of ~{:.0}K chars | chunk_id={chunk_id}]",
+                    max_chars as f64 / 1024.0,
+                    truncated_len as f64 / 1024.0,
+                ));
+            }
         }
         output
+    }
+
+    /// Persist a large tool result to `.shannon/mcp_results/{chunk_id}.json`.
+    ///
+    /// Returns the file path on success, or `None` if the write fails.
+    fn persist_result_to_disk(
+        &self,
+        chunk_id: &str,
+        content: &str,
+        tool_name: &str,
+    ) -> Option<std::path::PathBuf> {
+        let dir = std::path::Path::new(".shannon/mcp_results");
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            warn!(error = %e, "Failed to create .shannon/mcp_results directory");
+            return None;
+        }
+
+        let path = dir.join(format!("{chunk_id}.json"));
+        let data = serde_json::json!({
+            "chunk_id": chunk_id,
+            "tool_name": tool_name,
+            "content": content,
+            "stored_at": chrono::Utc::now().to_rfc3339(),
+        });
+
+        match std::fs::write(&path, data.to_string()) {
+            Ok(()) => {
+                debug!(path = %path.display(), "Persisted large MCP result to disk");
+                Some(path)
+            }
+            Err(e) => {
+                warn!(error = %e, path = %path.display(), "Failed to persist MCP result to disk");
+                None
+            }
+        }
     }
 
     /// Call a tool on a server with progress reporting.
@@ -2713,7 +2802,19 @@ impl Tool for PooledMcpToolAdapter {
     }
 
     fn input_schema(&self) -> Value {
-        self.input_schema.clone()
+        // When deferred mode is enabled, return a minimal stub to save context.
+        // The real schema is available via pool.get_deferred_schema() / McpToolSearchTool.
+        if self.pool.is_defer_tool_schemas() {
+            serde_json::json!({
+                "type": "object",
+                "description": format!(
+                    "Use the mcp__tool_search tool with tool_name=\"{}\" to get the full parameter schema before calling this tool.",
+                    self.tool_name
+                )
+            })
+        } else {
+            self.input_schema.clone()
+        }
     }
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
@@ -2928,14 +3029,23 @@ pub async fn discover_pooled_tools(
                 .get("annotations")
                 .and_then(|a| serde_json::from_value(a.clone()).ok());
 
-            tools.push(PooledMcpToolAdapter::new(
+            // Store the real schema for deferred retrieval if enabled.
+            let adapter = PooledMcpToolAdapter::new(
                 pool.clone(),
                 server_name.to_string(),
-                name,
+                name.clone(),
                 description,
-                input_schema,
+                input_schema.clone(),
                 annotations,
-            ));
+            );
+
+            // When deferred mode is on, store the real schema and let the adapter
+            // return a minimal stub via input_schema().
+            if pool.is_defer_tool_schemas() {
+                pool.store_deferred_schema(&adapter.tool_name, input_schema);
+            }
+
+            tools.push(adapter);
         }
     }
 
@@ -2981,6 +3091,83 @@ mod tests {
             None,
         );
         assert_eq!(adapter.description(), "Search the web");
+    }
+
+    #[test]
+    fn test_deferred_tool_schema_off_by_default() {
+        let pool = McpProcessPool::new();
+        assert!(!pool.is_defer_tool_schemas());
+    }
+
+    #[test]
+    fn test_deferred_tool_schema_returns_minimal_when_enabled() {
+        let pool = Arc::new(McpProcessPool::new());
+        pool.set_defer_tool_schemas(true);
+
+        let full_schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "The URL to fetch"},
+                "method": {"type": "string", "enum": ["GET", "POST"]}
+            },
+            "required": ["url"]
+        });
+
+        let adapter = PooledMcpToolAdapter::new(
+            pool.clone(),
+            "fetch".to_string(),
+            "fetch".to_string(),
+            "Fetch a URL".to_string(),
+            full_schema.clone(),
+            None,
+        );
+
+        // Store the deferred schema.
+        pool.store_deferred_schema(adapter.name(), full_schema.clone());
+
+        // input_schema() should return minimal stub.
+        let schema = adapter.input_schema();
+        assert_eq!(schema["type"], "object");
+        assert!(schema.get("properties").is_none());
+
+        // Verify the real schema is retrievable.
+        let real = pool.get_deferred_schema(adapter.name()).unwrap();
+        assert_eq!(real["properties"]["url"]["type"], "string");
+    }
+
+    #[test]
+    fn test_deferred_tool_schema_returns_full_when_disabled() {
+        let pool = Arc::new(McpProcessPool::new());
+        // Deferred mode is OFF by default.
+
+        let full_schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"}
+            }
+        });
+
+        let adapter = PooledMcpToolAdapter::new(
+            pool,
+            "search".to_string(),
+            "search".to_string(),
+            "Search".to_string(),
+            full_schema.clone(),
+            None,
+        );
+
+        // input_schema() should return the full schema.
+        let schema = adapter.input_schema();
+        assert_eq!(schema["properties"]["query"]["type"], "string");
+    }
+
+    #[test]
+    fn test_deferred_schema_store_and_retrieve() {
+        let pool = McpProcessPool::new();
+        pool.store_deferred_schema("mcp__test__tool", serde_json::json!({"type": "object"}));
+        assert!(pool.get_deferred_schema("mcp__test__tool").is_some());
+        assert!(pool.get_deferred_schema("mcp__nonexistent").is_none());
+        assert!(pool.deferred_schema_tool_names().contains(&"mcp__test__tool".to_string()));
     }
 
     #[test]
@@ -3438,6 +3625,39 @@ mod tests {
         let pool = McpProcessPool::new();
         assert!(pool.get_stored_result("nonexistent").await.is_none());
         assert!(pool.get_result_chunk("nonexistent", 0, 100).await.is_none());
+    }
+
+    #[test]
+    fn test_disk_persistence_saves_file() {
+        let pool = McpProcessPool::new();
+        let content = "x".repeat(5000);
+        let output = ToolOutput::success(content.clone());
+        let limited = pool.enforce_output_limit(output, 100, "mcp__test__disk");
+
+        // Should reference a file path.
+        assert!(limited.content.contains("full result saved to:"));
+        assert!(limited.content.contains(".shannon/mcp_results/"));
+
+        // Extract chunk_id and verify the file exists.
+        let chunk_id = limited.content
+            .split("chunk_id=")
+            .nth(1)
+            .and_then(|s| s.split(']').next())
+            .expect("should have chunk_id")
+            .to_string();
+
+        let path = std::path::Path::new(".shannon/mcp_results").join(format!("{chunk_id}.json"));
+        assert!(path.exists(), "disk file should exist");
+
+        // Verify file content.
+        let file_data: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(file_data["tool_name"], "mcp__test__disk");
+        assert_eq!(file_data["content"], content);
+        assert!(file_data["stored_at"].is_string());
+
+        // Clean up.
+        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]

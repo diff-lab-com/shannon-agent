@@ -82,6 +82,7 @@ pub use config::{
 pub use server_manager::{
     McpDiscoveryResult, discover_all_servers,
     PooledMcpDiscoveryResult, discover_all_servers_pooled,
+    discover_all_servers_pooled_nonblocking,
 };
 pub use process_pool::{
     McpProcessPool, PooledMcpToolAdapter, PooledDiscoveryResult,

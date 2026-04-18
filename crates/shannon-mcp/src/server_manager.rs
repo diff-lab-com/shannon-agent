@@ -196,6 +196,112 @@ pub async fn discover_all_servers_pooled(
     }
 }
 
+/// Non-blocking variant of [`discover_all_servers_pooled`].
+///
+/// Returns immediately with an empty tool list and a shared pool. Each server
+/// is connected in a background tokio task. When a server's tools are
+/// discovered, the `on_tools_ready` callback is invoked with the tool adapters,
+/// allowing the caller to register them dynamically.
+///
+/// This avoids blocking REPL startup on slow MCP servers.
+pub fn discover_all_servers_pooled_nonblocking(
+    project_dir: &Path,
+    on_tools_ready: Arc<dyn Fn(Vec<PooledMcpToolAdapter>) + Send + Sync>,
+) -> PooledMcpDiscoveryResult {
+    let config = match discover_config(project_dir) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(error = %e, "Failed to discover MCP config");
+            return PooledMcpDiscoveryResult {
+                servers: Vec::new(),
+                tools: Vec::new(),
+                pool: Arc::new(McpProcessPool::new()),
+            };
+        }
+    };
+
+    if config.mcp_servers.is_empty() {
+        debug!("No MCP servers configured");
+        return PooledMcpDiscoveryResult {
+            servers: Vec::new(),
+            tools: Vec::new(),
+            pool: Arc::new(McpProcessPool::new()),
+        };
+    }
+
+    info!(
+        server_count = config.mcp_servers.len(),
+        "Starting non-blocking MCP server discovery"
+    );
+
+    let pool = Arc::new(McpProcessPool::new());
+
+    // Start health checks in background.
+    let pool_for_health = pool.clone();
+    tokio::spawn(async move {
+        pool_for_health.start_health_checks().await;
+    });
+
+    // Spawn a background task for each server.
+    for (name, server_config) in config.mcp_servers {
+        let pool = pool.clone();
+        let on_tools_ready = on_tools_ready.clone();
+        let server_name = name.clone();
+
+        let task = async move {
+            let result = match server_config {
+                McpServerConfig::Stdio { command, args, env } => {
+                    discover_pooled_tools(pool.clone(), &server_name, &command, &args, &env).await
+                }
+                McpServerConfig::Sse { url, headers, .. } => {
+                    match pool.start_remote_server(&server_name, &url, headers.clone()).await {
+                        Ok(()) => discover_remote_pooled_tools(pool.clone(), &server_name).await,
+                        Err(e) => Err(e),
+                    }
+                }
+                McpServerConfig::Http { url, headers, .. } => {
+                    match pool.start_remote_server(&server_name, &url, headers.clone()).await {
+                        Ok(()) => discover_remote_pooled_tools(pool.clone(), &server_name).await,
+                        Err(e) => Err(e),
+                    }
+                }
+                McpServerConfig::WebSocket { url, .. } => {
+                    warn!(server = %server_name, url = %url,
+                          "WebSocket transport not yet supported for pooled discovery");
+                    return;
+                }
+            };
+
+            match result {
+                Ok(discovered) => {
+                    let tool_count = discovered.tools.len();
+                    info!(
+                        server = %server_name,
+                        tools = tool_count,
+                        "Non-blocking MCP server connected"
+                    );
+                    on_tools_ready(discovered.tools);
+                }
+                Err(e) => {
+                    error!(
+                        server = %server_name,
+                        error = %e,
+                        "Non-blocking MCP server discovery failed"
+                    );
+                }
+            }
+        };
+
+        tokio::spawn(task);
+    }
+
+    PooledMcpDiscoveryResult {
+        servers: Vec::new(),
+        tools: Vec::new(),
+        pool,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Legacy discovery (one-shot processes)
 // ---------------------------------------------------------------------------

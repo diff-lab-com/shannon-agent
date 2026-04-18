@@ -65,7 +65,7 @@ pub use task::{TaskTool, TaskOperation};
 pub use notebook::{NotebookEditTool, NotebookEditInput, NotebookEditOutput};
 pub use worktree::{WorktreeTool, EnterWorktreeInput, EnterWorktreeOutput, ExitWorktreeInput, ExitWorktreeOutput};
 pub use mcp::{McpResourceTool, ReadMcpResourceInput, ReadMcpResourceOutput, ListMcpResourcesInput, ListMcpResourcesOutput};
-pub use mcp_tools::{ListMcpResourcesTool, ReadMcpResourceTool, ListPromptsTool, GetPromptTool};
+pub use mcp_tools::{ListMcpResourcesTool, ReadMcpResourceTool, ListPromptsTool, GetPromptTool, McpToolSearchTool};
 pub use messaging::{SendMessageTool, SendMessageInput, SendMessageOutput};
 pub use todo::{
     TodoWriteTool, TodoWriteInput, TodoWriteOutput,
