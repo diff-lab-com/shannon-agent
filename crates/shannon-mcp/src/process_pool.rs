@@ -3144,6 +3144,55 @@ pub fn make_sampling_provider(
     })
 }
 
+/// User prompt callback type for elicitation.
+///
+/// Receives the server's message and optional JSON Schema,
+/// returns `(ElicitationAction, Option<Value>)` where the value
+/// is the user's structured input on accept.
+pub type UserPromptCallback = Arc<
+    dyn Fn(String, Option<serde_json::Value>) -> Pin<Box<dyn Future<Output = (crate::ElicitationAction, Option<serde_json::Value>)> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Create an elicitation provider that delegates to a user prompt callback.
+///
+/// When an MCP server sends `elicitation/create`, the callback is invoked
+/// with the server's message and optional schema. The callback should
+/// present the prompt to the user (e.g., via the TUI) and return the result.
+///
+/// If no callback is provided, all elicitation requests are auto-declined.
+pub fn make_elicitation_provider(
+    prompt_callback: Option<UserPromptCallback>,
+) -> ElicitationProvider {
+    use crate::{ElicitationRequest, ElicitationResult, ElicitationAction};
+
+    Arc::new(move |req: ElicitationRequest| {
+        let callback = prompt_callback.clone();
+        Box::pin(async move {
+            tracing::info!(
+                message = %req.message,
+                has_schema = req.requested_schema.is_some(),
+                "MCP elicitation request"
+            );
+
+            match callback {
+                Some(cb) => {
+                    let (action, content) = cb(req.message, req.requested_schema).await;
+                    Ok(ElicitationResult { action, content })
+                }
+                None => {
+                    tracing::warn!("Elicitation request auto-declined (no callback configured)");
+                    Ok(ElicitationResult {
+                        action: ElicitationAction::Decline,
+                        content: None,
+                    })
+                }
+            }
+        })
+    })
+}
+
 /// Discover tools from an MCP server using the persistent pool.
 ///
 /// Starts the server in the pool, sends `initialize` + `tools/list`,
