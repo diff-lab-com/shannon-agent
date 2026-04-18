@@ -40,6 +40,46 @@ pub struct McpConfig {
     /// MCP server definitions keyed by server name.
     #[serde(default, rename = "mcpServers")]
     pub mcp_servers: HashMap<String, McpServerConfig>,
+    /// Glob patterns for allowed tools (e.g., `["mcp__*", "Bash", "!mcp__internal__*"]`).
+    /// Loaded from `allowedTools` in settings.json. Empty = all tools allowed.
+    #[serde(default, rename = "allowedTools")]
+    pub allowed_tools: Vec<String>,
+}
+
+/// Authentication configuration for MCP servers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum McpAuthConfig {
+    /// API key authentication: adds a header to each request.
+    #[serde(rename = "api_key")]
+    ApiKey {
+        /// The API key value (supports `${VAR}` expansion).
+        key: String,
+        /// Header name (default: `X-API-Key`).
+        #[serde(default)]
+        header: Option<String>,
+        /// Key prefix in header value, e.g. `"Bearer"` (default: none).
+        #[serde(default)]
+        prefix: Option<String>,
+    },
+    /// OAuth 2.0 PKCE authentication.
+    #[serde(rename = "oauth")]
+    OAuth {
+        /// OAuth client ID.
+        client_id: String,
+        /// OAuth client secret (optional, for confidential clients).
+        #[serde(default)]
+        client_secret: Option<String>,
+        /// Authorization endpoint URL.
+        auth_url: String,
+        /// Token endpoint URL.
+        token_url: String,
+        /// Redirect URL for the OAuth flow.
+        redirect_url: String,
+        /// OAuth scopes.
+        #[serde(default)]
+        scopes: Vec<String>,
+    },
 }
 
 /// Configuration for a single MCP server.
@@ -66,6 +106,9 @@ pub enum McpServerConfig {
         /// Optional HTTP headers.
         #[serde(default)]
         headers: HashMap<String, String>,
+        /// Optional authentication configuration.
+        #[serde(default)]
+        auth: Option<McpAuthConfig>,
     },
     /// HTTP-based server: REST-style JSON-RPC.
     #[serde(rename = "http")]
@@ -75,12 +118,18 @@ pub enum McpServerConfig {
         /// Optional HTTP headers.
         #[serde(default)]
         headers: HashMap<String, String>,
+        /// Optional authentication configuration.
+        #[serde(default)]
+        auth: Option<McpAuthConfig>,
     },
     /// WebSocket-based server.
     #[serde(rename = "websocket")]
     WebSocket {
         /// The WebSocket endpoint URL.
         url: String,
+        /// Optional authentication configuration.
+        #[serde(default)]
+        auth: Option<McpAuthConfig>,
     },
 }
 
@@ -116,6 +165,7 @@ impl McpServerConfig {
             return Ok(McpServerConfig::Sse {
                 url: raw.url,
                 headers: raw.headers.unwrap_or_default(),
+                auth: raw.auth,
             });
         }
 
@@ -137,6 +187,7 @@ struct StdioRaw {
 struct UrlRaw {
     url: String,
     headers: Option<HashMap<String, String>>,
+    auth: Option<McpAuthConfig>,
 }
 
 /// Errors that can occur during config discovery and parsing.
@@ -248,6 +299,13 @@ pub fn expand_env_vars(input: &str) -> String {
     result
 }
 
+/// Expand env vars in auth config values.
+fn expand_auth_config(auth: &mut Option<McpAuthConfig>) {
+    if let Some(McpAuthConfig::ApiKey { key, .. }) = auth {
+        *key = expand_env_vars(key);
+    }
+}
+
 /// Expand env vars in all values of a server config (D2).
 pub fn expand_server_config(config: &mut McpServerConfig) {
     match config {
@@ -264,20 +322,23 @@ pub fn expand_server_config(config: &mut McpServerConfig) {
                 *val = expand_env_vars(val);
             }
         }
-        McpServerConfig::Sse { url, headers } => {
+        McpServerConfig::Sse { url, headers, auth } => {
             *url = expand_env_vars(url);
             for val in headers.values_mut() {
                 *val = expand_env_vars(val);
             }
+            expand_auth_config(auth);
         }
-        McpServerConfig::Http { url, headers } => {
+        McpServerConfig::Http { url, headers, auth } => {
             *url = expand_env_vars(url);
             for val in headers.values_mut() {
                 *val = expand_env_vars(val);
             }
+            expand_auth_config(auth);
         }
-        McpServerConfig::WebSocket { url } => {
+        McpServerConfig::WebSocket { url, auth } => {
             *url = expand_env_vars(url);
+            expand_auth_config(auth);
         }
     }
 }
@@ -376,13 +437,18 @@ fn load_config_file(path: &Path) -> Result<McpConfig, ConfigError> {
     let mcp_servers_value = match raw.get("mcpServers") {
         Some(v) => v,
         None => {
-            // No mcpServers key — check if this looks like a settings.json
-            // that might have other keys but no MCP config
-            debug!(
-                path = %path.display(),
-                "No 'mcpServers' key found in config file"
-            );
-            return Ok(McpConfig::default());
+            // No mcpServers key — but might still have allowedTools
+            let allowed_tools = parse_allowed_tools(&raw);
+            if allowed_tools.is_empty() {
+                debug!(
+                    path = %path.display(),
+                    "No 'mcpServers' key found in config file"
+                );
+            }
+            return Ok(McpConfig {
+                mcp_servers: HashMap::new(),
+                allowed_tools,
+            });
         }
     };
 
@@ -404,9 +470,30 @@ fn load_config_file(path: &Path) -> Result<McpConfig, ConfigError> {
         }
     }
 
+    let allowed_tools = parse_allowed_tools(&raw);
+
     Ok(McpConfig {
         mcp_servers: servers,
+        allowed_tools,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Allowed tools parsing (T5)
+// ---------------------------------------------------------------------------
+
+/// Extract `allowedTools` from a raw JSON config value.
+///
+/// Looks for an `"allowedTools"` array at the top level of the config file.
+/// Entries are returned as-is (glob patterns like `["mcp__*", "Bash", "!mcp__internal__*"]`).
+fn parse_allowed_tools(raw: &serde_json::Value) -> Vec<String> {
+    match raw.get("allowedTools").and_then(|v| v.as_array()) {
+        Some(arr) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
+        None => Vec::new(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -670,6 +757,150 @@ mod tests {
 
     // ── Expand server config tests ──────────────────────────────────────
 
+    // ── Allowed tools parsing tests (T5) ─────────────────────────────────
+
+    #[test]
+    fn test_parse_allowed_tools_present() {
+        let json = serde_json::json!({
+            "allowedTools": ["mcp__*", "Bash", "!mcp__internal__*"]
+        });
+        let tools = parse_allowed_tools(&json);
+        assert_eq!(tools, vec!["mcp__*", "Bash", "!mcp__internal__*"]);
+    }
+
+    #[test]
+    fn test_parse_allowed_tools_missing() {
+        let json = serde_json::json!({"other": "value"});
+        let tools = parse_allowed_tools(&json);
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn test_parse_allowed_tools_via_config_file() {
+        let json = serde_json::json!({
+            "allowedTools": ["mcp__myserver__*"],
+            "mcpServers": {
+                "myserver": {
+                    "command": "node",
+                    "args": ["server.js"]
+                }
+            }
+        });
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(temp.path(), serde_json::to_string(&json).unwrap()).unwrap();
+        let config = load_config_file(temp.path()).unwrap();
+        assert_eq!(config.allowed_tools, vec!["mcp__myserver__*"]);
+    }
+
+    // ── Auth config tests (T3) ──────────────────────────────────────────
+
+    #[test]
+    fn test_parse_api_key_auth_config() {
+        let json = serde_json::json!({
+            "mcpServers": {
+                "remote": {
+                    "url": "http://localhost:3000",
+                    "auth": {
+                        "type": "api_key",
+                        "key": "my-secret-key",
+                        "header": "Authorization",
+                        "prefix": "Bearer"
+                    }
+                }
+            }
+        });
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(temp.path(), serde_json::to_string(&json).unwrap()).unwrap();
+        let config = load_config_file(temp.path()).unwrap();
+        let server = config.mcp_servers.get("remote").unwrap();
+        match server {
+            McpServerConfig::Sse { auth, .. } => {
+                let auth = auth.as_ref().expect("auth should be set");
+                match auth {
+                    McpAuthConfig::ApiKey { key, header, prefix } => {
+                        assert_eq!(key, "my-secret-key");
+                        assert_eq!(header.as_deref(), Some("Authorization"));
+                        assert_eq!(prefix.as_deref(), Some("Bearer"));
+                    }
+                    _ => panic!("Expected ApiKey auth"),
+                }
+            }
+            _ => panic!("Expected Sse config"),
+        }
+    }
+
+    #[test]
+    fn test_parse_oauth_auth_config() {
+        let json = serde_json::json!({
+            "mcpServers": {
+                "remote": {
+                    "url": "http://localhost:3000",
+                    "auth": {
+                        "type": "oauth",
+                        "client_id": "my-client",
+                        "auth_url": "https://auth.example.com/authorize",
+                        "token_url": "https://auth.example.com/token",
+                        "redirect_url": "http://localhost:8080/callback",
+                        "scopes": ["read", "write"]
+                    }
+                }
+            }
+        });
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(temp.path(), serde_json::to_string(&json).unwrap()).unwrap();
+        let config = load_config_file(temp.path()).unwrap();
+        let server = config.mcp_servers.get("remote").unwrap();
+        match server {
+            McpServerConfig::Sse { auth, .. } => {
+                let auth = auth.as_ref().expect("auth should be set");
+                match auth {
+                    McpAuthConfig::OAuth { client_id, scopes, .. } => {
+                        assert_eq!(client_id, "my-client");
+                        assert_eq!(*scopes, vec!["read", "write"]);
+                    }
+                    _ => panic!("Expected OAuth auth"),
+                }
+            }
+            _ => panic!("Expected Sse config"),
+        }
+    }
+
+    #[test]
+    fn test_auth_env_expansion() {
+        unsafe { std::env::set_var("TEST_MCP_API_KEY", "expanded-key-123"); }
+        let json = serde_json::json!({
+            "mcpServers": {
+                "remote": {
+                    "url": "http://localhost:3000",
+                    "auth": {
+                        "type": "api_key",
+                        "key": "${TEST_MCP_API_KEY}"
+                    }
+                }
+            }
+        });
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(temp.path(), serde_json::to_string(&json).unwrap()).unwrap();
+        let mut config = load_config_file(temp.path()).unwrap();
+        for server_conf in config.mcp_servers.values_mut() {
+            expand_server_config(server_conf);
+        }
+        let server = config.mcp_servers.get("remote").unwrap();
+        match server {
+            McpServerConfig::Sse { auth, .. } => {
+                let auth = auth.as_ref().unwrap();
+                match auth {
+                    McpAuthConfig::ApiKey { key, .. } => {
+                        assert_eq!(key, "expanded-key-123");
+                    }
+                    _ => panic!("Expected ApiKey auth"),
+                }
+            }
+            _ => panic!("Expected Sse config"),
+        }
+        unsafe { std::env::remove_var("TEST_MCP_API_KEY"); }
+    }
+
     #[test]
     fn test_expand_stdio_config() {
         unsafe { std::env::set_var("TEST_MCP_MY_CMD", "/usr/bin/my-cmd"); }
@@ -711,6 +942,7 @@ mod tests {
         let mut config = McpServerConfig::Sse {
             url: "https://${TEST_MCP_SVC_HOST}/sse".to_string(),
             headers: HashMap::new(),
+            auth: None,
         };
 
         expand_server_config(&mut config);

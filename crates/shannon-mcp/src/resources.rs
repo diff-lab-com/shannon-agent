@@ -104,6 +104,38 @@ pub struct ReadResourceOutput {
     pub contents: Vec<ResourceReadContent>,
 }
 
+/// Input for subscribing to resource updates.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SubscribeResourceInput {
+    /// The MCP server that hosts the resource.
+    pub server_name: String,
+    /// The URI of the resource to subscribe to.
+    pub uri: String,
+}
+
+/// Output from subscribing to resource updates.
+#[derive(Debug, Clone, Serialize)]
+pub struct SubscribeResourceOutput {
+    /// Whether the subscription was successful.
+    pub subscribed: bool,
+}
+
+/// Input for unsubscribing from resource updates.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct UnsubscribeResourceInput {
+    /// The MCP server that hosts the resource.
+    pub server_name: String,
+    /// The URI of the resource to unsubscribe from.
+    pub uri: String,
+}
+
+/// Output from unsubscribing from resource updates.
+#[derive(Debug, Clone, Serialize)]
+pub struct UnsubscribeResourceOutput {
+    /// Whether the unsubscription was successful.
+    pub unsubscribed: bool,
+}
+
 // ---------------------------------------------------------------------------
 // Trait: McpResourceClient
 // ---------------------------------------------------------------------------
@@ -124,11 +156,20 @@ pub trait McpResourceClient: Send + Sync {
     /// Whether the server advertised resource support during initialization.
     async fn supports_resources(&self) -> bool;
 
+    /// Whether the server supports resource subscriptions.
+    async fn supports_subscribe(&self) -> bool;
+
     /// List all resources exposed by this server.
     async fn list_resources(&self) -> McpResult<Vec<Resource>>;
 
     /// Read a specific resource by URI.
     async fn read_resource(&self, uri: &str) -> McpResult<ResourceContent>;
+
+    /// Subscribe to updates for a specific resource URI.
+    async fn subscribe_resource(&self, uri: &str) -> McpResult<bool>;
+
+    /// Unsubscribe from updates for a specific resource URI.
+    async fn unsubscribe_resource(&self, uri: &str) -> McpResult<bool>;
 }
 
 // ---------------------------------------------------------------------------
@@ -289,6 +330,80 @@ impl McpResourceManager {
 
         Ok(ReadResourceOutput { contents })
     }
+
+    // -----------------------------------------------------------------------
+    // subscribe_resource
+    // -----------------------------------------------------------------------
+
+    /// Subscribe to updates for a specific resource on a named MCP server.
+    pub async fn subscribe_resource(
+        &self,
+        input: SubscribeResourceInput,
+    ) -> McpResult<SubscribeResourceOutput> {
+        let readers = self.inner.read().await;
+
+        let client = readers.get(&input.server_name).ok_or_else(|| {
+            let available = readers.keys().cloned().collect::<Vec<_>>().join(", ");
+            McpError::InvalidRequest(format!(
+                "Server '{}' not found. Available servers: {}",
+                input.server_name, available
+            ))
+        })?;
+
+        if !client.is_connected().await {
+            return Err(McpError::InvalidRequest(format!(
+                "Server '{}' is not connected",
+                input.server_name
+            )));
+        }
+
+        if !client.supports_subscribe().await {
+            return Err(McpError::InvalidRequest(format!(
+                "Server '{}' does not support resource subscriptions",
+                input.server_name
+            )));
+        }
+
+        let subscribed = client.subscribe_resource(&input.uri).await?;
+        Ok(SubscribeResourceOutput { subscribed })
+    }
+
+    // -----------------------------------------------------------------------
+    // unsubscribe_resource
+    // -----------------------------------------------------------------------
+
+    /// Unsubscribe from updates for a specific resource on a named MCP server.
+    pub async fn unsubscribe_resource(
+        &self,
+        input: UnsubscribeResourceInput,
+    ) -> McpResult<UnsubscribeResourceOutput> {
+        let readers = self.inner.read().await;
+
+        let client = readers.get(&input.server_name).ok_or_else(|| {
+            let available = readers.keys().cloned().collect::<Vec<_>>().join(", ");
+            McpError::InvalidRequest(format!(
+                "Server '{}' not found. Available servers: {}",
+                input.server_name, available
+            ))
+        })?;
+
+        if !client.is_connected().await {
+            return Err(McpError::InvalidRequest(format!(
+                "Server '{}' is not connected",
+                input.server_name
+            )));
+        }
+
+        if !client.supports_subscribe().await {
+            return Err(McpError::InvalidRequest(format!(
+                "Server '{}' does not support resource subscriptions",
+                input.server_name
+            )));
+        }
+
+        let unsubscribed = client.unsubscribe_resource(&input.uri).await?;
+        Ok(UnsubscribeResourceOutput { unsubscribed })
+    }
 }
 
 impl Default for McpResourceManager {
@@ -338,12 +453,24 @@ impl<T: crate::transport::Transport + Send + Sync + 'static> McpResourceClient
         self.client.supports_resources().await
     }
 
+    async fn supports_subscribe(&self) -> bool {
+        self.client.supports_subscribe().await
+    }
+
     async fn list_resources(&self) -> McpResult<Vec<Resource>> {
         self.client.list_resources().await
     }
 
     async fn read_resource(&self, uri: &str) -> McpResult<ResourceContent> {
         self.client.read_resource(uri).await
+    }
+
+    async fn subscribe_resource(&self, uri: &str) -> McpResult<bool> {
+        self.client.subscribe_resource(uri).await
+    }
+
+    async fn unsubscribe_resource(&self, uri: &str) -> McpResult<bool> {
+        self.client.unsubscribe_resource(uri).await
     }
 }
 
@@ -361,7 +488,9 @@ mod tests {
         name: String,
         connected: bool,
         has_resources: bool,
+        has_subscribe: bool,
         resources: Vec<Resource>,
+        subscribed_uris: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     }
 
     impl MockResourceClient {
@@ -370,8 +499,15 @@ mod tests {
                 name: name.to_string(),
                 connected,
                 has_resources,
+                has_subscribe: false,
                 resources: Vec::new(),
+                subscribed_uris: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             }
+        }
+
+        fn with_subscribe(mut self) -> Self {
+            self.has_subscribe = true;
+            self
         }
 
         fn with_resource(mut self, uri: &str, name: &str, description: &str) -> Self {
@@ -399,6 +535,10 @@ mod tests {
             self.has_resources
         }
 
+        async fn supports_subscribe(&self) -> bool {
+            self.has_subscribe
+        }
+
         async fn list_resources(&self) -> McpResult<Vec<Resource>> {
             Ok(self.resources.clone())
         }
@@ -411,6 +551,20 @@ mod tests {
                     text: format!("content of {uri}"),
                 }],
             })
+        }
+
+        async fn subscribe_resource(&self, uri: &str) -> McpResult<bool> {
+            let mut uris = self.subscribed_uris.lock().map_err(|e| McpError::Server(e.to_string()))?;
+            if !uris.contains(&uri.to_string()) {
+                uris.push(uri.to_string());
+            }
+            Ok(true)
+        }
+
+        async fn unsubscribe_resource(&self, uri: &str) -> McpResult<bool> {
+            let mut uris = self.subscribed_uris.lock().map_err(|e| McpError::Server(e.to_string()))?;
+            uris.retain(|u| u != uri);
+            Ok(true)
         }
     }
 
@@ -631,5 +785,103 @@ mod tests {
         let parsed: ReadResourceInput = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed.server_name, "my-server");
         assert_eq!(parsed.uri, "file:///test");
+    }
+
+    // ── Subscribe/Unsubscribe tests (T6) ─────────────────────────────────
+
+    #[tokio::test]
+    async fn test_subscribe_resource() {
+        let manager = McpResourceManager::new();
+        let client = MockResourceClient::new("my-server", true, true)
+            .with_subscribe();
+        manager.register(Arc::new(client)).await;
+
+        let output = manager
+            .subscribe_resource(SubscribeResourceInput {
+                server_name: "my-server".to_string(),
+                uri: "file:///readme.md".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(output.subscribed);
+    }
+
+    #[tokio::test]
+    async fn test_subscribe_resource_no_support() {
+        let manager = McpResourceManager::new();
+        let client = MockResourceClient::new("my-server", true, true);
+        // not calling .with_subscribe()
+        manager.register(Arc::new(client)).await;
+
+        let result = manager
+            .subscribe_resource(SubscribeResourceInput {
+                server_name: "my-server".to_string(),
+                uri: "file:///readme.md".to_string(),
+            })
+            .await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("does not support resource subscriptions"));
+    }
+
+    #[tokio::test]
+    async fn test_unsubscribe_resource() {
+        let manager = McpResourceManager::new();
+        let client = MockResourceClient::new("my-server", true, true)
+            .with_subscribe();
+        manager.register(Arc::new(client)).await;
+
+        // Subscribe first
+        manager
+            .subscribe_resource(SubscribeResourceInput {
+                server_name: "my-server".to_string(),
+                uri: "file:///readme.md".to_string(),
+            })
+            .await
+            .unwrap();
+
+        // Then unsubscribe
+        let output = manager
+            .unsubscribe_resource(UnsubscribeResourceInput {
+                server_name: "my-server".to_string(),
+                uri: "file:///readme.md".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(output.unsubscribed);
+    }
+
+    #[tokio::test]
+    async fn test_subscribe_unknown_server() {
+        let manager = McpResourceManager::new();
+
+        let result = manager
+            .subscribe_resource(SubscribeResourceInput {
+                server_name: "nonexistent".to_string(),
+                uri: "file:///x".to_string(),
+            })
+            .await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("nonexistent"));
+    }
+
+    #[tokio::test]
+    async fn test_subscribe_disconnected_server() {
+        let manager = McpResourceManager::new();
+        let client = MockResourceClient::new("offline", false, true).with_subscribe();
+        manager.register(Arc::new(client)).await;
+
+        let result = manager
+            .subscribe_resource(SubscribeResourceInput {
+                server_name: "offline".to_string(),
+                uri: "file:///x".to_string(),
+            })
+            .await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not connected"));
     }
 }

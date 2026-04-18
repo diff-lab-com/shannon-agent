@@ -186,6 +186,9 @@ impl Drop for StdioTransport {
 /// - SSE (GET) for server-to-client messages
 /// - HTTP POST for client-to-server messages
 ///
+/// Features automatic reconnection with exponential backoff when the
+/// SSE stream disconnects unexpectedly.
+///
 /// Note: This transport is NOT Sync due to the nature of streaming connections.
 /// It should be used within a single async context or wrapped in a mutex if needed.
 type ByteStream = Pin<Box<dyn futures_util::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send>>;
@@ -195,6 +198,10 @@ pub struct SseTransport {
     endpoint: String,
     stream: Option<ByteStream>,
     buffer: String,
+    /// Maximum reconnection attempts before giving up.
+    max_reconnects: usize,
+    /// Whether a reconnect is currently in progress (prevents nested reconnects).
+    reconnecting: bool,
 }
 
 // SAFETY: SseTransport is not thread-safe due to the stream field.
@@ -209,7 +216,15 @@ impl SseTransport {
             endpoint: endpoint.into(),
             stream: None,
             buffer: String::new(),
+            max_reconnects: 3,
+            reconnecting: false,
         }
+    }
+
+    /// Set the maximum number of reconnection attempts.
+    pub fn with_max_reconnects(mut self, max: usize) -> Self {
+        self.max_reconnects = max;
+        self
     }
 
     /// Connect to the SSE endpoint
@@ -236,6 +251,45 @@ impl SseTransport {
 
         info!("SSE connection established");
         Ok(())
+    }
+
+    /// Attempt to reconnect with exponential backoff.
+    ///
+    /// Returns `Ok(())` if reconnection succeeded, or the last error if all
+    /// attempts are exhausted.
+    async fn reconnect(&mut self) -> Result<(), TransportError> {
+        if self.reconnecting {
+            // Prevent nested reconnects
+            return Err(TransportError::Sse("Already reconnecting".to_string()));
+        }
+        self.reconnecting = true;
+
+        let mut last_err = TransportError::Sse("Reconnection failed".to_string());
+
+        for attempt in 0..self.max_reconnects {
+            let delay_ms = 100 * 2u64.pow(attempt as u32);
+            info!(
+                attempt = attempt + 1,
+                max = self.max_reconnects,
+                delay_ms,
+                "Attempting SSE reconnection"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+
+            match self.connect().await {
+                Ok(()) => {
+                    info!(attempt = attempt + 1, "SSE reconnection succeeded");
+                    self.reconnecting = false;
+                    return Ok(());
+                }
+                Err(e) => {
+                    last_err = e;
+                }
+            }
+        }
+
+        self.reconnecting = false;
+        Err(last_err)
     }
 
 }
@@ -265,50 +319,71 @@ impl Transport for SseTransport {
     }
 
     async fn receive(&mut self) -> Result<Option<String>, TransportError> {
-        if let Some(stream) = &mut self.stream {
-            loop {
-                match stream.next().await {
-                    Some(Ok(bytes)) => {
-                        let chunk = String::from_utf8_lossy(&bytes);
-                        // Process lines and update buffer
-                        for line in chunk.lines() {
-                            let line = line.trim();
-                            if line.is_empty() {
-                                // End of event, return accumulated data
-                                if !self.buffer.is_empty() {
-                                    let data = self.buffer.clone();
-                                    self.buffer.clear();
-                                    debug!("SSE received: {} bytes", data.len());
-                                    return Ok(Some(data));
-                                }
-                            } else if let Some(rest) = line.strip_prefix("data:") {
-                                // Accumulate data line
-                                let data = rest.trim();
-                                if !self.buffer.is_empty() {
-                                    self.buffer.push('\n');
-                                }
-                                self.buffer.push_str(data);
+        // Take the stream out to avoid borrow conflicts when reconnecting
+        let mut stream = match self.stream.take() {
+            Some(s) => s,
+            None => {
+                // Not connected — try to connect
+                self.connect().await?;
+                return self.receive().await;
+            }
+        };
+
+        loop {
+            match stream.next().await {
+                Some(Ok(bytes)) => {
+                    let chunk = String::from_utf8_lossy(&bytes);
+                    // Process lines and update buffer
+                    for line in chunk.lines() {
+                        let line = line.trim();
+                        if line.is_empty() {
+                            // End of event, return accumulated data
+                            if !self.buffer.is_empty() {
+                                let data = self.buffer.clone();
+                                self.buffer.clear();
+                                debug!("SSE received: {} bytes", data.len());
+                                // Put stream back
+                                self.stream = Some(stream);
+                                return Ok(Some(data));
                             }
-                            // Ignore other SSE fields (event:, id:, retry:)
+                        } else if let Some(rest) = line.strip_prefix("data:") {
+                            // Accumulate data line
+                            let data = rest.trim();
+                            if !self.buffer.is_empty() {
+                                self.buffer.push('\n');
+                            }
+                            self.buffer.push_str(data);
                         }
-                    }
-                    Some(Err(e)) => {
-                        return Err(TransportError::Sse(format!("Stream error: {e}")));
-                    }
-                    None => {
-                        // Stream closed - return any accumulated data
-                        if !self.buffer.is_empty() {
-                            let data = self.buffer.clone();
-                            self.buffer.clear();
-                            return Ok(Some(data));
-                        }
-                        return Ok(None);
+                        // Ignore other SSE fields (event:, id:, retry:)
                     }
                 }
+                Some(Err(e)) => {
+                    // Stream error — attempt reconnection
+                    debug!(error = %e, "SSE stream error, attempting reconnection");
+                    // stream is consumed, don't put it back
+                    drop(stream);
+                    self.reconnect().await?;
+                    return self.receive().await;
+                }
+                None => {
+                    // Stream closed gracefully — return any accumulated data first
+                    if !self.buffer.is_empty() {
+                        let data = self.buffer.clone();
+                        self.buffer.clear();
+                        // stream is consumed
+                        drop(stream);
+                        // Try reconnect in background for next receive
+                        let _ = self.reconnect().await;
+                        return Ok(Some(data));
+                    }
+                    // Attempt reconnection for graceful close
+                    drop(stream);
+                    if self.reconnect().await.is_ok() {
+                        return self.receive().await;
+                    }
+                    return Ok(None);
+                }
             }
-        } else {
-            // Not connected
-            Ok(None)
         }
     }
 
@@ -321,9 +396,14 @@ impl Transport for SseTransport {
 }
 
 /// HTTP transport for REST-style MCP communication
+///
+/// Uses a request/response pattern: `send()` POSTs a JSON-RPC message and
+/// buffers the response. `receive()` returns the buffered response.
 pub struct HttpTransport {
     client: reqwest::Client,
     endpoint: String,
+    /// Buffered response from the last POST request.
+    pending_response: Option<String>,
 }
 
 impl HttpTransport {
@@ -332,11 +412,14 @@ impl HttpTransport {
         Self {
             client: reqwest::Client::new(),
             endpoint: endpoint.into(),
+            pending_response: None,
         }
     }
+}
 
-    /// Send an HTTP POST request
-    async fn send_http(&self, message: &str) -> Result<String, TransportError> {
+#[async_trait]
+impl Transport for HttpTransport {
+    async fn send(&mut self, message: &str) -> Result<(), TransportError> {
         let response = self
             .client
             .post(&self.endpoint)
@@ -358,26 +441,18 @@ impl HttpTransport {
             .await
             .map_err(|e| TransportError::Http(format!("Failed to read response: {e}")))?;
 
-        Ok(body)
-    }
-}
-
-#[async_trait]
-impl Transport for HttpTransport {
-    async fn send(&mut self, message: &str) -> Result<(), TransportError> {
-        // HTTP is request/response, not streaming
-        self.send_http(message).await?;
-        debug!("Sent HTTP message: {} bytes", message.len());
+        debug!("HTTP sent+received: {} bytes request, {} bytes response", message.len(), body.len());
+        self.pending_response = Some(body);
         Ok(())
     }
 
     async fn receive(&mut self) -> Result<Option<String>, TransportError> {
-        // HTTP is request/response, not streaming
-        debug!("HTTP receive (not implemented for streaming)");
-        Ok(None)
+        // Return the buffered response from the last send()
+        Ok(self.pending_response.take())
     }
 
     async fn close(&mut self) -> Result<(), TransportError> {
+        self.pending_response = None;
         Ok(())
     }
 }

@@ -42,6 +42,7 @@ pub mod auth;
 pub mod resources;
 pub mod config;
 pub mod server_manager;
+pub mod process_pool;
 
 pub use protocol::{
     JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, JsonRpcNotification,
@@ -62,15 +63,22 @@ pub use auth::{AuthProvider, OAuth2Provider, ApiKeyProvider};
 pub use resources::{
     ResourceDescriptor, ListResourcesInput, ListResourcesOutput,
     ReadResourceInput, ReadResourceOutput, ResourceReadContent,
+    SubscribeResourceInput, SubscribeResourceOutput,
+    UnsubscribeResourceInput, UnsubscribeResourceOutput,
     McpResourceManager, McpResourceClient, McpClientAdapter,
 };
 pub use config::{
-    McpConfig, McpServerConfig, ConfigError,
+    McpConfig, McpServerConfig, McpAuthConfig, ConfigError,
     expand_env_vars, expand_server_config,
     discover_config, config_search_paths,
 };
 pub use server_manager::{
     McpDiscoveryResult, discover_all_servers,
+    PooledMcpDiscoveryResult, discover_all_servers_pooled,
+};
+pub use process_pool::{
+    McpProcessPool, PooledMcpToolAdapter, PooledDiscoveryResult,
+    discover_pooled_tools, ServerState,
 };
 
 /// Current MCP protocol version supported by this implementation

@@ -7,6 +7,7 @@ rust-version.workspace = true
 [dependencies]
 # Workspace dependencies
 shannon-core = { path = "../shannon-core" }
+shannon-tool-interface = { path = "../shannon-tool-interface" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
@@ -16,6 +17,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 reqwest = { workspace = true }
 uuid = { workspace = true }
+dashmap = "6.1"
 
 # MCP transport dependencies
 tokio-tungstenite = { workspace = true }

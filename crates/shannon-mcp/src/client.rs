@@ -245,6 +245,15 @@ impl<T: Transport> McpClient<T> {
             .is_some()
     }
 
+    /// Check if the server supports resource subscriptions
+    pub async fn supports_subscribe(&self) -> bool {
+        self.server_capabilities.lock().await
+            .as_ref()
+            .and_then(|caps| caps.resources.as_ref())
+            .map(|r| r.subscribe)
+            .unwrap_or(false)
+    }
+
     pub async fn supports_prompts(&self) -> bool {
         self.server_capabilities.lock().await
             .as_ref()

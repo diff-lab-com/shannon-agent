@@ -1,21 +1,147 @@
 //! MCP Server Manager — discovers MCP config and registers tools.
 //!
 //! Reads config files (via [`crate::config::discover_config`]), starts server
-//! processes, discovers remote tools, and returns [`McpToolAdapter`] instances
+//! processes, discovers remote tools, and returns tool adapter instances
 //! that implement the `Tool` trait for registration into the main `ToolRegistry`.
 //!
-//! Delegates to [`shannon_core::mcp_tool_adapter::discover_tools`] for the
-//! actual stdio tool-discovery handshake.
+//! Two modes are available:
+//! - **Pooled** (`discover_all_servers_pooled`): Persistent processes via
+//!   [`crate::process_pool::McpProcessPool`] — zero-overhead after startup.
+//! - **Legacy** (`discover_all_servers`): One-shot process per tool call.
 
 use crate::config::{discover_config, McpServerConfig};
-use shannon_core::mcp_tool_adapter::McpToolAdapter;
-use shannon_core::mcp_tool_adapter::discover_tools;
+use crate::process_pool::{
+    discover_pooled_tools, McpProcessPool, PooledMcpToolAdapter,
+};
+use shannon_core::{McpToolAdapter, discover_tools};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
 // ---------------------------------------------------------------------------
-// discover_and_register — convenience entry point
+// Pooled discovery (preferred)
+// ---------------------------------------------------------------------------
+
+/// Result of discovering all MCP servers using persistent connections.
+pub struct PooledMcpDiscoveryResult {
+    /// Successfully discovered servers: (server_name, tool_count).
+    pub servers: Vec<(String, usize)>,
+    /// Tool adapters ready to register in a ToolRegistry.
+    pub tools: Vec<PooledMcpToolAdapter>,
+    /// Shared process pool — keep alive for the application lifetime.
+    pub pool: Arc<McpProcessPool>,
+}
+
+/// Discover MCP servers using persistent connections (preferred).
+///
+/// Starts each server process once, keeps it alive via the pool,
+/// and returns pooled adapters for zero-overhead tool execution.
+pub async fn discover_all_servers_pooled(
+    project_dir: &Path,
+) -> PooledMcpDiscoveryResult {
+    let config = match discover_config(project_dir) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(error = %e, "Failed to discover MCP config");
+            return PooledMcpDiscoveryResult {
+                servers: Vec::new(),
+                tools: Vec::new(),
+                pool: Arc::new(McpProcessPool::new()),
+            };
+        }
+    };
+
+    if config.mcp_servers.is_empty() {
+        debug!("No MCP servers configured");
+        return PooledMcpDiscoveryResult {
+            servers: Vec::new(),
+            tools: Vec::new(),
+            pool: Arc::new(McpProcessPool::new()),
+        };
+    }
+
+    info!(
+        server_count = config.mcp_servers.len(),
+        "Discovering tools from MCP servers (pooled)"
+    );
+
+    let pool = Arc::new(McpProcessPool::new());
+    let mut servers = Vec::new();
+    let mut tools = Vec::new();
+
+    for (name, server_config) in &config.mcp_servers {
+        match server_config {
+            McpServerConfig::Stdio { command, args, env } => {
+                match discover_pooled_tools(
+                    pool.clone(),
+                    name,
+                    command,
+                    args,
+                    env,
+                )
+                .await
+                {
+                    Ok(discovered) => {
+                        let tool_count = discovered.tools.len();
+                        info!(
+                            server = %name,
+                            tools = tool_count,
+                            "MCP server tools discovered (pooled)"
+                        );
+                        servers.push((name.clone(), tool_count));
+                        tools.extend(discovered.tools);
+                    }
+                    Err(e) => {
+                        error!(
+                            server = %name,
+                            error = %e,
+                            "Failed to discover MCP server tools (pooled)"
+                        );
+                    }
+                }
+            }
+            McpServerConfig::Sse { url, .. } => {
+                warn!(
+                    server = %name,
+                    url = %url,
+                    "SSE transport not yet supported for pooled discovery"
+                );
+            }
+            McpServerConfig::Http { url, .. } => {
+                warn!(
+                    server = %name,
+                    url = %url,
+                    "HTTP transport not yet supported for pooled discovery"
+                );
+            }
+            McpServerConfig::WebSocket { url, .. } => {
+                warn!(
+                    server = %name,
+                    url = %url,
+                    "WebSocket transport not yet supported for pooled discovery"
+                );
+            }
+        }
+    }
+
+    pool.start_health_checks();
+
+    info!(
+        servers = servers.len(),
+        total_tools = tools.len(),
+        "Pooled MCP discovery complete"
+    );
+
+    PooledMcpDiscoveryResult {
+        servers,
+        tools,
+        pool,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Legacy discovery (one-shot processes)
 // ---------------------------------------------------------------------------
 
 /// Result of discovering all MCP servers from config.
@@ -28,9 +154,8 @@ pub struct McpDiscoveryResult {
 
 /// Discover MCP config files, start servers, and collect tool adapters.
 ///
-/// This is the main entry point. Call from the application startup to
-/// discover all configured MCP servers and obtain tool adapters for
-/// registration.
+/// This is the legacy entry point using one-shot processes.
+/// Prefer [`discover_all_servers_pooled`] for persistent connections.
 ///
 /// # Example
 ///
@@ -100,7 +225,7 @@ pub async fn discover_all_servers(project_dir: &Path) -> McpDiscoveryResult {
     McpDiscoveryResult { servers, tools }
 }
 
-/// Discover tools from a single MCP server.
+/// Discover tools from a single MCP server (legacy one-shot).
 async fn discover_server_tools(
     name: &str,
     config: &McpServerConfig,
@@ -125,8 +250,6 @@ async fn discover_server_tools(
             Ok(result.tools)
         }
         McpServerConfig::Sse { url, .. } => {
-            // SSE transport: not yet supported by the adapter's discover_tools.
-            // Will be added when persistent McpClient connections are integrated.
             warn!(
                 server = %name,
                 url = %url,
@@ -142,7 +265,7 @@ async fn discover_server_tools(
             );
             Ok(Vec::new())
         }
-        McpServerConfig::WebSocket { url } => {
+        McpServerConfig::WebSocket { url, .. } => {
             warn!(
                 server = %name,
                 url = %url,

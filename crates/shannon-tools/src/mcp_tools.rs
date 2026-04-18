@@ -306,6 +306,18 @@ mod tests {
                 }],
             })
         }
+
+        async fn supports_subscribe(&self) -> bool {
+            false
+        }
+
+        async fn subscribe_resource(&self, _uri: &str) -> shannon_mcp::McpResult<bool> {
+            Ok(false)
+        }
+
+        async fn unsubscribe_resource(&self, _uri: &str) -> shannon_mcp::McpResult<bool> {
+            Ok(false)
+        }
     }
 
     fn make_manager() -> Arc<McpResourceManager> {
