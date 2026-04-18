@@ -505,7 +505,7 @@ impl QueryEngine {
             let client = LlmClient::new(client_config);
 
             let mut turn = 0;
-            let mut tool_results: Vec<(String, String)> = Vec::new();
+            let mut tool_results: Vec<(String, String, bool)> = Vec::new(); // (tool_use_id, content, is_error)
             let mut total_input_tokens: u64 = 0;
             let mut total_output_tokens: u64 = 0;
             let mut file_edits_made = false;
@@ -557,13 +557,13 @@ impl QueryEngine {
                 }
 
                 // Add pending tool results from previous turn
-                for (tool_use_id, result_content) in tool_results.drain(..) {
+                for (tool_use_id, result_content, is_error) in tool_results.drain(..) {
                     messages.push(Message {
                         role: "user".to_string(),
                         content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
                             tool_use_id,
                             content: Some(ToolResultContent::Single(result_content)),
-                            is_error: Some(false),
+                            is_error: Some(is_error),
                         }]),
                     });
                 }
@@ -833,7 +833,7 @@ impl QueryEngine {
                                                                 result: error_msg.clone(),
                                                                 is_error: true,
                                                             }));
-                                                            tool_results.push((tool_id, error_msg));
+                                                            tool_results.push((tool_id, error_msg, true));
                                                             continue;
                                                         }
                                                         Ok(None) => {
@@ -856,7 +856,7 @@ impl QueryEngine {
                                                                     result: error_msg.clone(),
                                                                     is_error: true,
                                                                 }));
-                                                                tool_results.push((tool_id, error_msg));
+                                                                tool_results.push((tool_id, error_msg, true));
                                                                 continue;
                                                             }
 
@@ -922,7 +922,7 @@ impl QueryEngine {
                                                                             is_error: true,
                                                                         }));
                                                                         tool_results
-                                                                            .push((tool_id, denied_msg));
+                                                                            .push((tool_id, denied_msg, true));
                                                                         continue;
                                                                     }
                                                                     Some(
@@ -954,7 +954,7 @@ impl QueryEngine {
                                                                             is_error: true,
                                                                         }));
                                                                         tool_results
-                                                                            .push((tool_id, error_msg));
+                                                                            .push((tool_id, error_msg, true));
                                                                         continue;
                                                                     }
                                                                 }
@@ -989,7 +989,7 @@ impl QueryEngine {
                                                                 result: error_msg.clone(),
                                                                 is_error: true,
                                                             }));
-                                                            tool_results.push((tool_id, error_msg));
+                                                            tool_results.push((tool_id, error_msg, true));
                                                             continue;
                                                         }
                                                         crate::hooks::HookDecision::Modify { modified_input, .. } => {
@@ -1055,15 +1055,16 @@ impl QueryEngine {
 
                                                                             match result {
                                                                                 Ok(output) => {
+                                                                                    let is_err = output.is_error;
                                                                                     consecutive_denials = 0; // reset on success
                                                                                     let _ = tx.send(Ok(QueryEvent::ToolUseResult {
                                                                                         query_id,
                                                                                         tool_use_id: tool_id.clone(),
                                                                                         tool_name: tool_name.clone(),
                                                                                         result: output.content.clone(),
-                                                                                        is_error: false,
+                                                                                        is_error: is_err,
                                                                                     }));
-                                                                                    tool_results.push((tool_id, output.content.clone()));
+                                                                                    tool_results.push((tool_id, output.content.clone(), is_err));
                                                                                 }
                                                                                 Err(e) => {
                                                                                     let error_msg = format!("Tool error: {e}");
@@ -1074,7 +1075,7 @@ impl QueryEngine {
                                                                                         result: error_msg.clone(),
                                                                                         is_error: true,
                                                                                     }));
-                                                                                    tool_results.push((tool_id, error_msg));
+                                                                                    tool_results.push((tool_id, error_msg, true));
                                                                                 }
                                                                             }
                                                                         }
@@ -1114,15 +1115,16 @@ impl QueryEngine {
 
                                                                 match result {
                                                                     Ok(output) => {
+                                                                        let is_err = output.is_error;
                                                                         consecutive_denials = 0; // reset on success
                                                                         let _ = tx.send(Ok(QueryEvent::ToolUseResult {
                                                                             query_id,
                                                                             tool_use_id: tool_id.clone(),
                                                                             tool_name: tool_name.clone(),
                                                                             result: output.content.clone(),
-                                                                            is_error: false,
+                                                                            is_error: is_err,
                                                                         }));
-                                                                        tool_results.push((tool_id, output.content.clone()));
+                                                                        tool_results.push((tool_id, output.content.clone(), is_err));
                                                                         if matches!(tool_name.as_str(), "Edit" | "Write") {
                                                                             file_edits_made = true;
                                                                         }
@@ -1136,7 +1138,7 @@ impl QueryEngine {
                                                                             result: error_msg.clone(),
                                                                             is_error: true,
                                                                         }));
-                                                                        tool_results.push((tool_id, error_msg));
+                                                                        tool_results.push((tool_id, error_msg, true));
                                                                     }
                                                                 }
                                                             }
@@ -1151,7 +1153,7 @@ impl QueryEngine {
                                                          Stop retrying the same or similar operations. \
                                                          Ask the user for clarification or try a completely different approach."
                                                     );
-                                                    tool_results.push(("denial-warning".to_string(), warning));
+                                                    tool_results.push(("denial-warning".to_string(), warning, false));
                                                 }
 
                                                 turn += 1;
