@@ -48,7 +48,7 @@ pub use protocol::{
     JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, JsonRpcNotification,
     McpRequest, McpResponse, McpNotification,
     RequestMethod, ResponseMethod, NotificationMethod,
-    Tool, Resource, ResourceTemplate, Prompt, PromptArgument,
+    Tool, ToolAnnotations, Resource, ResourceTemplate, Prompt, PromptArgument,
     McpCapabilities, ServerCapabilities, ClientCapabilities,
     ToolContent, ResourceContent, ContentBlock,
     CompletionRequest, CompletionRef, CompletionResult, Completion, CompletionValue,
@@ -56,6 +56,11 @@ pub use protocol::{
     InitializeParams, InitializeResult, ClientInfo, ServerInfo,
     ListToolsResult, ListResourcesResult, ListPromptsResult, ListResourceTemplatesResult,
     SubscribeRequest, UnsubscribeRequest, SubscribeResult,
+    ProgressToken, ProgressNotification,
+    Root, ListRootsResult, RootsCapability,
+    SamplingCapability, SamplingMessageRole, SamplingMessage, SamplingContent,
+    ModelHint, ModelPreferences, SamplingParams,
+    CreateMessageRequest, CreateMessageResult, StopReason,
 };
 pub use transport::{Transport, TransportError, StdioTransport, SseTransport, HttpTransport, WebSocketTransport};
 pub use client::{McpClient, McpClientError};
@@ -78,7 +83,7 @@ pub use server_manager::{
 };
 pub use process_pool::{
     McpProcessPool, PooledMcpToolAdapter, PooledDiscoveryResult,
-    discover_pooled_tools, ServerState,
+    discover_pooled_tools, ServerState, ServerStatus,
 };
 
 /// Current MCP protocol version supported by this implementation

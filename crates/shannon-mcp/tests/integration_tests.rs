@@ -279,6 +279,7 @@ fn test_tool_definition() {
                 "arg1": {"type": "string"}
             }
         })),
+        annotations: None,
     };
 
     let json = serde_json::to_string(&tool).unwrap();
@@ -295,6 +296,7 @@ fn test_tool_without_schema() {
         name: "simple_tool".to_string(),
         description: "Simple tool".to_string(),
         input_schema: None,
+        annotations: None,
     };
 
     let json = serde_json::to_string(&tool).unwrap();
@@ -302,6 +304,60 @@ fn test_tool_without_schema() {
 
     assert_eq!(parsed.name, "simple_tool");
     assert!(parsed.input_schema.is_none());
+}
+
+#[test]
+fn test_tool_with_annotations() {
+    let tool = Tool {
+        name: "read_file".to_string(),
+        description: "Read a file".to_string(),
+        input_schema: Some(serde_json::json!({"type": "object"})),
+        annotations: Some(ToolAnnotations {
+            read_only_hint: true,
+            destructive_hint: false,
+            idempotent_hint: true,
+            open_world_hint: false,
+        }),
+    };
+
+    let json = serde_json::to_string(&tool).unwrap();
+    let parsed: Tool = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(parsed.name, "read_file");
+    let ann = parsed.annotations.unwrap();
+    assert!(ann.read_only_hint);
+    assert!(!ann.destructive_hint);
+    assert!(ann.idempotent_hint);
+    assert!(!ann.open_world_hint);
+}
+
+#[test]
+fn test_tool_annotations_deserialization_defaults() {
+    // When only some hints are provided, missing ones default to false.
+    let json = r#"{
+        "name": "tool",
+        "description": "desc",
+        "annotations": { "readOnlyHint": true }
+    }"#;
+    let tool: Tool = serde_json::from_str(json).unwrap();
+    let ann = tool.annotations.unwrap();
+    assert!(ann.read_only_hint);
+    assert!(!ann.destructive_hint);
+    assert!(!ann.idempotent_hint);
+    assert!(!ann.open_world_hint);
+}
+
+#[test]
+fn test_tool_annotations_roundtrip() {
+    let annotations = ToolAnnotations {
+        read_only_hint: false,
+        destructive_hint: true,
+        idempotent_hint: false,
+        open_world_hint: true,
+    };
+    let json = serde_json::to_string(&annotations).unwrap();
+    let parsed: ToolAnnotations = serde_json::from_str(&json).unwrap();
+    assert_eq!(annotations, parsed);
 }
 
 #[test]

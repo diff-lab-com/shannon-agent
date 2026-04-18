@@ -65,7 +65,7 @@ pub use task::{TaskTool, TaskOperation};
 pub use notebook::{NotebookEditTool, NotebookEditInput, NotebookEditOutput};
 pub use worktree::{WorktreeTool, EnterWorktreeInput, EnterWorktreeOutput, ExitWorktreeInput, ExitWorktreeOutput};
 pub use mcp::{McpResourceTool, ReadMcpResourceInput, ReadMcpResourceOutput, ListMcpResourcesInput, ListMcpResourcesOutput};
-pub use mcp_tools::{ListMcpResourcesTool, ReadMcpResourceTool};
+pub use mcp_tools::{ListMcpResourcesTool, ReadMcpResourceTool, ListPromptsTool, GetPromptTool};
 pub use messaging::{SendMessageTool, SendMessageInput, SendMessageOutput};
 pub use todo::{
     TodoWriteTool, TodoWriteInput, TodoWriteOutput,
@@ -231,6 +231,11 @@ pub fn register_default_tools(registry: &mut ToolRegistry) -> Result<std::sync::
     let mcp_manager = Arc::new(shannon_mcp::McpResourceManager::new());
     registry.register(Box::new(ListMcpResourcesTool::new(mcp_manager.clone())))?;
     registry.register(Box::new(ReadMcpResourceTool::new(mcp_manager)))?;
+
+    // ── MCP prompt tools (register with an empty pool; re-register with a live pool) ──
+    let mcp_pool = Arc::new(shannon_mcp::McpProcessPool::new());
+    registry.register(Box::new(ListPromptsTool::new(mcp_pool.clone())))?;
+    registry.register(Box::new(GetPromptTool::new(mcp_pool)))?;
 
     Ok(agent_context_handle)
 }

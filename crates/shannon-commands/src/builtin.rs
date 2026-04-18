@@ -28,6 +28,7 @@ mod config;
 mod credentials;
 mod debug;
 mod doctor;
+mod mcp;
 mod repl;
 
 /// Register all built-in commands
@@ -53,6 +54,7 @@ pub fn all_commands() -> Vec<Command> {
         credentials::command(),
         debug::command(),
         doctor::command(),
+        mcp::command(),
     ];
     cmds.extend(repl::all_commands());
     cmds
@@ -162,5 +164,16 @@ pub mod doctor_utils {
         run_all_checks,
         check_config_files, check_rust_toolchain,
         format_doctor_report,
+    };
+}
+
+/// Re-export MCP command utilities for REPL integration
+pub mod mcp_utils {
+    pub use super::mcp::{
+        McpSubcommand, parse_mcp_subcommand,
+        format_mcp_help, format_server_list, format_server_status,
+        format_tool_list, format_annotations, format_duration,
+        ServerStateDisplay, ServerStateInfo, ServerStatusInfo,
+        ToolInfo, AnnotationInfo,
     };
 }

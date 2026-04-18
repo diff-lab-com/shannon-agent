@@ -221,6 +221,30 @@ pub struct McpNotification {
     pub params: serde_json::Value,
 }
 
+/// Tool annotations providing behavioral hints about a tool.
+///
+/// Servers use annotations to communicate how a tool behaves so that clients
+/// can make smarter decisions about permissions, batching, and UI presentation.
+/// All fields default to `false` when absent.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolAnnotations {
+    /// If true, the tool only performs read operations (no side effects).
+    #[serde(default)]
+    pub read_only_hint: bool,
+    /// If true, the tool may perform destructive (irreversible) operations.
+    #[serde(default)]
+    pub destructive_hint: bool,
+    /// If true, calling the tool multiple times with the same arguments
+    /// produces the same result.
+    #[serde(default)]
+    pub idempotent_hint: bool,
+    /// If true, the tool may interact with external entities (network, APIs)
+    /// beyond the server's own resources.
+    #[serde(default)]
+    pub open_world_hint: bool,
+}
+
 /// Tool definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -229,6 +253,8 @@ pub struct Tool {
     pub description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_schema: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<ToolAnnotations>,
 }
 
 /// Resource definition
@@ -339,11 +365,129 @@ pub struct ClientCapabilities {
     pub sampling: Option<SamplingCapability>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resources: Option<ResourcesCapability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roots: Option<RootsCapability>,
+}
+
+/// Client capability for exposing filesystem roots to servers.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RootsCapability {
+    /// Whether the list of roots may change dynamically.
+    #[serde(default)]
+    pub list_changed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SamplingCapability {}
+
+// ---------------------------------------------------------------------------
+// Sampling (server→client LLM requests)
+// ---------------------------------------------------------------------------
+
+/// Role of a message author in a sampling conversation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SamplingMessageRole {
+    User,
+    Assistant,
+}
+
+/// A message in a sampling conversation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SamplingMessage {
+    pub role: SamplingMessageRole,
+    pub content: SamplingContent,
+}
+
+/// Content of a sampling message (text or image).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum SamplingContent {
+    Text { text: String },
+    Image { data: String, mime_type: String },
+}
+
+/// Hint about the model priority for a sampling request.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelHint {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// Server request to create a message via the client's LLM.
+///
+/// Spec: <https://spec.modelcontextprotocol.io/specification/2024-11-05/basic/utilities/sampling/>
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateMessageRequest {
+    /// Conversation messages provided by the server.
+    pub messages: Vec<SamplingMessage>,
+    /// Optional model selection hints.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_preferences: Option<ModelPreferences>,
+    /// System prompt the server wants to use.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+    /// Requested context window (in tokens).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    /// Sampling parameters.
+    #[serde(flatten)]
+    pub sampling_params: SamplingParams,
+}
+
+/// Model selection preferences.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelPreferences {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hints: Option<Vec<ModelHint>>,
+    /// Cost priority (0–1, higher = prioritize cost).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_priority: Option<f64>,
+    /// Speed priority (0–1, higher = prioritize speed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speed_priority: Option<f64>,
+    /// Intelligence priority (0–1, higher = prioritize quality).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intelligence_priority: Option<f64>,
+}
+
+/// Common sampling parameters for LLM requests.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SamplingParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_sequences: Option<Vec<String>>,
+}
+
+/// Reason why sampling stopped.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StopReason {
+    EndTurn,
+    StopSequence,
+    MaxTokens,
+}
+
+/// Result of a `sampling/createMessage` request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateMessageResult {
+    pub role: SamplingMessageRole,
+    pub model: String,
+    pub content: SamplingContent,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<StopReason>,
+}
 
 /// Combined capabilities type for convenience
 pub type McpCapabilities = ServerCapabilities;
@@ -498,4 +642,46 @@ pub struct UnsubscribeRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubscribeResult {
     pub subscribed: bool,
+}
+
+/// Progress token used to correlate progress notifications with requests.
+///
+/// The client includes this in `_meta.progressToken` of a request. The server
+/// then sends `notifications/progress` using the same token.
+pub type ProgressToken = serde_json::Value;
+
+/// Progress notification params sent by the server during long-running operations.
+///
+/// Spec: <https://spec.modelcontextprotocol.io/specification/2024-11-05/basic/utilities/progress/>
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgressNotification {
+    /// The progress token matching the one sent in the request `_meta`.
+    pub progress_token: ProgressToken,
+    /// Current progress value (monotonically increasing).
+    pub progress: f64,
+    /// Optional total value; when present, `progress / total` gives a fraction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<f64>,
+}
+
+/// A filesystem root that the client exposes to the server.
+///
+/// Servers can request the list of roots via `roots/list` to understand the
+/// workspace layout. Each root has a URI and an optional human-readable name.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Root {
+    /// URI for the root directory (e.g. `file:///home/user/project`).
+    pub uri: String,
+    /// Optional human-readable name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// Result of a `roots/list` request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListRootsResult {
+    pub roots: Vec<Root>,
 }

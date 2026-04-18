@@ -241,6 +241,186 @@ impl Tool for ReadMcpResourceTool {
 }
 
 // ---------------------------------------------------------------------------
+// ListPromptsTool
+// ---------------------------------------------------------------------------
+
+/// Tool that lists available prompts from MCP servers.
+///
+/// Optionally filter by `server_name`. Returns prompt names, descriptions,
+/// and argument schemas.
+pub struct ListPromptsTool {
+    pool: Arc<shannon_mcp::McpProcessPool>,
+    description: String,
+}
+
+impl ListPromptsTool {
+    /// Create a new tool backed by the given process pool.
+    pub fn new(pool: Arc<shannon_mcp::McpProcessPool>) -> Self {
+        Self {
+            pool,
+            description: "List available prompts from MCP (Model Context Protocol) servers. \
+                          Returns prompt names, descriptions, and argument schemas. \
+                          Optionally filter by server_name."
+                .to_string(),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for ListPromptsTool {
+    fn name(&self) -> &str {
+        "list_mcp_prompts"
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "server_name": {
+                    "type": "string",
+                    "description": "Optional MCP server name to filter prompts by."
+                }
+            }
+        })
+    }
+
+    fn category(&self) -> &str {
+        "mcp"
+    }
+
+    async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
+        let server_name: Option<String> = input
+            .get("server_name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let prompts = match server_name {
+            Some(ref name) => {
+                let list = self.pool.list_prompts(name).await.map_err(|e| {
+                    ToolError::ExecutionFailed(format!("Failed to list prompts: {e}"))
+                })?;
+                vec![(name.clone(), list)]
+            }
+            None => self.pool.list_all_prompts().await,
+        };
+
+        let total_count: usize = prompts.iter().map(|(_, p)| p.len()).sum();
+        let server_count = prompts.len();
+
+        let mut metadata = HashMap::new();
+        metadata.insert("count".to_string(), json!(total_count));
+        metadata.insert("servers".to_string(), json!(server_count));
+        metadata.insert("prompts".to_string(), json!(prompts));
+
+        Ok(ToolOutput {
+            content: format!("Found {total_count} prompt(s) across {server_count} server(s)"),
+            is_error: false,
+            metadata,
+        })
+    }
+    fn is_read_only(&self) -> bool { true }
+}
+
+// ---------------------------------------------------------------------------
+// GetPromptTool
+// ---------------------------------------------------------------------------
+
+/// Tool that gets a prompt from a specific MCP server.
+///
+/// Requires `server_name`, `prompt_name`, and optionally `arguments`.
+pub struct GetPromptTool {
+    pool: Arc<shannon_mcp::McpProcessPool>,
+    description: String,
+}
+
+impl GetPromptTool {
+    /// Create a new tool backed by the given process pool.
+    pub fn new(pool: Arc<shannon_mcp::McpProcessPool>) -> Self {
+        Self {
+            pool,
+            description: "Get a prompt from an MCP (Model Context Protocol) server. \
+                          Provide server_name, prompt_name, and optional arguments to \
+                          retrieve the prompt messages."
+                .to_string(),
+        }
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GetPromptInput {
+    server_name: String,
+    prompt_name: String,
+    arguments: Option<std::collections::HashMap<String, String>>,
+}
+
+#[async_trait]
+impl Tool for GetPromptTool {
+    fn name(&self) -> &str {
+        "get_mcp_prompt"
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "server_name": {
+                    "type": "string",
+                    "description": "Name of the MCP server."
+                },
+                "prompt_name": {
+                    "type": "string",
+                    "description": "Name of the prompt to get."
+                },
+                "arguments": {
+                    "type": "object",
+                    "description": "Optional arguments for the prompt.",
+                    "additionalProperties": { "type": "string" }
+                }
+            },
+            "required": ["server_name", "prompt_name"]
+        })
+    }
+
+    fn category(&self) -> &str {
+        "mcp"
+    }
+
+    async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
+        let tool_input: GetPromptInput = serde_json::from_value(input)
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid get prompt input: {e}")))?;
+
+        let result = self
+            .pool
+            .get_prompt(&tool_input.server_name, &tool_input.prompt_name, tool_input.arguments)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to get prompt: {e}")))?;
+
+        let mut metadata = HashMap::new();
+        metadata.insert("server_name".to_string(), json!(tool_input.server_name));
+        metadata.insert("prompt_name".to_string(), json!(tool_input.prompt_name));
+        metadata.insert("result".to_string(), result.clone());
+
+        let content_str = serde_json::to_string_pretty(&result)
+            .unwrap_or_else(|_| result.to_string());
+
+        Ok(ToolOutput {
+            content: content_str,
+            is_error: false,
+            metadata,
+        })
+    }
+    fn is_read_only(&self) -> bool { true }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
