@@ -1692,7 +1692,10 @@ pub struct McpProcessPool {
     /// Notification sender — cloned into each server handle.
     notification_tx: tokio::sync::mpsc::UnboundedSender<(String, Value)>,
     /// Callback invoked when a server reports `notifications/tools/list_changed`.
-    on_tools_changed: Arc<Mutex<Option<Arc<dyn Fn(&str) + Send + Sync>>>>,
+    ///
+    /// Receives `(server_name, new_tool_adapters)` so the caller can hot-swap
+    /// the tools in its registry without restarting the server.
+    on_tools_changed: Arc<Mutex<Option<Arc<dyn Fn(&str, Vec<PooledMcpToolAdapter>) + Send + Sync>>>>,
     /// Provider for filesystem roots. Called when a server sends `roots/list`.
     roots_provider: Arc<Mutex<Option<Arc<dyn Fn() -> Vec<crate::Root> + Send + Sync>>>>,
     /// Provider for LLM sampling. Called when a server sends `sampling/createMessage`.
@@ -2518,9 +2521,99 @@ impl McpProcessPool {
     /// Set a callback that is invoked when a server reports
     /// `notifications/tools/list_changed`.
     ///
-    /// The callback receives the server name as its argument.
-    pub async fn set_on_tools_changed(&self, callback: Arc<dyn Fn(&str) + Send + Sync>) {
+    /// The callback receives `(server_name, new_tool_adapters)` — the caller
+    /// should replace all existing tools from that server with the new adapters.
+    pub async fn set_on_tools_changed(&self, callback: Arc<dyn Fn(&str, Vec<PooledMcpToolAdapter>) + Send + Sync>) {
         *self.on_tools_changed.lock().await = Some(callback);
+    }
+
+    /// Re-fetch the tool list from a connected server.
+    ///
+    /// Sends `tools/list` to the server, parses the response into new
+    /// [`PooledMcpToolAdapter`] instances, updates deferred schemas if enabled,
+    /// and returns the adapters. Returns an empty `Vec` if the server does not
+    /// support tools or is not connected.
+    pub async fn refresh_tools_for_server(
+        self: &Arc<Self>,
+        server_name: &str,
+    ) -> Vec<PooledMcpToolAdapter> {
+        if !self.has_tools(server_name).await {
+            return Vec::new();
+        }
+
+        let response = match self
+            .send_server_request(server_name, "tools/list", serde_json::json!({}))
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(
+                    server = %server_name,
+                    error = %e,
+                    "Failed to refresh tools (tools/list)"
+                );
+                return Vec::new();
+            }
+        };
+
+        let mut tools = Vec::new();
+
+        if let Some(tools_array) = response
+            .get("result")
+            .and_then(|r| r.get("tools"))
+            .and_then(|t| t.as_array())
+        {
+            for tool_value in tools_array {
+                let name = tool_value
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let description = tool_value
+                    .get("description")
+                    .and_then(|d| d.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("MCP tool: {name}"));
+                let input_schema = tool_value
+                    .get("inputSchema")
+                    .cloned()
+                    .unwrap_or(serde_json::json!({"type": "object"}));
+
+                let annotations: Option<crate::ToolAnnotations> = tool_value
+                    .get("annotations")
+                    .and_then(|a| serde_json::from_value(a.clone()).ok());
+
+                let max_output_chars: Option<usize> = tool_value
+                    .get("_meta")
+                    .and_then(|m| m.get("maxResultSizeChars"))
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize);
+
+                let adapter = PooledMcpToolAdapter::with_output_limit(
+                    self.clone(),
+                    server_name.to_string(),
+                    name.clone(),
+                    description,
+                    input_schema.clone(),
+                    annotations,
+                    max_output_chars,
+                );
+
+                if self.is_defer_tool_schemas() {
+                    self.store_deferred_schema(&adapter.tool_name, input_schema);
+                }
+
+                tools.push(adapter);
+            }
+        }
+
+        info!(
+            server = %server_name,
+            tools = tools.len(),
+            "Refreshed tool list from server"
+        );
+
+        tools
     }
 
     /// Set the roots provider callback.
@@ -2643,11 +2736,14 @@ impl McpProcessPool {
     /// and dispatches them to the appropriate callback.
     ///
     /// Currently handles:
-    /// - `notifications/tools/list_changed` → calls `on_tools_changed` callback
-    pub fn start_notification_handler(&self) {
+    /// - `notifications/tools/list_changed` → re-fetches tools, calls `on_tools_changed`
+    /// - `notifications/resources/list_changed` → invalidates resource cache
+    /// - `notifications/prompts/list_changed` → logs for awareness
+    pub fn start_notification_handler(self: &Arc<Self>) {
         let rx = self.notification_rx.clone();
         let on_tools_changed = self.on_tools_changed.clone();
         let tool_cache = self.tool_cache.clone();
+        let pool = self.clone();
 
         tokio::spawn(async move {
             loop {
@@ -2673,10 +2769,26 @@ impl McpProcessPool {
                                     let mut cache = tool_cache.write().await;
                                     cache.retain(|k, _| !k.starts_with(&prefix));
                                 }
+
+                                // Re-fetch tools from the server.
+                                let new_tools = pool.refresh_tools_for_server(&server_name).await;
+
                                 let guard = on_tools_changed.lock().await;
                                 if let Some(ref cb) = *guard {
-                                    cb(&server_name);
+                                    cb(&server_name, new_tools);
                                 }
+                            }
+                            "notifications/resources/list_changed" => {
+                                info!(
+                                    server = %server_name,
+                                    "Received resources/list_changed notification"
+                                );
+                            }
+                            "notifications/prompts/list_changed" => {
+                                info!(
+                                    server = %server_name,
+                                    "Received prompts/list_changed notification"
+                                );
                             }
                             other => {
                                 debug!(
@@ -3940,13 +4052,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_notification_channel_forwarding() {
-        let pool = McpProcessPool::new();
+        let pool = Arc::new(McpProcessPool::new());
 
         // Set up a callback that records which server changed.
         // Use std::sync::Mutex since the callback is sync (not async).
         let changed = Arc::new(std::sync::Mutex::new(None::<String>));
         let changed_clone = changed.clone();
-        pool.set_on_tools_changed(Arc::new(move |server_name| {
+        pool.set_on_tools_changed(Arc::new(move |server_name, _new_tools| {
             *changed_clone.lock().unwrap() = Some(server_name.to_string());
         }))
         .await;

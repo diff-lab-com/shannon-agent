@@ -12,6 +12,7 @@ use serde_json::Value;
 use shannon_tool_interface::{Tool, ToolError, ToolOutput, ToolResult};
 use std::collections::HashMap;
 use std::process::Stdio;
+use std::sync::Arc;
 
 /// Adapter that exposes a single MCP server tool through the `Tool` trait.
 ///
@@ -35,6 +36,12 @@ pub struct McpToolAdapter {
     input_schema: Value,
     /// Tool name in the registry (e.g. "mcp__fetch__fetch").
     tool_name: String,
+    /// URL for remote HTTP/SSE transport (None for stdio).
+    url: Option<String>,
+    /// HTTP headers for remote transport (e.g. Authorization).
+    headers: HashMap<String, String>,
+    /// OAuth scopes required by this server (for 403 re-auth).
+    oauth_scopes: Vec<String>,
 }
 
 impl McpToolAdapter {
@@ -58,6 +65,151 @@ impl McpToolAdapter {
             description,
             input_schema,
             tool_name,
+            url: None,
+            headers: HashMap::new(),
+            oauth_scopes: Vec::new(),
+        }
+    }
+
+    /// Create a new MCP tool adapter for a remote HTTP/SSE server.
+    pub fn new_remote(
+        server_name: String,
+        remote_tool_name: String,
+        url: String,
+        headers: HashMap<String, String>,
+        description: String,
+        input_schema: Value,
+    ) -> Self {
+        let tool_name = format!("mcp__{server_name}__{remote_tool_name}");
+        Self {
+            server_name,
+            remote_tool_name,
+            command: None,
+            args: Vec::new(),
+            env: HashMap::new(),
+            description,
+            input_schema,
+            tool_name,
+            url: Some(url),
+            headers,
+            oauth_scopes: Vec::new(),
+        }
+    }
+
+    /// Swap the full input schema for a minimal stub, returning the original.
+    ///
+    /// Used for deferred schema loading: the tool registers with a stub schema
+    /// to save context, and the real schema is retrieved on demand via
+    /// `mcp__tool_search`.
+    pub fn swap_schema_for_deferred(&mut self) -> Value {
+        let real_schema = std::mem::replace(
+            &mut self.input_schema,
+            serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "description": format!("Use mcp__tool_search with tool_name=\"{}\" to get the full parameter schema.", self.tool_name)
+            }),
+        );
+        real_schema
+    }
+
+    /// Get a reference to the tool's registry name (e.g. `mcp__server__tool`).
+    pub fn registry_name(&self) -> &str {
+        &self.tool_name
+    }
+
+    /// Set OAuth scopes for 403 insufficient_scope error reporting.
+    pub fn with_oauth_scopes(mut self, scopes: Vec<String>) -> Self {
+        self.oauth_scopes = scopes;
+        self
+    }
+
+    /// Execute a tool call via HTTP POST to the remote MCP server.
+    async fn execute_remote(&self, url: &str, input: Value) -> ToolResult<ToolOutput> {
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": self.remote_tool_name,
+                "arguments": input,
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let mut builder = client
+            .post(url)
+            .header("Content-Type", "application/json")
+            .body(serde_json::to_string(&request).unwrap_or_default());
+
+        for (key, value) in &self.headers {
+            builder = builder.header(key.as_str(), value.as_str());
+        }
+
+        let timeout = tokio::time::Duration::from_secs(30);
+        let result = tokio::time::timeout(timeout, builder.send()).await;
+
+        match result {
+            Ok(Ok(response)) => {
+                let status = response.status();
+                if !status.is_success() {
+                    // Handle 403 Forbidden — check for insufficient_scope
+                    if status.as_u16() == 403 {
+                        let body = response.text().await.unwrap_or_default();
+                        let is_insufficient_scope = body.contains("insufficient_scope")
+                            || body.contains("insufficient permissions")
+                            || body.contains("permission denied");
+
+                        if is_insufficient_scope {
+                            let scope_hint = if self.oauth_scopes.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" Required scopes: {}", self.oauth_scopes.join(", "))
+                            };
+                            return Ok(ToolOutput::error(format!(
+                                "MCP server '{}' requires additional permissions (403 insufficient_scope).{scope_hint} Re-authenticate with broader scopes or check server permissions.",
+                                self.server_name
+                            )));
+                        }
+                        return Ok(ToolOutput::error(format!(
+                            "MCP server '{}' HTTP 403 Forbidden: {}",
+                            self.server_name,
+                            body.chars().take(500).collect::<String>()
+                        )));
+                    }
+                    return Ok(ToolOutput::error(format!(
+                        "MCP server '{}' HTTP error: {}",
+                        self.server_name,
+                        status
+                    )));
+                }
+                let body = response.text().await.unwrap_or_default();
+                if let Ok(parsed) = serde_json::from_str::<Value>(&body) {
+                    if let Some(result) = parsed.get("result") {
+                        if let Some(content) = result.get("content") {
+                            if let Some(text) = content.get(0).and_then(|c| c.get("text")).and_then(|t| t.as_str()) {
+                                return Ok(ToolOutput::success(text.to_string()));
+                            }
+                        }
+                        return Ok(ToolOutput::success(result.to_string()));
+                    }
+                    if let Some(error) = parsed.get("error") {
+                        let msg = error.get("message").and_then(|m| m.as_str()).unwrap_or("Unknown error");
+                        return Ok(ToolOutput::error(format!(
+                            "MCP server '{}' error: {}", self.server_name, msg
+                        )));
+                    }
+                }
+                Ok(ToolOutput::success(body))
+            }
+            Ok(Err(e)) => Err(ToolError::ExecutionFailed(format!(
+                "MCP server '{}' HTTP request failed: {}",
+                self.server_name, e
+            ))),
+            Err(_) => Err(ToolError::ExecutionFailed(format!(
+                "MCP server '{}' timed out after 30 seconds",
+                self.server_name
+            ))),
         }
     }
 }
@@ -86,11 +238,17 @@ impl Tool for McpToolAdapter {
     }
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
+        // Remote HTTP/SSE transport path
+        if let Some(ref url) = self.url {
+            return self.execute_remote(url, input).await;
+        }
+
+        // Stdio transport path
         let command = match &self.command {
             Some(cmd) => cmd.clone(),
             None => {
                 return Err(ToolError::ExecutionFailed(format!(
-                    "MCP server '{}' has no command configured (HTTP transport not yet supported)",
+                    "MCP server '{}' has no command or URL configured",
                     self.server_name
                 )));
             }
@@ -249,6 +407,7 @@ pub async fn discover_tools(
     command: &str,
     args: &[String],
     env: &HashMap<String, String>,
+    timeout_secs: Option<u64>,
 ) -> Result<DiscoveryResult, String> {
     // Build the full command
     let mut parts: Vec<String> = command
@@ -319,7 +478,7 @@ pub async fn discover_tools(
     }
 
     // Wait for response with timeout
-    let timeout = tokio::time::Duration::from_secs(15);
+    let timeout = tokio::time::Duration::from_secs(timeout_secs.unwrap_or(15));
     let result = tokio::time::timeout(timeout, child.wait_with_output()).await;
 
     let output = match result {
@@ -428,6 +587,237 @@ pub async fn discover_tools(
         tools: discovered_tools,
         prompts: discovered_prompts,
     })
+}
+
+/// Discover tools from a remote MCP server via HTTP transport.
+///
+/// Sends initialize + tools/list + prompts/list via HTTP POST requests,
+/// parses the responses, and returns adapters for each discovered tool.
+pub async fn discover_tools_http(
+    server_name: &str,
+    url: &str,
+    headers: &HashMap<String, String>,
+    timeout_secs: Option<u64>,
+) -> Result<DiscoveryResult, String> {
+    let client = reqwest::Client::new();
+
+    let init_request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "shannon-code", "version": "0.1.0"}
+        }
+    });
+    let tools_list_request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/list",
+        "params": {}
+    });
+    let prompts_list_request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "prompts/list",
+        "params": {}
+    });
+
+    // Helper to send a JSON-RPC request
+    let send_request = |req_body: Value| {
+        let mut builder = client
+            .post(url)
+            .header("Content-Type", "application/json")
+            .body(serde_json::to_string(&req_body).unwrap_or_default());
+        for (key, value) in headers {
+            builder = builder.header(key.as_str(), value.as_str());
+        }
+        builder.send()
+    };
+
+    // Send initialize
+    let init_timeout = tokio::time::Duration::from_secs(timeout_secs.unwrap_or(10));
+    let init_resp = tokio::time::timeout(init_timeout, send_request(init_request))
+        .await
+        .map_err(|_| format!("MCP server '{server_name}' init request timed out"))?
+        .map_err(|e| format!("MCP server '{server_name}' init request failed: {e}"))?;
+
+    if !init_resp.status().is_success() {
+        return Err(format!("MCP server '{server_name}' init returned HTTP {}", init_resp.status()));
+    }
+
+    // Send tools/list
+    let tools_timeout = tokio::time::Duration::from_secs(timeout_secs.unwrap_or(15));
+    let tools_resp = tokio::time::timeout(tools_timeout, send_request(tools_list_request))
+        .await
+        .map_err(|_| format!("MCP server '{server_name}' tools/list request timed out"))?
+        .map_err(|e| format!("MCP server '{server_name}' tools/list request failed: {e}"))?;
+
+    let tools_body = tools_resp.text().await.unwrap_or_default();
+
+    // Send prompts/list (best-effort)
+    let prompts_resp = tokio::time::timeout(
+        tokio::time::Duration::from_secs(10),
+        send_request(prompts_list_request),
+    ).await;
+    let prompts_body = prompts_resp
+        .ok()
+        .and_then(|r| r.ok())
+        .map(|r| tokio::runtime::Handle::current().block_on(r.text()).unwrap_or_default())
+        .unwrap_or_default();
+
+    // Parse tools
+    let mut discovered_tools: Vec<McpToolAdapter> = Vec::new();
+    if let Ok(parsed) = serde_json::from_str::<Value>(&tools_body) {
+        if let Some(tools_array) = parsed.get("result").and_then(|r| r.get("tools")).and_then(|t| t.as_array()) {
+            for tool_value in tools_array {
+                let tool_name = tool_value.get("name").and_then(|n| n.as_str()).unwrap_or("unknown").to_string();
+                let description = tool_value.get("description").and_then(|d| d.as_str()).unwrap_or(&format!("MCP tool: {tool_name}")).to_string();
+                let input_schema = tool_value.get("inputSchema").cloned().unwrap_or(serde_json::json!({"type": "object"}));
+                discovered_tools.push(McpToolAdapter::new_remote(
+                    server_name.to_string(),
+                    tool_name,
+                    url.to_string(),
+                    headers.clone(),
+                    description,
+                    input_schema,
+                ));
+            }
+        }
+    }
+
+    // Parse prompts
+    let mut discovered_prompts: Vec<PromptInfo> = Vec::new();
+    if let Ok(parsed) = serde_json::from_str::<Value>(&prompts_body) {
+        if let Some(prompts_array) = parsed.get("result").and_then(|r| r.get("prompts")).and_then(|p| p.as_array()) {
+            for prompt_value in prompts_array {
+                let name = prompt_value.get("name").and_then(|n| n.as_str()).unwrap_or("unknown").to_string();
+                let description = prompt_value.get("description").and_then(|d| d.as_str()).unwrap_or("").to_string();
+                let argument_names = prompt_value.get("arguments")
+                    .and_then(|a| a.as_array())
+                    .map(|arr| arr.iter().filter_map(|arg| arg.get("name").and_then(|n| n.as_str()).map(String::from)).collect())
+                    .unwrap_or_default();
+                discovered_prompts.push(PromptInfo { name, description, argument_names });
+            }
+        }
+    }
+
+    Ok(DiscoveryResult {
+        server_name: server_name.to_string(),
+        tools: discovered_tools,
+        prompts: discovered_prompts,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Deferred schema store for legacy (non-pooled) tool path
+// ---------------------------------------------------------------------------
+
+/// Shared store for deferred MCP tool schemas.
+///
+/// When many MCP tools are discovered, their full JSON schemas consume
+/// significant context. This store holds the real schemas while tools
+/// register with minimal stubs. The LLM retrieves full schemas on demand
+/// via [`DeferredSchemaSearchTool`].
+pub type DeferredSchemaStore = Arc<std::sync::Mutex<HashMap<String, Value>>>;
+
+/// Threshold above which deferred schema loading is auto-enabled.
+pub const DEFERRED_SCHEMA_THRESHOLD: usize = 20;
+
+/// Prepare deferred schema loading for a batch of MCP tool adapters.
+///
+/// Swaps each adapter's full schema for a minimal stub, storing the
+/// originals in the returned store. Returns the store and the number
+/// of tools deferred.
+pub fn prepare_deferred_schemas(
+    tools: &mut [Box<McpToolAdapter>],
+) -> DeferredSchemaStore {
+    let store: DeferredSchemaStore = Arc::new(std::sync::Mutex::new(HashMap::new()));
+    for tool in tools.iter_mut() {
+        let real_schema = tool.swap_schema_for_deferred();
+        let name = tool.name().to_string();
+        store.lock().unwrap().insert(name, real_schema);
+    }
+    store
+}
+
+/// Lightweight tool that retrieves deferred MCP tool schemas on demand.
+///
+/// Works with [`DeferredSchemaStore`] (simple HashMap) instead of requiring
+/// the full `McpProcessPool`. Used by the legacy one-shot discovery path.
+pub struct DeferredSchemaSearchTool {
+    schemas: DeferredSchemaStore,
+}
+
+impl DeferredSchemaSearchTool {
+    /// Create a new search tool backed by the given schema store.
+    pub fn new(schemas: DeferredSchemaStore) -> Self {
+        Self { schemas }
+    }
+}
+
+impl std::fmt::Debug for DeferredSchemaSearchTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeferredSchemaSearchTool").finish()
+    }
+}
+
+#[async_trait]
+impl Tool for DeferredSchemaSearchTool {
+    fn name(&self) -> &str {
+        "mcp__tool_search"
+    }
+
+    fn description(&self) -> &str {
+        "Search for an MCP tool's full parameter schema by tool name. \
+         Use this before calling any mcp__ tool to discover its required \
+         and optional parameters."
+    }
+
+    fn input_schema(&self) -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "tool_name": {
+                    "type": "string",
+                    "description": "Full tool name (e.g., \"mcp__fetch__fetch\") to retrieve the schema for."
+                }
+            },
+            "required": ["tool_name"]
+        })
+    }
+
+    fn category(&self) -> &str {
+        "mcp"
+    }
+
+    async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
+        let tool_name = input
+            .get("tool_name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidInput("Missing 'tool_name' parameter".to_string()))?;
+
+        let schemas = self.schemas.lock().unwrap();
+        match schemas.get(tool_name) {
+            Some(schema) => {
+                let schema_str = serde_json::to_string_pretty(schema)
+                    .unwrap_or_else(|_| schema.to_string());
+                Ok(ToolOutput::success(schema_str))
+            }
+            None => {
+                let available: Vec<&String> = schemas.keys().collect();
+                Ok(ToolOutput::error(format!(
+                    "No deferred schema found for '{tool_name}'. Available: {:?}",
+                    available.iter().take(10).collect::<Vec<_>>()
+                )))
+            }
+        }
+    }
+
+    fn requires_auth(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]

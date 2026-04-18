@@ -485,6 +485,7 @@ async fn discover_server_tools(
                 command,
                 &args_owned,
                 &env_owned,
+                None,
             )
             .await?;
 

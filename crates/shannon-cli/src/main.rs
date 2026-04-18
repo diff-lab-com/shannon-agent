@@ -503,6 +503,7 @@ fn run_noninteractive_query(
                         &command,
                         &config.args,
                         &config.env,
+                        None,
                     )
                     .await
                     {
@@ -843,6 +844,7 @@ fn run_team_agent_mode(
                         &command,
                         &mcp_config.args,
                         &mcp_config.env,
+                        None,
                     )
                     .await
                     {

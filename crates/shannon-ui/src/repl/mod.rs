@@ -289,62 +289,115 @@ impl Repl {
             let mcp_count = mcp_registry.load_from_default_paths();
             if mcp_count > 0 {
                 tracing::info!("Discovered {} MCP server configuration(s)", mcp_count);
+
+                // Load approval state for MCP server gating
+                let approval_path = std::path::PathBuf::from(".shannon/mcp_approvals.json");
+                let mut approval_manager = shannon_core::McpApprovalManager::with_defaults();
+                if let Err(e) = approval_manager.load_from_file(&approval_path) {
+                    tracing::debug!("Could not load MCP approval state: {}", e);
+                }
+
                 let discovery_rt = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
                     .unwrap_or_else(|_| tokio::runtime::Runtime::new().unwrap());
 
                 // Classify servers into local (stdio) and remote (http/sse) buckets
-                let mut local_servers: Vec<(String, String, Vec<String>, HashMap<String, String>)> = Vec::new();
-                let mut remote_servers: Vec<(String, String, Vec<String>, HashMap<String, String>)> = Vec::new();
+                let mut local_servers: Vec<(String, String, Vec<String>, HashMap<String, String>, Vec<String>)> = Vec::new();
+                let mut http_servers: Vec<(String, String, HashMap<String, String>, Vec<String>)> = Vec::new(); // (name, url, headers, oauth_scopes)
 
                 for config in mcp_registry.enabled_servers() {
-                    let command = match &config.command {
-                        Some(cmd) => cmd.clone(),
-                        None => {
+                    // Check server approval before attempting discovery
+                    let approval_transport = match config.transport_type {
+                        shannon_core::mcp_advanced::TransportType::Stdio => shannon_core::mcp_server_approval::McpTransportType::Stdio,
+                        shannon_core::mcp_advanced::TransportType::Http => shannon_core::mcp_server_approval::McpTransportType::StreamableHttp,
+                        shannon_core::mcp_advanced::TransportType::Sse => shannon_core::mcp_server_approval::McpTransportType::Sse,
+                    };
+                    let mut approval_req = shannon_core::McpServerApprovalRequest::new(
+                        &config.name,
+                        approval_transport,
+                    );
+                    if let Some(ref url) = config.url {
+                        approval_req.server_url = Some(url.clone());
+                    }
+                    approval_req.capabilities.push("tools".to_string());
+                    let decision = approval_manager.request_approval(approval_req)
+                        .unwrap_or(shannon_core::ApprovalDecision::Deny);
+                    match decision {
+                        shannon_core::ApprovalDecision::Deny => {
                             tracing::warn!(
-                                "Skipping '{}' (HTTP/SSE not yet supported for discovery)",
+                                "MCP server '{}' denied by approval policy, skipping",
                                 config.name
                             );
                             continue;
                         }
-                    };
-                    let entry = (config.name.clone(), command, config.args.clone(), config.env.clone());
-                    match config.transport_type {
-                        shannon_core::mcp_advanced::TransportType::Stdio => local_servers.push(entry),
-                        _ => remote_servers.push(entry),
+                        shannon_core::ApprovalDecision::ApproveWithRestrictions { .. } => {
+                            tracing::warn!(
+                                "MCP server '{}' requires manual approval. \
+                                 Use /mcp approve {} to enable on next startup.",
+                                config.name, config.name
+                            );
+                            continue;
+                        }
+                        shannon_core::ApprovalDecision::Approve => {}
+                    }
+
+                    match (&config.command, &config.url) {
+                        (Some(cmd), _) => {
+                            // Stdio transport
+                            let entry = (config.name.clone(), cmd.clone(), config.args.clone(), config.env.clone(), config.oauth_scopes.clone());
+                            local_servers.push(entry);
+                        }
+                        (None, Some(url)) => {
+                            // HTTP/SSE transport — discover via HTTP
+                            http_servers.push((config.name.clone(), url.clone(), config.headers.clone(), config.oauth_scopes.clone()));
+                        }
+                        (None, None) => {
+                            tracing::warn!(
+                                "Skipping '{}' (no command or URL configured)",
+                                config.name
+                            );
+                            continue;
+                        }
                     }
                 }
 
                 const LOCAL_BATCH_SIZE: usize = 3;
                 const REMOTE_BATCH_SIZE: usize = 20;
 
+                // Collect all MCP tool adapters before registering, so we can
+                // enable deferred schema loading if the total count is high.
+                let mut all_mcp_adapters: Vec<Box<shannon_core::McpToolAdapter>> = Vec::new();
+
                 // Discover local (stdio) servers in batches
                 for batch in local_servers.chunks(LOCAL_BATCH_SIZE) {
                     let futures: Vec<_> = batch
                         .iter()
-                        .map(|(name, cmd, args, env)| {
-                            shannon_core::discover_tools(name, cmd, args, env)
+                        .map(|(name, cmd, args, env, _scopes)| {
+                            shannon_core::discover_tools(name, cmd, args, env, None)
                         })
                         .collect();
                     let results = discovery_rt.block_on(futures::future::join_all(futures));
-                    for (result, (name, _, _, _)) in results.into_iter().zip(batch.iter()) {
+                    for (result, (name, _, _, _, scopes)) in results.into_iter().zip(batch.iter()) {
                         match result {
                             Ok(discovery) => {
                                 let tool_count = discovery.tools.len();
                                 for tool in discovery.tools {
-                                    if let Err(e) = tool_registry.register(Box::new(tool)) {
-                                        tracing::debug!("MCP tool registration skipped: {}", e);
-                                    }
+                                    let adapted = if !scopes.is_empty() {
+                                        tool.with_oauth_scopes(scopes.clone())
+                                    } else {
+                                        tool
+                                    };
+                                    all_mcp_adapters.push(Box::new(adapted));
                                 }
                                 let server = discovery.server_name.clone();
                                 for prompt in discovery.prompts {
                                     discovered_mcp_prompts.push((server.clone(), prompt));
                                 }
                                 tracing::info!(
-                                    "Registered {} tool(s) from '{}'",
+                                    "Discovered {} tool(s) from '{}'",
                                     tool_count,
-                                    discovery.server_name
+                                    name
                                 );
                             }
                             Err(e) => {
@@ -355,31 +408,34 @@ impl Repl {
                 }
 
                 // Discover remote (http/sse) servers in batches
-                for batch in remote_servers.chunks(REMOTE_BATCH_SIZE) {
+                for batch in http_servers.chunks(REMOTE_BATCH_SIZE) {
                     let futures: Vec<_> = batch
                         .iter()
-                        .map(|(name, cmd, args, env)| {
-                            shannon_core::discover_tools(name, cmd, args, env)
+                        .map(|(name, url, headers, _scopes)| {
+                            shannon_core::discover_tools_http(name, url, headers, None)
                         })
                         .collect();
                     let results = discovery_rt.block_on(futures::future::join_all(futures));
-                    for (result, (name, _, _, _)) in results.into_iter().zip(batch.iter()) {
+                    for (result, (name, _, _, scopes)) in results.into_iter().zip(batch.iter()) {
                         match result {
                             Ok(discovery) => {
                                 let tool_count = discovery.tools.len();
                                 for tool in discovery.tools {
-                                    if let Err(e) = tool_registry.register(Box::new(tool)) {
-                                        tracing::debug!("MCP tool registration skipped: {}", e);
-                                    }
+                                    let adapted = if !scopes.is_empty() {
+                                        tool.with_oauth_scopes(scopes.clone())
+                                    } else {
+                                        tool
+                                    };
+                                    all_mcp_adapters.push(Box::new(adapted));
                                 }
                                 let server = discovery.server_name.clone();
                                 for prompt in discovery.prompts {
                                     discovered_mcp_prompts.push((server.clone(), prompt));
                                 }
                                 tracing::info!(
-                                    "Registered {} tool(s) from '{}'",
+                                    "Discovered {} tool(s) from '{}'",
                                     tool_count,
-                                    discovery.server_name
+                                    name
                                 );
                             }
                             Err(e) => {
@@ -387,6 +443,45 @@ impl Repl {
                             }
                         }
                     }
+                }
+
+                // Auto-enable deferred schema loading when there are many MCP tools.
+                // This swaps full JSON schemas for minimal stubs, saving ~85% context.
+                // The LLM retrieves full schemas on demand via mcp__tool_search.
+                let deferred_store = if all_mcp_adapters.len() > shannon_core::DEFERRED_SCHEMA_THRESHOLD {
+                    tracing::info!(
+                        "Enabling deferred schema loading for {} MCP tools (threshold: {})",
+                        all_mcp_adapters.len(),
+                        shannon_core::DEFERRED_SCHEMA_THRESHOLD
+                    );
+                    let store = shannon_core::prepare_deferred_schemas(&mut all_mcp_adapters);
+                    // Register the search tool
+                    let search_tool = shannon_core::DeferredSchemaSearchTool::new(store.clone());
+                    if let Err(e) = tool_registry.register(Box::new(search_tool)) {
+                        tracing::debug!("mcp__tool_search registration skipped: {}", e);
+                    }
+                    Some(store)
+                } else {
+                    None
+                };
+
+                // Register all MCP tool adapters
+                for tool in all_mcp_adapters {
+                    if let Err(e) = tool_registry.register(tool) {
+                        tracing::debug!("MCP tool registration skipped: {}", e);
+                    }
+                }
+
+                if let Some(store) = &deferred_store {
+                    tracing::info!(
+                        "Deferred mode active: {} tool schemas stored",
+                        store.lock().unwrap().len()
+                    );
+                }
+
+                // Persist approval state (auto-approved servers, any new denies)
+                if let Err(e) = approval_manager.save_to_file(&approval_path) {
+                    tracing::debug!("Could not save MCP approval state: {}", e);
                 }
             }
         }

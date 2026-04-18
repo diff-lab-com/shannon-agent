@@ -515,6 +515,58 @@ impl McpApprovalManager {
     fn is_read_only_server(&self, request: &McpServerApprovalRequest) -> bool {
         !request.requests_write_access() && !request.requests_network_access()
     }
+
+    /// Persist the current approval state to a file.
+    ///
+    /// The file is written as JSON containing the approved and denied server
+    /// name sets. Typically stored at `.shannon/mcp_approvals.json`.
+    pub fn save_to_file(&self, path: &std::path::Path) -> Result<(), std::io::Error> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let data = ApprovalStateFile {
+            approved: self.approved_servers.iter().cloned().collect(),
+            denied: self.denied_servers.iter().cloned().collect(),
+        };
+        let json = serde_json::to_string_pretty(&data)?;
+        std::fs::write(path, json)
+    }
+
+    /// Load approval state from a file previously written by [`save_to_file`].
+    ///
+    /// Merges the file's state into the current manager. Returns `Ok(())` if
+    /// the file doesn't exist (no previously saved state).
+    pub fn load_from_file(&mut self, path: &std::path::Path) -> Result<(), std::io::Error> {
+        if !path.exists() {
+            return Ok(());
+        }
+        let content = std::fs::read_to_string(path)?;
+        let data: ApprovalStateFile = serde_json::from_str(&content)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        for name in data.approved {
+            self.approved_servers.insert(name);
+        }
+        for name in data.denied {
+            self.denied_servers.insert(name);
+        }
+        Ok(())
+    }
+
+    /// Clear persisted approval state by deleting the file.
+    pub fn reset_persisted(path: &std::path::Path) -> Result<(), std::io::Error> {
+        if path.exists() {
+            std::fs::remove_file(path)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Serialization helper for persisting approval state.
+#[derive(Serialize, Deserialize)]
+struct ApprovalStateFile {
+    approved: Vec<String>,
+    denied: Vec<String>,
 }
 
 // ============================================================================

@@ -2528,6 +2528,9 @@ fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
 /mcp remove <name>               — Remove an MCP server
 /mcp show <name>                 — Show server details
 /mcp test <name>                 — Test server connection
+/mcp approve <name>              — Approve a server for next startup
+/mcp deny <name>                 — Deny a server
+/mcp reset-approvals             — Clear all approval decisions
 /mcp path                        — Show config file path".to_string());
         }
         "list" => {
@@ -2655,6 +2658,43 @@ fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
         }
         "path" => {
             repl.chat.add_message(ChatRole::System, format!("MCP config: {}", config_path().display()));
+        }
+        "approve" => {
+            let name = parts.get(1).copied().unwrap_or("");
+            if name.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Usage: /mcp approve <name>".to_string());
+                return Ok(());
+            }
+            let approval_path = PathBuf::from(".shannon/mcp_approvals.json");
+            let mut mgr = shannon_core::McpApprovalManager::with_defaults();
+            let _ = mgr.load_from_file(&approval_path);
+            mgr.approve_server(name);
+            match mgr.save_to_file(&approval_path) {
+                Ok(()) => { repl.chat.add_message(ChatRole::System, format!("Approved '{name}'. It will connect on next startup.")); }
+                Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to save approval: {e}")); }
+            }
+        }
+        "deny" => {
+            let name = parts.get(1).copied().unwrap_or("");
+            if name.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Usage: /mcp deny <name>".to_string());
+                return Ok(());
+            }
+            let approval_path = PathBuf::from(".shannon/mcp_approvals.json");
+            let mut mgr = shannon_core::McpApprovalManager::with_defaults();
+            let _ = mgr.load_from_file(&approval_path);
+            mgr.deny_server(name);
+            match mgr.save_to_file(&approval_path) {
+                Ok(()) => { repl.chat.add_message(ChatRole::System, format!("Denied '{name}'. It will be skipped on next startup.")); }
+                Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to save denial: {e}")); }
+            }
+        }
+        "reset-approvals" => {
+            let approval_path = PathBuf::from(".shannon/mcp_approvals.json");
+            match shannon_core::McpApprovalManager::reset_persisted(&approval_path) {
+                Ok(()) => { repl.chat.add_message(ChatRole::System, "All approval decisions cleared. Servers will be re-evaluated on next startup.".to_string()); }
+                Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to reset approvals: {e}")); }
+            }
         }
         _ => {
             repl.chat.add_message(ChatRole::System, format!("Unknown subcommand: {subcommand}. Use /mcp help."));

@@ -27,6 +27,9 @@
 //!     url: None,
 //!     headers: Default::default(),
 //!     enabled: true,
+//!     timeout_secs: None,
+//!     discovery_timeout_secs: None,
+//!     oauth_scopes: Vec::new(),
 //! };
 //! registry.register(config);
 //! ```
@@ -135,6 +138,21 @@ pub struct McpServerConfig {
     /// Whether the server is enabled
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+
+    /// Tool call execution timeout in seconds (default: 30)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+
+    /// Discovery/initialization timeout in seconds (default: 15)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discovery_timeout_secs: Option<u64>,
+
+    /// OAuth scopes required by this server (e.g., `["read", "write"]`).
+    ///
+    /// When a server returns HTTP 403 with `insufficient_scope`, these scopes
+    /// are used to re-authenticate with broader permissions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub oauth_scopes: Vec<String>,
 }
 
 fn default_transport_stdio() -> TransportType {
@@ -222,6 +240,9 @@ impl McpServerConfig {
             url: None,
             headers: HashMap::new(),
             enabled: true,
+            timeout_secs: None,
+            discovery_timeout_secs: None,
+            oauth_scopes: Vec::new(),
         }
     }
 
@@ -236,6 +257,9 @@ impl McpServerConfig {
             url: Some(url.to_string()),
             headers: HashMap::new(),
             enabled: true,
+            timeout_secs: None,
+            discovery_timeout_secs: None,
+            oauth_scopes: Vec::new(),
         }
     }
 
@@ -250,6 +274,9 @@ impl McpServerConfig {
             url: Some(url.to_string()),
             headers: HashMap::new(),
             enabled: true,
+            timeout_secs: None,
+            discovery_timeout_secs: None,
+            oauth_scopes: Vec::new(),
         }
     }
 
@@ -969,6 +996,9 @@ impl McpServerRegistry {
             url,
             headers,
             enabled: true,
+            timeout_secs: None,
+            discovery_timeout_secs: None,
+            oauth_scopes: Vec::new(),
         };
         config.validate()?;
         Ok(config)
@@ -1053,6 +1083,8 @@ impl McpServerRegistry {
             p.push(base.join(".mcp.json"));
             // Shannon project-local (highest priority)
             p.push(base.join(".shannon").join("mcp_servers.json"));
+            // Machine-local only — not committed to VCS (highest priority)
+            p.push(base.join(".shannon").join("mcp.local.json"));
             p
         };
 
@@ -1126,6 +1158,9 @@ mod tests {
             url: None,
             headers: HashMap::new(),
             enabled: true,
+            timeout_secs: None,
+            discovery_timeout_secs: None,
+            oauth_scopes: Vec::new(),
         };
         assert!(config.validate().is_err());
 
@@ -1139,6 +1174,9 @@ mod tests {
             url: None,
             headers: HashMap::new(),
             enabled: true,
+            timeout_secs: None,
+            discovery_timeout_secs: None,
+            oauth_scopes: Vec::new(),
         };
         assert!(config.validate().is_err());
 
@@ -1672,6 +1710,9 @@ mod tests {
                 ("Authorization".to_string(), "Bearer ${SHANNON_API_KEY}".to_string()),
             ]),
             enabled: true,
+            timeout_secs: None,
+            discovery_timeout_secs: None,
+            oauth_scopes: Vec::new(),
         };
         expand_env_vars_in_config(&mut config);
         assert_eq!(config.headers.get("Authorization").unwrap(), "Bearer secret123");
