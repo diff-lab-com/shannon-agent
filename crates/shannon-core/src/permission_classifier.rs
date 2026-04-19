@@ -187,13 +187,29 @@ impl PermissionRule {
     /// Check whether this rule applies to the given tool and input string.
     ///
     /// A rule matches when:
-    /// 1. Its `tool_name` is `None` **or** equals `tool_name`.
+    /// 1. Its `tool_name` is `None` **or** equals/matches `tool_name`
+    ///    (supports glob patterns like `mcp__server__*`).
     /// 2. Its `pattern` is `None` **or** the regex matches `input_str`.
     pub fn matches(&self, tool_name: &str, input_str: &str) -> bool {
-        // Tool filter
+        // Tool filter — supports both exact match and glob patterns
         if let Some(ref name) = self.tool_name {
             if name != tool_name {
-                return false;
+                // Try glob match for patterns containing wildcards
+                if name.contains('*') || name.contains('?') || name.contains('[') {
+                    if let Ok(glob) = globset::Glob::new(name) {
+                        if let Ok(set) = globset::GlobSetBuilder::new().add(glob).build() {
+                            if !set.is_match(tool_name) {
+                                return false;
+                            }
+                        } else {
+                            return false;
+                        }
+                    } else {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
             }
         }
 

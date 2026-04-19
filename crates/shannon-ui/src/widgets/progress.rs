@@ -327,6 +327,20 @@ impl MultiProgressWidget {
         self.bars.clear();
     }
 
+    /// Check if a bar with the given label exists
+    pub fn has_bar(&self, label: &str) -> bool {
+        self.bars.iter().any(|(l, _, _)| l == label)
+    }
+
+    /// Add a bar or update it if it already exists
+    pub fn add_or_update(&mut self, label: &str, progress: f64, color: Color) {
+        if let Some(bar) = self.bars.iter_mut().find(|(l, _, _)| l == label) {
+            bar.1 = progress.clamp(0.0, 1.0);
+        } else {
+            self.bars.push((label.to_string(), progress.clamp(0.0, 1.0), color));
+        }
+    }
+
     /// Update a bar's progress
     pub fn update(&mut self, label: &str, progress: f64) {
         if let Some(bar) = self.bars.iter_mut().find(|(l, _, _)| l == label) {

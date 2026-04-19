@@ -88,7 +88,8 @@ pub use server_manager::{
 };
 pub use process_pool::{
     McpProcessPool, PooledMcpToolAdapter, PooledDiscoveryResult,
-    discover_pooled_tools, make_sampling_provider, make_elicitation_provider,
+    discover_pooled_tools, discover_pooled_remote_tools,
+    make_sampling_provider, make_elicitation_provider,
     UserPromptCallback, ServerState, ServerStatus,
     ChunkResult,
 };

@@ -2599,6 +2599,7 @@ dependencies = [
  "dirs 5.0.1",
  "dotenvy",
  "futures",
+ "globset",
  "libc",
  "mockito",
  "regex",

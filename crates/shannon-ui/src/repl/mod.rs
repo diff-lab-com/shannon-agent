@@ -27,6 +27,7 @@ use ratatui::{
 };
 use std::collections::HashMap;
 use std::io;
+use std::sync::Arc;
 use tokio::runtime::Runtime;
 
 
@@ -46,6 +47,7 @@ use shannon_commands::{Command, CommandBase, CommandRegistry, CommandParser, Exe
 // Tool registration
 use shannon_tools::register_default_tools;
 use crate::skill_bridge::register_skills_as_tools;
+use shannon_mcp::{McpProcessPool, discover_pooled_tools, discover_pooled_remote_tools, HeaderSource};
 
 /// Application state for the REPL
 #[derive(Debug, Clone)]
@@ -228,6 +230,8 @@ pub struct Repl {
     pub(crate) team_coordinator: Option<std::sync::Arc<shannon_agents::AgentCoordinator>>,
     /// Sub-agent registry for background agent management
     pub(crate) agent_registry: Option<std::sync::Arc<shannon_agents::SubAgentRegistry>>,
+    /// MCP progress update receiver (from McpProcessPool to REPL UI)
+    pub(crate) mcp_progress_rx: Option<tokio::sync::mpsc::UnboundedReceiver<(String, f64, Option<f64>)>>,
     /// Model routing rules: (pattern, model_name) pairs
     pub(crate) model_routes: Vec<(String, String)>,
     /// Checkpoint manager for undo/revert operations
@@ -283,7 +287,8 @@ impl Repl {
         // Servers are batched to avoid file descriptor exhaustion:
         //   - Local (stdio) servers: batches of 3
         //   - Remote (http/sse) servers: batches of 20
-        let mut discovered_mcp_prompts: Vec<(String, PromptInfo)> = Vec::new();
+        let mut discovered_mcp_prompts: Vec<(String, PromptInfo)> = Vec::new(); // populated during pooled discovery
+        let mcp_pool = Arc::new(McpProcessPool::new()); // persistent pool for all MCP servers
         {
             let mut mcp_registry = shannon_core::mcp_advanced::McpServerRegistry::new();
             let mcp_count = mcp_registry.load_from_default_paths();
@@ -365,37 +370,36 @@ impl Repl {
                 const LOCAL_BATCH_SIZE: usize = 3;
                 const REMOTE_BATCH_SIZE: usize = 20;
 
-                // Collect all MCP tool adapters before registering, so we can
-                // enable deferred schema loading if the total count is high.
-                let mut all_mcp_adapters: Vec<Box<shannon_core::McpToolAdapter>> = Vec::new();
+                // Use the persistent pool created above the discovery block.
+                // This replaces one-shot process spawning with persistent connections,
+                // eliminating per-call initialization overhead.
+                let mcp_pool = mcp_pool.clone();
 
-                // Discover local (stdio) servers in batches
+                // Collect all pooled MCP tool adapters
+                let mut all_pooled_adapters: Vec<shannon_mcp::PooledMcpToolAdapter> = Vec::new();
+
+                // Discover local (stdio) servers via persistent pool connections
                 for batch in local_servers.chunks(LOCAL_BATCH_SIZE) {
                     let futures: Vec<_> = batch
                         .iter()
                         .map(|(name, cmd, args, env, _scopes)| {
-                            shannon_core::discover_tools(name, cmd, args, env, None)
+                            discover_pooled_tools(
+                                mcp_pool.clone(),
+                                name,
+                                cmd,
+                                args,
+                                env,
+                            )
                         })
                         .collect();
                     let results = discovery_rt.block_on(futures::future::join_all(futures));
-                    for (result, (name, _, _, _, scopes)) in results.into_iter().zip(batch.iter()) {
+                    for (result, (name, _, _, _, _scopes)) in results.into_iter().zip(batch.iter()) {
                         match result {
                             Ok(discovery) => {
                                 let tool_count = discovery.tools.len();
-                                for tool in discovery.tools {
-                                    let adapted = if !scopes.is_empty() {
-                                        tool.with_oauth_scopes(scopes.clone())
-                                    } else {
-                                        tool
-                                    };
-                                    all_mcp_adapters.push(Box::new(adapted));
-                                }
-                                let server = discovery.server_name.clone();
-                                for prompt in discovery.prompts {
-                                    discovered_mcp_prompts.push((server.clone(), prompt));
-                                }
+                                all_pooled_adapters.extend(discovery.tools);
                                 tracing::info!(
-                                    "Discovered {} tool(s) from '{}'",
+                                    "Discovered {} tool(s) from '{}' (pooled)",
                                     tool_count,
                                     name
                                 );
@@ -407,33 +411,32 @@ impl Repl {
                     }
                 }
 
-                // Discover remote (http/sse) servers in batches
+                // Discover remote (http/sse) servers via persistent pool connections
                 for batch in http_servers.chunks(REMOTE_BATCH_SIZE) {
                     let futures: Vec<_> = batch
                         .iter()
                         .map(|(name, url, headers, _scopes)| {
-                            shannon_core::discover_tools_http(name, url, headers, None)
+                            let header_sources: HashMap<String, HeaderSource> = headers
+                                .iter()
+                                .map(|(k, v)| (k.clone(), HeaderSource::Static(v.clone())))
+                                .collect();
+                            discover_pooled_remote_tools(
+                                mcp_pool.clone(),
+                                name,
+                                url,
+                                header_sources,
+                                None,
+                            )
                         })
                         .collect();
                     let results = discovery_rt.block_on(futures::future::join_all(futures));
-                    for (result, (name, _, _, scopes)) in results.into_iter().zip(batch.iter()) {
+                    for (result, (name, _, _, _scopes)) in results.into_iter().zip(batch.iter()) {
                         match result {
                             Ok(discovery) => {
                                 let tool_count = discovery.tools.len();
-                                for tool in discovery.tools {
-                                    let adapted = if !scopes.is_empty() {
-                                        tool.with_oauth_scopes(scopes.clone())
-                                    } else {
-                                        tool
-                                    };
-                                    all_mcp_adapters.push(Box::new(adapted));
-                                }
-                                let server = discovery.server_name.clone();
-                                for prompt in discovery.prompts {
-                                    discovered_mcp_prompts.push((server.clone(), prompt));
-                                }
+                                all_pooled_adapters.extend(discovery.tools);
                                 tracing::info!(
-                                    "Discovered {} tool(s) from '{}'",
+                                    "Discovered {} tool(s) from '{}' (pooled, remote)",
                                     tool_count,
                                     name
                                 );
@@ -446,37 +449,61 @@ impl Repl {
                 }
 
                 // Auto-enable deferred schema loading when there are many MCP tools.
-                // This swaps full JSON schemas for minimal stubs, saving ~85% context.
-                // The LLM retrieves full schemas on demand via mcp__tool_search.
-                let deferred_store = if all_mcp_adapters.len() > shannon_core::DEFERRED_SCHEMA_THRESHOLD {
+                // Note: deferred mode is set AFTER discovery for pooled adapters since the
+                // adapters already stored their real schemas during discovery if the pool's
+                // deferred flag was enabled. We set it now and rebuild with minimal schemas.
+                if all_pooled_adapters.len() > shannon_core::DEFERRED_SCHEMA_THRESHOLD {
                     tracing::info!(
                         "Enabling deferred schema loading for {} MCP tools (threshold: {})",
-                        all_mcp_adapters.len(),
+                        all_pooled_adapters.len(),
                         shannon_core::DEFERRED_SCHEMA_THRESHOLD
                     );
-                    let store = shannon_core::prepare_deferred_schemas(&mut all_mcp_adapters);
-                    // Register the search tool
-                    let search_tool = shannon_core::DeferredSchemaSearchTool::new(store.clone());
+                    mcp_pool.set_defer_tool_schemas(true);
+
+                    // Build a DeferredSchemaStore from the pool's stored schemas
+                    let store = shannon_core::DeferredSchemaStore::default();
+                    for name in mcp_pool.deferred_schema_tool_names() {
+                        if let Some(schema) = mcp_pool.get_deferred_schema(&name) {
+                            store.lock().unwrap().insert(name, schema);
+                        }
+                    }
+                    let search_tool = shannon_core::DeferredSchemaSearchTool::new(store);
                     if let Err(e) = tool_registry.register(Box::new(search_tool)) {
                         tracing::debug!("mcp__tool_search registration skipped: {}", e);
                     }
-                    Some(store)
-                } else {
-                    None
-                };
+                }
 
-                // Register all MCP tool adapters
-                for tool in all_mcp_adapters {
-                    if let Err(e) = tool_registry.register(tool) {
+                // Register all pooled MCP tool adapters
+                for tool in all_pooled_adapters {
+                    if let Err(e) = tool_registry.register(Box::new(tool)) {
                         tracing::debug!("MCP tool registration skipped: {}", e);
                     }
                 }
 
-                if let Some(store) = &deferred_store {
+                if mcp_pool.is_defer_tool_schemas() {
                     tracing::info!(
                         "Deferred mode active: {} tool schemas stored",
-                        store.lock().unwrap().len()
+                        mcp_pool.deferred_schema_tool_names().len()
                     );
+                }
+
+                // Discover prompts from all connected servers and populate
+                // discovered_mcp_prompts for slash-command registration below.
+                let pooled_prompts = discovery_rt.block_on(mcp_pool.list_all_prompts());
+                for (server_name, prompts) in pooled_prompts {
+                    for p in prompts {
+                        let arg_names = p.arguments
+                            .map(|args| args.into_iter().map(|a| a.name).collect())
+                            .unwrap_or_default();
+                        discovered_mcp_prompts.push((
+                            server_name.clone(),
+                            PromptInfo {
+                                name: p.name,
+                                description: p.description,
+                                argument_names: arg_names,
+                            },
+                        ));
+                    }
                 }
 
                 // Persist approval state (auto-approved servers, any new denies)
@@ -530,6 +557,51 @@ impl Repl {
             shannon_core::api::LlmClient::new(client_config)
         } else {
             shannon_core::api::LlmClient::new_unauthenticated(client_config)
+        };
+
+        // Wire MCP sampling and elicitation providers so MCP servers can
+        // request LLM completions (sampling) and ask the user questions (elicitation).
+        {
+            let pool = mcp_pool.clone();
+            let llm = std::sync::Arc::new(client.clone());
+            let sampling = shannon_mcp::make_sampling_provider(llm);
+            // For now, elicitation auto-declines (no TUI callback wired yet).
+            // Future: wire to input_dialog for interactive elicitation.
+            let elicitation = shannon_mcp::make_elicitation_provider(None);
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap_or_else(|_| tokio::runtime::Runtime::new().unwrap());
+            rt.block_on(async {
+                pool.set_sampling_provider(sampling).await;
+                pool.set_elicitation_provider(elicitation).await;
+            });
+        }
+
+        // Start MCP config hot-reload watcher.
+        // Polls config files every 5 seconds and applies changes dynamically.
+        {
+            let pool = mcp_pool.clone();
+            let project_dir = std::env::current_dir().unwrap_or_default();
+            pool.start_config_watcher(project_dir, std::time::Duration::from_secs(5));
+        }
+
+        // Wire MCP progress updates to the UI.
+        // Progress notifications from MCP servers are forwarded to a channel
+        // that the main event loop drains into the multi-progress widget.
+        let mcp_progress_rx = {
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<(String, f64, Option<f64>)>();
+            let pool = mcp_pool.clone();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap_or_else(|_| tokio::runtime::Runtime::new().unwrap());
+            rt.block_on(async move {
+                pool.set_progress_callback(std::sync::Arc::new(move |tool_name, progress, total| {
+                    let _ = tx.send((tool_name.to_string(), progress, total));
+                })).await;
+            });
+            Some(rx)
         };
 
         // Create permission manager
@@ -684,6 +756,7 @@ impl Repl {
             vim_handler: VimHandler::new(),
             team_coordinator: shared_coordinator,
             agent_registry: None,
+            mcp_progress_rx,
             model_routes: Vec::new(),
             checkpoint_manager: shannon_core::CheckpointManager::new(),
             notifier: {
@@ -819,6 +892,23 @@ impl Repl {
                     // Store the permission prompt and response channel
                     self.state.permission_dialog = Some(permission_req.prompt.clone());
                     self.state.permission_response_tx = Some(permission_req.response_tx);
+                }
+            }
+
+            // Drain MCP progress updates into the multi-progress widget
+            if let Some(ref mut rx) = self.mcp_progress_rx {
+                let mut had_updates = false;
+                while let Ok((tool_name, progress, total)) = rx.try_recv() {
+                    if !had_updates {
+                        self.state.multi_progress_visible = true;
+                        had_updates = true;
+                    }
+                    let pct = if let Some(t) = total {
+                        if t > 0.0 { (progress / t).clamp(0.0, 1.0) } else { progress.clamp(0.0, 1.0) }
+                    } else {
+                        progress.clamp(0.0, 1.0)
+                    };
+                    self.state.multi_progress.add_or_update(&tool_name, pct, ratatui::style::Color::Cyan);
                 }
             }
 

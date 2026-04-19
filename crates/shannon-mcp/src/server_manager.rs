@@ -168,12 +168,38 @@ pub async fn discover_all_servers_pooled(
                     }
                 }
             }
-            McpServerConfig::WebSocket { url, .. } => {
-                warn!(
-                    server = %name,
-                    url = %url,
-                    "WebSocket transport not yet supported for pooled discovery"
-                );
+            McpServerConfig::WebSocket { url, auth } => {
+                match pool.start_websocket_server(name, url, auth.clone()).await {
+                    Ok(()) => {
+                        match discover_remote_pooled_tools(pool.clone(), name).await {
+                            Ok(discovered) => {
+                                let tool_count = discovered.tools.len();
+                                info!(
+                                    server = %name,
+                                    tools = tool_count,
+                                    "WebSocket MCP server tools discovered"
+                                );
+                                servers.push((name.clone(), tool_count));
+                                tools.extend(discovered.tools);
+                            }
+                            Err(e) => {
+                                error!(
+                                    server = %name,
+                                    error = %e,
+                                    "Failed to discover WebSocket MCP server tools"
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!(
+                            server = %name,
+                            url = %url,
+                            error = %e,
+                            "Failed to start WebSocket MCP server"
+                        );
+                    }
+                }
             }
         }
     }
@@ -265,10 +291,11 @@ pub fn discover_all_servers_pooled_nonblocking(
                         Err(e) => Err(e),
                     }
                 }
-                McpServerConfig::WebSocket { url, .. } => {
-                    warn!(server = %server_name, url = %url,
-                          "WebSocket transport not yet supported for pooled discovery");
-                    return;
+                McpServerConfig::WebSocket { url, auth } => {
+                    match pool.start_websocket_server(&server_name, &url, auth.clone()).await {
+                        Ok(()) => discover_remote_pooled_tools(pool.clone(), &server_name).await,
+                        Err(e) => Err(e),
+                    }
                 }
             };
 
@@ -501,10 +528,11 @@ async fn discover_server_tools(
             Ok(Vec::new())
         }
         McpServerConfig::WebSocket { url, .. } => {
+            // WebSocket servers require persistent connections — use pooled discovery instead.
             warn!(
                 server = %name,
                 url = %url,
-                "WebSocket transport not yet supported for auto-discovery"
+                "WebSocket MCP servers require pooled discovery; skipping in legacy path"
             );
             Ok(Vec::new())
         }

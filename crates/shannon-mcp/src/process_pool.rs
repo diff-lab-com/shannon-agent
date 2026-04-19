@@ -29,6 +29,8 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::path::PathBuf;
+use crate::transport::Transport;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -516,6 +518,10 @@ pub struct ServerStatus {
     pub restart_count: u64,
     /// Time since last successful health check (None if never checked).
     pub last_health_check: Option<Duration>,
+    /// Total bytes of tool result content across all calls (approximate token usage / 4).
+    pub total_result_bytes: u64,
+    /// Configured budget in bytes for this server (None = unlimited).
+    pub budget_bytes: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -578,6 +584,10 @@ struct McpServerHandle {
     request_count: AtomicU64,
     /// Total number of failed tool calls.
     error_count: AtomicU64,
+    /// Total bytes of tool result content (approximate token usage).
+    total_result_bytes: AtomicU64,
+    /// Budget in bytes for this server (None = unlimited).
+    budget_bytes: Arc<RwLock<Option<u64>>>,
     /// When the last successful health check occurred.
     last_health_check: Arc<RwLock<Option<Instant>>>,
     /// Channel to forward server notifications to the pool.
@@ -1222,6 +1232,8 @@ impl McpServerHandle {
             error_count: self.error_count.load(Ordering::Relaxed),
             restart_count: self.restart_count.load(Ordering::Relaxed),
             last_health_check: last_check.map(|t| now.duration_since(t)),
+            total_result_bytes: self.total_result_bytes.load(Ordering::Relaxed),
+            budget_bytes: *self.budget_bytes.read().await,
         }
     }
 
@@ -1310,6 +1322,10 @@ struct RemoteMcpServerHandle {
     request_count: AtomicU64,
     /// Total number of failed tool calls.
     error_count: AtomicU64,
+    /// Total bytes of tool result content (approximate token usage).
+    total_result_bytes: AtomicU64,
+    /// Budget in bytes for this server (None = unlimited).
+    budget_bytes: Arc<RwLock<Option<u64>>>,
     /// How many times this server has been restarted (re-initialized).
     restart_count: Arc<AtomicU64>,
     /// Maximum restart attempts.
@@ -1325,12 +1341,33 @@ struct RemoteMcpServerHandle {
     /// MCP session ID returned by the server during initialization.
     /// Per MCP spec 2025-03-26 Streamable HTTP, included in all subsequent requests.
     session_id: Arc<RwLock<Option<String>>>,
+    /// Optional WebSocket transport (takes precedence over HTTP when set).
+    ws_transport: Option<Arc<Mutex<crate::WebSocketTransport>>>,
 }
 
 impl RemoteMcpServerHandle {
     /// Initialize the remote server: send `initialize` + `notifications/initialized`.
     async fn start(&self) -> Result<(), String> {
+        // Check if this is a restart (previous state was Stopped).
+        let is_restart = {
+            let state = self.state.read().await;
+            matches!(*state, ServerState::Stopped)
+        };
+
         *self.state.write().await = ServerState::Starting;
+
+        // Reconnect WebSocket on restart.
+        if is_restart {
+            if let Some(ws) = &self.ws_transport {
+                let mut ws_guard = ws.lock().await;
+                ws_guard.connect().await.map_err(|e| {
+                    format!(
+                        "WebSocket reconnection failed for '{}': {e}",
+                        self.name
+                    )
+                })?;
+            }
+        }
 
         let init_response = self
             .send_request_with_timeout(
@@ -1387,7 +1424,7 @@ impl RemoteMcpServerHandle {
         Ok(())
     }
 
-    /// Send a JSON-RPC request via HTTP POST and wait for the response.
+    /// Send a JSON-RPC request via WebSocket (when available) or HTTP POST.
     async fn send_request_with_timeout(
         &self,
         method: &str,
@@ -1401,6 +1438,11 @@ impl RemoteMcpServerHandle {
             "method": method,
             "params": params,
         });
+
+        // Use WebSocket transport when available (takes precedence over HTTP).
+        if let Some(ws) = &self.ws_transport {
+            return self.send_ws_request(ws, &request, timeout).await;
+        }
 
         let response = self.send_http_request(&request, timeout).await?;
 
@@ -1493,6 +1535,50 @@ impl RemoteMcpServerHandle {
         } else {
             self.parse_jsonrpc_response(response).await
         }
+    }
+
+    /// Send a JSON-RPC request over WebSocket and wait for the response.
+    async fn send_ws_request(
+        &self,
+        ws: &Arc<Mutex<crate::WebSocketTransport>>,
+        request: &Value,
+        timeout: Duration,
+    ) -> Result<Value, String> {
+        let request_str =
+            serde_json::to_string(request).unwrap_or_default();
+
+        let mut ws_guard = ws.lock().await;
+
+        ws_guard
+            .send(&request_str)
+            .await
+            .map_err(|e| format!("WebSocket send failed for '{}': {e}", self.name))?;
+
+        let response_str = tokio::time::timeout(timeout, ws_guard.receive())
+            .await
+            .map_err(|_| {
+                format!("WebSocket request timed out for '{}'", self.name)
+            })?
+            .map_err(|e| {
+                format!("WebSocket receive failed for '{}': {e}", self.name)
+            })?
+            .ok_or_else(|| {
+                format!("WebSocket connection closed for '{}'", self.name)
+            })?;
+
+        let value: Value = serde_json::from_str(&response_str).map_err(|e| {
+            format!("Invalid JSON-RPC response from WebSocket '{name}': {e}", name = self.name)
+        })?;
+
+        // Check for JSON-RPC error.
+        if let Some(error) = value.get("error") {
+            return Err(format!(
+                "WebSocket MCP error from '{}': {error}",
+                self.name
+            ));
+        }
+
+        Ok(value)
     }
 
     /// Build and send an HTTP POST with all headers (static + dynamic + auth).
@@ -1682,6 +1768,20 @@ impl RemoteMcpServerHandle {
             "method": method,
             "params": params,
         });
+
+        // Use WebSocket transport when available.
+        if let Some(ws) = &self.ws_transport {
+            let notif_str =
+                serde_json::to_string(&notification).unwrap_or_default();
+            let mut ws_guard = ws.lock().await;
+            ws_guard.send(&notif_str).await.map_err(|e| {
+                format!(
+                    "WebSocket notification failed for '{}': {e}",
+                    self.name
+                )
+            })?;
+            return Ok(());
+        }
 
         let mut builder = self.client.post(&self.url);
         for (key, value) in &self.headers {
@@ -1933,6 +2033,8 @@ impl RemoteMcpServerHandle {
             error_count: self.error_count.load(Ordering::Relaxed),
             restart_count: self.restart_count.load(Ordering::Relaxed),
             last_health_check: None,
+            total_result_bytes: self.total_result_bytes.load(Ordering::Relaxed),
+            budget_bytes: *self.budget_bytes.read().await,
         }
     }
 
@@ -1941,6 +2043,11 @@ impl RemoteMcpServerHandle {
         *self.state.write().await = ServerState::Stopped;
         *self.started_at.write().await = None;
         *self.session_id.write().await = None;
+        // Close WebSocket if present.
+        if let Some(ws) = &self.ws_transport {
+            let mut ws_guard = ws.lock().await;
+            let _ = ws_guard.close().await;
+        }
     }
 }
 
@@ -2006,6 +2113,11 @@ pub struct McpProcessPool {
     /// Full input schemas keyed by tool name (e.g. "mcp__fetch__fetch").
     /// Populated during discovery when `defer_tool_schemas` is enabled.
     deferred_schemas: DashMap<String, Value>,
+    /// Background config watcher task handle.
+    config_watcher_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    /// Callback invoked after a config hot-reload completes.
+    /// Receives a list of human-readable change descriptions.
+    on_config_reloaded: Arc<Mutex<Option<Arc<dyn Fn(&[String]) + Send + Sync>>>>,
 }
 
 impl McpProcessPool {
@@ -2036,6 +2148,8 @@ impl McpProcessPool {
             result_store: Arc::new(ToolResultStore::new()),
             defer_tool_schemas: Arc::new(AtomicBool::new(false)),
             deferred_schemas: DashMap::new(),
+            config_watcher_task: Arc::new(Mutex::new(None)),
+            on_config_reloaded: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -2161,6 +2275,8 @@ impl McpProcessPool {
             started_at: Arc::new(RwLock::new(None)),
             request_count: AtomicU64::new(0),
             error_count: AtomicU64::new(0),
+            total_result_bytes: AtomicU64::new(0),
+            budget_bytes: Arc::new(RwLock::new(None)),
             last_health_check: Arc::new(RwLock::new(None)),
             notification_tx: self.notification_tx.clone(),
             roots_provider: self.roots_provider.clone(),
@@ -2258,6 +2374,8 @@ impl McpProcessPool {
             next_id: AtomicU64::new(1),
             request_count: AtomicU64::new(0),
             error_count: AtomicU64::new(0),
+            total_result_bytes: AtomicU64::new(0),
+            budget_bytes: Arc::new(RwLock::new(None)),
             restart_count: Arc::new(AtomicU64::new(0)),
             max_restarts: self.max_restarts,
             started_at: Arc::new(RwLock::new(None)),
@@ -2267,6 +2385,96 @@ impl McpProcessPool {
                 self.max_concurrent_per_server as usize,
             )),
             session_id: Arc::new(RwLock::new(None)),
+            ws_transport: None,
+        });
+
+        handle.start().await?;
+        self.remote_handles.insert(name.to_string(), handle);
+        Ok(())
+    }
+
+    /// Start a WebSocket-based MCP server and add it to the pool.
+    ///
+    /// Creates a [`WebSocketTransport`], connects to the endpoint, then runs
+    /// the standard MCP initialization handshake. The resulting handle is
+    /// stored in `remote_handles` with `ws_transport` set, so all subsequent
+    /// requests go over the WebSocket instead of HTTP.
+    pub async fn start_websocket_server(
+        &self,
+        name: &str,
+        url: &str,
+        auth: Option<McpAuthConfig>,
+    ) -> Result<(), String> {
+        // Connect WebSocket transport.
+        let mut ws = crate::WebSocketTransport::new(url);
+        ws.connect().await.map_err(|e| {
+            format!("WebSocket connect failed for '{name}': {e}")
+        })?;
+
+        // Resolve auth into static headers (WebSocket doesn't use HTTP headers
+        // natively, but we store them for any future subprotocol use).
+        let mut resolved_headers = HashMap::new();
+        let auth_provider: Option<Arc<OAuth2Provider>> = match auth {
+            Some(McpAuthConfig::ApiKey { key, header, prefix }) => {
+                let header_name = header.as_deref().unwrap_or("X-API-Key");
+                let value = match prefix {
+                    Some(p) => format!("{p} {key}"),
+                    None => key,
+                };
+                resolved_headers.insert(header_name.to_string(), value);
+                info!(server = %name, "Configured API key auth for WebSocket MCP server");
+                None
+            }
+            Some(McpAuthConfig::OAuth {
+                client_id,
+                client_secret,
+                auth_url,
+                token_url,
+                redirect_url,
+                scopes,
+            }) => {
+                let provider = OAuth2Provider::new(
+                    client_id,
+                    auth_url,
+                    token_url,
+                    redirect_url,
+                )
+                .with_scopes(scopes);
+                let provider = match client_secret {
+                    Some(secret) => provider.with_client_secret(secret),
+                    None => provider,
+                };
+                info!(server = %name, "Configured OAuth auth for WebSocket MCP server");
+                Some(Arc::new(provider))
+            }
+            None => None,
+        };
+
+        let handle = Arc::new(RemoteMcpServerHandle {
+            name: name.to_string(),
+            url: url.to_string(),
+            client: reqwest::Client::new(),
+            headers: resolved_headers,
+            auth_provider,
+            header_commands: HashMap::new(),
+            state: Arc::new(RwLock::new(ServerState::Starting)),
+            capabilities: Arc::new(RwLock::new(None)),
+            protocol_version: Arc::new(RwLock::new(String::new())),
+            next_id: AtomicU64::new(1),
+            request_count: AtomicU64::new(0),
+            error_count: AtomicU64::new(0),
+            total_result_bytes: AtomicU64::new(0),
+            budget_bytes: Arc::new(RwLock::new(None)),
+            restart_count: Arc::new(AtomicU64::new(0)),
+            max_restarts: self.max_restarts,
+            started_at: Arc::new(RwLock::new(None)),
+            request_timeout: self.request_timeout,
+            tool_timeout: self.tool_timeout,
+            concurrency_semaphore: Arc::new(tokio::sync::Semaphore::new(
+                self.max_concurrent_per_server as usize,
+            )),
+            session_id: Arc::new(RwLock::new(None)),
+            ws_transport: Some(Arc::new(Mutex::new(ws))),
         });
 
         handle.start().await?;
@@ -2300,6 +2508,12 @@ impl McpProcessPool {
         arguments: Value,
         max_chars: usize,
     ) -> ToolResult<ToolOutput> {
+        // Budget check — reject early if server has exceeded its byte budget.
+        if self.is_over_budget(server_name).await {
+            return Err(ToolError::ExecutionFailed(format!(
+                "MCP server '{server_name}' has exceeded its result byte budget"
+            )));
+        }
 
         // Check remote handles first (simpler, no process management).
         if let Some(remote) = self.remote_handles.get(server_name) {
@@ -2312,8 +2526,14 @@ impl McpProcessPool {
 
             let state = remote.get_state().await;
             if matches!(state, ServerState::Healthy) {
+                let args_clone = arguments.clone();
                 return match remote.call_tool(tool_name, arguments).await {
-                    Ok(output) => Ok(self.enforce_output_limit(output, max_chars, &format!("mcp__{server_name}__{tool_name}"))),
+                    Ok(output) => {
+                        let byte_count = output.content.len() as u64;
+                        let result = Ok(self.enforce_output_limit(output, max_chars, &format!("mcp__{server_name}__{tool_name}")));
+                        self.track_result_bytes_for(server_name, byte_count);
+                        result
+                    }
                     Err(e) => {
                         *remote.state.write().await =
                             ServerState::Unhealthy(e.to_string());
@@ -2322,9 +2542,27 @@ impl McpProcessPool {
                             remote.reset().await;
                             if let Err(reinit_err) = remote.start().await {
                                 warn!(server = %server_name, error = %reinit_err, "Remote server re-init failed");
+                                return Err(e);
                             }
+                            // Auto-retry once after reconnection
+                            warn!(server = %server_name, tool = %tool_name, "Retrying tool call after reconnect");
+                            match remote.call_tool(tool_name, args_clone).await {
+                                Ok(output) => {
+                                    *remote.state.write().await = ServerState::Healthy;
+                                    let byte_count = output.content.len() as u64;
+                                    let result = Ok(self.enforce_output_limit(output, max_chars, &format!("mcp__{server_name}__{tool_name}")));
+                                    self.track_result_bytes_for(server_name, byte_count);
+                                    result
+                                }
+                                Err(retry_err) => {
+                                    *remote.state.write().await =
+                                        ServerState::Unhealthy(retry_err.to_string());
+                                    Err(retry_err)
+                                }
+                            }
+                        } else {
+                            Err(e)
                         }
-                        Err(e)
                     }
                 };
             }
@@ -2333,8 +2571,10 @@ impl McpProcessPool {
             remote.start().await.map_err(|e| {
                 ToolError::ExecutionFailed(format!("Remote MCP server '{server_name}' restart failed: {e}"))
             })?;
-            return remote.call_tool(tool_name, arguments).await
-                .map(|o| self.enforce_output_limit(o, max_chars, &format!("mcp__{server_name}__{tool_name}")));
+            let output = remote.call_tool(tool_name, arguments).await
+                .map(|o| self.enforce_output_limit(o, max_chars, &format!("mcp__{server_name}__{tool_name}")))?;
+            self.track_result_bytes_for(server_name, output.content.len() as u64);
+            return Ok(output);
         }
 
         // Stdio handle.
@@ -2378,12 +2618,36 @@ impl McpProcessPool {
             }
         }
 
+        let args_clone = arguments.clone();
         match handle.call_tool(tool_name, arguments).await {
-            Ok(output) => Ok(self.enforce_output_limit(output, max_chars, &format!("mcp__{server_name}__{tool_name}"))),
+            Ok(output) => {
+                let byte_count = output.content.len() as u64;
+                let result = Ok(self.enforce_output_limit(output, max_chars, &format!("mcp__{server_name}__{tool_name}")));
+                self.track_result_bytes_for(server_name, byte_count);
+                result
+            }
             Err(e) => {
                 *handle.state.write().await =
                     ServerState::Unhealthy(e.to_string());
-                Err(e)
+                // Auto-retry once: restart the server and try again
+                if let Ok(()) = self.restart_server(&handle).await {
+                    warn!(server = %server_name, tool = %tool_name, "Retrying tool call after server restart");
+                    match handle.call_tool(tool_name, args_clone).await {
+                        Ok(output) => {
+                            let byte_count = output.content.len() as u64;
+                            let result = Ok(self.enforce_output_limit(output, max_chars, &format!("mcp__{server_name}__{tool_name}")));
+                            self.track_result_bytes_for(server_name, byte_count);
+                            result
+                        }
+                        Err(retry_err) => {
+                            *handle.state.write().await =
+                                ServerState::Unhealthy(retry_err.to_string());
+                            Err(retry_err)
+                        }
+                    }
+                } else {
+                    Err(e)
+                }
             }
         }
     }
@@ -2489,6 +2753,13 @@ impl McpProcessPool {
         on_progress: Arc<dyn Fn(f64, Option<f64>) + Send + Sync>,
         max_chars: usize,
     ) -> ToolResult<ToolOutput> {
+        // Budget check.
+        if self.is_over_budget(server_name).await {
+            return Err(ToolError::ExecutionFailed(format!(
+                "MCP server '{server_name}' has exceeded its result byte budget"
+            )));
+        }
+
         let handle = self
             .handles
             .get(server_name)
@@ -2533,7 +2804,12 @@ impl McpProcessPool {
             .call_tool_with_progress(tool_name, arguments, Some(on_progress))
             .await
         {
-            Ok(output) => Ok(self.enforce_output_limit(output, max_chars, &format!("mcp__{server_name}__{tool_name}"))),
+            Ok(output) => {
+                let byte_count = output.content.len() as u64;
+                let result = Ok(self.enforce_output_limit(output, max_chars, &format!("mcp__{server_name}__{tool_name}")));
+                self.track_result_bytes_for(server_name, byte_count);
+                result
+            }
             Err(e) => {
                 *handle.state.write().await = ServerState::Unhealthy(e.to_string());
                 Err(e)
@@ -2834,6 +3110,113 @@ impl McpProcessPool {
         }
     }
 
+    /// Set a callback invoked after a config hot-reload completes.
+    ///
+    /// The callback receives a list of human-readable change descriptions
+    /// (e.g., "Started stdio server 'fetch'", "Removed server 'old'").
+    pub async fn set_on_config_reloaded(&self, callback: Arc<dyn Fn(&[String]) + Send + Sync>) {
+        *self.on_config_reloaded.lock().await = Some(callback);
+    }
+
+    /// Start a background task that watches MCP config files for changes
+    /// and triggers hot-reload when modifications are detected.
+    ///
+    /// Polls every `interval` duration. Compares file modification times
+    /// against the previously observed state to detect changes efficiently
+    /// without adding a filesystem watcher dependency.
+    pub fn start_config_watcher(self: &Arc<Self>, project_dir: PathBuf, interval: Duration) {
+        let pool = self.clone();
+        let search_paths = crate::config::config_search_paths(&project_dir);
+
+        let task = tokio::spawn(async move {
+            // Track last-seen modification times for each config path.
+            let mut mtimes: HashMap<PathBuf, std::time::SystemTime> = HashMap::new();
+
+            // Initialize with current state (skip first reload).
+            for path in &search_paths {
+                if let Ok(meta) = std::fs::metadata(path) {
+                    if let Ok(modified) = meta.modified() {
+                        mtimes.insert(path.clone(), modified);
+                    }
+                }
+            }
+
+            loop {
+                tokio::time::sleep(interval).await;
+
+                let mut changed = false;
+                for path in &search_paths {
+                    match std::fs::metadata(path) {
+                        Ok(meta) => {
+                            if let Ok(modified) = meta.modified() {
+                                let prev = mtimes.get(path).copied();
+                                if prev != Some(modified) {
+                                    changed = true;
+                                    mtimes.insert(path.clone(), modified);
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            // File removed — note it if we had a previous entry.
+                            if mtimes.remove(path).is_some() {
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+
+                if !changed {
+                    continue;
+                }
+
+                info!("MCP config file change detected, reloading");
+
+                match crate::config::discover_config(&project_dir) {
+                    Ok(config) => match pool.reload_from_config(&config).await {
+                        Ok(changes) => {
+                            if !changes.is_empty() {
+                                for change in &changes {
+                                    info!(change = %change, "Config reload change");
+                                }
+                                let guard = pool.on_config_reloaded.lock().await;
+                                if let Some(cb) = guard.as_ref() {
+                                    cb(&changes);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "Config reload failed");
+                        }
+                    },
+                    Err(e) => {
+                        warn!(error = %e, "Failed to discover MCP config for reload");
+                    }
+                }
+            }
+        });
+
+        // Store the task handle — stop_config_watcher can cancel it.
+        // We abuse the notification here by putting it in a separate lock.
+        // Use a tokio::spawn to avoid holding the lock across .await
+        let task_handle = self.config_watcher_task.clone();
+        tokio::spawn(async move {
+            let mut guard = task_handle.lock().await;
+            if let Some(prev) = guard.take() {
+                prev.abort();
+            }
+            *guard = Some(task);
+        });
+    }
+
+    /// Stop the background config watcher task.
+    pub async fn stop_config_watcher(&self) {
+        let mut guard = self.config_watcher_task.lock().await;
+        if let Some(task) = guard.take() {
+            task.abort();
+            info!("Config watcher stopped");
+        }
+    }
+
     /// Set a callback that is invoked when a server reports
     /// `notifications/tools/list_changed`.
     ///
@@ -3031,6 +3414,56 @@ impl McpProcessPool {
         cache.retain(|k, _| !k.starts_with(&prefix));
     }
 
+    /// Set a byte budget for a specific server. Once the cumulative result bytes
+    /// exceed this limit, further `call_tool` calls return an error.
+    pub async fn set_server_budget(&self, server_name: &str, budget_bytes: u64) {
+        if let Some(remote) = self.remote_handles.get(server_name) {
+            *remote.budget_bytes.write().await = Some(budget_bytes);
+        } else if let Some(handle) = self.handles.get(server_name) {
+            *handle.budget_bytes.write().await = Some(budget_bytes);
+        }
+    }
+
+    /// Get the total result bytes consumed by a server.
+    pub async fn server_total_result_bytes(&self, server_name: &str) -> Option<u64> {
+        if let Some(remote) = self.remote_handles.get(server_name) {
+            Some(remote.total_result_bytes.load(Ordering::Relaxed))
+        } else {
+            self.handles.get(server_name)
+                .map(|h| h.total_result_bytes.load(Ordering::Relaxed))
+        }
+    }
+
+    /// Check whether a server has exceeded its byte budget.
+    ///
+    /// Returns `true` if the server has a budget set and the cumulative
+    /// result bytes meet or exceed it. Servers without a budget always
+    /// return `false`.
+    pub async fn is_over_budget(&self, server_name: &str) -> bool {
+        if let Some(remote) = self.remote_handles.get(server_name) {
+            let budget = *remote.budget_bytes.read().await;
+            return budget
+                .map(|b| remote.total_result_bytes.load(Ordering::Relaxed) >= b)
+                .unwrap_or(false);
+        }
+        if let Some(handle) = self.handles.get(server_name) {
+            let budget = *handle.budget_bytes.read().await;
+            return budget
+                .map(|b| handle.total_result_bytes.load(Ordering::Relaxed) >= b)
+                .unwrap_or(false);
+        }
+        false
+    }
+
+    /// Track result bytes for a server after a successful tool call.
+    fn track_result_bytes_for(&self, server_name: &str, byte_count: u64) {
+        if let Some(remote) = self.remote_handles.get(server_name) {
+            remote.total_result_bytes.fetch_add(byte_count, Ordering::Relaxed);
+        } else if let Some(handle) = self.handles.get(server_name) {
+            handle.total_result_bytes.fetch_add(byte_count, Ordering::Relaxed);
+        }
+    }
+
     /// Look up a cached tool result. Returns `None` if not cached or expired.
     async fn get_cached(&self, key: &str) -> Option<String> {
         let cache = self.tool_cache.read().await;
@@ -3196,11 +3629,10 @@ impl McpProcessPool {
                         changes.push(format!("Started remote server '{name}'"));
                     }
                 }
-                crate::config::McpServerConfig::WebSocket { .. } => {
+                crate::config::McpServerConfig::WebSocket { url, auth } => {
                     if !is_current {
-                        changes.push(format!(
-                            "Skipped WebSocket server '{name}' (not yet supported)"
-                        ));
+                        self.start_websocket_server(name, url, auth.clone()).await?;
+                        changes.push(format!("Started WebSocket server '{name}'"));
                     }
                 }
             }
@@ -3756,6 +4188,95 @@ pub async fn discover_pooled_tools(
     }
 
     drop(handle);
+
+    Ok(PooledDiscoveryResult {
+        server_name: server_name.to_string(),
+        tools,
+    })
+}
+
+/// Discover tools from a remote MCP server using the pool.
+///
+/// Starts the remote server via `start_remote_server`, then sends `tools/list`
+/// over the persistent connection and returns `PooledMcpToolAdapter` instances.
+pub async fn discover_pooled_remote_tools(
+    pool: Arc<McpProcessPool>,
+    server_name: &str,
+    url: &str,
+    headers: HashMap<String, HeaderSource>,
+    auth: Option<McpAuthConfig>,
+) -> Result<PooledDiscoveryResult, String> {
+    // Start the remote server in the pool (handles initialize handshake)
+    pool.start_remote_server(server_name, url, headers, auth).await?;
+
+    // Check capabilities before attempting tools/list.
+    if !pool.has_tools(server_name).await {
+        debug!(
+            server = %server_name,
+            "Remote server does not advertise tools capability; skipping tools/list"
+        );
+        return Ok(PooledDiscoveryResult {
+            server_name: server_name.to_string(),
+            tools: Vec::new(),
+        });
+    }
+
+    // Send tools/list via the pool's persistent connection
+    let response = pool
+        .send_server_request(server_name, "tools/list", serde_json::json!({}))
+        .await
+        .map_err(|e| format!("tools/list failed for remote server '{server_name}': {e}"))?;
+
+    let mut tools = Vec::new();
+
+    if let Some(tools_array) = response
+        .get("result")
+        .and_then(|r| r.get("tools"))
+        .and_then(|t| t.as_array())
+    {
+        for tool_value in tools_array {
+            let name = tool_value
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let description = tool_value
+                .get("description")
+                .and_then(|d| d.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("MCP tool: {name}"));
+            let input_schema = tool_value
+                .get("inputSchema")
+                .cloned()
+                .unwrap_or(serde_json::json!({"type": "object"}));
+
+            let annotations: Option<crate::ToolAnnotations> = tool_value
+                .get("annotations")
+                .and_then(|a| serde_json::from_value(a.clone()).ok());
+
+            let max_output_chars: Option<usize> = tool_value
+                .get("_meta")
+                .and_then(|m| m.get("maxResultSizeChars"))
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize);
+
+            let adapter = PooledMcpToolAdapter::with_output_limit(
+                pool.clone(),
+                server_name.to_string(),
+                name.clone(),
+                description,
+                input_schema.clone(),
+                annotations,
+                max_output_chars,
+            );
+
+            if pool.is_defer_tool_schemas() {
+                pool.store_deferred_schema(&adapter.tool_name, input_schema);
+            }
+
+            tools.push(adapter);
+        }
+    }
 
     Ok(PooledDiscoveryResult {
         server_name: server_name.to_string(),
@@ -4668,5 +5189,163 @@ mod tests {
         };
         let result = provider(req).await.unwrap();
         assert_eq!(result.model, "mock");
+    }
+
+    #[tokio::test]
+    async fn test_budget_tracking_no_budget_by_default() {
+        let pool = McpProcessPool::new();
+        // No server → not over budget
+        assert!(!pool.is_over_budget("nonexistent").await);
+        assert_eq!(pool.server_total_result_bytes("nonexistent").await, None);
+    }
+
+    #[tokio::test]
+    async fn test_track_result_bytes_for() {
+        let pool = McpProcessPool::new();
+
+        let (ntx, _) = tokio::sync::mpsc::unbounded_channel();
+        let handle = Arc::new(McpServerHandle {
+            name: "test-srv".to_string(),
+            command: "echo".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            stdin: Arc::new(Mutex::new(None)),
+            next_id: AtomicU64::new(1),
+            pending: Arc::new(DashMap::new()),
+            state: Arc::new(RwLock::new(ServerState::Stopped)),
+            child: Arc::new(Mutex::new(None)),
+            reader_task: Arc::new(Mutex::new(None)),
+            restart_count: Arc::new(AtomicU64::new(0)),
+            max_restarts: 3,
+            health_interval: Duration::from_secs(60),
+            request_timeout: Duration::from_secs(30),
+            connection_timeout: Duration::from_secs(30),
+            tool_timeout: Duration::from_secs(120),
+            started_at: Arc::new(RwLock::new(None)),
+            request_count: AtomicU64::new(0),
+            error_count: AtomicU64::new(0),
+            total_result_bytes: AtomicU64::new(0),
+            budget_bytes: Arc::new(RwLock::new(None)),
+            last_health_check: Arc::new(RwLock::new(None)),
+            notification_tx: ntx,
+            roots_provider: Arc::new(Mutex::new(None)),
+            sampling_provider: Arc::new(Mutex::new(None)),
+            elicitation_provider: Arc::new(Mutex::new(None)),
+            capabilities: Arc::new(RwLock::new(None)),
+            protocol_version: Arc::new(RwLock::new(String::new())),
+            concurrency_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
+        });
+
+        pool.handles.insert("test-srv".to_string(), handle);
+
+        // Track bytes
+        pool.track_result_bytes_for("test-srv", 100);
+        assert_eq!(pool.server_total_result_bytes("test-srv").await, Some(100));
+
+        pool.track_result_bytes_for("test-srv", 250);
+        assert_eq!(pool.server_total_result_bytes("test-srv").await, Some(350));
+
+        // No budget set → not over budget
+        assert!(!pool.is_over_budget("test-srv").await);
+    }
+
+    #[tokio::test]
+    async fn test_budget_enforcement() {
+        let pool = McpProcessPool::new();
+
+        let (ntx, _) = tokio::sync::mpsc::unbounded_channel();
+        let handle = Arc::new(McpServerHandle {
+            name: "budget-srv".to_string(),
+            command: "echo".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            stdin: Arc::new(Mutex::new(None)),
+            next_id: AtomicU64::new(1),
+            pending: Arc::new(DashMap::new()),
+            state: Arc::new(RwLock::new(ServerState::Stopped)),
+            child: Arc::new(Mutex::new(None)),
+            reader_task: Arc::new(Mutex::new(None)),
+            restart_count: Arc::new(AtomicU64::new(0)),
+            max_restarts: 3,
+            health_interval: Duration::from_secs(60),
+            request_timeout: Duration::from_secs(30),
+            connection_timeout: Duration::from_secs(30),
+            tool_timeout: Duration::from_secs(120),
+            started_at: Arc::new(RwLock::new(None)),
+            request_count: AtomicU64::new(0),
+            error_count: AtomicU64::new(0),
+            total_result_bytes: AtomicU64::new(800),
+            budget_bytes: Arc::new(RwLock::new(Some(1000))),
+            last_health_check: Arc::new(RwLock::new(None)),
+            notification_tx: ntx,
+            roots_provider: Arc::new(Mutex::new(None)),
+            sampling_provider: Arc::new(Mutex::new(None)),
+            elicitation_provider: Arc::new(Mutex::new(None)),
+            capabilities: Arc::new(RwLock::new(None)),
+            protocol_version: Arc::new(RwLock::new(String::new())),
+            concurrency_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
+        });
+
+        pool.handles.insert("budget-srv".to_string(), handle);
+
+        // 800 / 1000 → not over budget yet
+        assert!(!pool.is_over_budget("budget-srv").await);
+        assert_eq!(pool.server_total_result_bytes("budget-srv").await, Some(800));
+
+        // Add 250 bytes → 1050 > 1000 → over budget
+        pool.track_result_bytes_for("budget-srv", 250);
+        assert!(pool.is_over_budget("budget-srv").await);
+    }
+
+    #[tokio::test]
+    async fn test_set_server_budget() {
+        let pool = McpProcessPool::new();
+
+        let (ntx, _) = tokio::sync::mpsc::unbounded_channel();
+        let handle = Arc::new(McpServerHandle {
+            name: "cfg-srv".to_string(),
+            command: "echo".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            stdin: Arc::new(Mutex::new(None)),
+            next_id: AtomicU64::new(1),
+            pending: Arc::new(DashMap::new()),
+            state: Arc::new(RwLock::new(ServerState::Stopped)),
+            child: Arc::new(Mutex::new(None)),
+            reader_task: Arc::new(Mutex::new(None)),
+            restart_count: Arc::new(AtomicU64::new(0)),
+            max_restarts: 3,
+            health_interval: Duration::from_secs(60),
+            request_timeout: Duration::from_secs(30),
+            connection_timeout: Duration::from_secs(30),
+            tool_timeout: Duration::from_secs(120),
+            started_at: Arc::new(RwLock::new(None)),
+            request_count: AtomicU64::new(0),
+            error_count: AtomicU64::new(0),
+            total_result_bytes: AtomicU64::new(500),
+            budget_bytes: Arc::new(RwLock::new(None)),
+            last_health_check: Arc::new(RwLock::new(None)),
+            notification_tx: ntx,
+            roots_provider: Arc::new(Mutex::new(None)),
+            sampling_provider: Arc::new(Mutex::new(None)),
+            elicitation_provider: Arc::new(Mutex::new(None)),
+            capabilities: Arc::new(RwLock::new(None)),
+            protocol_version: Arc::new(RwLock::new(String::new())),
+            concurrency_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
+        });
+
+        pool.handles.insert("cfg-srv".to_string(), handle);
+
+        // No budget → never over budget
+        assert!(!pool.is_over_budget("cfg-srv").await);
+
+        // Set budget
+        pool.set_server_budget("cfg-srv", 600).await;
+        // 500 < 600 → not over budget
+        assert!(!pool.is_over_budget("cfg-srv").await);
+
+        // Add 200 bytes → 700 > 600 → over budget
+        pool.track_result_bytes_for("cfg-srv", 200);
+        assert!(pool.is_over_budget("cfg-srv").await);
     }
 }

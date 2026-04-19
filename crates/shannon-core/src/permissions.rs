@@ -2,6 +2,7 @@
 //!
 //! Security and permission validation for tool execution and resource access.
 
+use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
@@ -330,10 +331,18 @@ impl ToolPermissionPolicy {
 /// Memory of user permission choices (persists across prompts)
 #[derive(Debug, Clone)]
 pub struct PermissionMemory {
-    /// Always-allowed tools
+    /// Always-allowed tools (exact match)
     always_allowed: HashSet<String>,
-    /// Always-denied tools
+    /// Always-denied tools (exact match)
     always_denied: HashSet<String>,
+    /// Glob patterns for auto-allowed tools (e.g., `mcp__server__*`)
+    allowed_patterns: Vec<String>,
+    /// Compiled glob set for allowed patterns (rebuilt when patterns change)
+    allowed_globset: Option<GlobSet>,
+    /// Glob patterns for always-denied tools
+    denied_patterns: Vec<String>,
+    /// Compiled glob set for denied patterns
+    denied_globset: Option<GlobSet>,
     /// Session-specific choices
     session_choices: HashMap<uuid::Uuid, HashMap<String, PermissionChoice>>,
 }
@@ -344,23 +353,51 @@ impl PermissionMemory {
         Self {
             always_allowed: HashSet::new(),
             always_denied: HashSet::new(),
+            allowed_patterns: Vec::new(),
+            allowed_globset: None,
+            denied_patterns: Vec::new(),
+            denied_globset: None,
             session_choices: HashMap::new(),
         }
     }
 
     /// Check if a tool is always allowed for this session
     pub fn is_always_allowed(&self, session_id: uuid::Uuid, tool_name: &str) -> bool {
-        self.always_allowed.contains(tool_name)
-            || self.session_choices
-                .get(&session_id)
-                .and_then(|choices| choices.get(tool_name))
-                .map(|choice| choice == &PermissionChoice::AlwaysAllow)
-                .unwrap_or(false)
+        // Fast path: exact match
+        if self.always_allowed.contains(tool_name) {
+            return true;
+        }
+        // Session-specific exact match
+        if self.session_choices
+            .get(&session_id)
+            .and_then(|choices| choices.get(tool_name))
+            .map(|choice| choice == &PermissionChoice::AlwaysAllow)
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        // Glob pattern match
+        if let Some(ref globset) = self.allowed_globset {
+            if globset.is_match(tool_name) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Check if a tool is always denied
     pub fn is_always_denied(&self, tool_name: &str) -> bool {
-        self.always_denied.contains(tool_name)
+        // Fast path: exact match
+        if self.always_denied.contains(tool_name) {
+            return true;
+        }
+        // Glob pattern match
+        if let Some(ref globset) = self.denied_globset {
+            if globset.is_match(tool_name) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Remember a user's permission choice
@@ -417,11 +454,55 @@ impl PermissionMemory {
     pub fn always_denied_tools(&self) -> &HashSet<String> {
         &self.always_denied
     }
+
+    /// Add a glob pattern for auto-allowing tools (e.g., `mcp__server__*`).
+    pub fn allow_pattern(&mut self, pattern: &str) {
+        if !self.allowed_patterns.contains(&pattern.to_string()) {
+            self.allowed_patterns.push(pattern.to_string());
+            self.rebuild_allowed_globset();
+        }
+    }
+
+    /// Add a glob pattern for always-denying tools.
+    pub fn deny_pattern(&mut self, pattern: &str) {
+        if !self.denied_patterns.contains(&pattern.to_string()) {
+            self.denied_patterns.push(pattern.to_string());
+            self.rebuild_denied_globset();
+        }
+    }
+
+    /// Get all allowed glob patterns.
+    pub fn allowed_patterns(&self) -> &[String] {
+        &self.allowed_patterns
+    }
+
+    /// Get all denied glob patterns.
+    pub fn denied_patterns(&self) -> &[String] {
+        &self.denied_patterns
+    }
+
+    /// Rebuild the allowed globset from stored patterns.
+    fn rebuild_allowed_globset(&mut self) {
+        self.allowed_globset = build_globset(&self.allowed_patterns);
+    }
+
+    /// Rebuild the denied globset from stored patterns.
+    fn rebuild_denied_globset(&mut self) {
+        self.denied_globset = build_globset(&self.denied_patterns);
+    }
 }
 
 impl Default for PermissionMemory {
     fn default() -> Self {
-        Self::new()
+        Self {
+            always_allowed: HashSet::new(),
+            always_denied: HashSet::new(),
+            allowed_patterns: Vec::new(),
+            allowed_globset: None,
+            denied_patterns: Vec::new(),
+            denied_globset: None,
+            session_choices: HashMap::new(),
+        }
     }
 }
 
@@ -691,6 +772,16 @@ impl PermissionManager {
     /// Deny a tool globally (always denied)
     pub fn deny_tool(&mut self, tool_name: &str) {
         self.memory.deny_tool(tool_name);
+    }
+
+    /// Allow all tools matching a glob pattern (e.g., `mcp__server__*`).
+    pub fn allow_pattern(&mut self, pattern: &str) {
+        self.memory.allow_pattern(pattern);
+    }
+
+    /// Deny all tools matching a glob pattern.
+    pub fn deny_pattern(&mut self, pattern: &str) {
+        self.memory.deny_pattern(pattern);
     }
 
     /// Reset all permission memory (allowed/denied tools)
@@ -1018,6 +1109,28 @@ impl PermissionManager {
             is_destructive,
         }))
     }
+}
+
+/// Build a compiled `GlobSet` from a list of glob pattern strings.
+/// Returns `None` if the list is empty or all patterns fail to compile.
+fn build_globset(patterns: &[String]) -> Option<GlobSet> {
+    if patterns.is_empty() {
+        return None;
+    }
+    let mut builder = GlobSetBuilder::new();
+    let mut valid_count = 0;
+    for pat in patterns {
+        if let Ok(glob) = Glob::new(pat) {
+            builder.add(glob);
+            valid_count += 1;
+        } else {
+            tracing::warn!("Invalid glob pattern in permissions: {pat}");
+        }
+    }
+    if valid_count == 0 {
+        return None;
+    }
+    builder.build().ok()
 }
 
 /// Convert classifier RiskLevel to permissions RiskLevel.
@@ -1803,5 +1916,80 @@ mod tests {
         );
         assert!(result.is_ok());
         assert!(result.unwrap().is_none()); // auto-allowed via memory
+    }
+
+    // ── Glob pattern permission tests ──────────────────────────────────
+
+    #[test]
+    fn test_glob_allow_pattern_mcp_server() {
+        let mut mem = PermissionMemory::new();
+        let sid = Uuid::new_v4();
+
+        mem.allow_pattern("mcp__github__*");
+
+        assert!(mem.is_always_allowed(sid, "mcp__github__create_issue"));
+        assert!(mem.is_always_allowed(sid, "mcp__github__list_repos"));
+        assert!(mem.is_always_allowed(sid, "mcp__github__search_code"));
+        assert!(!mem.is_always_allowed(sid, "mcp__other__create_issue"));
+        assert!(!mem.is_always_allowed(sid, "Bash"));
+    }
+
+    #[test]
+    fn test_glob_deny_pattern() {
+        let mut mem = PermissionMemory::new();
+
+        mem.deny_pattern("mcp__*__delete_*");
+
+        assert!(mem.is_always_denied("mcp__github__delete_repo"));
+        assert!(mem.is_always_denied("mcp__db__delete_record"));
+        assert!(!mem.is_always_denied("mcp__github__create_issue"));
+        assert!(!mem.is_always_denied("Bash"));
+    }
+
+    #[test]
+    fn test_glob_and_exact_match_coexist() {
+        let mut mem = PermissionMemory::new();
+        let sid = Uuid::new_v4();
+
+        mem.allow_tool("Bash");
+        mem.allow_pattern("mcp__server__*");
+
+        assert!(mem.is_always_allowed(sid, "Bash"));
+        assert!(mem.is_always_allowed(sid, "mcp__server__tool1"));
+        assert!(!mem.is_always_allowed(sid, "mcp__other__tool"));
+    }
+
+    #[test]
+    fn test_glob_wildcard_all_mcp() {
+        let mut mem = PermissionMemory::new();
+        let sid = Uuid::new_v4();
+
+        mem.allow_pattern("mcp__*");
+        assert!(mem.is_always_allowed(sid, "mcp__anything__here"));
+        assert!(mem.is_always_allowed(sid, "mcp__server__tool"));
+        assert!(!mem.is_always_allowed(sid, "Bash"));
+    }
+
+    #[test]
+    fn test_glob_invalid_pattern_ignored() {
+        let mut mem = PermissionMemory::new();
+        mem.allow_pattern("[invalid");
+        assert!(!mem.is_always_denied("anything"));
+    }
+
+    #[test]
+    fn test_manager_allow_pattern_auto_approves() {
+        let mut mgr = PermissionManager::new();
+        let sid = Uuid::new_v4();
+
+        mgr.allow_pattern("mcp__github__*");
+
+        let result = mgr.classify_and_check(
+            sid,
+            "mcp__github__list_prs",
+            &serde_json::json!({"repo": "org/repo"}),
+        );
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none()); // auto-approved via glob
     }
 }
