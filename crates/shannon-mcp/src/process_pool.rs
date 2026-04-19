@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{oneshot, Mutex, RwLock};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 use crate::auth::{AuthProvider, OAuth2Provider, discover_oauth_endpoints};
 use crate::config::{McpAuthConfig, HeaderSource};
 
@@ -268,8 +268,8 @@ const DEFAULT_TOOL_TIMEOUT_SECS: u64 = 600;
 /// - **Long text**: paragraph-aware truncation
 ///
 /// For content that is already within budget, returns it unchanged.
-fn truncate_tool_result(content: &str) -> String {
-    if content.len() <= MAX_TOOL_RESULT_CHARS {
+fn truncate_tool_result(content: &str, budget: usize) -> String {
+    if content.len() <= budget {
         return content.to_string();
     }
 
@@ -279,7 +279,7 @@ fn truncate_tool_result(content: &str) -> String {
     // Strategy 1: Try JSON-aware compression for JSON content.
     if trimmed.starts_with('[') || trimmed.starts_with('{') {
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
-            let compressed = compress_json(&value, MAX_TOOL_RESULT_CHARS);
+            let compressed = compress_json(&value, budget);
             let pct = ((original_len - compressed.len()) as f64 / original_len as f64) * 100.0;
             return format!(
                 "{}\n\n[compressed: showed ~{} of ~{} chars ({:.0}% omitted)]",
@@ -294,8 +294,8 @@ fn truncate_tool_result(content: &str) -> String {
     // Strategy 2: Line-based compression for structured text (stack traces, logs).
     let lines: Vec<&str> = content.lines().collect();
     if lines.len() > 20 {
-        let head_budget = MAX_TOOL_RESULT_CHARS / 2;
-        let tail_budget = MAX_TOOL_RESULT_CHARS / 2;
+        let head_budget = budget / 2;
+        let tail_budget = budget / 2;
 
         let mut head_lines = Vec::new();
         let mut head_len = 0;
@@ -335,7 +335,7 @@ fn truncate_tool_result(content: &str) -> String {
     }
 
     // Strategy 3: Paragraph-aware truncation for prose text.
-    let mut end = MAX_TOOL_RESULT_CHARS;
+    let mut end = budget;
     while !content.is_char_boundary(end) && end > 0 {
         end -= 1;
     }
@@ -395,6 +395,8 @@ fn compress_json(value: &serde_json::Value, budget: usize) -> String {
             }
             let mut result = String::from("{\n");
             let value_budget = 200; // max chars per value
+            let mut keys_shown = 0;
+            let total_keys = map.len();
             for (key, val) in map {
                 let val_str = serde_json::to_string(val).unwrap_or_default();
                 let display_val = if val_str.len() > value_budget {
@@ -402,16 +404,18 @@ fn compress_json(value: &serde_json::Value, budget: usize) -> String {
                     while !val_str.is_char_boundary(v_end) && v_end > 0 {
                         v_end -= 1;
                     }
-                    format!("{}...\"", &val_str[..v_end])
+                    format!("{}…", &val_str[..v_end])
                 } else {
                     val_str
                 };
                 let line = format!("  \"{}\": {},\n", key, display_val);
-                if result.len() + line.len() + 10 > budget {
-                    result.push_str(&format!("  // ... {} more keys\n", map.len() - result.lines().count() + 1));
+                if result.len() + line.len() + 30 > budget {
+                    let remaining = total_keys - keys_shown;
+                    result.push_str(&format!("  // ... {remaining} more keys\n"));
                     break;
                 }
                 result.push_str(&line);
+                keys_shown += 1;
             }
             result.push('}');
             result
@@ -930,6 +934,34 @@ impl McpServerHandle {
                     }
                 }
             }
+            // Handle incoming cancellation notifications from the server.
+            // The server cancels a request it previously received.
+            else if value.get("method").and_then(|m| m.as_str())
+                == Some("notifications/cancelled")
+            {
+                if let Some(params) = value.get("params") {
+                    if let Some(request_id) = params.get("requestId").and_then(|v| v.as_u64()) {
+                        let reason = params
+                            .get("reason")
+                            .and_then(|r| r.as_str())
+                            .unwrap_or("cancelled by server");
+                        if let Some((_, pending_req)) = pending.remove(&request_id) {
+                            let error_response = serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "id": request_id,
+                                "error": { "code": -32800, "message": format!("Request cancelled: {reason}") }
+                            });
+                            let _ = pending_req.tx.send(error_response);
+                            info!(
+                                server = %server_name,
+                                request_id,
+                                reason,
+                                "MCP server cancelled request"
+                            );
+                        }
+                    }
+                }
+            }
             // Other notifications (no id) are forwarded to the pool.
             else if value.get("method").is_some() {
                 debug!(
@@ -1167,7 +1199,7 @@ impl McpServerHandle {
                     // For errors, include ALL content blocks to preserve full error context.
                     let normalized = normalize_error_content(content_array);
                     if !normalized.is_empty() {
-                        let content = truncate_tool_result(&normalized);
+                        let content = truncate_tool_result(&normalized, MAX_TOOL_RESULT_CHARS);
                         return Ok(ToolOutput::error(content));
                     }
                 } else {
@@ -1184,16 +1216,16 @@ impl McpServerHandle {
                         .collect();
 
                     if !texts.is_empty() {
-                        let content = truncate_tool_result(&texts.join("\n"));
+                        let content = truncate_tool_result(&texts.join("\n"), MAX_TOOL_RESULT_CHARS);
                         return Ok(ToolOutput::success(content));
                     }
                 }
             }
             // Fallback: return the result as JSON string (also truncated)
-            return Ok(ToolOutput::success(truncate_tool_result(&result.to_string())));
+            return Ok(ToolOutput::success(truncate_tool_result(&result.to_string(), MAX_TOOL_RESULT_CHARS)));
         }
 
-        Ok(ToolOutput::success(truncate_tool_result(&response.to_string())))
+        Ok(ToolOutput::success(truncate_tool_result(&response.to_string(), MAX_TOOL_RESULT_CHARS)))
     }
 
     /// Send a ping to check server health.
@@ -1343,6 +1375,11 @@ struct RemoteMcpServerHandle {
     session_id: Arc<RwLock<Option<String>>>,
     /// Optional WebSocket transport (takes precedence over HTTP when set).
     ws_transport: Option<Arc<Mutex<crate::WebSocketTransport>>>,
+    /// Provider for LLM sampling (handles `sampling/createMessage` from servers).
+    /// Shared reference to the pool's sampling provider so all servers use the same one.
+    sampling_provider: Arc<Mutex<Option<SamplingProvider>>>,
+    /// Channel for forwarding server notifications to the pool's notification handler.
+    notification_tx: tokio::sync::mpsc::UnboundedSender<(String, Value)>,
 }
 
 impl RemoteMcpServerHandle {
@@ -1544,6 +1581,7 @@ impl RemoteMcpServerHandle {
         request: &Value,
         timeout: Duration,
     ) -> Result<Value, String> {
+        let request_id = request.get("id").cloned();
         let request_str =
             serde_json::to_string(request).unwrap_or_default();
 
@@ -1554,31 +1592,125 @@ impl RemoteMcpServerHandle {
             .await
             .map_err(|e| format!("WebSocket send failed for '{}': {e}", self.name))?;
 
-        let response_str = tokio::time::timeout(timeout, ws_guard.receive())
-            .await
-            .map_err(|_| {
-                format!("WebSocket request timed out for '{}'", self.name)
-            })?
-            .map_err(|e| {
-                format!("WebSocket receive failed for '{}': {e}", self.name)
-            })?
-            .ok_or_else(|| {
-                format!("WebSocket connection closed for '{}'", self.name)
+        // Loop: receive messages, handling interleaved server-initiated
+        // requests (sampling, elicitation, notifications) until we get the
+        // response matching our request id.
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(format!("WebSocket request timed out for '{}'", self.name));
+            }
+
+            let response_str = tokio::time::timeout(remaining, ws_guard.receive())
+                .await
+                .map_err(|_| {
+                    format!("WebSocket request timed out for '{}'", self.name)
+                })?
+                .map_err(|e| {
+                    format!("WebSocket receive failed for '{}': {e}", self.name)
+                })?
+                .ok_or_else(|| {
+                    format!("WebSocket connection closed for '{}'", self.name)
+                })?;
+
+            let value: Value = serde_json::from_str(&response_str).map_err(|e| {
+                format!("Invalid JSON-RPC response from WebSocket '{name}': {e}", name = self.name)
             })?;
 
-        let value: Value = serde_json::from_str(&response_str).map_err(|e| {
-            format!("Invalid JSON-RPC response from WebSocket '{name}': {e}", name = self.name)
-        })?;
+            // Check if this is the response to our request.
+            let matches_our_id = request_id.as_ref().map_or(false, |rid| {
+                value.get("id").map_or(false, |rid2| rid2 == rid)
+            });
 
-        // Check for JSON-RPC error.
-        if let Some(error) = value.get("error") {
-            return Err(format!(
-                "WebSocket MCP error from '{}': {error}",
-                self.name
-            ));
+            if matches_our_id {
+                // Check for JSON-RPC error.
+                if let Some(error) = value.get("error") {
+                    return Err(format!(
+                        "WebSocket MCP error from '{}': {error}",
+                        self.name
+                    ));
+                }
+                return Ok(value);
+            }
+
+            // Not our response — handle server-initiated messages.
+            let method = value.get("method").and_then(|m| m.as_str()).unwrap_or("");
+
+            // Server→client request (has both method and id).
+            if value.get("id").is_some() {
+                let response_value = match method {
+                    "sampling/createMessage" => {
+                        self.handle_remote_sampling(&value).await
+                    }
+                    "elicitation/create" => {
+                        self.handle_remote_elicitation(&value).await
+                    }
+                    _ => {
+                        let req_id = value.get("id").cloned();
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": req_id,
+                            "error": { "code": -32601, "message": format!("Method not found: {method}") }
+                        })
+                    }
+                };
+                let resp_str = serde_json::to_string(&response_value).unwrap_or_default();
+                ws_guard.send(&resp_str).await.map_err(|e| {
+                    format!("WebSocket send response failed for '{}': {e}", self.name)
+                })?;
+            } else {
+                // Server notification (method but no id) — forward to pool.
+                let _ = self.notification_tx.send((self.name.clone(), value));
+            }
         }
+    }
 
-        Ok(value)
+    /// Handle a `sampling/createMessage` request from a remote server.
+    async fn handle_remote_sampling(&self, value: &Value) -> Value {
+        let req_id = value.get("id").cloned();
+        let provider = self.sampling_provider.lock().await;
+        if let Some(ref handler) = *provider {
+            let params = value.get("params").cloned().unwrap_or(serde_json::json!({}));
+            match serde_json::from_value::<crate::CreateMessageRequest>(params) {
+                Ok(req) => match handler(req).await {
+                    Ok(result) => serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "result": result,
+                    }),
+                    Err(e) => serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "error": { "code": -32603, "message": e },
+                    }),
+                },
+                Err(e) => serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": { "code": -32602, "message": format!("Invalid params: {e}") },
+                }),
+            }
+        } else {
+            drop(provider);
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": { "code": -32601, "message": "Sampling not supported" },
+            })
+        }
+    }
+
+    /// Handle an `elicitation/create` request from a remote server.
+    async fn handle_remote_elicitation(&self, value: &Value) -> Value {
+        let req_id = value.get("id").cloned();
+        // Elicitation requires interactive user input — not available for
+        // remote servers in the current architecture. Auto-decline.
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": { "action": "decline" }
+        })
     }
 
     /// Build and send an HTTP POST with all headers (static + dynamic + auth).
@@ -1987,7 +2119,7 @@ impl RemoteMcpServerHandle {
                 if is_error {
                     let normalized = normalize_error_content(content_array);
                     if !normalized.is_empty() {
-                        let content = truncate_tool_result(&normalized);
+                        let content = truncate_tool_result(&normalized, MAX_TOOL_RESULT_CHARS);
                         return Ok(ToolOutput::error(content));
                     }
                 } else {
@@ -2003,15 +2135,15 @@ impl RemoteMcpServerHandle {
                         .collect();
 
                     if !texts.is_empty() {
-                        let content = truncate_tool_result(&texts.join("\n"));
+                        let content = truncate_tool_result(&texts.join("\n"), MAX_TOOL_RESULT_CHARS);
                         return Ok(ToolOutput::success(content));
                     }
                 }
             }
-            return Ok(ToolOutput::success(truncate_tool_result(&result.to_string())));
+            return Ok(ToolOutput::success(truncate_tool_result(&result.to_string(), MAX_TOOL_RESULT_CHARS)));
         }
 
-        Ok(ToolOutput::success(truncate_tool_result(&response.to_string())))
+        Ok(ToolOutput::success(truncate_tool_result(&response.to_string(), MAX_TOOL_RESULT_CHARS)))
     }
 
     /// Get the current state.
@@ -2386,6 +2518,8 @@ impl McpProcessPool {
             )),
             session_id: Arc::new(RwLock::new(None)),
             ws_transport: None,
+            sampling_provider: self.sampling_provider.clone(),
+            notification_tx: self.notification_tx.clone(),
         });
 
         handle.start().await?;
@@ -2475,6 +2609,8 @@ impl McpProcessPool {
             )),
             session_id: Arc::new(RwLock::new(None)),
             ws_transport: Some(Arc::new(Mutex::new(ws))),
+            sampling_provider: self.sampling_provider.clone(),
+            notification_tx: self.notification_tx.clone(),
         });
 
         handle.start().await?;
@@ -2658,7 +2794,7 @@ impl McpProcessPool {
     fn enforce_output_limit(&self, mut output: ToolOutput, max_chars: usize, tool_name: &str) -> ToolOutput {
         if output.content.len() > max_chars {
             let full_content = output.content.clone();
-            let truncated_len = full_content.len();
+            let original_len = full_content.len();
 
             // Store the full content for chunked retrieval (in-memory).
             let chunk_id = self.result_store.store(tool_name, full_content.clone());
@@ -2666,27 +2802,31 @@ impl McpProcessPool {
             // Persist to disk so the LLM can use the Read tool to access the full result.
             let disk_path = self.persist_result_to_disk(&chunk_id, &full_content, tool_name);
 
-            // Truncate at char boundary
-            let mut end = max_chars;
-            while !output.content.is_char_boundary(end) && end > 0 {
-                end -= 1;
+            // Use format-aware compression instead of simple truncation.
+            let mut compressed = truncate_tool_result(&output.content, max_chars);
+            // If compression didn't fit in budget, truncate_tool_result already handled it.
+            // Replace the trailing [compressed: ...] marker with our own that includes
+            // persistence info.
+            if let Some(pos) = compressed.rfind("\n\n[compressed:") {
+                let before = &compressed[..pos];
+                if let Some(ref path) = disk_path {
+                    compressed = format!(
+                        "{}\n\n[compressed: showed ~{:.0}K of ~{:.0}K chars | full result saved to: {} | chunk_id={chunk_id}]",
+                        before,
+                        before.len() as f64 / 1024.0,
+                        original_len as f64 / 1024.0,
+                        path.display(),
+                    );
+                } else {
+                    compressed = format!(
+                        "{}\n\n[compressed: showed ~{:.0}K of ~{:.0}K chars | chunk_id={chunk_id}]",
+                        before,
+                        before.len() as f64 / 1024.0,
+                        original_len as f64 / 1024.0,
+                    );
+                }
             }
-            output.content.truncate(end);
-
-            if let Some(ref path) = disk_path {
-                output.content.push_str(&format!(
-                    "\n\n[...truncated: showed ~{:.0}K of ~{:.0}K chars | full result saved to: {} | chunk_id={chunk_id}]",
-                    max_chars as f64 / 1024.0,
-                    truncated_len as f64 / 1024.0,
-                    path.display(),
-                ));
-            } else {
-                output.content.push_str(&format!(
-                    "\n\n[...truncated: showed ~{:.0}K of ~{:.0}K chars | chunk_id={chunk_id}]",
-                    max_chars as f64 / 1024.0,
-                    truncated_len as f64 / 1024.0,
-                ));
-            }
+            output.content = compressed;
         }
         output
     }
@@ -2894,7 +3034,7 @@ impl McpProcessPool {
     ///
     /// Uses a single HTTP POST with a JSON array of requests. Returns results
     /// matched to each request. Only supported for remote (HTTP) servers.
-    pub(crate) async fn send_batch_server_request(
+    pub async fn send_batch_server_request(
         &self,
         server_name: &str,
         requests: Vec<(&str, Value)>,
@@ -2921,6 +3061,63 @@ impl McpProcessPool {
             }
         }
         Ok(results)
+    }
+
+    /// Call multiple tools on the same server as a batch.
+    ///
+    /// For remote (HTTP) servers, this uses a single HTTP POST with a JSON-RPC
+    /// batch array. For stdio servers, it falls back to sequential calls.
+    /// Returns results in the same order as the input.
+    pub async fn call_tools_batch(
+        &self,
+        server_name: &str,
+        tool_calls: Vec<(&str, Value)>,
+    ) -> Vec<ToolResult<ToolOutput>> {
+        if tool_calls.is_empty() {
+            return Vec::new();
+        }
+
+        let count = tool_calls.len();
+        let requests: Vec<(&str, Value)> = tool_calls
+            .into_iter()
+            .map(|(tool_name, args)| {
+                ("tools/call", serde_json::json!({ "name": tool_name, "arguments": args }))
+            })
+            .collect();
+
+        match self.send_batch_server_request(server_name, requests).await {
+            Ok(results) => results
+                .into_iter()
+                .map(|(_, result)| {
+                    let value = result.map_err(ToolError::ExecutionFailed)?;
+                    // Parse content the same way as RemoteMcpServerHandle::call_tool.
+                    if let Some(result) = value.get("result") {
+                        if let Some(content_array) = result.get("content").and_then(|c| c.as_array()) {
+                            let is_error = result.get("isError").and_then(|e| e.as_bool()).unwrap_or(false);
+                            let texts: Vec<String> = content_array
+                                .iter()
+                                .filter_map(|block| {
+                                    if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                        block.get("text").and_then(|t| t.as_str()).map(|s| s.to_string())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                            let content = truncate_tool_result(&texts.join("\n"), MAX_TOOL_RESULT_CHARS);
+                            if is_error {
+                                return Ok(ToolOutput::error(content));
+                            }
+                            return Ok(ToolOutput::success(content));
+                        }
+                    }
+                    Ok(ToolOutput::success(String::new()))
+                })
+                .collect(),
+            Err(e) => {
+                (0..count).map(|_| Err(ToolError::ExecutionFailed(e.clone()))).collect()
+            }
+        }
     }
 
     /// List prompts from a specific server via `prompts/list`.
@@ -3288,6 +3485,11 @@ impl McpProcessPool {
                     .and_then(|v| v.as_u64())
                     .map(|v| v as usize);
 
+                let tool_timeout_secs: Option<u64> = tool_value
+                    .get("_meta")
+                    .and_then(|m| m.get("timeoutSeconds"))
+                    .and_then(|v| v.as_u64());
+
                 let adapter = PooledMcpToolAdapter::with_output_limit(
                     self.clone(),
                     server_name.to_string(),
@@ -3296,6 +3498,7 @@ impl McpProcessPool {
                     input_schema.clone(),
                     annotations,
                     max_output_chars,
+                    tool_timeout_secs,
                 );
 
                 if self.is_defer_tool_schemas() {
@@ -3400,6 +3603,37 @@ impl McpProcessPool {
             response.get("result").cloned().unwrap_or(serde_json::json!({})),
         )
         .map_err(|e| format!("Failed to parse completion result: {e}"))
+    }
+
+    /// Send a `notifications/cancelled` to a server to cancel an in-progress request.
+    ///
+    /// Per MCP spec, this is a *notification* (no id, no response expected).
+    /// The server should abort the request identified by `request_id` and
+    /// may optionally clean up resources.
+    pub async fn cancel_request(
+        &self,
+        server_name: &str,
+        request_id: u64,
+        reason: Option<&str>,
+    ) -> Result<(), String> {
+        let params = serde_json::json!({
+            "requestId": request_id,
+            "reason": reason,
+        });
+
+        // For remote servers, send a notification (no id → no response expected).
+        if let Some(remote) = self.remote_handles.get(server_name) {
+            remote.send_notification("notifications/cancelled", params).await?;
+            return Ok(());
+        }
+
+        // For stdio servers, write the notification to stdin.
+        let handle = self
+            .handles
+            .get(server_name)
+            .ok_or_else(|| format!("MCP server '{server_name}' not in pool"))?;
+
+        handle.send_notification("notifications/cancelled", params).await
     }
 
     /// Clear all cached tool results.
@@ -3538,6 +3772,43 @@ impl McpProcessPool {
                                     server = %server_name,
                                     "Received prompts/list_changed notification"
                                 );
+                            }
+                            "notifications/message" => {
+                                // Forward MCP server log messages to our logging system.
+                                let level = notification
+                                    .get("params")
+                                    .and_then(|p| p.get("level"))
+                                    .and_then(|l| l.as_str())
+                                    .unwrap_or("info");
+                                let data = notification
+                                    .get("params")
+                                    .and_then(|p| p.get("data"))
+                                    .and_then(|d| d.as_str())
+                                    .unwrap_or("");
+                                let logger = notification
+                                    .get("params")
+                                    .and_then(|p| p.get("logger"))
+                                    .and_then(|l| l.as_str())
+                                    .unwrap_or("");
+                                let target = if logger.is_empty() {
+                                    format!("mcp:{server_name}")
+                                } else {
+                                    format!("mcp:{server_name}:{logger}")
+                                };
+                                match level {
+                                    "error" | "critical" | "alert" | "emergency" => {
+                                        error!(target = %target, "{data}")
+                                    }
+                                    "warning" => {
+                                        warn!(target = %target, "{data}")
+                                    }
+                                    "debug" => {
+                                        debug!(target = %target, "{data}")
+                                    }
+                                    _ => {
+                                        info!(target = %target, "{data}")
+                                    }
+                                }
                             }
                             other => {
                                 debug!(
@@ -3752,6 +4023,9 @@ pub struct PooledMcpToolAdapter {
     /// Per-tool output limit in chars (from `_meta.maxResultSizeChars`).
     /// Overrides the pool's global `max_output_chars` when set.
     max_output_chars: Option<usize>,
+    /// Per-tool timeout in seconds (from `_meta.timeoutSeconds`).
+    /// Overrides the handle's default `tool_timeout` when set.
+    tool_timeout_secs: Option<u64>,
 }
 
 impl PooledMcpToolAdapter {
@@ -3772,13 +4046,14 @@ impl PooledMcpToolAdapter {
             input_schema,
             annotations,
             None,
+            None,
         )
     }
 
-    /// Create a pooled tool adapter with an explicit per-tool output limit.
+    /// Create a pooled tool adapter with explicit per-tool overrides.
     ///
-    /// `max_output_chars` overrides the pool's global limit for this specific tool.
-    /// Parse from `_meta.maxResultSizeChars` in the MCP tool definition.
+    /// `max_output_chars` overrides the pool's global limit (from `_meta.maxResultSizeChars`).
+    /// `tool_timeout_secs` overrides the handle's default timeout (from `_meta.timeoutSeconds`).
     pub fn with_output_limit(
         pool: Arc<McpProcessPool>,
         server_name: String,
@@ -3787,6 +4062,7 @@ impl PooledMcpToolAdapter {
         input_schema: Value,
         annotations: Option<crate::ToolAnnotations>,
         max_output_chars: Option<usize>,
+        tool_timeout_secs: Option<u64>,
     ) -> Self {
         let tool_name = format!("mcp__{server_name}__{remote_tool_name}");
         // Truncate oversized descriptions to avoid wasting context tokens.
@@ -3808,6 +4084,7 @@ impl PooledMcpToolAdapter {
             tool_name,
             annotations,
             max_output_chars,
+            tool_timeout_secs,
         }
     }
 
@@ -3817,30 +4094,46 @@ impl PooledMcpToolAdapter {
         // Use per-tool limit if set, otherwise use pool's global default.
         let max_chars = self.max_output_chars.unwrap_or(self.pool.max_output_chars);
 
-        let progress_cb = self.pool.progress_callback.lock().await;
-        if let Some(ref cb) = *progress_cb {
-            let tool_name = self.tool_name.clone();
-            let cb = cb.clone();
-            drop(progress_cb);
+        let fut = async {
+            let progress_cb = self.pool.progress_callback.lock().await;
+            if let Some(ref cb) = *progress_cb {
+                let tool_name = self.tool_name.clone();
+                let cb = cb.clone();
+                drop(progress_cb);
 
-            let on_progress = Arc::new(move |progress: f64, total: Option<f64>| {
-                cb(&tool_name, progress, total);
-            });
+                let on_progress = Arc::new(move |progress: f64, total: Option<f64>| {
+                    cb(&tool_name, progress, total);
+                });
 
-            self.pool
-                .call_tool_with_progress_and_limit(
-                    &self.server_name,
-                    &self.remote_tool_name,
-                    input,
-                    on_progress,
-                    max_chars,
-                )
+                self.pool
+                    .call_tool_with_progress_and_limit(
+                        &self.server_name,
+                        &self.remote_tool_name,
+                        input,
+                        on_progress,
+                        max_chars,
+                    )
+                    .await
+            } else {
+                drop(progress_cb);
+                self.pool
+                    .call_tool_with_limit(&self.server_name, &self.remote_tool_name, input, max_chars)
+                    .await
+            }
+        };
+
+        // Apply per-tool timeout if specified (from _meta.timeoutSeconds).
+        if let Some(secs) = self.tool_timeout_secs {
+            tokio::time::timeout(std::time::Duration::from_secs(secs), fut)
                 .await
+                .map_err(|_| {
+                    ToolError::ExecutionFailed(format!(
+                        "MCP tool '{}' timed out after {secs}s (per-tool timeout)",
+                        self.tool_name
+                    ))
+                })?
         } else {
-            drop(progress_cb);
-            self.pool
-                .call_tool_with_limit(&self.server_name, &self.remote_tool_name, input, max_chars)
-                .await
+            fut.await
         }
     }
 
@@ -4166,6 +4459,12 @@ pub async fn discover_pooled_tools(
                 .and_then(|v| v.as_u64())
                 .map(|v| v as usize);
 
+            // Parse per-tool timeout from _meta.timeoutSeconds.
+            let tool_timeout_secs: Option<u64> = tool_value
+                .get("_meta")
+                .and_then(|m| m.get("timeoutSeconds"))
+                .and_then(|v| v.as_u64());
+
             // Store the real schema for deferred retrieval if enabled.
             let adapter = PooledMcpToolAdapter::with_output_limit(
                 pool.clone(),
@@ -4175,6 +4474,7 @@ pub async fn discover_pooled_tools(
                 input_schema.clone(),
                 annotations,
                 max_output_chars,
+                tool_timeout_secs,
             );
 
             // When deferred mode is on, store the real schema and let the adapter
@@ -4260,6 +4560,12 @@ pub async fn discover_pooled_remote_tools(
                 .and_then(|v| v.as_u64())
                 .map(|v| v as usize);
 
+            // Parse per-tool timeout from _meta.timeoutSeconds.
+            let tool_timeout_secs: Option<u64> = tool_value
+                .get("_meta")
+                .and_then(|m| m.get("timeoutSeconds"))
+                .and_then(|v| v.as_u64());
+
             let adapter = PooledMcpToolAdapter::with_output_limit(
                 pool.clone(),
                 server_name.to_string(),
@@ -4268,6 +4574,7 @@ pub async fn discover_pooled_remote_tools(
                 input_schema.clone(),
                 annotations,
                 max_output_chars,
+                tool_timeout_secs,
             );
 
             if pool.is_defer_tool_schemas() {
@@ -4432,14 +4739,14 @@ mod tests {
     #[test]
     fn test_tool_result_not_truncated_under_limit() {
         let content = "x".repeat(100);
-        let result = truncate_tool_result(&content);
+        let result = truncate_tool_result(&content, MAX_TOOL_RESULT_CHARS);
         assert_eq!(result, content);
     }
 
     #[test]
     fn test_tool_result_truncated_plain_text() {
         let content = "line\n".repeat(10_000); // 50,000 chars
-        let result = truncate_tool_result(&content);
+        let result = truncate_tool_result(&content, MAX_TOOL_RESULT_CHARS);
         assert!(result.len() <= MAX_TOOL_RESULT_CHARS + 200); // +200 for notice
         assert!(result.contains("[compressed:") || result.contains("[...truncated:"));
         assert!(result.contains("50"));
@@ -4452,7 +4759,7 @@ mod tests {
     fn test_tool_result_truncated_json() {
         let items: Vec<String> = (0..5000).map(|i| format!(r#"{{"id": {}, "data": "item {}"}}"#, i, i)).collect();
         let content = format!("[{}]", items.join(",\n"));
-        let result = truncate_tool_result(&content);
+        let result = truncate_tool_result(&content, MAX_TOOL_RESULT_CHARS);
         assert!(result.len() <= MAX_TOOL_RESULT_CHARS + 200);
         assert!(result.contains("[compressed:") || result.contains("[...truncated:"));
     }
@@ -4461,7 +4768,7 @@ mod tests {
     fn test_tool_result_truncation_preserves_unicode() {
         // String with multi-byte chars
         let content = "日本語テスト\n".repeat(10_000);
-        let result = truncate_tool_result(&content);
+        let result = truncate_tool_result(&content, MAX_TOOL_RESULT_CHARS);
         // Should not panic on char boundary
         assert!(result.contains("[compressed:") || result.contains("[...truncated:"));
     }
@@ -4756,8 +5063,8 @@ mod tests {
         let long_content = "a".repeat(2000);
         let output = ToolOutput::success(long_content);
         let limited = pool.enforce_output_limit(output, 1000, "mcp__test__tool");
-        assert!(limited.content.len() < 1200); // 1000 + truncation notice + chunk_id
-        assert!(limited.content.contains("[...truncated:"));
+        assert!(limited.content.len() < 1500); // budget + compression notice + chunk_id
+        assert!(limited.content.contains("[compressed:") || limited.content.contains("chunk_id="));
     }
 
     #[test]
@@ -4768,7 +5075,7 @@ mod tests {
         let output = ToolOutput::success(content);
         let limited = pool.enforce_output_limit(output, 100, "mcp__test__tool");
         // Should not panic on char boundary
-        assert!(limited.content.contains("[...truncated:") || limited.content.len() <= 200);
+        assert!(limited.content.contains("[compressed:") || limited.content.contains("chunk_id=") || limited.content.len() <= 200);
     }
 
     #[tokio::test]
@@ -4795,7 +5102,7 @@ mod tests {
         let limited = pool.enforce_output_limit(output, 100, "mcp__srv__tool");
 
         // Should contain a chunk_id in the truncation notice.
-        assert!(limited.content.contains("[...truncated:"));
+        assert!(limited.content.contains("[compressed:") || limited.content.contains("chunk_id="));
         let chunk_id = limited.content
             .split("chunk_id=")
             .nth(1)

@@ -394,6 +394,12 @@ async fn discover_remote_pooled_tools(
                 .and_then(|v| v.as_u64())
                 .map(|v| v as usize);
 
+            // Parse per-tool timeout from _meta.timeoutSeconds.
+            let tool_timeout_secs: Option<u64> = tool_value
+                .get("_meta")
+                .and_then(|m| m.get("timeoutSeconds"))
+                .and_then(|v| v.as_u64());
+
             tools.push(PooledMcpToolAdapter::with_output_limit(
                 pool.clone(),
                 server_name.to_string(),
@@ -402,6 +408,7 @@ async fn discover_remote_pooled_tools(
                 input_schema,
                 annotations,
                 max_output_chars,
+                tool_timeout_secs,
             ));
         }
     }

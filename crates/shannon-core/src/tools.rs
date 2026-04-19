@@ -125,7 +125,7 @@ fn glob_to_regex(pattern: &str) -> Result<Regex, regex::Error> {
 
 /// Registry for managing available tools
 pub struct ToolRegistry {
-    tools: HashMap<String, Box<dyn Tool>>,
+    tools: std::sync::RwLock<HashMap<String, std::sync::Arc<dyn Tool>>>,
     /// Optional glob-based allow/deny filter for tool access.
     tool_filter: Option<ToolFilter>,
     /// Cache for read-only tool results: (tool_name, input_hash) -> cached output.
@@ -141,7 +141,7 @@ impl ToolRegistry {
     /// Create a new empty tool registry
     pub fn new() -> Self {
         Self {
-            tools: HashMap::new(),
+            tools: std::sync::RwLock::new(HashMap::new()),
             tool_filter: None,
             result_cache: std::sync::Mutex::new(HashMap::new()),
             max_cache_entries: 256,
@@ -189,29 +189,36 @@ impl ToolRegistry {
     }
 
     /// Register a new tool
-    pub fn register(&mut self, tool: Box<dyn Tool>) -> ToolResult<()> {
+    pub fn register(&self, tool: Box<dyn Tool>) -> ToolResult<()> {
         let name = tool.name().to_string();
-        if self.tools.contains_key(&name) {
+        let mut tools = self.tools.write().unwrap();
+        if tools.contains_key(&name) {
             return Err(ToolError::RegistryError(format!(
                 "Tool {name} already registered"
             )));
         }
-        self.tools.insert(name, tool);
+        tools.insert(name, std::sync::Arc::from(tool));
         Ok(())
     }
 
-    /// Unregister a tool
-    pub fn unregister(&mut self, name: &str) -> ToolResult<()> {
+    /// Unregister a tool by name.
+    pub fn unregister(&self, name: &str) -> ToolResult<()> {
         self.tools
+            .write()
+            .unwrap()
             .remove(name)
             .ok_or_else(|| ToolError::NotFound(name.to_string()))?;
         Ok(())
     }
 
-    /// Get a tool by name (respects the allowed_tools filter)
-    pub fn get(&self, name: &str) -> Option<&dyn Tool> {
+    /// Get a tool by name (respects the allowed_tools filter).
+    ///
+    /// Returns an `Arc` clone so the caller does not need to hold the internal
+    /// read lock — the tool can be used (and `.await`ed) without blocking
+    /// concurrent registrations.
+    pub fn get(&self, name: &str) -> Option<std::sync::Arc<dyn Tool>> {
         if self.is_allowed(name) {
-            self.tools.get(name).map(|t| t.as_ref())
+            self.tools.read().unwrap().get(name).cloned()
         } else {
             None
         }
@@ -220,6 +227,8 @@ impl ToolRegistry {
     /// List all registered tool names (respects the allowed_tools filter)
     pub fn list(&self) -> Vec<String> {
         self.tools
+            .read()
+            .unwrap()
             .keys()
             .filter(|name| self.is_allowed(name))
             .cloned()
@@ -229,6 +238,8 @@ impl ToolRegistry {
     /// List all registered tools with their metadata (name, description, category, auth, schema).
     pub fn list_tools_info(&self) -> Vec<ToolInfo> {
         self.tools
+            .read()
+            .unwrap()
             .values()
             .filter(|t| self.is_allowed(t.name()))
             .map(|t| ToolInfo {
@@ -358,6 +369,8 @@ impl ToolRegistry {
     /// Return the names of all registered tools flagged as destructive.
     pub fn destructive_tool_names(&self) -> Vec<String> {
         self.tools
+            .read()
+            .unwrap()
             .values()
             .filter(|t| t.is_destructive())
             .map(|t| t.name().to_string())
@@ -420,6 +433,8 @@ impl ToolRegistry {
     pub fn to_json_schema(&self) -> Value {
         let tools: Vec<Value> = self
             .tools
+            .read()
+            .unwrap()
             .values()
             .filter(|t| self.is_allowed(t.name()))
             .map(|tool| {
@@ -436,6 +451,8 @@ impl ToolRegistry {
     /// Get all tools as ToolDefinition for Claude API (respects the allowed_tools filter)
     pub fn to_tool_definitions(&self) -> Vec<crate::api::ToolDefinition> {
         self.tools
+            .read()
+            .unwrap()
             .values()
             .filter(|t| self.is_allowed(t.name()))
             .map(|tool| crate::api::ToolDefinition {

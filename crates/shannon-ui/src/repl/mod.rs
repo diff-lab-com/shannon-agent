@@ -559,6 +559,10 @@ impl Repl {
             shannon_core::api::LlmClient::new_unauthenticated(client_config)
         };
 
+        // Wrap tool registry in Arc so it can be shared with MCP callbacks
+        // for dynamic tool re-registration.
+        let tool_registry = std::sync::Arc::new(tool_registry);
+
         // Wire MCP sampling and elicitation providers so MCP servers can
         // request LLM completions (sampling) and ask the user questions (elicitation).
         {
@@ -575,6 +579,46 @@ impl Repl {
             rt.block_on(async {
                 pool.set_sampling_provider(sampling).await;
                 pool.set_elicitation_provider(elicitation).await;
+                // Expose the project directory as a filesystem root so MCP servers
+                // (e.g. filesystem, git) know the workspace boundaries.
+                let project_dir = std::env::current_dir().unwrap_or_default();
+                pool.set_roots_provider(std::sync::Arc::new(move || {
+                    let uri = format!("file://{}", project_dir.display());
+                    vec![shannon_mcp::Root {
+                        uri,
+                        name: Some("project".to_string()),
+                    }]
+                }))
+                .await;
+
+                // Dynamic tool re-registration: when a server reports
+                // tools/list_changed, swap out its old tools for the new ones.
+                let reg = tool_registry.clone();
+                pool.set_on_tools_changed(std::sync::Arc::new(move |server_name, new_tools| {
+                    let prefix = format!("mcp__{server_name}__");
+                    // Unregister old tools from this server.
+                    {
+                        let tools_to_remove: Vec<String> = reg.list()
+                            .into_iter()
+                            .filter(|n| n.starts_with(&prefix))
+                            .collect();
+                        for name in tools_to_remove {
+                            if let Err(e) = reg.unregister(&name) {
+                                tracing::debug!("Dynamic unregister {}: {}", name, e);
+                            }
+                        }
+                    }
+                    // Register new tools.
+                    for tool in new_tools {
+                        if let Err(e) = reg.register(Box::new(tool)) {
+                            tracing::debug!("Dynamic register: {}", e);
+                        }
+                    }
+                    tracing::info!(
+                        server = %server_name,
+                        "Dynamically re-registered tools from notification"
+                    );
+                })).await;
             });
         }
 
@@ -616,9 +660,9 @@ impl Repl {
         let state_manager = StateManager::new();
 
         // Create query engine with optional memory store
-        let base_engine = QueryEngine::with_defaults(
+        let base_engine = QueryEngine::with_defaults_arc(
             client,
-            tool_registry,
+            tool_registry.clone(),
             permission_manager,
             state_manager,
         );

@@ -164,11 +164,24 @@ impl QueryEngine {
         permissions: PermissionManager,
         state: StateManager,
     ) -> Self {
+        Self::with_defaults_arc(client, Arc::new(tools), permissions, state)
+    }
+
+    /// Create with default configuration and a pre-wrapped `Arc<ToolRegistry>`.
+    ///
+    /// Use this when you need to share the registry with async callbacks
+    /// (e.g. MCP `on_tools_changed` for dynamic tool re-registration).
+    pub fn with_defaults_arc(
+        client: LlmClient,
+        tools: Arc<ToolRegistry>,
+        permissions: PermissionManager,
+        state: StateManager,
+    ) -> Self {
         let model = client.model().to_string();
         let session_id = Uuid::new_v4();
         Self {
             client,
-            tools: Arc::new(tools),
+            tools,
             permissions: Arc::new(RwLock::new(permissions)),
             state: Arc::new(state),
             config: QueryEngineConfig::default(),
