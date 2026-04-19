@@ -168,6 +168,7 @@ pub mod doctor_utils {
 }
 
 /// Re-export MCP command utilities for REPL integration
+#[allow(unused_imports)]
 pub mod mcp_utils {
     pub use super::mcp::{
         McpSubcommand, parse_mcp_subcommand,

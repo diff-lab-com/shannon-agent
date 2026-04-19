@@ -3,6 +3,8 @@
 //! Provides subcommands for listing servers, viewing status,
 //! restarting servers, and listing available tools.
 
+#![allow(dead_code)]
+
 use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
 
 /// MCP prompt template

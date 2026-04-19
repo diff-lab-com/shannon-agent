@@ -99,11 +99,13 @@ impl Default for HealthCheckConfig {
 }
 
 /// A pending RPC response waiter.
+#[allow(dead_code)]
 struct PendingRpc {
     sender: oneshot::Sender<Result<JsonRpcMessage, String>>,
 }
 
 /// Handle to a running agent process.
+#[allow(dead_code)]
 pub struct AgentHandle {
     /// The spawned child process.
     child: Child,

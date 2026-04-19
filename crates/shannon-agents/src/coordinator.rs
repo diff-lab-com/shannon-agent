@@ -145,6 +145,7 @@ pub enum CoordinatorEvent {
 }
 
 /// Main coordinator for managing multi-agent teams
+#[allow(dead_code)]
 pub struct AgentCoordinator {
     config: CoordinatorConfig,
     teams: Arc<RwLock<HashMap<String, AgentTeam>>>,

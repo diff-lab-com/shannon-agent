@@ -138,6 +138,7 @@ fn is_tool_allowed_by_patterns(tool_name: &str, patterns: &[String]) -> bool {
 /// When a tool result is compressed or truncated, the full content is stored
 /// here with a unique chunk ID. The LLM can then request the full result
 /// or the next chunk if needed.
+#[allow(dead_code)]
 struct ToolResultStore {
     /// Full results keyed by chunk ID.
     results: DashMap<String, StoredResult>,
@@ -146,6 +147,7 @@ struct ToolResultStore {
 }
 
 /// A stored tool result with metadata.
+#[allow(dead_code)]
 struct StoredResult {
     /// The full content.
     full_content: String,
@@ -215,6 +217,7 @@ impl ToolResultStore {
     }
 
     /// Evict expired results.
+    #[allow(dead_code)]
     fn evict_expired(&self) {
         self.results.retain(|_, v| v.stored_at.elapsed() < self.max_age);
     }
@@ -533,6 +536,7 @@ pub struct ServerStatus {
 // ---------------------------------------------------------------------------
 
 /// A pending JSON-RPC request waiting for a response.
+#[allow(dead_code)]
 struct PendingRequest {
     /// Oneshot channel to deliver the response.
     tx: oneshot::Sender<Value>,
@@ -549,6 +553,7 @@ struct PendingRequest {
 // ---------------------------------------------------------------------------
 
 /// Manages a single persistent MCP server process.
+#[allow(dead_code)]
 struct McpServerHandle {
     /// Server name (for logging).
     name: String,

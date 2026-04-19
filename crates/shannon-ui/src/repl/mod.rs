@@ -262,6 +262,7 @@ impl Repl {
     /// Create a new REPL instance
     pub fn new() -> Result<Self> {
         let runtime = Runtime::new()?;
+        let _rt_guard = runtime.enter();
 
         // Create tool registry and register all tools
         let mut tool_registry = ToolRegistry::new();
