@@ -1322,6 +1322,9 @@ struct RemoteMcpServerHandle {
     tool_timeout: Duration,
     /// Semaphore limiting concurrent tool calls to this server.
     concurrency_semaphore: Arc<tokio::sync::Semaphore>,
+    /// MCP session ID returned by the server during initialization.
+    /// Per MCP spec 2025-03-26 Streamable HTTP, included in all subsequent requests.
+    session_id: Arc<RwLock<Option<String>>>,
 }
 
 impl RemoteMcpServerHandle {
@@ -1419,6 +1422,38 @@ impl RemoteMcpServerHandle {
                 }
             }
 
+            // No existing auth provider — try DCR auto-registration.
+            if self.auth_provider.is_none() {
+                info!(server = %self.name, "Got 401 with no auth, attempting DCR auto-registration");
+                let scopes = vec!["mcp".to_string()];
+                let redirect = "http://localhost:8080/callback".to_string();
+                match crate::auto_register_oauth(&self.url, &redirect, scopes).await {
+                    Ok(provider) => {
+                        info!(server = %self.name, "DCR auto-registration succeeded");
+                        // DCR gives us client credentials but we still need user authorization.
+                        match provider.get_authorization_url().await {
+                            Ok((auth_url, _state)) => {
+                                return Err(format!(
+                                    "Remote MCP server '{}' requires OAuth. DCR auto-registration succeeded.\n\
+                                     Visit this URL to authorize:\n  {auth_url}\n\n\
+                                     Then add the resulting OAuth config to your MCP server configuration.",
+                                    self.name
+                                ));
+                            }
+                            Err(e) => {
+                                return Err(format!(
+                                    "Remote MCP server '{}' requires OAuth. DCR registration succeeded but could not build auth URL: {e}",
+                                    self.name
+                                ));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(server = %self.name, error = %e, "DCR auto-registration failed");
+                    }
+                }
+            }
+
             // Auto-discovery: try RFC 9728/8414 OAuth metadata for helpful guidance.
             let discovery_hint = match discover_oauth_endpoints(&self.url).await {
                 Ok(d) => format!(
@@ -1445,7 +1480,19 @@ impl RemoteMcpServerHandle {
             ));
         }
 
-        self.parse_jsonrpc_response(response).await
+        // Streamable HTTP: detect SSE vs JSON response by Content-Type.
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_lowercase();
+
+        if content_type.contains("text/event-stream") {
+            self.parse_sse_response(response).await
+        } else {
+            self.parse_jsonrpc_response(response).await
+        }
     }
 
     /// Build and send an HTTP POST with all headers (static + dynamic + auth).
@@ -1491,6 +1538,12 @@ impl RemoteMcpServerHandle {
                 builder = builder.header(key.as_str(), value.as_str());
             }
         }
+        // Include MCP session ID if available (Streamable HTTP spec).
+        if let Some(sid) = self.session_id.read().await.as_ref() {
+            builder = builder.header("Mcp-Session-Id", sid.as_str());
+        }
+        // Accept both JSON and SSE responses (Streamable HTTP spec).
+        builder = builder.header("Accept", "application/json, text/event-stream");
 
         tokio::time::timeout(
             timeout,
@@ -1505,10 +1558,19 @@ impl RemoteMcpServerHandle {
     }
 
     /// Parse a successful HTTP response as JSON-RPC.
+    ///
+    /// Also captures the `Mcp-Session-Id` header if present (Streamable HTTP spec).
     async fn parse_jsonrpc_response(
         &self,
         response: reqwest::Response,
     ) -> Result<Value, String> {
+        // Capture MCP session ID from response headers.
+        if let Some(sid) = response.headers().get("Mcp-Session-Id") {
+            if let Ok(s) = sid.to_str() {
+                debug!(server = %self.name, session_id = %s, "Received MCP session ID");
+                *self.session_id.write().await = Some(s.to_string());
+            }
+        }
 
         let body: Value = response
             .json()
@@ -1525,6 +1587,92 @@ impl RemoteMcpServerHandle {
         }
 
         Ok(body)
+    }
+
+    /// Parse an SSE (text/event-stream) HTTP response as JSON-RPC.
+    ///
+    /// Reads the SSE stream and extracts the first JSON-RPC response payload
+    /// from `data:` events. Used for Streamable HTTP where the server responds
+    /// with SSE instead of a single JSON body.
+    async fn parse_sse_response(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<Value, String> {
+        use futures_util::StreamExt;
+
+        // Capture MCP session ID from response headers.
+        if let Some(sid) = response.headers().get("Mcp-Session-Id") {
+            if let Ok(s) = sid.to_str() {
+                debug!(server = %self.name, session_id = %s, "Received MCP session ID (SSE)");
+                *self.session_id.write().await = Some(s.to_string());
+            }
+        }
+
+        let byte_stream = response.bytes_stream();
+        let mut stream = Box::pin(byte_stream);
+        let mut buffer = String::new();
+        let mut event_data = String::new();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| format!("SSE stream error: {e}"))?;
+            let text = String::from_utf8_lossy(&chunk);
+            buffer.push_str(&text);
+
+            // Process complete lines.
+            while let Some(newline_pos) = buffer.find('\n') {
+                let line = buffer[..newline_pos].trim().to_string();
+                buffer = buffer[newline_pos + 1..].to_string();
+
+                if line.is_empty() {
+                    // End of event — try to parse accumulated data as JSON-RPC.
+                    if !event_data.is_empty() {
+                        if let Ok(value) = serde_json::from_str::<Value>(&event_data) {
+                            if let Some(error) = value.get("error") {
+                                let msg = error
+                                    .get("message")
+                                    .and_then(|m| m.as_str())
+                                    .unwrap_or("Unknown error");
+                                return Err(format!(
+                                    "Remote MCP server '{}' error: {}",
+                                    self.name, msg
+                                ));
+                            }
+                            return Ok(value);
+                        }
+                        event_data.clear();
+                    }
+                } else if let Some(rest) = line.strip_prefix("data:") {
+                    let data = rest.trim();
+                    if !event_data.is_empty() {
+                        event_data.push('\n');
+                    }
+                    event_data.push_str(data);
+                }
+                // Ignore other SSE fields (event:, id:, retry:)
+            }
+        }
+
+        // Process any remaining data after stream ends.
+        if !event_data.is_empty() {
+            if let Ok(value) = serde_json::from_str::<Value>(&event_data) {
+                if let Some(error) = value.get("error") {
+                    let msg = error
+                        .get("message")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("Unknown error");
+                    return Err(format!(
+                        "Remote MCP server '{}' error: {}",
+                        self.name, msg
+                    ));
+                }
+                return Ok(value);
+            }
+        }
+
+        Err(format!(
+            "Remote MCP server '{}' SSE stream ended without JSON-RPC response",
+            self.name
+        ))
     }
 
     /// Send a JSON-RPC notification (no id, no response expected).
@@ -1549,6 +1697,10 @@ impl RemoteMcpServerHandle {
                 builder = builder.header(key.as_str(), value.as_str());
             }
         }
+        // Include MCP session ID if available (Streamable HTTP spec).
+        if let Some(sid) = self.session_id.read().await.as_ref() {
+            builder = builder.header("Mcp-Session-Id", sid.as_str());
+        }
 
         builder
             .header("Content-Type", "application/json")
@@ -1563,6 +1715,135 @@ impl RemoteMcpServerHandle {
             })?;
 
         Ok(())
+    }
+
+    /// Send multiple JSON-RPC requests as a batch (JSON-RPC spec §6).
+    ///
+    /// All requests are sent in a single HTTP POST. Returns results matched
+    /// by request ID. Individual request errors are returned within the
+    /// result array (not as top-level errors).
+    async fn send_batch_request(
+        &self,
+        requests: Vec<(&str, Value)>,
+        timeout: Duration,
+    ) -> Result<Vec<(u64, Result<Value, String>)>, String> {
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Assign IDs and build batch array.
+        let mut batch = Vec::with_capacity(requests.len());
+        let mut ids = Vec::with_capacity(requests.len());
+        for (method, params) in &requests {
+            let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+            ids.push(id);
+            batch.push(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": method,
+                "params": params,
+            }));
+        }
+
+        let response = self
+            .send_http_request(&serde_json::json!(batch), timeout)
+            .await?;
+
+        // Handle 401 — attempt token refresh once.
+        if response.status().as_u16() == 401 {
+            if let Some(provider) = &self.auth_provider {
+                if provider.refresh_token().await.is_ok() {
+                    let retry = self
+                        .send_http_request(&serde_json::json!(batch), timeout)
+                        .await?;
+                    if !retry.status().is_success() {
+                        return Err(format!(
+                            "Remote MCP server '{}' returned HTTP {} after token refresh",
+                            self.name,
+                            retry.status()
+                        ));
+                    }
+                    return self.parse_batch_response(retry, &ids).await;
+                }
+            }
+            return Err(format!(
+                "Remote MCP server '{}' returned HTTP 401 (unauthorized)",
+                self.name
+            ));
+        }
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "Remote MCP server '{}' returned HTTP {}",
+                self.name,
+                response.status()
+            ));
+        }
+
+        self.parse_batch_response(response, &ids).await
+    }
+
+    /// Parse a batch JSON-RPC response, matching results to request IDs.
+    async fn parse_batch_response(
+        &self,
+        response: reqwest::Response,
+        ids: &[u64],
+    ) -> Result<Vec<(u64, Result<Value, String>)>, String> {
+        // Capture session ID from response.
+        if let Some(sid) = response.headers().get("Mcp-Session-Id") {
+            if let Ok(s) = sid.to_str() {
+                *self.session_id.write().await = Some(s.to_string());
+            }
+        }
+
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|e| {
+                format!(
+                    "Remote MCP server '{}' batch response parse error: {}",
+                    self.name, e
+                )
+            })?;
+
+        // Build result map from response array.
+        let mut results: HashMap<u64, Result<Value, String>> = HashMap::new();
+
+        let items = match body {
+            Value::Array(arr) => arr,
+            single => {
+                // Single response (not batched) — treat as array of one.
+                vec![single]
+            }
+        };
+
+        for item in items {
+            let id = item
+                .get("id")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+
+            if let Some(error) = item.get("error") {
+                let msg = error
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("Unknown error");
+                results.insert(id, Err(msg.to_string()));
+            } else if let Some(result) = item.get("result").cloned() {
+                results.insert(id, Ok(result));
+            }
+        }
+
+        // Return in the same order as input IDs.
+        Ok(ids
+            .iter()
+            .map(|&id| {
+                (
+                    id,
+                    results.remove(&id).unwrap_or(Err("No response for request".to_string())),
+                )
+            })
+            .collect())
     }
 
     /// Call a tool on this remote server via `tools/call`.
@@ -1659,6 +1940,7 @@ impl RemoteMcpServerHandle {
     async fn reset(&self) {
         *self.state.write().await = ServerState::Stopped;
         *self.started_at.write().await = None;
+        *self.session_id.write().await = None;
     }
 }
 
@@ -1984,6 +2266,7 @@ impl McpProcessPool {
             concurrency_semaphore: Arc::new(tokio::sync::Semaphore::new(
                 self.max_concurrent_per_server as usize,
             )),
+            session_id: Arc::new(RwLock::new(None)),
         });
 
         handle.start().await?;
@@ -2329,6 +2612,39 @@ impl McpProcessPool {
             .get(server_name)
             .ok_or_else(|| format!("MCP server '{server_name}' not in pool"))?;
         handle.send_request(method, params).await
+    }
+
+    /// Send multiple JSON-RPC requests as a batch to a remote server.
+    ///
+    /// Uses a single HTTP POST with a JSON array of requests. Returns results
+    /// matched to each request. Only supported for remote (HTTP) servers.
+    pub(crate) async fn send_batch_server_request(
+        &self,
+        server_name: &str,
+        requests: Vec<(&str, Value)>,
+    ) -> Result<Vec<(u64, Result<Value, String>)>, String> {
+        if let Some(remote) = self.remote_handles.get(server_name) {
+            return remote
+                .send_batch_request(requests, remote.request_timeout)
+                .await;
+        }
+        // Stdio servers don't support batch — fall back to sequential.
+        let mut results = Vec::with_capacity(requests.len());
+        let handle = self
+            .handles
+            .get(server_name)
+            .ok_or_else(|| format!("MCP server '{server_name}' not in pool"))?;
+        for (method, params) in requests {
+            let result = handle.send_request(method, params).await;
+            match result {
+                Ok(value) => {
+                    let id = value.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
+                    results.push((id, Ok(value)));
+                }
+                Err(e) => results.push((0, Err(e))),
+            }
+        }
+        Ok(results)
     }
 
     /// List prompts from a specific server via `prompts/list`.

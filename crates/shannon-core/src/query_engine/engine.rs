@@ -1026,6 +1026,14 @@ impl QueryEngine {
                                                                 // Execute read-only tools concurrently
                                                                 let mut exec_handles = Vec::new();
                                                                 for (tool_id, tool_name, effective_input) in tool_calls {
+                                                                    // Emit progress: tool started
+                                                                    let _ = tx.send(Ok(QueryEvent::ToolProgress {
+                                                                        query_id,
+                                                                        tool_use_id: tool_id.clone(),
+                                                                        tool_name: tool_name.clone(),
+                                                                        progress: 0.0,
+                                                                        message: format!("{tool_name} started"),
+                                                                    }));
                                                                     let tools_exec = tools.clone();
                                                                     let exec_name = tool_name.clone();
                                                                     let exec_input = effective_input.clone();
@@ -1053,6 +1061,14 @@ impl QueryEngine {
                                                                                 let _ = hm.run_hooks(&post_event).await;
                                                                             }
 
+                                                                            // Emit progress: tool completed
+                                                                            let _ = tx.send(Ok(QueryEvent::ToolProgress {
+                                                                                query_id,
+                                                                                tool_use_id: tool_id.clone(),
+                                                                                tool_name: tool_name.clone(),
+                                                                                progress: 1.0,
+                                                                                message: format!("{tool_name} completed"),
+                                                                            }));
                                                                             match result {
                                                                                 Ok(output) => {
                                                                                     let is_err = output.is_error;
@@ -1094,6 +1110,14 @@ impl QueryEngine {
                                                             }
                                                             crate::tools::ToolBatch::Serial((tool_id, tool_name, effective_input)) => {
                                                                 // Execute write tools sequentially (one at a time)
+                                                                // Emit progress: tool started
+                                                                let _ = tx.send(Ok(QueryEvent::ToolProgress {
+                                                                    query_id,
+                                                                    tool_use_id: tool_id.clone(),
+                                                                    tool_name: tool_name.clone(),
+                                                                    progress: 0.0,
+                                                                    message: format!("{tool_name} started"),
+                                                                }));
                                                                 let result = tools
                                                                     .execute(&tool_name, effective_input.clone())
                                                                     .await;
@@ -1113,6 +1137,14 @@ impl QueryEngine {
                                                                     let _ = hm.run_hooks(&post_event).await;
                                                                 }
 
+                                                                // Emit progress: tool completed
+                                                                let _ = tx.send(Ok(QueryEvent::ToolProgress {
+                                                                    query_id,
+                                                                    tool_use_id: tool_id.clone(),
+                                                                    tool_name: tool_name.clone(),
+                                                                    progress: 1.0,
+                                                                    message: format!("{tool_name} completed"),
+                                                                }));
                                                                 match result {
                                                                     Ok(output) => {
                                                                         let is_err = output.is_error;

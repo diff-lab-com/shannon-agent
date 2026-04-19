@@ -483,6 +483,8 @@ pub struct OAuthDiscoveryResult {
     pub token_endpoint: String,
     /// Scopes supported by the authorization server.
     pub scopes_supported: Vec<String>,
+    /// Registration endpoint URL (RFC 7591 DCR), if advertised.
+    pub registration_endpoint: Option<String>,
 }
 
 /// Extract the origin from a URL (scheme + host + port).
@@ -535,6 +537,10 @@ fn parse_auth_server_metadata(metadata: &serde_json::Value) -> Option<OAuthDisco
                     .collect()
             })
             .unwrap_or_default(),
+        registration_endpoint: metadata
+            .get("registration_endpoint")
+            .and_then(|v| v.as_str())
+            .map(String::from),
     })
 }
 
@@ -606,6 +612,133 @@ pub async fn discover_oauth_endpoints(
     Err(AuthError::Configuration(format!(
         "OAuth discovery failed for '{server_url}': no metadata found at well-known endpoints"
     )))
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic Client Registration (RFC 7591)
+// ---------------------------------------------------------------------------
+
+/// Result of a successful dynamic client registration.
+#[derive(Debug, Clone)]
+pub struct DcrRegistrationResult {
+    /// The registered client ID.
+    pub client_id: String,
+    /// The client secret (optional, not all flows use it).
+    pub client_secret: Option<String>,
+}
+
+/// Register a new OAuth client dynamically using RFC 7591.
+///
+/// This is used when no `client_id` is configured — the client registers
+/// itself with the authorization server at runtime.
+///
+/// # Arguments
+/// * `registration_endpoint` — URL from `OAuthDiscoveryResult::registration_endpoint`
+/// * `redirect_uris` — URIs the authorization server can redirect to after auth
+/// * `scopes` — OAuth scopes to request
+pub async fn register_client(
+    registration_endpoint: &str,
+    redirect_uris: &[String],
+    scopes: &[String],
+) -> Result<DcrRegistrationResult, AuthError> {
+    info!("Attempting dynamic client registration at {registration_endpoint}");
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| AuthError::OAuth(format!("Failed to create HTTP client: {e}")))?;
+
+    let mut body = serde_json::json!({
+        "client_name": "shannon-code",
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none",
+        "application_type": "native",
+    });
+
+    if !redirect_uris.is_empty() {
+        body["redirect_uris"] = serde_json::json!(redirect_uris);
+    }
+
+    if !scopes.is_empty() {
+        body["scope"] = serde_json::json!(scopes.join(" "));
+    }
+
+    let response = client
+        .post(registration_endpoint)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| AuthError::OAuth(format!("DCR request failed: {e}")))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let resp_body = response.text().await.unwrap_or_default();
+        return Err(AuthError::OAuth(format!(
+            "Dynamic client registration failed: {status} - {resp_body}"
+        )));
+    }
+
+    let result: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| AuthError::OAuth(format!("Failed to parse DCR response: {e}")))?;
+
+    let client_id = result
+        .get("client_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AuthError::OAuth("DCR response missing client_id".to_string()))?
+        .to_string();
+
+    let client_secret = result
+        .get("client_secret")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    info!("Dynamic client registration successful: client_id={client_id}");
+    Ok(DcrRegistrationResult {
+        client_id,
+        client_secret,
+    })
+}
+
+/// Attempt OAuth auto-registration when no client_id is configured.
+///
+/// Uses the DCR endpoint from discovery (if available) to register a new client,
+/// then constructs an `OAuth2Provider` with the registered credentials.
+pub async fn auto_register_oauth(
+    server_url: &str,
+    redirect_url: &str,
+    scopes: Vec<String>,
+) -> Result<OAuth2Provider, AuthError> {
+    let discovery = discover_oauth_endpoints(server_url).await?;
+
+    let registration_endpoint = discovery
+        .registration_endpoint
+        .as_ref()
+        .ok_or_else(|| {
+            AuthError::Configuration(
+                "Server does not advertise a registration_endpoint for DCR".to_string(),
+            )
+        })?;
+
+    let redirect_uris = vec![redirect_url.to_string()];
+    let dcr = register_client(registration_endpoint, &redirect_uris, &scopes).await?;
+
+    let mut provider = OAuth2Provider::new(
+        dcr.client_id,
+        discovery.authorization_endpoint,
+        discovery.token_endpoint,
+        redirect_url,
+    )
+    .with_scopes(scopes);
+
+    if let Some(secret) = dcr.client_secret {
+        provider = provider.with_client_secret(secret);
+    }
+
+    Ok(provider)
 }
 
 #[cfg(test)]
@@ -722,6 +855,7 @@ mod tests {
         assert_eq!(result.authorization_endpoint, "https://auth.example.com/authorize");
         assert_eq!(result.token_endpoint, "https://auth.example.com/token");
         assert_eq!(result.scopes_supported, vec!["read", "write"]);
+        assert!(result.registration_endpoint.is_none());
     }
 
     #[test]
@@ -730,6 +864,17 @@ mod tests {
             "token_endpoint": "https://auth.example.com/token"
         });
         assert!(super::parse_auth_server_metadata(&metadata).is_none());
+    }
+
+    #[test]
+    fn test_parse_auth_server_metadata_with_registration() {
+        let metadata = serde_json::json!({
+            "authorization_endpoint": "https://auth.example.com/authorize",
+            "token_endpoint": "https://auth.example.com/token",
+            "registration_endpoint": "https://auth.example.com/register"
+        });
+        let result = super::parse_auth_server_metadata(&metadata).unwrap();
+        assert_eq!(result.registration_endpoint.as_deref(), Some("https://auth.example.com/register"));
     }
 
     #[test]

@@ -66,7 +66,8 @@ pub use protocol::{
 };
 pub use transport::{Transport, TransportError, StdioTransport, SseTransport, HttpTransport, WebSocketTransport};
 pub use client::{McpClient, McpClientError};
-pub use auth::{AuthProvider, OAuth2Provider, ApiKeyProvider, OAuthDiscoveryResult, discover_oauth_endpoints};
+pub use auth::{AuthProvider, OAuth2Provider, ApiKeyProvider, OAuthDiscoveryResult, discover_oauth_endpoints,
+    DcrRegistrationResult, register_client, auto_register_oauth};
 pub use resources::{
     ResourceDescriptor, ListResourcesInput, ListResourcesOutput,
     ReadResourceInput, ReadResourceOutput, ResourceReadContent,

@@ -202,6 +202,10 @@ pub struct SseTransport {
     max_reconnects: usize,
     /// Whether a reconnect is currently in progress (prevents nested reconnects).
     reconnecting: bool,
+    /// Last event ID received (for resumability via `Last-Event-ID` header).
+    last_event_id: Option<String>,
+    /// MCP session ID (Streamable HTTP).
+    session_id: Option<String>,
 }
 
 // SAFETY: SseTransport is not thread-safe due to the stream field.
@@ -218,6 +222,8 @@ impl SseTransport {
             buffer: String::new(),
             max_reconnects: 3,
             reconnecting: false,
+            last_event_id: None,
+            session_id: None,
         }
     }
 
@@ -227,17 +233,41 @@ impl SseTransport {
         self
     }
 
-    /// Connect to the SSE endpoint
+    /// Get the current MCP session ID.
+    pub fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
+    /// Connect to the SSE endpoint.
+    ///
+    /// Sends `Last-Event-ID` header if reconnecting after a previous connection
+    /// (SSE Resumability per MCP spec). Captures `Mcp-Session-Id` from response.
     pub async fn connect(&mut self) -> Result<(), TransportError> {
         info!("Connecting to SSE endpoint: {}", self.endpoint);
 
-        let response = self
+        let mut builder = self
             .client
             .get(&self.endpoint)
-            .header("Accept", "text/event-stream")
+            .header("Accept", "text/event-stream");
+
+        // Send Last-Event-ID for resumability if we have a previous event ID.
+        if let Some(ref eid) = self.last_event_id {
+            debug!(last_event_id = %eid, "SSE reconnecting with Last-Event-ID");
+            builder = builder.header("Last-Event-ID", eid.as_str());
+        }
+
+        let response = builder
             .send()
             .await
             .map_err(|e| TransportError::Sse(format!("Connection failed: {e}")))?;
+
+        // Capture MCP session ID from response.
+        if let Some(sid) = response.headers().get("Mcp-Session-Id") {
+            if let Ok(s) = sid.to_str() {
+                debug!(session_id = %s, "SSE transport received MCP session ID");
+                self.session_id = Some(s.to_string());
+            }
+        }
 
         if !response.status().is_success() {
             return Err(TransportError::Sse(format!(
@@ -298,14 +328,29 @@ impl SseTransport {
 impl Transport for SseTransport {
     async fn send(&mut self, message: &str) -> Result<(), TransportError> {
         // For bidirectional SSE, send via HTTP POST
-        let response = self
+        let mut builder = self
             .client
             .post(&self.endpoint)
             .header("Content-Type", "application/json")
-            .body(message.to_string())
+            .header("Accept", "application/json, text/event-stream")
+            .body(message.to_string());
+
+        // Include MCP session ID if available (Streamable HTTP).
+        if let Some(ref sid) = self.session_id {
+            builder = builder.header("Mcp-Session-Id", sid.as_str());
+        }
+
+        let response = builder
             .send()
             .await
             .map_err(|e| TransportError::Sse(format!("POST request failed: {e}")))?;
+
+        // Capture session ID from response.
+        if let Some(sid) = response.headers().get("Mcp-Session-Id") {
+            if let Ok(s) = sid.to_str() {
+                self.session_id = Some(s.to_string());
+            }
+        }
 
         if !response.status().is_success() {
             return Err(TransportError::Sse(format!(
@@ -353,8 +398,14 @@ impl Transport for SseTransport {
                                 self.buffer.push('\n');
                             }
                             self.buffer.push_str(data);
+                        } else if let Some(rest) = line.strip_prefix("id:") {
+                            // Capture event ID for SSE resumability.
+                            let id = rest.trim().to_string();
+                            if !id.is_empty() {
+                                self.last_event_id = Some(id);
+                            }
                         }
-                        // Ignore other SSE fields (event:, id:, retry:)
+                        // Ignore other SSE fields (event:, retry:)
                     }
                 }
                 Some(Err(e)) => {
@@ -399,11 +450,18 @@ impl Transport for SseTransport {
 ///
 /// Uses a request/response pattern: `send()` POSTs a JSON-RPC message and
 /// buffers the response. `receive()` returns the buffered response.
+///
+/// Supports MCP Streamable HTTP (spec 2025-03-26):
+/// - Sends `Accept: application/json, text/event-stream` header
+/// - Handles both JSON and SSE responses
+/// - Tracks `Mcp-Session-Id` for session management
 pub struct HttpTransport {
     client: reqwest::Client,
     endpoint: String,
     /// Buffered response from the last POST request.
     pending_response: Option<String>,
+    /// MCP session ID (Streamable HTTP).
+    session_id: Option<String>,
 }
 
 impl HttpTransport {
@@ -413,21 +471,43 @@ impl HttpTransport {
             client: reqwest::Client::new(),
             endpoint: endpoint.into(),
             pending_response: None,
+            session_id: None,
         }
+    }
+
+    /// Get the current MCP session ID.
+    pub fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
     }
 }
 
 #[async_trait]
 impl Transport for HttpTransport {
     async fn send(&mut self, message: &str) -> Result<(), TransportError> {
-        let response = self
+        let mut builder = self
             .client
             .post(&self.endpoint)
             .header("Content-Type", "application/json")
-            .body(message.to_string())
+            .header("Accept", "application/json, text/event-stream")
+            .body(message.to_string());
+
+        // Include MCP session ID if available (Streamable HTTP).
+        if let Some(ref sid) = self.session_id {
+            builder = builder.header("Mcp-Session-Id", sid.as_str());
+        }
+
+        let response = builder
             .send()
             .await
             .map_err(|e| TransportError::Http(format!("Request failed: {e}")))?;
+
+        // Capture session ID from response.
+        if let Some(sid) = response.headers().get("Mcp-Session-Id") {
+            if let Ok(s) = sid.to_str() {
+                debug!(session_id = %s, "HTTP transport received MCP session ID");
+                self.session_id = Some(s.to_string());
+            }
+        }
 
         if !response.status().is_success() {
             return Err(TransportError::Http(format!(
@@ -436,13 +516,29 @@ impl Transport for HttpTransport {
             )));
         }
 
-        let body = response
-            .text()
-            .await
-            .map_err(|e| TransportError::Http(format!("Failed to read response: {e}")))?;
+        // Detect SSE vs JSON response (Streamable HTTP).
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_lowercase();
 
-        debug!("HTTP sent+received: {} bytes request, {} bytes response", message.len(), body.len());
-        self.pending_response = Some(body);
+        if content_type.contains("text/event-stream") {
+            // SSE response — extract first JSON-RPC payload from events.
+            let body = Self::extract_sse_payload(response).await?;
+            debug!("HTTP sent+received (SSE): {} bytes request, {} bytes response", message.len(), body.len());
+            self.pending_response = Some(body);
+        } else {
+            // Standard JSON response.
+            let body = response
+                .text()
+                .await
+                .map_err(|e| TransportError::Http(format!("Failed to read response: {e}")))?;
+            debug!("HTTP sent+received: {} bytes request, {} bytes response", message.len(), body.len());
+            self.pending_response = Some(body);
+        }
+
         Ok(())
     }
 
@@ -453,7 +549,58 @@ impl Transport for HttpTransport {
 
     async fn close(&mut self) -> Result<(), TransportError> {
         self.pending_response = None;
+        // Send DELETE to terminate session if we have a session ID.
+        if self.session_id.is_some() {
+            let _ = self
+                .client
+                .delete(&self.endpoint)
+                .send()
+                .await;
+            self.session_id = None;
+        }
         Ok(())
+    }
+}
+
+impl HttpTransport {
+    /// Extract the first JSON-RPC payload from an SSE response body.
+    async fn extract_sse_payload(response: reqwest::Response) -> Result<String, TransportError> {
+        use futures_util::StreamExt;
+
+        let byte_stream = response.bytes_stream();
+        let mut stream = Box::pin(byte_stream);
+        let mut buffer = String::new();
+        let mut event_data = String::new();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| TransportError::Sse(format!("Stream error: {e}")))?;
+            let text = String::from_utf8_lossy(&chunk);
+            buffer.push_str(&text);
+
+            while let Some(newline_pos) = buffer.find('\n') {
+                let line = buffer[..newline_pos].trim().to_string();
+                buffer = buffer[newline_pos + 1..].to_string();
+
+                if line.is_empty() {
+                    if !event_data.is_empty() {
+                        return Ok(event_data);
+                    }
+                } else if let Some(rest) = line.strip_prefix("data:") {
+                    let data = rest.trim();
+                    if !event_data.is_empty() {
+                        event_data.push('\n');
+                    }
+                    event_data.push_str(data);
+                }
+            }
+        }
+
+        // Return remaining data if any.
+        if !event_data.is_empty() {
+            return Ok(event_data);
+        }
+
+        Err(TransportError::Sse("SSE stream ended without data payload".to_string()))
     }
 }
 
