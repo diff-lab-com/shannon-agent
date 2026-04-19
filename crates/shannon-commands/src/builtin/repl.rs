@@ -63,7 +63,7 @@ pub fn model_command() -> Command {
     Command::Local(LocalCommand {
         base: CommandBase {
             name: "model".to_string(),
-            aliases: vec![],
+            aliases: vec!["models".to_string()],
             description: "Show or set the AI model".to_string(),
             has_user_specified_description: false,
             availability: vec![CommandAvailability::All],

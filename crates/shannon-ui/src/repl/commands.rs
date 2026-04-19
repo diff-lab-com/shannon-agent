@@ -177,11 +177,10 @@ fn handle_quit(repl: &mut Repl) -> Result<()> {
 
 fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
     if args.is_empty() {
-        repl.show_input_dialog(
-            "Set Model",
-            "Enter model name (e.g. claude-3.5-sonnet, gpt-4o)...",
-            "set_model",
+        let picker = crate::widgets::select::ModelPickerWidget::new(
+            repl.state.model.as_deref(),
         );
+        repl.state.model_picker = Some(picker);
     } else {
         repl.state.model = Some(args.to_string());
         repl.chat.add_message(

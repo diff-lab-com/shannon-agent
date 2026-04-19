@@ -37,6 +37,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             || state.fuzzy_picker.is_some()
             || state.file_selector.is_some()
             || state.multi_select.is_some()
+            || state.model_picker.is_some()
         {
             // Render base layout first
             crate::widgets::MainLayoutWidget::render_complete_with_spinner(
@@ -55,6 +56,8 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
                 selector.render(f, f.area());
             } else if let Some(ref msel) = state.multi_select {
                 msel.render(f, f.area());
+            } else if let Some(ref mp) = state.model_picker {
+                mp.render(f, f.area());
             }
         } else {
             crate::widgets::MainLayoutWidget::render_complete_with_spinner(

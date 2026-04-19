@@ -98,6 +98,8 @@ pub struct ReplState {
     pub multi_progress_visible: bool,
     /// Active multi-select widget (e.g., for /select-tools)
     pub multi_select: Option<crate::widgets::select::MultiSelectWidget>,
+    /// Active model picker widget (for /models command)
+    pub model_picker: Option<crate::widgets::select::ModelPickerWidget>,
     /// Current completion suggestions to display (populated by Tab, cleared by typing)
     pub completion_suggestions: Vec<String>,
     /// Index of the currently highlighted completion suggestion
@@ -160,6 +162,7 @@ impl Default for ReplState {
             multi_progress: MultiProgressWidget::new(),
             multi_progress_visible: false,
             multi_select: None,
+            model_picker: None,
             completion_suggestions: Vec::new(),
             completion_suggestion_index: 0,
             plan: PlanState::default(),

@@ -726,3 +726,301 @@ mod tests {
         assert_eq!(widget.title, "Select File");
     }
 }
+
+// ── Model Picker Widget ────────────────────────────────────────────
+
+use shannon_core::api::LlmProvider;
+use shannon_core::model_registry::{
+    ModelInfo, all_providers, detect_local_models, models_for_provider, provider_display_name,
+};
+
+const MAX_VISIBLE_MODELS: usize = 10;
+
+/// Interactive model picker with provider tabs and model list.
+///
+/// Navigate with:
+/// - `←` / `→` — switch provider tab
+/// - `↑` / `↓` / `j` / `k` — select model
+/// - `Enter` — confirm selection
+/// - `Esc` — cancel
+#[derive(Debug, Clone)]
+pub struct ModelPickerWidget {
+    /// All providers that have models available.
+    providers: Vec<LlmProvider>,
+    /// Index into `providers` for the currently active tab.
+    current_provider_idx: usize,
+    /// Models for the currently selected provider.
+    models: Vec<ModelInfo>,
+    /// Index of the highlighted model within `models`.
+    selected_idx: usize,
+    /// Vertical scroll offset for long model lists.
+    scroll_offset: usize,
+    /// Locally detected Ollama models (kept separate to avoid leaking).
+    local_models: Vec<ModelInfo>,
+}
+
+impl ModelPickerWidget {
+    /// Create a new model picker, optionally highlighting `current_model`.
+    pub fn new(current_model: Option<&str>) -> Self {
+        let local_models = detect_local_models();
+        let providers = all_providers();
+
+        // Include Ollama if local models were found
+        let mut providers = providers;
+        if !local_models.is_empty() && !providers.contains(&LlmProvider::Ollama) {
+            providers.push(LlmProvider::Ollama);
+        }
+
+        let mut picker = Self {
+            providers,
+            current_provider_idx: 0,
+            models: Vec::new(),
+            selected_idx: 0,
+            scroll_offset: 0,
+            local_models,
+        };
+
+        // Find the provider of the current model to open the right tab
+        if let Some(model_id) = current_model {
+            if let Some(idx) = picker.providers.iter().position(|p| {
+                picker.models_for(p.clone()).iter().any(|m| m.id == model_id)
+            }) {
+                picker.current_provider_idx = idx;
+            }
+        }
+
+        picker.refresh_models();
+
+        // Highlight the current model if it belongs to this provider
+        if let Some(model_id) = current_model {
+            if let Some(idx) = picker.models.iter().position(|m| m.id == model_id) {
+                picker.selected_idx = idx;
+                if picker.selected_idx >= MAX_VISIBLE_MODELS {
+                    picker.scroll_offset = picker.selected_idx - (MAX_VISIBLE_MODELS - 1);
+                }
+            }
+        }
+
+        picker
+    }
+
+    /// Get models for a provider, including Ollama local models.
+    fn models_for(&self, provider: LlmProvider) -> Vec<ModelInfo> {
+        if provider == LlmProvider::Ollama {
+            if self.local_models.is_empty() {
+                // Fallback if no local models detected
+                vec![ModelInfo {
+                    id: "ollama/llama3",
+                    display_name: "Llama 3 (local)",
+                    provider: LlmProvider::Ollama,
+                    context_window: 8_192,
+                    max_output: 4_096,
+                }]
+            } else {
+                self.local_models.clone()
+            }
+        } else {
+            models_for_provider(provider)
+                .into_iter()
+                .cloned()
+                .collect()
+        }
+    }
+
+    /// Reload models list for the current provider tab.
+    fn refresh_models(&mut self) {
+        if self.providers.is_empty() {
+            self.models = Vec::new();
+            return;
+        }
+        let provider = self.providers[self.current_provider_idx].clone();
+        self.models = self.models_for(provider);
+        self.selected_idx = 0;
+        self.scroll_offset = 0;
+    }
+
+    /// Move selection up (wraps to bottom).
+    pub fn move_up(&mut self) {
+        if self.models.is_empty() {
+            return;
+        }
+        if self.selected_idx > 0 {
+            self.selected_idx -= 1;
+        } else {
+            self.selected_idx = self.models.len() - 1;
+            self.scroll_offset = self.models.len().saturating_sub(MAX_VISIBLE_MODELS);
+        }
+        if self.selected_idx < self.scroll_offset {
+            self.scroll_offset = self.selected_idx;
+        }
+    }
+
+    /// Move selection down (wraps to top).
+    pub fn move_down(&mut self) {
+        if self.models.is_empty() {
+            return;
+        }
+        if self.selected_idx < self.models.len() - 1 {
+            self.selected_idx += 1;
+        } else {
+            self.selected_idx = 0;
+            self.scroll_offset = 0;
+        }
+        if self.selected_idx >= self.scroll_offset + MAX_VISIBLE_MODELS {
+            self.scroll_offset = self.selected_idx - (MAX_VISIBLE_MODELS - 1);
+        }
+    }
+
+    /// Switch to the previous provider tab.
+    pub fn prev_provider(&mut self) {
+        if self.providers.len() <= 1 {
+            return;
+        }
+        if self.current_provider_idx > 0 {
+            self.current_provider_idx -= 1;
+        } else {
+            self.current_provider_idx = self.providers.len() - 1;
+        }
+        self.refresh_models();
+    }
+
+    /// Switch to the next provider tab.
+    pub fn next_provider(&mut self) {
+        if self.providers.len() <= 1 {
+            return;
+        }
+        if self.current_provider_idx < self.providers.len() - 1 {
+            self.current_provider_idx += 1;
+        } else {
+            self.current_provider_idx = 0;
+        }
+        self.refresh_models();
+    }
+
+    /// Get the currently selected model info.
+    pub fn selected_model(&self) -> Option<&ModelInfo> {
+        self.models.get(self.selected_idx)
+    }
+
+    /// Render the model picker as a centered dialog.
+    pub fn render(&self, frame: &mut Frame, area: Rect) {
+        use ratatui::widgets::Clear;
+
+        let dialog_width = 52u16.min(area.width.saturating_sub(4));
+        let visible_count = MAX_VISIBLE_MODELS.min(self.models.len());
+        // +3 for title, +2 for tab bar, +1 for footer hint
+        let dialog_height = (visible_count as u16 + 6).min(area.height.saturating_sub(4));
+
+        let x = (area.width.saturating_sub(dialog_width)) / 2;
+        let y = (area.height.saturating_sub(dialog_height)) / 2;
+
+        let dialog_area = Rect {
+            x: area.x + x,
+            y: area.y + y,
+            width: dialog_width,
+            height: dialog_height,
+        };
+        frame.render_widget(Clear, dialog_area);
+
+        let mut lines: Vec<Line> = Vec::new();
+
+        // ── Title ──
+        let provider_name = if self.providers.is_empty() {
+            "Unknown".to_string()
+        } else {
+            provider_display_name(&self.providers[self.current_provider_idx]).to_string()
+        };
+        lines.push(Line::from(Span::styled(
+            format!(" Select {provider_name} Model "),
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(""));
+
+        // ── Provider tabs ──
+        if self.providers.len() > 1 {
+            let tab_spans: Vec<Span> = self
+                .providers
+                .iter()
+                .enumerate()
+                .flat_map(|(i, p)| {
+                    let name = provider_display_name(p);
+                    let style = if i == self.current_provider_idx {
+                        Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    };
+                    let bracket = if i == self.current_provider_idx {
+                        format!(" [{name}] ")
+                    } else {
+                        format!("  {name}  ")
+                    };
+                    vec![Span::styled(bracket, style)]
+                })
+                .collect();
+            lines.push(Line::from(tab_spans));
+            lines.push(Line::from(""));
+        }
+
+        // ── Model list ──
+        let end_idx = (self.scroll_offset + MAX_VISIBLE_MODELS).min(self.models.len());
+        for i in self.scroll_offset..end_idx {
+            let model = &self.models[i];
+            let label = if model.display_name == model.id {
+                model.id.to_string()
+            } else {
+                format!("{}  ({})", model.display_name, model.id)
+            };
+            // Truncate to dialog width
+            let max_len = (dialog_width as usize).saturating_sub(4);
+            let truncated = if label.len() > max_len {
+                format!("{}...", &label[..max_len.saturating_sub(3)])
+            } else {
+                label
+            };
+
+            if i == self.selected_idx {
+                lines.push(Line::from(Span::styled(
+                    format!("▸ {truncated}"),
+                    Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD),
+                )));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    format!("  {truncated}"),
+                    Style::default().fg(Color::White),
+                )));
+            }
+        }
+
+        // ── Scroll indicators ──
+        let mut hints = String::new();
+        if self.models.len() > MAX_VISIBLE_MODELS {
+            if self.scroll_offset > 0 {
+                hints.push_str("↑ ");
+            }
+            if self.scroll_offset + MAX_VISIBLE_MODELS < self.models.len() {
+                hints.push_str("↓ ");
+            }
+        }
+        if self.providers.len() > 1 {
+            hints.push_str("←→ provider  ");
+        }
+        hints.push_str("↑↓ select  ⏎ ok  esc cancel");
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            hints,
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        let paragraph = Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray))
+                    .border_type(ratatui::widgets::BorderType::Rounded),
+            )
+            .wrap(Wrap { trim: false });
+
+        frame.render_widget(paragraph, dialog_area);
+    }
+}

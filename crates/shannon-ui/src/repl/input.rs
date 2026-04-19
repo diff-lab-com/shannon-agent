@@ -42,6 +42,11 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         return handle_multi_select_input(repl, key);
     }
 
+    // If model picker is active, handle model picker input
+    if repl.state.model_picker.is_some() {
+        return handle_model_picker_input(repl, key);
+    }
+
     // If incremental search (Ctrl+R) is active, handle search keys
     if repl.state.incremental_search_active {
         return handle_incremental_search(repl, key);
@@ -85,12 +90,12 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Char(c) => {
             repl.prompt.add_char(c);
-            repl.state.completion_suggestions.clear();
+            update_inline_completions(repl);
             Ok(())
         }
         KeyCode::Backspace => {
             repl.prompt.backspace();
-            repl.state.completion_suggestions.clear();
+            update_inline_completions(repl);
             Ok(())
         }
         KeyCode::Up => {
@@ -269,32 +274,90 @@ fn handle_vim_action(repl: &mut Repl, action: VimAction) {
     }
 }
 
-/// Handle tab completion
-fn handle_tab_completion(repl: &mut Repl) -> Result<()> {
+/// Compute completion candidates for the current input and populate the
+/// visual suggestion popup. Called on every keystroke so suggestions
+/// appear inline without requiring Tab.
+fn update_inline_completions(repl: &mut Repl) {
     let input = repl.prompt.input().to_string();
+    let (prefix, _word_start, _word_end) = extract_completion_word(&input, repl);
+
+    // Only recompute when the prefix actually changed
+    if repl.tab_completion_state.last_prefix == prefix && !repl.tab_completion_state.candidates.is_empty() {
+        return;
+    }
 
     let mut command_names = repl.runtime.block_on(async {
         repl.shared_executor.registry().await.list_names().await
     });
-
-    // Also include plugin commands in completion candidates
     for cmd in repl.plugin_manager.get_plugin_commands() {
         if !command_names.iter().any(|n| n == &cmd.name) {
             command_names.push(cmd.name.clone());
         }
     }
 
-    if let Some((completion, start, end)) = tab_complete(repl, &input, &command_names) {
-        let mut new_input = String::new();
-        if start > 0 && start <= input.len() {
-            new_input.push_str(&input[..start]);
-        }
-        new_input.push_str(&completion);
-        if end < input.len() {
-            new_input.push_str(&input[end..]);
-        }
-        repl.prompt.set_input(new_input);
+    let candidates = compute_candidates(&input, &prefix, &command_names);
+
+    repl.tab_completion_state.last_prefix = prefix;
+    repl.tab_completion_state.candidates = candidates.clone();
+    repl.tab_completion_state.current_index = 0;
+    repl.state.completion_suggestions = candidates;
+    repl.state.completion_suggestion_index = 0;
+}
+
+/// Pure function: compute completion candidates for the given input.
+fn compute_candidates(input: &str, prefix: &str, available_commands: &[String]) -> Vec<String> {
+    let has_space = input.trim_end_matches(' ').contains(' ');
+
+    if !has_space && prefix.starts_with('/') {
+        available_commands
+            .iter()
+            .filter(|cmd| {
+                let with_slash = format!("/{cmd}");
+                with_slash.starts_with(prefix)
+            })
+            .map(|cmd| format!("/{cmd}"))
+            .collect()
+    } else if !has_space && prefix.is_empty() {
+        available_commands.iter().map(|c| format!("/{c}")).collect()
+    } else if has_space && looks_like_path(prefix) {
+        complete_file_path(prefix)
+    } else if has_space {
+        let cmd_name = input.split_whitespace().next().unwrap_or("").trim_start_matches('/');
+        complete_command_args(cmd_name, prefix)
+    } else {
+        Vec::new()
     }
+}
+
+/// Handle tab completion — cycles through existing inline suggestions.
+fn handle_tab_completion(repl: &mut Repl) -> Result<()> {
+    let input = repl.prompt.input().to_string();
+
+    // Ensure candidates are fresh
+    update_inline_completions(repl);
+
+    let candidates = &repl.tab_completion_state.candidates;
+    if candidates.is_empty() {
+        return Ok(());
+    }
+
+    let idx = repl.tab_completion_state.current_index;
+    let completion = &candidates[idx];
+    let (_prefix, word_start, word_end) = extract_completion_word(&input, repl);
+
+    let mut new_input = String::new();
+    if word_start > 0 && word_start <= input.len() {
+        new_input.push_str(&input[..word_start]);
+    }
+    new_input.push_str(completion);
+    if word_end < input.len() {
+        new_input.push_str(&input[word_end..]);
+    }
+    repl.prompt.set_input(new_input);
+
+    // Advance index for next Tab press
+    repl.tab_completion_state.current_index = (idx + 1) % candidates.len();
+    repl.state.completion_suggestion_index = repl.tab_completion_state.current_index;
 
     Ok(())
 }
@@ -375,13 +438,24 @@ pub(crate) fn complete_file_path(prefix: &str) -> Vec<String> {
 /// - `/worktree` → actions (enter, exit, status)
 /// - `/debug` → subcommands (info, log, profile, trace)
 pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String> {
+    // Model names come from the static catalog (dynamic)
+    if cmd_name == "model" || cmd_name == "models" {
+        let mut ids: Vec<String> = shannon_core::model_registry::MODEL_CATALOG
+            .iter()
+            .map(|m| m.id.to_string())
+            .collect();
+        // Append local Ollama models
+        for m in shannon_core::model_registry::detect_local_models() {
+            if !ids.contains(&m.id.to_string()) {
+                ids.push(m.id.to_string());
+            }
+        }
+        let p = prefix.to_lowercase();
+        return ids.into_iter().filter(|id| id.to_lowercase().starts_with(&p)).collect();
+    }
+
     let candidates: &[&str] = match cmd_name {
         "team" => &["create", "add", "task", "assign", "status", "list", "run", "shutdown", "help"],
-        "model" => &[
-            "claude-3-5-sonnet", "claude-3-opus", "claude-3-sonnet",
-            "gpt-4o", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo",
-            "ollama/llama3", "ollama/mistral", "ollama/codellama",
-        ],
         "doctor" | "check" | "diagnostics" => &[],
         "compact" => &["status", "truncate", "micro", "group"],
         "cost" => &[],
@@ -406,66 +480,6 @@ pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String>
         .filter(|c| c.starts_with(prefix))
         .map(|c| (*c).to_string())
         .collect()
-}
-
-/// Perform tab completion on the current input.
-///
-/// Routes between three completion contexts:
-/// 1. Command name completion (input starts with `/`, no space)
-/// 2. File path completion (argument word looks like a path)
-/// 3. No completion (fallback)
-///
-/// Returns the completed text and the range to replace (start, end).
-fn tab_complete(repl: &mut Repl, input: &str, available_commands: &[String]) -> Option<(String, usize, usize)> {
-    let (prefix, word_start, word_end) = extract_completion_word(input, repl);
-
-    // Reset completion state if the prefix changed
-    if repl.tab_completion_state.last_prefix != prefix || repl.tab_completion_state.candidates.is_empty() {
-        repl.tab_completion_state.last_prefix = prefix.clone();
-        repl.tab_completion_state.current_index = 0;
-
-        // Determine completion context
-        let has_space = input.trim_end_matches(' ').contains(' ');
-
-        repl.tab_completion_state.candidates = if !has_space && prefix.starts_with('/') {
-            // Command name completion mode
-            available_commands
-                .iter()
-                .filter(|cmd| {
-                    let with_slash = format!("/{cmd}");
-                    with_slash.starts_with(&prefix)
-                })
-                .map(|cmd| format!("/{cmd}"))
-                .collect()
-        } else if !has_space && prefix.is_empty() {
-            // Empty input — show all commands
-            available_commands.iter().map(|c| format!("/{c}")).collect()
-        } else if has_space && looks_like_path(&prefix) {
-            // File path completion mode
-            complete_file_path(&prefix)
-        } else if has_space {
-            // Command argument completion
-            let cmd_name = input.split_whitespace().next().unwrap_or("").trim_start_matches('/');
-            complete_command_args(cmd_name, &prefix)
-        } else {
-            Vec::new()
-        };
-
-        // Update visual suggestions
-        repl.state.completion_suggestions = repl.tab_completion_state.candidates.clone();
-    }
-
-    if repl.tab_completion_state.candidates.is_empty() {
-        repl.state.completion_suggestions.clear();
-        return None;
-    }
-
-    let completion = &repl.tab_completion_state.candidates[repl.tab_completion_state.current_index];
-    repl.state.completion_suggestion_index = repl.tab_completion_state.current_index;
-    repl.tab_completion_state.current_index = (repl.tab_completion_state.current_index + 1)
-        % repl.tab_completion_state.candidates.len();
-
-    Some((completion.clone(), word_start, word_end))
 }
 
 /// Extract the word to complete from input.
@@ -782,6 +796,52 @@ fn handle_multi_select_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Esc => {
             repl.state.multi_select = None;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Handle keyboard input when the model picker is active.
+fn handle_model_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => {
+            if let Some(ref mut picker) = repl.state.model_picker {
+                picker.move_up();
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if let Some(ref mut picker) = repl.state.model_picker {
+                picker.move_down();
+            }
+        }
+        KeyCode::Left => {
+            if let Some(ref mut picker) = repl.state.model_picker {
+                picker.prev_provider();
+            }
+        }
+        KeyCode::Right => {
+            if let Some(ref mut picker) = repl.state.model_picker {
+                picker.next_provider();
+            }
+        }
+        KeyCode::Enter => {
+            let selected = repl.state.model_picker
+                .as_ref()
+                .and_then(|p| p.selected_model())
+                .map(|m| m.id.to_string());
+            repl.state.model_picker = None;
+
+            if let Some(model_id) = selected {
+                repl.state.model = Some(model_id.clone());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("Model set to: {model_id}"),
+                );
+            }
+        }
+        KeyCode::Esc => {
+            repl.state.model_picker = None;
         }
         _ => {}
     }
