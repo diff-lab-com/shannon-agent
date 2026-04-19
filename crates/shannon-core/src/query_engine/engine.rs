@@ -365,6 +365,11 @@ impl QueryEngine {
         &self.client
     }
 
+    /// Update the model used for API calls.
+    pub fn set_model(&mut self, model: String) {
+        self.client.set_model(model);
+    }
+
     /// Replace the conversation history with new messages (e.g., after compaction)
     pub fn replace_conversation(&mut self, messages: Vec<Message>) {
         let turn_count = messages.iter().filter(|m| m.role == "user").count();

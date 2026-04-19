@@ -30,7 +30,12 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
     let assistant_msg_index = repl.chat.add_message(ChatRole::Assistant, String::new());
 
     // Take the query engine out — spawn requires 'static ownership
-    let query_engine = repl.query_engine.take().expect("QueryEngine not initialized");
+    let mut query_engine = repl.query_engine.take().expect("QueryEngine not initialized");
+
+    // Sync the model from REPL state into the engine's LLM client
+    if let Some(ref model) = repl.state.model {
+        query_engine.set_model(model.clone());
+    }
 
     let query_id = Uuid::new_v4();
     let session_id = Uuid::new_v4();
