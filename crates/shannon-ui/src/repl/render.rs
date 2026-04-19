@@ -204,7 +204,7 @@ pub fn render_permission_dialog(
 }
 
 /// Render a completion suggestions popup above the prompt area.
-fn render_completion_suggestions(
+pub(crate) fn render_completion_suggestions(
     frame: &mut ratatui::Frame,
     area: Rect,
     suggestions: &[String],

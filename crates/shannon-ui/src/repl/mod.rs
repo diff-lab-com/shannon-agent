@@ -3,7 +3,7 @@
 mod commands;
 mod input;
 mod query;
-mod render;
+pub(crate) mod render;
 
 use crate::{
     events::EventHandler,

@@ -333,6 +333,12 @@ enum Commands {
         #[arg(short, long)]
         host: Option<String>,
     },
+
+    /// Render predefined UI scenes as text files for AI analysis
+    Screenshot {
+        /// Output directory for screenshot text files
+        dir: String,
+    },
 }
 
 /// Parse CLI env overrides into a HashMap.
@@ -1293,7 +1299,7 @@ fn main() -> Result<()> {
             )
         }
         // No subcommand, Version, Config, and Serve commands don't need config in the same way
-        None | Some(Commands::Version { .. }) | Some(Commands::Config { .. }) | Some(Commands::Serve { .. }) => CliConfig::default(),
+        None | Some(Commands::Version { .. }) | Some(Commands::Config { .. }) | Some(Commands::Serve { .. }) | Some(Commands::Screenshot { .. }) => CliConfig::default(),
     };
 
     // Execute commands with explicit config
@@ -1404,6 +1410,11 @@ fn main() -> Result<()> {
         }
         Some(Commands::Serve { port, host }) => {
             run_serve_command(port, host.clone(), &config)?;
+        }
+        Some(Commands::Screenshot { dir }) => {
+            let output_path = std::path::PathBuf::from(&dir);
+            shannon_ui::screenshot::render_all_scenes(&output_path)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
         }
     }
 
