@@ -104,6 +104,23 @@ impl LlmProvider {
         }
     }
 
+    /// Return the default base URL for this provider.
+    pub fn default_base_url(&self) -> &'static str {
+        match self {
+            LlmProvider::Anthropic => "https://api.anthropic.com",
+            LlmProvider::OpenAI => "https://api.openai.com",
+            LlmProvider::Ollama => "http://localhost:11434",
+            LlmProvider::Gemini => "https://generativelanguage.googleapis.com",
+            LlmProvider::Azure => "https://openai.azure.com",
+            LlmProvider::Bedrock => "https://bedrock-runtime.us-east-1.amazonaws.com",
+            LlmProvider::Mistral => "https://api.mistral.ai",
+            LlmProvider::DeepSeek => "https://api.deepseek.com",
+            LlmProvider::Groq => "https://api.groq.com",
+            LlmProvider::Together => "https://api.together.xyz",
+            LlmProvider::Custom => "http://localhost:8080",
+        }
+    }
+
     /// Whether this provider uses the OpenAI-compatible wire format.
     ///
     /// These providers share the same request/response JSON schema and can

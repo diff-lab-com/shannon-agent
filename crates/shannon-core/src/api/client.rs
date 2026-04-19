@@ -417,6 +417,18 @@ impl LlmClient {
         self.config.model = model;
     }
 
+    /// Update the model AND switch provider (including base_url).
+    ///
+    /// This is the correct method to call when the user selects a model from
+    /// a different provider (e.g. picking an Ollama model while the client was
+    /// configured for Anthropic).
+    pub fn set_model_for_provider(&mut self, model: String, provider: LlmProvider) {
+        let base_url = provider.default_base_url().to_string();
+        self.config.model = model;
+        self.config.provider = provider;
+        self.config.base_url = base_url;
+    }
+
     /// Get the base URL
     pub fn base_url(&self) -> &str {
         &self.config.base_url

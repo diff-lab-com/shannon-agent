@@ -888,11 +888,12 @@ fn handle_model_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             let selected = repl.state.model_picker
                 .as_ref()
                 .and_then(|p| p.selected_model())
-                .map(|m| m.id.to_string());
+                .map(|m| (m.id.to_string(), m.provider.clone()));
             repl.state.model_picker = None;
 
-            if let Some(model_id) = selected {
+            if let Some((model_id, provider)) = selected {
                 repl.state.model = Some(model_id.clone());
+                repl.state.selected_provider = Some(provider);
                 repl.chat.add_message(
                     ChatRole::System,
                     format!("Model set to: {model_id}"),

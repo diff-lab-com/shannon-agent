@@ -56,6 +56,8 @@ pub struct ReplState {
     pub status: String,
     /// Model name being used
     pub model: Option<String>,
+    /// Provider associated with the selected model (synced to QueryEngine)
+    pub selected_provider: Option<shannon_core::api::LlmProvider>,
     /// Total tokens used
     pub tokens_used: u64,
     /// Total cost in USD accumulated across all queries
@@ -141,6 +143,7 @@ impl Default for ReplState {
         Self {
             status: "Ready".to_string(),
             model: Some("claude-3-5-sonnet".to_string()),
+            selected_provider: None,
             tokens_used: 0,
             total_cost_usd: 0.0,
             working_directory: cwd,

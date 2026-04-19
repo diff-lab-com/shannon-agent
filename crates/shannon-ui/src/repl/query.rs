@@ -32,8 +32,12 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
     // Take the query engine out — spawn requires 'static ownership
     let mut query_engine = repl.query_engine.take().expect("QueryEngine not initialized");
 
-    // Sync the model from REPL state into the engine's LLM client
-    if let Some(ref model) = repl.state.model {
+    // Sync the model (and provider, if changed) from REPL state into the engine's LLM client
+    if let Some(ref provider) = repl.state.selected_provider {
+        if let Some(ref model) = repl.state.model {
+            query_engine.set_model_for_provider(model.clone(), provider.clone());
+        }
+    } else if let Some(ref model) = repl.state.model {
         query_engine.set_model(model.clone());
     }
 

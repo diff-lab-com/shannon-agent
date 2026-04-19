@@ -40,7 +40,7 @@
 //! ```
 
 use crate::api::{
-    ContentBlock, ContentDelta, LlmClient, Message, MessageContent, StreamEvent, SystemContentBlock,
+    ContentBlock, ContentDelta, LlmClient, LlmProvider, Message, MessageContent, StreamEvent, SystemContentBlock,
     ToolResultContent,
 };
 use crate::memory::AutoDreamService;
@@ -368,6 +368,11 @@ impl QueryEngine {
     /// Update the model used for API calls.
     pub fn set_model(&mut self, model: String) {
         self.client.set_model(model);
+    }
+
+    /// Update the model AND switch provider (including base_url).
+    pub fn set_model_for_provider(&mut self, model: String, provider: LlmProvider) {
+        self.client.set_model_for_provider(model, provider);
     }
 
     /// Replace the conversation history with new messages (e.g., after compaction)
