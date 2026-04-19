@@ -58,12 +58,21 @@ impl ToolSearchTool {
     }
 
     /// Core search logic: list tools from the registry and apply filters.
+    /// Also searches deferred tools when a query is provided.
     fn search(&self, input: ToolSearchInput) -> Result<ToolSearchOutput, ToolError> {
         let registry = self.registry.read().map_err(|e| {
             ToolError::ExecutionFailed(format!("Failed to acquire registry lock: {e}"))
         })?;
 
-        let all_tools = registry.list_tools_info();
+        // Collect visible (non-deferred) tools plus matching deferred tools
+        let mut all_tools = registry.list_tools_info();
+
+        // When a query is provided, also search deferred tools
+        if input.query.is_some() {
+            let query = input.query.as_deref().unwrap_or("");
+            let deferred_matches = registry.search_deferred(query);
+            all_tools.extend(deferred_matches);
+        }
 
         let query_lower = input
             .query

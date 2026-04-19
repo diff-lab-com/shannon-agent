@@ -106,6 +106,16 @@ pub enum HookEventType {
     TeamTaskCompleted,
     /// When a teammate goes idle
     TeammateIdle,
+    /// Before context compaction
+    PreCompact,
+    /// When a subagent is spawned
+    SubagentStart,
+    /// When a subagent finishes
+    SubagentStop,
+    /// When a tool permission is denied
+    PermissionDenied,
+    /// When the model stops generating
+    Stop,
 }
 
 impl HookEventType {
@@ -121,6 +131,11 @@ impl HookEventType {
             "TeamTaskCreated" => Some(Self::TeamTaskCreated),
             "TeamTaskCompleted" => Some(Self::TeamTaskCompleted),
             "TeammateIdle" => Some(Self::TeammateIdle),
+            "PreCompact" => Some(Self::PreCompact),
+            "SubagentStart" => Some(Self::SubagentStart),
+            "SubagentStop" => Some(Self::SubagentStop),
+            "PermissionDenied" => Some(Self::PermissionDenied),
+            "Stop" => Some(Self::Stop),
             _ => None,
         }
     }
@@ -138,6 +153,11 @@ impl std::fmt::Display for HookEventType {
             Self::TeamTaskCreated => write!(f, "TeamTaskCreated"),
             Self::TeamTaskCompleted => write!(f, "TeamTaskCompleted"),
             Self::TeammateIdle => write!(f, "TeammateIdle"),
+            Self::PreCompact => write!(f, "PreCompact"),
+            Self::SubagentStart => write!(f, "SubagentStart"),
+            Self::SubagentStop => write!(f, "SubagentStop"),
+            Self::PermissionDenied => write!(f, "PermissionDenied"),
+            Self::Stop => write!(f, "Stop"),
         }
     }
 }
@@ -218,6 +238,43 @@ pub enum HookEvent {
         /// Number of remaining available tasks
         available_tasks: usize,
     },
+    /// Before context compaction
+    PreCompact {
+        /// Number of messages in the conversation
+        messages_count: usize,
+        /// Estimated token usage
+        estimated_tokens: usize,
+    },
+    /// When a subagent is spawned
+    SubagentStart {
+        /// Unique agent identifier
+        agent_id: String,
+        /// Type of agent (e.g. "Explore", "general-purpose")
+        agent_type: String,
+    },
+    /// When a subagent finishes
+    SubagentStop {
+        /// Unique agent identifier
+        agent_id: String,
+        /// Brief summary of the result
+        result_summary: String,
+    },
+    /// When a tool permission is denied
+    PermissionDenied {
+        /// Name of the tool
+        tool_name: String,
+        /// Tool input that was denied
+        input: Value,
+        /// How many times the user has retried
+        retry_count: usize,
+    },
+    /// When the model stops generating
+    Stop {
+        /// Number of tool calls made in this turn
+        tool_calls_count: usize,
+        /// Whether the model should continue (exit code 2 = force continue)
+        should_continue: bool,
+    },
 }
 
 impl HookEvent {
@@ -233,6 +290,11 @@ impl HookEvent {
             Self::TeamTaskCreated { .. } => HookEventType::TeamTaskCreated,
             Self::TeamTaskCompleted { .. } => HookEventType::TeamTaskCompleted,
             Self::TeammateIdle { .. } => HookEventType::TeammateIdle,
+            Self::PreCompact { .. } => HookEventType::PreCompact,
+            Self::SubagentStart { .. } => HookEventType::SubagentStart,
+            Self::SubagentStop { .. } => HookEventType::SubagentStop,
+            Self::PermissionDenied { .. } => HookEventType::PermissionDenied,
+            Self::Stop { .. } => HookEventType::Stop,
         }
     }
 
@@ -250,6 +312,11 @@ impl HookEvent {
             Self::TeamTaskCreated { subject, .. } => subject.clone(),
             Self::TeamTaskCompleted { subject, .. } => subject.clone(),
             Self::TeammateIdle { agent_name, .. } => agent_name.clone(),
+            Self::PreCompact { messages_count, .. } => messages_count.to_string(),
+            Self::SubagentStart { agent_id, .. } => agent_id.clone(),
+            Self::SubagentStop { agent_id, .. } => agent_id.clone(),
+            Self::PermissionDenied { tool_name, .. } => tool_name.clone(),
+            Self::Stop { tool_calls_count, .. } => tool_calls_count.to_string(),
         }
     }
 

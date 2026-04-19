@@ -9,7 +9,7 @@ pub use shannon_tool_interface::{Tool, ToolError, ToolOutput, ToolResult, ToolIn
 
 use regex::Regex;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A cached tool result with creation timestamp for TTL expiry.
 #[derive(Clone)]
@@ -123,9 +123,15 @@ fn glob_to_regex(pattern: &str) -> Result<Regex, regex::Error> {
 // ToolRegistry
 // ---------------------------------------------------------------------------
 
+/// Default threshold above which MCP server tools are deferred (not sent to LLM schema).
+pub const DEFER_THRESHOLD: usize = 50;
+
 /// Registry for managing available tools
 pub struct ToolRegistry {
     tools: std::sync::RwLock<HashMap<String, std::sync::Arc<dyn Tool>>>,
+    /// Tool names that are deferred — registered and executable, but excluded from
+    /// the JSON schema sent to the LLM.  Discovered on-demand via `ToolSearch`.
+    deferred: std::sync::RwLock<HashSet<String>>,
     /// Optional glob-based allow/deny filter for tool access.
     tool_filter: Option<ToolFilter>,
     /// Cache for read-only tool results: (tool_name, input_hash) -> cached output.
@@ -135,6 +141,12 @@ pub struct ToolRegistry {
     max_cache_entries: usize,
     /// Cache TTL in seconds. Entries older than this are considered stale.
     cache_ttl_secs: u64,
+    /// Schema cache: (version, JSON schema Value). Invalidated on register/unregister.
+    schema_cache: std::sync::RwLock<Option<(u64, Value)>>,
+    /// Tool definitions cache: (version, Vec<ToolDefinition>). Invalidated on register/unregister.
+    defs_cache: std::sync::RwLock<Option<(u64, Vec<crate::api::ToolDefinition>)>>,
+    /// Version counter for cache invalidation.
+    version: std::sync::atomic::AtomicU64,
 }
 
 impl ToolRegistry {
@@ -142,10 +154,14 @@ impl ToolRegistry {
     pub fn new() -> Self {
         Self {
             tools: std::sync::RwLock::new(HashMap::new()),
+            deferred: std::sync::RwLock::new(HashSet::new()),
             tool_filter: None,
             result_cache: std::sync::Mutex::new(HashMap::new()),
             max_cache_entries: 256,
             cache_ttl_secs: DEFAULT_CACHE_TTL_SECS,
+            schema_cache: std::sync::RwLock::new(None),
+            defs_cache: std::sync::RwLock::new(None),
+            version: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -188,6 +204,11 @@ impl ToolRegistry {
         }
     }
 
+    /// Bump the version counter to invalidate schema/defs caches.
+    fn invalidate_cache(&self) {
+        self.version.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Register a new tool
     pub fn register(&self, tool: Box<dyn Tool>) -> ToolResult<()> {
         let name = tool.name().to_string();
@@ -198,6 +219,7 @@ impl ToolRegistry {
             )));
         }
         tools.insert(name, std::sync::Arc::from(tool));
+        self.invalidate_cache();
         Ok(())
     }
 
@@ -208,7 +230,94 @@ impl ToolRegistry {
             .unwrap()
             .remove(name)
             .ok_or_else(|| ToolError::NotFound(name.to_string()))?;
+        // Also remove from deferred set if present
+        self.deferred.write().unwrap().remove(name);
+        self.invalidate_cache();
         Ok(())
+    }
+
+    /// Register a tool and mark it as deferred (excluded from LLM schema).
+    ///
+    /// Deferred tools are still executable via `get()` / `execute()` but their
+    /// schemas are not sent to the model.  The model discovers them on-demand
+    /// through the `ToolSearch` meta-tool.
+    pub fn register_deferred(&self, tool: Box<dyn Tool>) -> ToolResult<()> {
+        let name = tool.name().to_string();
+        let mut tools = self.tools.write().unwrap();
+        if tools.contains_key(&name) {
+            return Err(ToolError::RegistryError(format!(
+                "Tool {name} already registered"
+            )));
+        }
+        self.deferred.write().unwrap().insert(name.clone());
+        tools.insert(name, std::sync::Arc::from(tool));
+        self.invalidate_cache();
+        Ok(())
+    }
+
+    /// Register multiple tools, automatically deferring if the batch exceeds
+    /// [`DEFER_THRESHOLD`].  Returns the number of tools marked as deferred.
+    pub fn register_batch(&self, batch: Vec<Box<dyn Tool>>) -> ToolResult<usize> {
+        if batch.is_empty() {
+            return Ok(0);
+        }
+        let defer = batch.len() > DEFER_THRESHOLD;
+        let mut deferred_count = 0;
+        for tool in batch {
+            let name = tool.name().to_string();
+            let mut tools = self.tools.write().unwrap();
+            if tools.contains_key(&name) {
+                continue; // skip duplicates silently in batch mode
+            }
+            if defer {
+                self.deferred.write().unwrap().insert(name.clone());
+                deferred_count += 1;
+            }
+            tools.insert(name, std::sync::Arc::from(tool));
+        }
+        self.invalidate_cache();
+        Ok(deferred_count)
+    }
+
+    /// Search deferred tools by keyword (name or description substring match).
+    ///
+    /// Returns full `ToolInfo` including input_schema so the LLM can use the
+    /// tool after discovery.
+    pub fn search_deferred(&self, query: &str) -> Vec<ToolInfo> {
+        let deferred = self.deferred.read().unwrap();
+        if deferred.is_empty() {
+            return vec![];
+        }
+        let query_lower = query.to_lowercase();
+        let tools = self.tools.read().unwrap();
+        deferred
+            .iter()
+            .filter_map(|name| {
+                let tool = tools.get(name)?;
+                let tool_name = tool.name();
+                if !self.is_allowed(tool_name) {
+                    return None;
+                }
+                let name_match = tool_name.to_lowercase().contains(&query_lower);
+                let desc_match = tool.description().to_lowercase().contains(&query_lower);
+                if name_match || desc_match {
+                    Some(ToolInfo {
+                        name: tool_name.to_string(),
+                        description: tool.description().to_string(),
+                        category: tool.category().to_string(),
+                        requires_auth: tool.requires_auth(),
+                        input_schema: tool.input_schema(),
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Returns the number of deferred tools.
+    pub fn deferred_count(&self) -> usize {
+        self.deferred.read().unwrap().len()
     }
 
     /// Get a tool by name (respects the allowed_tools filter).
@@ -429,14 +538,26 @@ pub enum ToolBatch {
 }
 
 impl ToolRegistry {
-    /// Get all tools as JSON schema for Claude API (respects the allowed_tools filter)
+    /// Get all tools as JSON schema for Claude API (respects the allowed_tools filter
+    /// and excludes deferred tools). Results are cached and invalidated on register/unregister.
     pub fn to_json_schema(&self) -> Value {
+        let ver = self.version.load(std::sync::atomic::Ordering::Relaxed);
+        {
+            let cache = self.schema_cache.read().unwrap();
+            if let Some((cached_ver, ref schema)) = *cache {
+                if cached_ver == ver {
+                    return schema.clone();
+                }
+            }
+        }
+        // Cache miss — rebuild
+        let deferred = self.deferred.read().unwrap();
         let tools: Vec<Value> = self
             .tools
             .read()
             .unwrap()
             .values()
-            .filter(|t| self.is_allowed(t.name()))
+            .filter(|t| self.is_allowed(t.name()) && !deferred.contains(t.name()))
             .map(|tool| {
                 serde_json::json!({
                     "name": tool.name(),
@@ -445,23 +566,40 @@ impl ToolRegistry {
                 })
             })
             .collect();
-        serde_json::json!(tools)
+        let schema = serde_json::json!(tools);
+        *self.schema_cache.write().unwrap() = Some((ver, schema.clone()));
+        schema
     }
 
-    /// Get all tools as ToolDefinition for Claude API (respects the allowed_tools filter)
+    /// Get all tools as ToolDefinition for Claude API (respects the allowed_tools filter
+    /// and excludes deferred tools). Results are cached and invalidated on register/unregister.
     pub fn to_tool_definitions(&self) -> Vec<crate::api::ToolDefinition> {
-        self.tools
+        let ver = self.version.load(std::sync::atomic::Ordering::Relaxed);
+        {
+            let cache = self.defs_cache.read().unwrap();
+            if let Some((cached_ver, ref defs)) = *cache {
+                if cached_ver == ver {
+                    return defs.clone();
+                }
+            }
+        }
+        // Cache miss — rebuild
+        let deferred = self.deferred.read().unwrap();
+        let defs: Vec<crate::api::ToolDefinition> = self
+            .tools
             .read()
             .unwrap()
             .values()
-            .filter(|t| self.is_allowed(t.name()))
+            .filter(|t| self.is_allowed(t.name()) && !deferred.contains(t.name()))
             .map(|tool| crate::api::ToolDefinition {
                 name: tool.name().to_string(),
                 description: tool.description().to_string(),
                 input_schema: tool.input_schema(),
-                strict: Some(false), // Default to non-strict for compatibility
+                strict: Some(false),
             })
-            .collect()
+            .collect();
+        *self.defs_cache.write().unwrap() = Some((ver, defs.clone()));
+        defs
     }
 }
 
@@ -918,5 +1056,104 @@ mod tests {
         let names = registry.list();
         assert_eq!(names.len(), 1);
         assert!(names.contains(&"Bash".to_string()));
+    }
+
+    // ── Deferred loading tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_register_deferred_excludes_from_schema() {
+        let registry = ToolRegistry::new();
+        registry.register(Box::new(DummyTool { name: "VisibleTool".into() })).unwrap();
+        registry.register_deferred(Box::new(DummyTool { name: "HiddenTool".into() })).unwrap();
+
+        // Both should be in list() and get()
+        assert!(registry.get("VisibleTool").is_some());
+        assert!(registry.get("HiddenTool").is_some());
+        assert_eq!(registry.list().len(), 2);
+
+        // Only VisibleTool should appear in schema
+        let schema = registry.to_json_schema();
+        let tools = schema.as_array().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["name"], "VisibleTool");
+
+        // Only VisibleTool in tool definitions
+        let defs = registry.to_tool_definitions();
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].name, "VisibleTool");
+    }
+
+    #[test]
+    fn test_deferred_count() {
+        let registry = ToolRegistry::new();
+        assert_eq!(registry.deferred_count(), 0);
+        registry.register_deferred(Box::new(DummyTool { name: "D1".into() })).unwrap();
+        registry.register_deferred(Box::new(DummyTool { name: "D2".into() })).unwrap();
+        assert_eq!(registry.deferred_count(), 2);
+    }
+
+    #[test]
+    fn test_search_deferred() {
+        let registry = ToolRegistry::new();
+        registry.register(Box::new(DummyTool { name: "NormalTool".into() })).unwrap();
+        registry.register_deferred(Box::new(DummyTool { name: "mcp__db__query_users".into() })).unwrap();
+        registry.register_deferred(Box::new(DummyTool { name: "mcp__db__query_orders".into() })).unwrap();
+
+        let results = registry.search_deferred("query");
+        assert_eq!(results.len(), 2);
+
+        let results = registry.search_deferred("users");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "mcp__db__query_users");
+    }
+
+    #[test]
+    fn test_register_batch_auto_defers() {
+        let registry = ToolRegistry::new();
+
+        // Create 51 tools — should auto-defer
+        let batch: Vec<Box<dyn Tool>> = (0..51)
+            .map(|i| Box::new(DummyTool { name: format!("tool_{i}") }) as Box<dyn Tool>)
+            .collect();
+
+        let deferred = registry.register_batch(batch).unwrap();
+        assert_eq!(deferred, 51);
+        assert_eq!(registry.deferred_count(), 51);
+
+        // Schema should be empty (all deferred)
+        let schema = registry.to_json_schema();
+        assert_eq!(schema.as_array().unwrap().len(), 0);
+
+        // But tools are still executable
+        assert!(registry.get("tool_0").is_some());
+        assert!(registry.get("tool_50").is_some());
+    }
+
+    #[test]
+    fn test_register_batch_small_no_defer() {
+        let registry = ToolRegistry::new();
+
+        let batch: Vec<Box<dyn Tool>> = (0..10)
+            .map(|i| Box::new(DummyTool { name: format!("small_{i}") }) as Box<dyn Tool>)
+            .collect();
+
+        let deferred = registry.register_batch(batch).unwrap();
+        assert_eq!(deferred, 0);
+        assert_eq!(registry.deferred_count(), 0);
+
+        // All should appear in schema
+        let schema = registry.to_json_schema();
+        assert_eq!(schema.as_array().unwrap().len(), 10);
+    }
+
+    #[test]
+    fn test_unregister_removes_deferred() {
+        let registry = ToolRegistry::new();
+        registry.register_deferred(Box::new(DummyTool { name: "DeferredTool".into() })).unwrap();
+        assert_eq!(registry.deferred_count(), 1);
+
+        registry.unregister("DeferredTool").unwrap();
+        assert_eq!(registry.deferred_count(), 0);
+        assert!(registry.get("DeferredTool").is_none());
     }
 }

@@ -72,8 +72,20 @@ pub struct CompactConfig {
     pub max_output_tokens: usize,
     /// Number of recent messages to keep in full (default: 10)
     pub keep_recent_count: usize,
-    /// Fraction of max context to trigger auto-compact (default: 0.8)
+    /// Fraction of max context to trigger auto-compact (default: 0.92)
     pub trigger_threshold: f32,
+    /// Fraction of max context to emit a compaction warning (default: 0.85).
+    /// Should be less than `trigger_threshold`.
+    #[serde(default = "default_warning_threshold")]
+    pub warning_threshold: f32,
+    /// Fraction of max context considered critical — proactive cleanup (default: 0.97).
+    /// Should be greater than `trigger_threshold`.
+    #[serde(default = "default_critical_threshold")]
+    pub critical_threshold: f32,
+    /// Tokens reserved for the summary during auto-compact (default: 20000).
+    /// Ensures the summary has room even under tight context limits.
+    #[serde(default = "default_reserved_summary_tokens")]
+    pub reserved_summary_tokens: usize,
     /// Enable single-message compression for oversized results
     pub enable_micro_compact: bool,
     /// Token threshold for micro-compact (default: 4096)
@@ -84,12 +96,19 @@ pub struct CompactConfig {
     pub max_context_tokens: usize,
 }
 
+fn default_warning_threshold() -> f32 { 0.85 }
+fn default_critical_threshold() -> f32 { 0.97 }
+fn default_reserved_summary_tokens() -> usize { 20000 }
+
 impl Default for CompactConfig {
     fn default() -> Self {
         Self {
             max_output_tokens: 2000,
             keep_recent_count: 10,
-            trigger_threshold: 0.8,
+            trigger_threshold: 0.92,
+            warning_threshold: 0.85,
+            critical_threshold: 0.97,
+            reserved_summary_tokens: 20000,
             enable_micro_compact: true,
             micro_compact_threshold: 4096,
             enable_session_memory_compact: true,
@@ -122,6 +141,26 @@ impl CompactConfig {
         if self.trigger_threshold <= 0.0 || self.trigger_threshold > 1.0 {
             return Err(CompactError::InvalidConfig(
                 "trigger_threshold must be in (0.0, 1.0]".to_string(),
+            ));
+        }
+        if self.warning_threshold <= 0.0 || self.warning_threshold > 1.0 {
+            return Err(CompactError::InvalidConfig(
+                "warning_threshold must be in (0.0, 1.0]".to_string(),
+            ));
+        }
+        if self.critical_threshold <= 0.0 || self.critical_threshold > 1.0 {
+            return Err(CompactError::InvalidConfig(
+                "critical_threshold must be in (0.0, 1.0]".to_string(),
+            ));
+        }
+        if self.warning_threshold > self.trigger_threshold {
+            return Err(CompactError::InvalidConfig(
+                "warning_threshold should be <= trigger_threshold".to_string(),
+            ));
+        }
+        if self.trigger_threshold > self.critical_threshold {
+            return Err(CompactError::InvalidConfig(
+                "trigger_threshold should be <= critical_threshold".to_string(),
             ));
         }
         if self.max_context_tokens == 0 {
@@ -313,6 +352,10 @@ pub struct ContextAnalysis {
     pub estimated_tokens: usize,
     /// Whether auto-compact should be triggered
     pub should_compact: bool,
+    /// Whether a compaction warning should be emitted (above warning_threshold but below trigger)
+    pub should_warn: bool,
+    /// Whether context usage is critical (above critical_threshold)
+    pub is_critical: bool,
     /// Which strategy is recommended
     pub recommended_strategy: CompactStrategy,
     /// Number of messages that would be compacted
@@ -770,6 +813,8 @@ impl CompactEngine {
             0.0
         };
         let should_compact = context_usage_ratio >= self.config.trigger_threshold;
+        let should_warn = !should_compact && context_usage_ratio >= self.config.warning_threshold;
+        let is_critical = context_usage_ratio >= self.config.critical_threshold;
 
         // Count micro-compact candidates
         let micro_compact_candidates = if self.config.enable_micro_compact {
@@ -803,6 +848,8 @@ impl CompactEngine {
         ContextAnalysis {
             estimated_tokens,
             should_compact,
+            should_warn,
+            is_critical,
             recommended_strategy,
             compactable_message_count,
             micro_compact_candidates,
@@ -1685,7 +1732,7 @@ mod tests {
         let config = CompactConfig::default();
         assert_eq!(config.max_output_tokens, 2000);
         assert_eq!(config.keep_recent_count, 10);
-        assert!((config.trigger_threshold - 0.8).abs() < 0.001);
+        assert!((config.trigger_threshold - 0.92).abs() < 0.001);
         assert!(config.enable_micro_compact);
         assert_eq!(config.micro_compact_threshold, 4096);
         assert!(config.enable_session_memory_compact);
@@ -1797,6 +1844,7 @@ mod tests {
             CompactConfig {
                 max_context_tokens: 100,
                 trigger_threshold: 0.8,
+                warning_threshold: 0.7,
                 keep_recent_count: 2,
                 ..Default::default()
             },
@@ -1844,6 +1892,7 @@ mod tests {
             CompactConfig {
                 max_context_tokens: 50,
                 trigger_threshold: 0.5,
+                warning_threshold: 0.4,
                 ..Default::default()
             },
             Box::new(RuleBasedSummarizer::new()),
@@ -2417,6 +2466,7 @@ mod tests {
             CompactConfig {
                 max_context_tokens: 200,
                 trigger_threshold: 0.5,
+                warning_threshold: 0.4,
                 keep_recent_count: 4,
                 ..Default::default()
             },

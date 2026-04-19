@@ -509,13 +509,23 @@ fn run_noninteractive_query(
                     {
                         Ok(result) => {
                             let tool_count = result.tools.len();
-                            for tool in result.tools {
-                                let _ = tools.register(Box::new(tool));
+                            let boxed: Vec<Box<dyn shannon_core::tools::Tool>> = result
+                                .tools
+                                .into_iter()
+                                .map(|t| Box::new(t) as Box<dyn shannon_core::tools::Tool>)
+                                .collect();
+                            let deferred = tools.register_batch(boxed).unwrap_or(0);
+                            if deferred > 0 {
+                                eprintln!(
+                                    "  Registered {} tool(s) from '{}' ({} deferred, use ToolSearch to discover)",
+                                    tool_count, result.server_name, deferred
+                                );
+                            } else {
+                                eprintln!(
+                                    "  Registered {} tool(s) from '{}'",
+                                    tool_count, result.server_name
+                                );
                             }
-                            eprintln!(
-                                "  Registered {} tool(s) from '{}'",
-                                tool_count, result.server_name
-                            );
                         }
                         Err(e) => {
                             eprintln!("  Warning: MCP server '{}' discovery failed: {e}", config.name);
@@ -850,14 +860,26 @@ fn run_team_agent_mode(
                     {
                         Ok(result) => {
                             let tool_count = result.tools.len();
-                            for tool in result.tools {
-                                let _ = tools.register(Box::new(tool));
+                            let boxed: Vec<Box<dyn shannon_core::tools::Tool>> = result
+                                .tools
+                                .into_iter()
+                                .map(|t| Box::new(t) as Box<dyn shannon_core::tools::Tool>)
+                                .collect();
+                            let deferred = tools.register_batch(boxed).unwrap_or(0);
+                            if deferred > 0 {
+                                tracing::info!(
+                                    "Registered {} tool(s) from '{}' ({} deferred)",
+                                    tool_count,
+                                    result.server_name,
+                                    deferred
+                                );
+                            } else {
+                                tracing::info!(
+                                    "Registered {} tool(s) from '{}'",
+                                    tool_count,
+                                    result.server_name
+                                );
                             }
-                            tracing::info!(
-                                "Registered {} tool(s) from '{}'",
-                                tool_count,
-                                result.server_name
-                            );
                         }
                         Err(e) => {
                             tracing::warn!("MCP server '{}' discovery failed: {e}", mcp_config.name);
