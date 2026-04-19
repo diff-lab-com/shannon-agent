@@ -757,20 +757,22 @@ pub struct ModelPickerWidget {
     scroll_offset: usize,
     /// Locally detected Ollama models (kept separate to avoid leaking).
     local_models: Vec<ModelInfo>,
+    /// The model ID currently in use (shown with ✓ marker).
+    current_model_id: Option<String>,
 }
 
 impl ModelPickerWidget {
     /// Create a new model picker, optionally highlighting `current_model`.
     pub fn new(current_model: Option<&str>) -> Self {
         let local_models = detect_local_models();
-        let providers = all_providers();
+        let mut providers = all_providers();
 
-        // Include Ollama if local models were found
-        let mut providers = providers;
-        if !local_models.is_empty() && !providers.contains(&LlmProvider::Ollama) {
+        // Always include Ollama tab (shows "No local models" if none detected)
+        if !providers.contains(&LlmProvider::Ollama) {
             providers.push(LlmProvider::Ollama);
         }
 
+        let current_model_id = current_model.map(|s| s.to_string());
         let mut picker = Self {
             providers,
             current_provider_idx: 0,
@@ -778,6 +780,7 @@ impl ModelPickerWidget {
             selected_idx: 0,
             scroll_offset: 0,
             local_models,
+            current_model_id,
         };
 
         // Find the provider of the current model to open the right tab
@@ -807,18 +810,8 @@ impl ModelPickerWidget {
     /// Get models for a provider, including Ollama local models.
     fn models_for(&self, provider: LlmProvider) -> Vec<ModelInfo> {
         if provider == LlmProvider::Ollama {
-            if self.local_models.is_empty() {
-                // Fallback if no local models detected
-                vec![ModelInfo {
-                    id: "ollama/llama3",
-                    display_name: "Llama 3 (local)",
-                    provider: LlmProvider::Ollama,
-                    context_window: 8_192,
-                    max_output: 4_096,
-                }]
-            } else {
-                self.local_models.clone()
-            }
+            // Return detected local models, or empty vec (render shows "No local models detected")
+            self.local_models.clone()
         } else {
             models_for_provider(provider)
                 .into_iter()
@@ -962,33 +955,69 @@ impl ModelPickerWidget {
         }
 
         // ── Model list ──
-        let end_idx = (self.scroll_offset + MAX_VISIBLE_MODELS).min(self.models.len());
-        for i in self.scroll_offset..end_idx {
-            let model = &self.models[i];
-            let label = if model.display_name == model.id {
-                model.id.to_string()
-            } else {
-                format!("{}  ({})", model.display_name, model.id)
-            };
-            // Truncate to dialog width
-            let max_len = (dialog_width as usize).saturating_sub(4);
-            let truncated = if label.len() > max_len {
-                format!("{}...", &label[..max_len.saturating_sub(3)])
-            } else {
-                label
-            };
+        if self.models.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "  No local models detected",
+                Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+            )));
+            lines.push(Line::from(Span::styled(
+                "  Install Ollama and run: ollama pull llama3",
+                Style::default().fg(Color::DarkGray),
+            )));
+        } else {
+            let end_idx = (self.scroll_offset + MAX_VISIBLE_MODELS).min(self.models.len());
+            for i in self.scroll_offset..end_idx {
+                let model = &self.models[i];
+                let is_current = self.current_model_id.as_deref() == Some(model.id);
+                let marker = if is_current { "✓" } else { " " };
+                let label = if model.display_name == model.id {
+                    model.id.to_string()
+                } else {
+                    format!("{}  ({})", model.display_name, model.id)
+                };
+                // Truncate to dialog width
+                let max_len = (dialog_width as usize).saturating_sub(6);
+                let truncated = if label.len() > max_len {
+                    format!("{}...", &label[..max_len.saturating_sub(3)])
+                } else {
+                    label
+                };
 
-            if i == self.selected_idx {
-                lines.push(Line::from(Span::styled(
-                    format!("▸ {truncated}"),
-                    Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD),
-                )));
-            } else {
-                lines.push(Line::from(Span::styled(
-                    format!("  {truncated}"),
-                    Style::default().fg(Color::White),
-                )));
+                if i == self.selected_idx {
+                    lines.push(Line::from(Span::styled(
+                        format!("{marker}▸ {truncated}"),
+                        Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    )));
+                } else if is_current {
+                    lines.push(Line::from(Span::styled(
+                        format!("{marker}  {truncated}"),
+                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    )));
+                } else {
+                    lines.push(Line::from(Span::styled(
+                        format!("{marker}  {truncated}"),
+                        Style::default().fg(Color::White),
+                    )));
+                }
             }
+        }
+
+        // ── Selected model details ──
+        if let Some(model) = self.selected_model() {
+            let ctx = if model.context_window >= 1_000_000 {
+                format!("{}M", model.context_window / 1_000_000)
+            } else {
+                format!("{}K", model.context_window / 1_000)
+            };
+            let out = if model.max_output >= 1_000 {
+                format!("{}K", model.max_output / 1_000)
+            } else {
+                model.max_output.to_string()
+            };
+            lines.push(Line::from(Span::styled(
+                format!("  ctx: {ctx} tokens  |  max output: {out} tokens"),
+                Style::default().fg(Color::Yellow),
+            )));
         }
 
         // ── Scroll indicators ──

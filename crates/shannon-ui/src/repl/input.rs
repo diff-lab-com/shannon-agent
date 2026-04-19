@@ -81,6 +81,15 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             Ok(())
         }
         KeyCode::Enter => {
+            // If completion suggestions are visible, apply the selected one
+            if !repl.state.completion_suggestions.is_empty() {
+                let idx = repl.state.completion_suggestion_index;
+                if let Some(suggestion) = repl.state.completion_suggestions.get(idx).cloned() {
+                    apply_completion(repl, &suggestion);
+                }
+                clear_completions(repl);
+                return Ok(());
+            }
             if key.modifiers.contains(KeyModifiers::SHIFT) {
                 repl.prompt.insert_newline();
             } else {
@@ -99,6 +108,16 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             Ok(())
         }
         KeyCode::Up => {
+            // If completion suggestions are visible, navigate up
+            if !repl.state.completion_suggestions.is_empty() {
+                if repl.state.completion_suggestion_index > 0 {
+                    repl.state.completion_suggestion_index -= 1;
+                } else {
+                    repl.state.completion_suggestion_index =
+                        repl.state.completion_suggestions.len().saturating_sub(1);
+                }
+                return Ok(());
+            }
             if repl.prompt.input().contains('\n') {
                 repl.prompt.cursor_up();
             } else if !repl.prompt.input().is_empty() || repl.command_history.cursor() >= 0 {
@@ -114,6 +133,15 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             Ok(())
         }
         KeyCode::Down => {
+            // If completion suggestions are visible, navigate down
+            if !repl.state.completion_suggestions.is_empty() {
+                if repl.state.completion_suggestion_index < repl.state.completion_suggestions.len().saturating_sub(1) {
+                    repl.state.completion_suggestion_index += 1;
+                } else {
+                    repl.state.completion_suggestion_index = 0;
+                }
+                return Ok(());
+            }
             if repl.prompt.input().contains('\n') {
                 repl.prompt.cursor_down();
             } else if repl.command_history.cursor() >= 0 {
@@ -129,6 +157,11 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             Ok(())
         }
         KeyCode::Esc => {
+            // If completion suggestions are visible, dismiss them
+            if !repl.state.completion_suggestions.is_empty() {
+                clear_completions(repl);
+                return Ok(());
+            }
             let action = repl.vim_handler.process_key(key);
             handle_vim_action(repl, action);
             Ok(())
@@ -272,6 +305,32 @@ fn handle_vim_action(repl: &mut Repl, action: VimAction) {
         }
         _ => {}
     }
+}
+
+/// Clear all completion suggestions and reset state.
+fn clear_completions(repl: &mut Repl) {
+    repl.state.completion_suggestions.clear();
+    repl.state.completion_suggestion_index = 0;
+    repl.tab_completion_state.candidates.clear();
+    repl.tab_completion_state.current_index = 0;
+    repl.tab_completion_state.last_prefix.clear();
+}
+
+/// Apply a completion suggestion to the current input, replacing the
+/// word under the cursor with the selected suggestion.
+fn apply_completion(repl: &mut Repl, suggestion: &str) {
+    let input = repl.prompt.input().to_string();
+    let (_prefix, word_start, word_end) = extract_completion_word(&input, repl);
+
+    let mut new_input = String::new();
+    if word_start > 0 && word_start <= input.len() {
+        new_input.push_str(&input[..word_start]);
+    }
+    new_input.push_str(suggestion);
+    if word_end < input.len() {
+        new_input.push_str(&input[word_end..]);
+    }
+    repl.prompt.set_input(new_input);
 }
 
 /// Compute completion candidates for the current input and populate the

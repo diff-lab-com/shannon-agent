@@ -68,7 +68,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "help" => handle_help(repl, args)?,
             "clear" => handle_clear(repl)?,
             "quit" | "exit" => handle_quit(repl)?,
-            "model" => handle_model(repl, args)?,
+            "model" | "models" => handle_model(repl, args)?,
             "init" => handle_init(repl)?,
             "config" => handle_config(repl, args)?,
             "sessions" => handle_sessions(repl, args)?,
