@@ -609,6 +609,17 @@ impl ToolExecutionService {
         let duration = start_time.elapsed();
         let is_error = output.is_error;
 
+        // 4b. Truncate oversized tool output (~10K tokens max)
+        const MAX_TOOL_OUTPUT_CHARS: usize = 40_000; // ~10K tokens at 4 chars/token
+        let mut output = output;
+        if output.content.len() > MAX_TOOL_OUTPUT_CHARS {
+            let original_len = output.content.len();
+            let truncated: String = output.content.chars().take(MAX_TOOL_OUTPUT_CHARS).collect();
+            output.content = format!(
+                "{truncated}\n\n[Tool output truncated: {original_len} chars -> {MAX_TOOL_OUTPUT_CHARS} chars]"
+            );
+        }
+
         // 5. Emit completed/failed progress
         if is_error {
             let progress = ToolProgress::failed(

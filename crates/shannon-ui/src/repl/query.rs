@@ -214,10 +214,22 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                     if let Ok(mut s) = status_clone.lock() { *s = progress_status.clone(); }
                 }
                 Ok(QueryEvent::Completed { .. }) => {
+                    let mut summary_parts = Vec::new();
+                    if tokens_in_turn > 0 {
+                        let turn_fmt = if tokens_in_turn >= 1000 {
+                            format!("{:.1}k", tokens_in_turn as f64 / 1000.0)
+                        } else {
+                            tokens_in_turn.to_string()
+                        };
+                        summary_parts.push(format!("{turn_fmt} tokens this turn"));
+                    }
                     if let Ok(cost) = cost_clone.lock() {
                         if *cost > 0.0 {
-                            response_text.push_str(&format!("\n💰 Session total: ${:.4}", *cost));
+                            summary_parts.push(format!("${:.4} total", *cost));
                         }
+                    }
+                    if !summary_parts.is_empty() {
+                        response_text.push_str(&format!("\n📊 {}", summary_parts.join(" · ")));
                     }
                 }
                 Ok(QueryEvent::Failed { error, .. }) => {

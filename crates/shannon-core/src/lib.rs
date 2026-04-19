@@ -72,6 +72,7 @@ pub mod unified_config;
 pub mod bridge_service;
 pub mod session_history;
 pub mod compact;
+pub mod context_budget;
 pub mod project_instructions;
 pub mod streaming_tool_executor;
 pub mod tool_execution;

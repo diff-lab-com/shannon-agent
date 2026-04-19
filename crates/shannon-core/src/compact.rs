@@ -1205,6 +1205,102 @@ impl CompactEngine {
     }
 
     // ========================================================================
+    // Proactive Stale Tool Result Pruning
+    // ========================================================================
+
+    /// Maximum tool result content to keep (in estimated tokens).
+    /// Tool results exceeding this are truncated to a summary line.
+    pub const MAX_TOOL_RESULT_TOKENS: usize = 10_000;
+
+    /// Number of "turns" (user↔assistant exchanges) after which tool results
+    /// are considered stale and eligible for proactive pruning.
+    pub const STALE_TURN_THRESHOLD: usize = 3;
+
+    /// Proactively prune tool results from older turns (>{STALE_TURN_THRESHOLD}
+    /// turns ago) by replacing their content with a short summary line.
+    ///
+    /// Unlike full compaction, this preserves the conversation structure —
+    /// only the bulky tool output content is replaced with a placeholder.
+    /// This is called when context usage crosses the warning threshold (0.85).
+    ///
+    /// Returns the number of tool results pruned and the estimated token savings.
+    pub fn prune_stale_tool_results(&self, messages: &mut Vec<Message>) -> (usize, usize) {
+        if messages.len() < 2 {
+            return (0, 0);
+        }
+
+        let original_tokens = estimate_tokens(messages);
+        let mut pruned_count = 0usize;
+
+        // Identify the boundary index: messages after this are "recent" and kept intact.
+        // We count user messages as turn boundaries.
+        let recent_start = {
+            let user_msg_count = messages.iter().filter(|m| m.role == "user").count();
+            let keep_turns = self.config.keep_recent_count / 2; // ~turns = messages/2
+            let keep_turns = keep_turns.max(Self::STALE_TURN_THRESHOLD);
+            if user_msg_count <= keep_turns {
+                0 // All messages are recent
+            } else {
+                // Walk backwards from the end to find where we should stop pruning
+                let mut user_seen = 0usize;
+                let mut boundary = messages.len();
+                for (i, msg) in messages.iter().enumerate().rev() {
+                    if msg.role == "user" {
+                        user_seen += 1;
+                        if user_seen > keep_turns {
+                            boundary = i + 1;
+                            break;
+                        }
+                    }
+                }
+                boundary
+            }
+        };
+
+        // Prune large tool results in messages before the boundary
+        for i in 0..recent_start.min(messages.len()) {
+            let msg = &mut messages[i];
+            if let MessageContent::Blocks(blocks) = &mut msg.content {
+                for block in blocks.iter_mut() {
+                    if let ContentBlock::ToolResult { content, is_error, .. } = block {
+                        if let Some(result_content) = content.take() {
+                            let text = match &result_content {
+                                ToolResultContent::Single(s) => s.clone(),
+                                ToolResultContent::Multiple(blks) => blks
+                                    .iter()
+                                    .filter_map(|b| match b {
+                                        ContentBlock::Text { text } => Some(text.as_str()),
+                                        _ => None,
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n"),
+                            };
+
+                            let estimated_tokens = text.len() / 4;
+                            if estimated_tokens > Self::MAX_TOOL_RESULT_TOKENS {
+                                let is_err = is_error.unwrap_or(false);
+                                let summary = format!(
+                                    "[Tool result pruned — was {} tokens] {}",
+                                    estimated_tokens,
+                                    if is_err { "(error) " } else { "" },
+                                );
+                                *content = Some(ToolResultContent::Single(summary));
+                                pruned_count += 1;
+                            } else {
+                                *content = Some(result_content);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let new_tokens = estimate_tokens(messages);
+        let saved = original_tokens.saturating_sub(new_tokens);
+        (pruned_count, saved)
+    }
+
+    // ========================================================================
     // Post-Compact Cleanup
     // ========================================================================
 
@@ -2844,6 +2940,90 @@ mod tests {
         let messages = vec![user_msg(&format!("Check {long_path}"))];
         let (files, _) = extract_compaction_metadata(&messages);
         assert!(files.is_empty(), "Long paths should be ignored");
+    }
+
+    // -- prune_stale_tool_results --
+
+    #[test]
+    fn test_prune_stale_no_messages() {
+        let engine = CompactEngine::with_defaults().unwrap();
+        let mut messages: Vec<Message> = vec![];
+        let (count, saved) = engine.prune_stale_tool_results(&mut messages);
+        assert_eq!(count, 0);
+        assert_eq!(saved, 0);
+    }
+
+    #[test]
+    fn test_prune_stale_keeps_recent_intact() {
+        let engine = CompactEngine::with_defaults().unwrap();
+        let large_result = "X".repeat(60_000);
+        let mut messages = vec![
+            user_msg("Do something"),
+            tool_use_msg("t1", "bash", "ls"),
+            tool_result_msg("t1", &large_result),
+            assistant_msg("Done"),
+        ];
+        let (count, _saved) = engine.prune_stale_tool_results(&mut messages);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_prune_stale_prunes_old_large_results() {
+        let engine = CompactEngine::new(
+            CompactConfig {
+                keep_recent_count: 4,
+                ..Default::default()
+            },
+            Box::new(RuleBasedSummarizer::new()),
+        )
+        .unwrap();
+
+        let large_result = "X".repeat(60_000);
+        let mut messages = vec![
+            user_msg("Turn 1"),
+            tool_use_msg("t1", "bash", "ls"),
+            tool_result_msg("t1", &large_result),
+            assistant_msg("Response 1"),
+            user_msg("Turn 2"),
+            tool_use_msg("t2", "bash", "cat"),
+            tool_result_msg("t2", &large_result),
+            assistant_msg("Response 2"),
+            user_msg("Turn 3"),
+            tool_use_msg("t3", "bash", "find"),
+            tool_result_msg("t3", &large_result),
+            assistant_msg("Response 3"),
+            user_msg("Recent turn"),
+            assistant_msg("Recent reply"),
+        ];
+
+        let (count, saved) = engine.prune_stale_tool_results(&mut messages);
+        assert!(count > 0, "Should prune at least one old tool result");
+        assert!(saved > 0, "Should save tokens");
+    }
+
+    #[test]
+    fn test_prune_stale_small_results_not_pruned() {
+        let engine = CompactEngine::new(
+            CompactConfig {
+                keep_recent_count: 2,
+                ..Default::default()
+            },
+            Box::new(RuleBasedSummarizer::new()),
+        )
+        .unwrap();
+
+        let small_result = "OK";
+        let mut messages = vec![
+            user_msg("Turn 1"),
+            tool_result_msg("t1", small_result),
+            assistant_msg("Response 1"),
+            user_msg("Turn 2"),
+            tool_result_msg("t2", small_result),
+            assistant_msg("Response 2"),
+        ];
+
+        let (count, _saved) = engine.prune_stale_tool_results(&mut messages);
+        assert_eq!(count, 0, "Small results should not be pruned");
     }
 
     // -- Edge case: set_config validates new config --
