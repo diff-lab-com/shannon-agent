@@ -59,7 +59,7 @@ impl HeaderWidget {
         let left_paragraph = Paragraph::new(Line::from(left_spans))
             .block(
                 Block::default()
-                    .borders(Borders::ALL & !Borders::RIGHT & !Borders::BOTTOM)
+                    .borders(Borders::TOP | Borders::BOTTOM)
                     .border_style(Style::default().fg(Color::Cyan))
             )
             .alignment(Alignment::Left)
@@ -93,7 +93,7 @@ impl HeaderWidget {
         let right_paragraph = Paragraph::new(Line::from(right_spans))
             .block(
                 Block::default()
-                    .borders(Borders::ALL & !Borders::LEFT & !Borders::BOTTOM)
+                    .borders(Borders::TOP | Borders::BOTTOM)
                     .border_style(Style::default().fg(Color::Cyan))
             )
             .alignment(Alignment::Left)
@@ -104,7 +104,7 @@ impl HeaderWidget {
 
     /// Get the recommended height for the header bar
     pub fn height() -> usize {
-        1 // Single line header
+        3 // Top border + content + bottom padding
     }
 }
 
@@ -360,6 +360,7 @@ impl ChatWidget {
     /// Render the chat widget
     pub fn render(&self, frame: &mut Frame, area: Rect) {
         let mut list_items = Vec::new();
+        let inner_width = area.width.saturating_sub(2) as usize; // subtract borders
 
         for msg in self.messages.iter() {
             let (role_name, role_color) = match msg.role {
@@ -371,24 +372,49 @@ impl ChatWidget {
 
             let timestamp = msg.timestamp.format("%H:%M:%S").to_string();
 
-            // Format message (use char-aware truncation for UTF-8 safety)
-            let formatted_content = if msg.content.chars().count() > 80 {
-                let truncated: String = msg.content.chars().take(77).collect();
-                format!("{truncated}...")
-            } else {
-                msg.content.clone()
-            };
+            // Split content by newlines into individual display lines
+            let content_lines: Vec<&str> = msg.content.split('\n').collect();
 
-            let item = ListItem::new(Line::from(vec![
-                Span::styled("[", Style::default().fg(Color::DarkGray)),
-                Span::styled(timestamp.clone(), Style::default().fg(Color::DarkGray)),
-                Span::styled("] ", Style::default().fg(Color::DarkGray)),
-                Span::styled(role_name, Style::default().fg(role_color).add_modifier(Modifier::BOLD)),
-                Span::styled(": ", Style::default().fg(Color::Gray)),
-                Span::styled(formatted_content, Style::default().fg(Color::White)),
-            ]));
+            for (i, content_line) in content_lines.iter().enumerate() {
+                if i == 0 {
+                    // First line: timestamp + role + content
+                    let prefix_len = timestamp.len() + role_name.len() + 5; // "[00:00:00] Role: "
+                    let available = inner_width.saturating_sub(prefix_len);
+                    let text = if content_line.chars().count() > available {
+                        let truncated: String = content_line.chars().take(available.saturating_sub(3)).collect();
+                        format!("{truncated}...")
+                    } else {
+                        content_line.to_string()
+                    };
 
-            list_items.push(item);
+                    let item = ListItem::new(Line::from(vec![
+                        Span::styled("[", Style::default().fg(Color::DarkGray)),
+                        Span::styled(timestamp.clone(), Style::default().fg(Color::DarkGray)),
+                        Span::styled("] ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(role_name, Style::default().fg(role_color).add_modifier(Modifier::BOLD)),
+                        Span::styled(": ", Style::default().fg(Color::Gray)),
+                        Span::styled(text, Style::default().fg(Color::White)),
+                    ]));
+                    list_items.push(item);
+                } else {
+                    // Continuation lines: indented
+                    let indent_len = timestamp.len() + role_name.len() + 5;
+                    let indent = " ".repeat(indent_len);
+                    let available = inner_width.saturating_sub(indent_len);
+                    let text = if content_line.chars().count() > available {
+                        let truncated: String = content_line.chars().take(available.saturating_sub(3)).collect();
+                        format!("{truncated}...")
+                    } else {
+                        content_line.to_string()
+                    };
+
+                    let item = ListItem::new(Line::from(vec![
+                        Span::styled(indent, Style::default().fg(Color::DarkGray)),
+                        Span::styled(text, Style::default().fg(Color::White)),
+                    ]));
+                    list_items.push(item);
+                }
+            }
 
             // If the message has inline image preview lines, render them
             if let Some(ref img_lines) = msg.image_lines {
@@ -398,7 +424,25 @@ impl ChatWidget {
             }
         }
 
-        let list = List::new(list_items)
+        // Slice list_items to fit the visible area.
+        // inner height = area height minus top/bottom borders (2 rows)
+        let visible_rows = area.height.saturating_sub(2) as usize;
+        let total = list_items.len();
+        let items = if total > visible_rows {
+            // Show the latest messages (from the bottom).
+            // When scroll_offset < last message, user scrolled up → show from earlier.
+            // Default scroll_offset = last msg index → show latest.
+            let max_start = total.saturating_sub(visible_rows);
+            // Use scroll_offset to determine how far back to show.
+            // scroll_offset = msg index; map to approximate line offset.
+            let scroll_back = self.messages.len().saturating_sub(1).saturating_sub(self.scroll_offset);
+            let start = max_start.saturating_sub(scroll_back).min(max_start);
+            list_items[start..].to_vec()
+        } else {
+            list_items
+        };
+
+        let list = List::new(items)
             .block(
                 Block::default()
                     .borders(Borders::ALL)

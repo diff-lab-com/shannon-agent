@@ -14,6 +14,7 @@ use ratatui::{
 use crate::repl::ReplState;
 use crate::widgets::{ChatWidget, ChatRole, MainLayoutWidget, PromptWidget};
 use crate::repl::render::{render_completion_suggestions, render_permission_dialog};
+use crate::widgets::progress::{SpinnerWidget, ProgressBarWidget};
 
 // ── Scene data ─────────────────────────────────────────────────────
 
@@ -37,6 +38,11 @@ pub fn render_all_scenes(output_dir: &Path) -> Result<(), Box<dyn std::error::Er
         scene_model_picker(),
         scene_chat(),
         scene_permission(),
+        scene_spinner(),
+        scene_many_messages(),
+        scene_long_message(),
+        scene_progress(),
+        scene_overflow(),
     ];
 
     for scene in &scenes {
@@ -280,5 +286,132 @@ fn scene_permission() -> SceneData {
         prompt,
         name: "permission",
         filename: "05_permission.txt",
+    }
+}
+
+fn scene_spinner() -> SceneData {
+    let mut state = ReplState::default();
+    let mut chat = ChatWidget::new(100);
+    let prompt = PromptWidget::new();
+
+    state.status = "Processing...".to_string();
+    state.active_tool = Some("bash".to_string());
+    // Advance spinner to show a visible frame
+    state.spinner = SpinnerWidget::new();
+    state.spinner.tick(); // advance to next frame
+
+    chat.add_message(ChatRole::User, "Run cargo test".to_string());
+    chat.add_message(ChatRole::Assistant, "Running tests now...".to_string());
+
+    SceneData {
+        state,
+        chat,
+        prompt,
+        name: "spinner",
+        filename: "06_spinner.txt",
+    }
+}
+
+fn scene_many_messages() -> SceneData {
+    let mut state = ReplState::default();
+    let mut chat = ChatWidget::new(100);
+    let prompt = PromptWidget::new();
+
+    state.status = "Ready".to_string();
+    state.tokens_used = 12_345;
+
+    // Add 15 messages to overflow the visible chat area
+    for i in 1..=5 {
+        chat.add_message(ChatRole::User, format!("Question {i}: explain concept {i}"));
+        chat.add_message(ChatRole::Assistant, format!("Answer {i}: Here is the explanation for concept {i}."));
+        chat.add_message(ChatRole::Tool, format!("bash: cargo build #{i}"));
+    }
+
+    SceneData {
+        state,
+        chat,
+        prompt,
+        name: "many_messages",
+        filename: "07_many_messages.txt",
+    }
+}
+
+fn scene_long_message() -> SceneData {
+    let mut state = ReplState::default();
+    let mut chat = ChatWidget::new(100);
+    let prompt = PromptWidget::new();
+
+    state.status = "Ready".to_string();
+    state.tokens_used = 8_920;
+
+    // Very long single-line message
+    chat.add_message(ChatRole::User, "Explain all the features of Rust's type system in detail".to_string());
+    chat.add_message(
+        ChatRole::Assistant,
+        "Rust has a rich type system that includes: ownership and borrowing rules, \
+         lifetimes ('a, 'static), traits (impl Trait, dyn Trait), generics (T: Clone + Send), \
+         enums with variants, structs (unit, tuple, named), pattern matching, \
+         type aliases, associated types, const generics, and macro types.".to_string(),
+    );
+
+    // Message with many short lines (code block simulation)
+    chat.add_message(ChatRole::Tool, "bash: cargo check\n  Checking shannon-core v0.1.0\n  Checking shannon-ui v0.1.0\n  Checking shannon-cli v0.1.0\n  Finished dev [unoptimized + debuginfo]".to_string());
+
+    SceneData {
+        state,
+        chat,
+        prompt,
+        name: "long_message",
+        filename: "08_long_message.txt",
+    }
+}
+
+fn scene_progress() -> SceneData {
+    let mut state = ReplState::default();
+    let mut chat = ChatWidget::new(100);
+    let prompt = PromptWidget::new();
+
+    state.status = "Running tool...".to_string();
+    state.active_tool = Some("write_file".to_string());
+    state.progress_bar_visible = true;
+    state.progress_bar = ProgressBarWidget::new()
+        .with_title("Writing src/main.rs".to_string())
+        .with_progress(0.45);
+    state.spinner = SpinnerWidget::new();
+    state.spinner.tick();
+
+    chat.add_message(ChatRole::User, "Add error handling to main.rs".to_string());
+    chat.add_message(ChatRole::Assistant, "I'll add error handling. Let me write the file.".to_string());
+
+    SceneData {
+        state,
+        chat,
+        prompt,
+        name: "progress",
+        filename: "09_progress.txt",
+    }
+}
+
+fn scene_overflow() -> SceneData {
+    let mut state = ReplState::default();
+    let mut chat = ChatWidget::new(100);
+    let prompt = PromptWidget::new();
+
+    state.status = "Ready".to_string();
+    state.tokens_used = 50_000;
+
+    // Add 30 messages — way more than the ~17 visible content rows
+    for i in 1..=10 {
+        chat.add_message(ChatRole::User, format!("Question {i}"));
+        chat.add_message(ChatRole::Assistant, format!("Answer {i} with some explanation text."));
+        chat.add_message(ChatRole::Tool, format!("bash: command #{i}"));
+    }
+
+    SceneData {
+        state,
+        chat,
+        prompt,
+        name: "overflow",
+        filename: "10_overflow.txt",
     }
 }

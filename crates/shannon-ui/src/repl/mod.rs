@@ -142,7 +142,7 @@ impl Default for ReplState {
 
         Self {
             status: "Ready".to_string(),
-            model: Some("claude-3-5-sonnet".to_string()),
+            model: Some("claude-sonnet-4-20250514".to_string()),
             selected_provider: None,
             tokens_used: 0,
             total_cost_usd: 0.0,
