@@ -1,5 +1,7 @@
 //! Ratatui widgets for Shannon UI
 
+use crate::tool_format::strip_ansi;
+
 pub mod select;
 pub mod progress;
 pub mod dialog;
@@ -372,8 +374,9 @@ impl ChatWidget {
 
             let timestamp = msg.timestamp.format("%H:%M:%S").to_string();
 
-            // Split content by newlines into individual display lines
-            let content_lines: Vec<&str> = msg.content.split('\n').collect();
+            // Strip ANSI escape codes — ratatui doesn't interpret them
+            let clean_content = strip_ansi(&msg.content);
+            let content_lines: Vec<&str> = clean_content.split('\n').collect();
 
             for (i, content_line) in content_lines.iter().enumerate() {
                 if i == 0 {
@@ -861,7 +864,7 @@ mod tests {
 
     #[test]
     fn test_header_widget_height() {
-        assert_eq!(HeaderWidget::height(), 1);
+        assert_eq!(HeaderWidget::height(), 3);
     }
 
     #[test]
@@ -886,12 +889,12 @@ mod tests {
         let area = Rect::new(0, 0, 100, 20);
         let (header, chat, prompt, status, full) = MainLayoutWidget::layout(area);
 
-        // Header should be at top with height 1
-        assert_eq!(header.y, 1); // margin(1) + 0
-        assert_eq!(header.height, 1);
+        // Header should be at top with height 3
+        assert_eq!(header.y, 1); // margin(1)
+        assert_eq!(header.height, 3);
 
         // Chat should be below header and be flexible
-        assert_eq!(chat.y, 2); // margin + header
+        assert_eq!(chat.y, 4); // margin(1) + header(3)
         assert!(chat.height > 0); // Flexible size
 
         // Prompt should be below chat with height 3
@@ -922,7 +925,7 @@ mod tests {
         let (header, _, prompt, status, _) = MainLayoutWidget::layout(area);
 
         // Header, prompt, and status should have fixed heights
-        assert_eq!(header.height, 1);
+        assert_eq!(header.height, 3);
         assert_eq!(prompt.height, 3);
         assert_eq!(status.height, 3);
     }

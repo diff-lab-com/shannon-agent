@@ -24,7 +24,7 @@ fn test_repl_state_working_directory() {
 fn test_repl_state_fields() {
     let mut state = ReplState::default();
     assert_eq!(state.status, "Ready");
-    assert_eq!(state.model, Some("claude-3-5-sonnet".to_string()));
+    assert_eq!(state.model, Some("claude-sonnet-4-20250514".to_string()));
     assert_eq!(state.tokens_used, 0);
     assert!(!state.welcome_active);
 

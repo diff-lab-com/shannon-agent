@@ -43,6 +43,7 @@ pub fn render_all_scenes(output_dir: &Path) -> Result<(), Box<dyn std::error::Er
         scene_long_message(),
         scene_progress(),
         scene_overflow(),
+        scene_ansi_content(),
     ];
 
     for scene in &scenes {
@@ -413,5 +414,35 @@ fn scene_overflow() -> SceneData {
         prompt,
         name: "overflow",
         filename: "10_overflow.txt",
+    }
+}
+
+fn scene_ansi_content() -> SceneData {
+    let mut state = ReplState::default();
+    let mut chat = ChatWidget::new(100);
+    let prompt = PromptWidget::new();
+
+    state.status = "Ready".to_string();
+    state.tokens_used = 1500;
+
+    chat.add_message(ChatRole::User, "Hello".to_string());
+    // Simulate what render_output produces — ANSI bold + color codes
+    chat.add_message(
+        ChatRole::Assistant,
+        "\x1b[1m\x1b[36mHello! How can I help you today?\x1b[0m".to_string(),
+    );
+    chat.add_message(ChatRole::User, "Explain Rust".to_string());
+    // Simulate render_markdown with syntax highlighting
+    chat.add_message(
+        ChatRole::Assistant,
+        "\x1b[38;5;81mRust\x1b[0m is a systems language with \x1b[1mownership\x1b[0m and \x1b[3mborrowing\x1b[0m.".to_string(),
+    );
+
+    SceneData {
+        state,
+        chat,
+        prompt,
+        name: "ansi_content",
+        filename: "11_ansi_content.txt",
     }
 }

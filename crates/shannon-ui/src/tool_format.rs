@@ -426,28 +426,28 @@ fn format_error(tool_name: &str, s: &str) -> String {
 
 // ── Tests ───────────────────────────────────────────────────────────────
 
+/// Strip ANSI escape sequences from a string.
+pub fn strip_ansi(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next(); // consume '['
+            // Skip all digits and semicolons until 'm'
+            while let Some(&next) = chars.peek() {
+                chars.next();
+                if next == 'm' { break; }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Strip ANSI escape sequences for test assertions.
-    fn strip_ansi(s: &str) -> String {
-        let mut result = String::with_capacity(s.len());
-        let mut chars = s.chars().peekable();
-        while let Some(c) = chars.next() {
-            if c == '\x1b' && chars.peek() == Some(&'[') {
-                chars.next(); // consume '['
-                // Skip all digits and semicolons until 'm'
-                while let Some(&next) = chars.peek() {
-                    chars.next();
-                    if next == 'm' { break; }
-                }
-            } else {
-                result.push(c);
-            }
-        }
-        result
-    }
 
     // ── Detection tests ──────────────────────────────────────────────
 

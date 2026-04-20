@@ -104,6 +104,9 @@ impl SseStream {
             s
         } else if let Some(s) = line.strip_prefix("data:") {
             s.trim()
+        } else if matches!(self.provider, LlmProvider::Ollama) && line.starts_with('{') {
+            // Ollama returns NDJSON (raw JSON per line) without "data:" prefix
+            line
         } else {
             // Ignore other SSE fields (event:, retry:)
             return vec![];
@@ -353,15 +356,21 @@ mod tests {
                 continue;
             }
 
-            if let Some(json_str) = line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) {
-                let json_str = json_str.trim();
-                if json_str == "[DONE]" {
-                    events.push(Ok(StreamEvent::MessageStop));
-                    continue;
-                }
-                let mut result_events = crate::api::adapter::normalize_sse_event(json_str, &provider, &mut state);
-                events.append(&mut result_events);
+            let json_str = if let Some(s) = line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) {
+                s.trim()
+            } else if matches!(provider, LlmProvider::Ollama) && line.starts_with('{') {
+                // Ollama returns NDJSON without "data:" prefix
+                line
+            } else {
+                continue;
+            };
+
+            if json_str == "[DONE]" {
+                events.push(Ok(StreamEvent::MessageStop));
+                continue;
             }
+            let mut result_events = crate::api::adapter::normalize_sse_event(json_str, &provider, &mut state);
+            events.append(&mut result_events);
         }
         events
     }
@@ -533,6 +542,43 @@ mod tests {
         match &events[1] {
             Ok(StreamEvent::ContentBlockStop { .. }) => {},
             other => panic!("Expected ContentBlockStop, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ollama_ndjson_without_data_prefix() {
+        // Ollama's /api/chat returns raw NDJSON without "data:" prefix
+        let lines = vec![
+            r#"{"model":"glm-4","message":{"role":"assistant","content":"Hello!"},"done":false}"#,
+            r#"{"model":"glm-4","message":{"role":"assistant","content":" How can I help?"},"done":false}"#,
+            r#"{"model":"glm-4","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":10,"eval_count":8}"#,
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::Ollama);
+        assert!(events.len() >= 3);
+
+        // First two should be text deltas
+        match &events[0] {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                assert_eq!(delta, &ContentDelta::TextDelta { text: "Hello!".to_string() });
+            }
+            other => panic!("Expected ContentBlockDelta, got {other:?}"),
+        }
+
+        match &events[1] {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                assert_eq!(delta, &ContentDelta::TextDelta { text: " How can I help?".to_string() });
+            }
+            other => panic!("Expected ContentBlockDelta, got {other:?}"),
+        }
+
+        // Last should be MessageDelta with usage
+        let last = events.last().unwrap();
+        match last {
+            Ok(StreamEvent::MessageDelta { usage, .. }) => {
+                assert_eq!(usage.input_tokens, 10);
+                assert_eq!(usage.output_tokens, 8);
+            }
+            other => panic!("Expected MessageDelta, got {other:?}"),
         }
     }
 
