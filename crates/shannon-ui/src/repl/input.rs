@@ -104,7 +104,11 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Backspace => {
             repl.prompt.backspace();
-            update_inline_completions(repl);
+            // Dismiss completion popup on text change; will be recomputed on next Tab
+            repl.state.completion_suggestions.clear();
+            repl.state.completion_suggestion_index = 0;
+            repl.tab_completion_state.candidates.clear();
+            repl.tab_completion_state.last_prefix.clear();
             Ok(())
         }
         KeyCode::Up => {
@@ -416,7 +420,8 @@ fn handle_tab_completion(repl: &mut Repl) -> Result<()> {
 
     // Advance index for next Tab press
     repl.tab_completion_state.current_index = (idx + 1) % candidates.len();
-    repl.state.completion_suggestion_index = repl.tab_completion_state.current_index;
+    // Highlight the suggestion just selected (not the next one)
+    repl.state.completion_suggestion_index = idx;
 
     Ok(())
 }
@@ -672,6 +677,12 @@ fn handle_input_dialog_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                     "set_model" => {
                         if !value.is_empty() {
                             repl.state.model = Some(value.clone());
+                            crate::repl::preferences::save_preferences(
+                                &crate::repl::preferences::Preferences {
+                                    model: repl.state.model.clone(),
+                                    provider: repl.state.selected_provider.clone(),
+                                },
+                            );
                             repl.chat.add_message(
                                 ChatRole::System,
                                 format!("Model set to: {value}"),
@@ -893,7 +904,13 @@ fn handle_model_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
 
             if let Some((model_id, provider)) = selected {
                 repl.state.model = Some(model_id.clone());
-                repl.state.selected_provider = Some(provider);
+                repl.state.selected_provider = Some(provider.clone());
+                crate::repl::preferences::save_preferences(
+                    &crate::repl::preferences::Preferences {
+                        model: Some(model_id.clone()),
+                        provider: Some(provider),
+                    },
+                );
                 repl.chat.add_message(
                     ChatRole::System,
                     format!("Model set to: {model_id}"),

@@ -2,6 +2,7 @@
 
 mod commands;
 mod input;
+pub(crate) mod preferences;
 mod query;
 pub(crate) mod render;
 
@@ -783,7 +784,17 @@ impl Repl {
             renderer: Renderer::new(),
             chat: ChatWidget::new(1000),
             prompt: PromptWidget::new(),
-            state: ReplState::default(),
+            state: {
+                let mut s = ReplState::default();
+                let prefs = preferences::load_preferences();
+                if let Some(model) = prefs.model {
+                    s.model = Some(model);
+                }
+                if let Some(provider) = prefs.provider {
+                    s.selected_provider = Some(provider);
+                }
+                s
+            },
             running: false,
             query_engine: Some(query_engine),
             state_manager: StateManager::new(),

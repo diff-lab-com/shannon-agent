@@ -183,6 +183,10 @@ fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
         repl.state.model_picker = Some(picker);
     } else {
         repl.state.model = Some(args.to_string());
+        crate::repl::preferences::save_preferences(&crate::repl::preferences::Preferences {
+            model: repl.state.model.clone(),
+            provider: repl.state.selected_provider.clone(),
+        });
         repl.chat.add_message(
             ChatRole::System,
             t!("commands.model.set", name = args).to_string(),
@@ -5046,6 +5050,10 @@ mode = \"suggest\"    # suggest | auto-edit | full-auto | readonly\n\
                 format!("Current model: {}", repl.state.model.as_deref().unwrap_or("none")));
         } else {
             repl.state.model = Some(model.to_string());
+            crate::repl::preferences::save_preferences(&crate::repl::preferences::Preferences {
+                model: repl.state.model.clone(),
+                provider: repl.state.selected_provider.clone(),
+            });
             repl.chat.add_message(ChatRole::System,
                 format!("Project model set to: {model}"));
         }

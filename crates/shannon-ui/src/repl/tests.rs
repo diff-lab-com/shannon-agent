@@ -157,8 +157,7 @@ fn test_repl_model_show_dialog() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/model".to_string());
     super::commands::submit_input(&mut repl).unwrap();
-    assert!(repl.state.input_dialog.is_some());
-    assert_eq!(repl.state.input_dialog_action.as_deref(), Some("set_model"));
+    assert!(repl.state.model_picker.is_some());
 }
 
 #[test]
