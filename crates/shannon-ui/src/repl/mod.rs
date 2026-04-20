@@ -1,5 +1,8 @@
 //! REPL main loop and terminal management
 
+/// Number of lines above which a paste is shown as "[Pasted Text #N X lines]"
+const PASTE_THRESHOLD_LINES: usize = 5;
+
 mod commands;
 mod input;
 pub(crate) mod preferences;
@@ -119,6 +122,10 @@ pub struct ReplState {
     pub incremental_search_match_index: usize,
     /// Input saved before entering incremental search (restored on cancel)
     pub incremental_search_saved_input: String,
+    /// Stored pasted texts awaiting submission: (paste_number, content)
+    pub pasted_texts: std::collections::HashMap<usize, String>,
+    /// Counter for the next paste number (increments with each large paste)
+    pub paste_counter: usize,
 }
 
 /// State for plan mode
@@ -175,6 +182,8 @@ impl Default for ReplState {
             incremental_search_query: String::new(),
             incremental_search_match_index: 0,
             incremental_search_saved_input: String::new(),
+            pasted_texts: std::collections::HashMap::new(),
+            paste_counter: 0,
         }
     }
 }
@@ -1051,8 +1060,16 @@ impl Repl {
                 }
             }
             crate::events::Event::Paste(content) => {
-                // Insert pasted text preserving newlines (bracketed paste)
-                self.prompt.insert_text(&content);
+                let line_count = content.lines().count();
+                if line_count > PASTE_THRESHOLD_LINES {
+                    self.state.paste_counter += 1;
+                    let num = self.state.paste_counter;
+                    self.state.pasted_texts.insert(num, content);
+                    let display = format!("[Pasted Text #{num} {line_count} lines]");
+                    self.prompt.insert_text(&display);
+                } else {
+                    self.prompt.insert_text(&content);
+                }
                 self.state.completion_suggestions.clear();
             }
             crate::events::Event::Tick => {

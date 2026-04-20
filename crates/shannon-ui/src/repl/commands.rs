@@ -8,28 +8,83 @@ use rust_i18n::t;
 
 use super::Repl;
 
+/// Expand `[Pasted Text #N X lines]` markers with the actual stored content.
+/// Removes expanded entries from the map.
+fn expand_pasted_texts(
+    input: &str,
+    pasted_texts: &mut std::collections::HashMap<usize, String>,
+) -> String {
+    let marker_prefix = "[Pasted Text #";
+    let mut result = String::with_capacity(input.len());
+    let mut remaining = input;
+    let mut expanded_keys = Vec::new();
+
+    while let Some(start) = remaining.find(marker_prefix) {
+        result.push_str(&remaining[..start]);
+        let after = &remaining[start + marker_prefix.len()..];
+
+        // Extract the number
+        let num_end = after
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(after.len());
+        if let Ok(num) = after[..num_end].parse::<usize>() {
+            // Find closing bracket
+            if let Some(bracket_end) = after.find(']') {
+                if let Some(content) = pasted_texts.get(&num) {
+                    result.push_str(content);
+                    expanded_keys.push(num);
+                } else {
+                    // Paste not found, keep the marker as-is
+                    result.push_str(marker_prefix);
+                    result.push_str(&after[..bracket_end + 1]);
+                }
+                remaining = &after[bracket_end + 1..];
+            } else {
+                result.push_str(remaining);
+                remaining = "";
+            }
+        } else {
+            result.push_str(remaining);
+            remaining = "";
+        }
+    }
+    result.push_str(remaining);
+
+    for key in expanded_keys {
+        pasted_texts.remove(&key);
+    }
+    result
+}
+
 /// Submit the current input
 pub fn submit_input(repl: &mut Repl) -> Result<()> {
-    let input = repl.prompt.input().to_string();
+    let raw_input = repl.prompt.input().to_string();
 
-    if input.trim().is_empty() {
+    if raw_input.trim().is_empty() {
         return Ok(());
     }
 
-    // Add user message to chat
-    repl.chat.add_message(ChatRole::User, input.clone());
+    // Expand pasted text references: [Pasted Text #N X lines] -> actual content
+    let expanded = expand_pasted_texts(&raw_input, &mut repl.state.pasted_texts);
 
-    // Push to command history and clear input
-    repl.command_history.push(&input);
+    // Add user message to chat (show raw input with paste markers)
+    repl.chat.add_message(ChatRole::User, raw_input);
+
+    // Push expanded text to command history and clear input
+    repl.command_history.push(&expanded);
     repl.saved_input.clear();
     repl.prompt.clear();
 
-    // Process command or query
-    if input.starts_with('/') {
+    // Clear paste state for next input
+    repl.state.pasted_texts.clear();
+    repl.state.paste_counter = 0;
+
+    // Process command or query with expanded text
+    if expanded.starts_with('/') {
         repl.commands_run += 1;
-        handle_command(repl, &input)?;
+        handle_command(repl, &expanded)?;
     } else {
-        super::query::handle_query(repl, &input)?;
+        super::query::handle_query(repl, &expanded)?;
     }
 
     Ok(())

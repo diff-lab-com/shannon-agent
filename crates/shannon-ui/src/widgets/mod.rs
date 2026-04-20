@@ -9,7 +9,7 @@ pub mod dialog;
 use ratatui::{
     layout::{Alignment, Direction, Rect, Constraint},
     style::{Color, Modifier, Style},
-    text::{Line, Span, Text},
+    text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
     Frame,
 };
@@ -625,30 +625,127 @@ impl PromptWidget {
         self.buffer.cursor_col()
     }
 
+    /// Get current cursor row (0-based)
+    pub fn cursor_row(&self) -> usize {
+        self.buffer.cursor_row()
+    }
+
+    /// Compute how many terminal rows the prompt needs, given the available width.
+    /// Returns a value clamped to [MIN_PROMPT_HEIGHT, MAX_PROMPT_HEIGHT].
+    pub fn needed_height(&self, available_width: u16) -> u16 {
+        const MAX_PROMPT_HEIGHT: u16 = 10;
+        const MIN_PROMPT_HEIGHT: u16 = 3;
+
+        let inner_width = available_width.saturating_sub(4) as usize; // 2 borders + 2 prefix
+        if inner_width == 0 {
+            return MIN_PROMPT_HEIGHT;
+        }
+        let input = self.input();
+        if input.is_empty() {
+            return MIN_PROMPT_HEIGHT;
+        }
+
+        let rows: usize = input.split('\n').map(|line| {
+            let chars = line.chars().count();
+            if chars == 0 { 1 } else { (chars + inner_width - 1) / inner_width }
+        }).sum();
+
+        let needed = (rows + 2) as u16; // +2 for top/bottom borders
+        needed.clamp(MIN_PROMPT_HEIGHT, MAX_PROMPT_HEIGHT)
+    }
+
+    /// Wrap a single logical line into chunks that fit within `max_width` characters.
+    fn wrap_line(line: &str, max_width: usize) -> Vec<String> {
+        if max_width == 0 || line.is_empty() {
+            return vec![line.to_string()];
+        }
+        let chars: Vec<char> = line.chars().collect();
+        let mut result = Vec::new();
+        let mut start = 0;
+        while start < chars.len() {
+            let end = (start + max_width).min(chars.len());
+            result.push(chars[start..end].iter().collect());
+            start = end;
+        }
+        result
+    }
+
+    /// Compute the (display_row, display_col) of the cursor, accounting for wrapping.
+    fn cursor_display_pos(&self, inner_width: usize) -> (usize, usize) {
+        let cursor_row = self.buffer.cursor_row();
+        let cursor_col = self.buffer.cursor_col();
+        let input = self.input();
+        let lines: Vec<&str> = input.split('\n').collect();
+
+        let mut display_row: usize = 0;
+        for (row_idx, line) in lines.iter().enumerate() {
+            let wrapped_count = if line.is_empty() {
+                1
+            } else {
+                let c = line.chars().count();
+                if inner_width > 0 { (c + inner_width - 1) / inner_width } else { 1 }
+            };
+
+            if row_idx == cursor_row {
+                let wrap_row = if inner_width > 0 { cursor_col / inner_width } else { 0 };
+                let wrap_col = if inner_width > 0 { cursor_col % inner_width } else { cursor_col };
+                return (display_row + wrap_row, wrap_col);
+            }
+            display_row += wrapped_count;
+        }
+        (display_row, cursor_col)
+    }
+
     /// Render the prompt widget
     pub fn render(&self, frame: &mut Frame, area: Rect) {
         let input_text = self.input();
-        let display_text = if input_text.is_empty() {
-            self.placeholder.clone()
+        let inner_width = area.width.saturating_sub(4) as usize; // 2 borders + 2 prefix
+
+        let mut display_lines: Vec<Line<'static>> = Vec::new();
+
+        if input_text.is_empty() {
+            display_lines.push(Line::from(vec![
+                Span::styled("> ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(self.placeholder.clone(), Style::default().fg(Color::DarkGray)),
+            ]));
         } else {
-            input_text
-        };
+            let logical_lines: Vec<&str> = input_text.split('\n').collect();
+            for (line_idx, logical_line) in logical_lines.iter().enumerate() {
+                let wrapped = Self::wrap_line(logical_line, inner_width);
+                for (wrap_idx, chunk) in wrapped.iter().enumerate() {
+                    let prefix = if line_idx == 0 && wrap_idx == 0 {
+                        Span::styled("> ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+                    } else {
+                        Span::styled("  ", Style::default())
+                    };
+                    display_lines.push(Line::from(vec![
+                        prefix,
+                        Span::styled(chunk.clone(), Style::default().fg(Color::White)),
+                    ]));
+                }
+            }
+        }
 
-        let text = Text::from(Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled(&display_text, Style::default().fg(Color::White)),
-        ]));
-
-        let paragraph = Paragraph::new(text)
+        let paragraph = Paragraph::new(display_lines)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Cyan))
-                    .title(" Input ")
+                    .title(" Input "),
             )
             .alignment(Alignment::Left);
 
         frame.render_widget(paragraph, area);
+
+        // Show cursor
+        if !input_text.is_empty() && inner_width > 0 {
+            let (disp_row, disp_col) = self.cursor_display_pos(inner_width);
+            let cursor_x = area.x + 1 + 2 + disp_col as u16; // border + prefix + col
+            let cursor_y = area.y + 1 + disp_row as u16;     // top border + row
+            if cursor_y < area.bottom() - 1 && cursor_x < area.right() - 1 {
+                frame.set_cursor_position((cursor_x, cursor_y));
+            }
+        }
     }
 }
 
@@ -664,15 +761,15 @@ pub struct MainLayoutWidget;
 impl MainLayoutWidget {
     /// Create the main layout chunks
     /// Returns (header_area, chat_area, prompt_area, status_area, full_area)
-    pub fn layout(area: Rect) -> (Rect, Rect, Rect, Rect, Rect) {
+    pub fn layout(area: Rect, prompt_height: u16) -> (Rect, Rect, Rect, Rect, Rect) {
         let chunks = ratatui::layout::Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
             .constraints([
                 Constraint::Length(HeaderWidget::height() as u16), // Header bar
-                Constraint::Min(0),      // Chat area (flexible)
-                Constraint::Length(3),   // Input prompt
-                Constraint::Length(3),   // Status bar
+                Constraint::Min(0),              // Chat area (flexible)
+                Constraint::Length(prompt_height), // Input prompt (dynamic)
+                Constraint::Length(3),            // Status bar
             ])
             .split(area);
 
@@ -712,7 +809,8 @@ impl MainLayoutWidget {
     ) {
         let area = frame.area();
 
-        let (header_area, chat_area, prompt_area, status_area, _) = Self::layout(area);
+        let prompt_height = prompt.needed_height(area.width);
+        let (header_area, chat_area, prompt_area, status_area, _) = Self::layout(area, prompt_height);
 
         // Render each widget
         HeaderWidget::render(frame, header_area, model, tokens_used, working_dir);
@@ -887,7 +985,7 @@ mod tests {
     fn test_main_layout_widget_returns_five_chunks() {
         // Create a test area (100x20)
         let area = Rect::new(0, 0, 100, 20);
-        let (header, chat, prompt, status, full) = MainLayoutWidget::layout(area);
+        let (header, chat, prompt, status, full) = MainLayoutWidget::layout(area, 3);
 
         // Header should be at top with height 3
         assert_eq!(header.y, 1); // margin(1)
@@ -910,10 +1008,10 @@ mod tests {
     #[test]
     fn test_main_layout_widget_chat_area_is_flexible() {
         let small_area = Rect::new(0, 0, 80, 10);
-        let (_, small_chat, _, _, _) = MainLayoutWidget::layout(small_area);
+        let (_, small_chat, _, _, _) = MainLayoutWidget::layout(small_area, 3);
 
         let large_area = Rect::new(0, 0, 80, 30);
-        let (_, large_chat, _, _, _) = MainLayoutWidget::layout(large_area);
+        let (_, large_chat, _, _, _) = MainLayoutWidget::layout(large_area, 3);
 
         // Chat area should grow with available space
         assert!(large_chat.height > small_chat.height);
@@ -922,7 +1020,7 @@ mod tests {
     #[test]
     fn test_main_layout_widget_fixed_sizes() {
         let area = Rect::new(0, 0, 100, 20);
-        let (header, _, prompt, status, _) = MainLayoutWidget::layout(area);
+        let (header, _, prompt, status, _) = MainLayoutWidget::layout(area, 3);
 
         // Header, prompt, and status should have fixed heights
         assert_eq!(header.height, 3);
@@ -933,7 +1031,7 @@ mod tests {
     #[test]
     fn test_main_layout_widget_margins() {
         let area = Rect::new(0, 0, 100, 20);
-        let (header, _, _, _, _) = MainLayoutWidget::layout(area);
+        let (header, _, _, _, _) = MainLayoutWidget::layout(area, 3);
 
         // Check that margin(1) is applied
         assert_eq!(header.x, 1);
