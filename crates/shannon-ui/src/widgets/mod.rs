@@ -30,7 +30,7 @@ impl HeaderWidget {
     fn tip_message() -> Vec<Span<'static>> {
         vec![
             Span::styled("Tip: ", Style::default().fg(Color::Yellow)),
-            Span::styled("Type /help for commands", Style::default().fg(Color::White)),
+            Span::styled("/help", Style::default().fg(Color::White)),
         ]
     }
 
