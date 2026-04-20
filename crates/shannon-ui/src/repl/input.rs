@@ -47,6 +47,11 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         return handle_model_picker_input(repl, key);
     }
 
+    // If diff viewer overlay is active, handle viewer keys
+    if repl.state.diff_viewer.is_some() {
+        return handle_diff_viewer_input(repl, key);
+    }
+
     // If incremental search (Ctrl+R) is active, handle search keys
     if repl.state.incremental_search_active {
         return handle_incremental_search(repl, key);
@@ -80,6 +85,16 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             super::commands::handle_image_paste_from_input(repl)?;
             Ok(())
         }
+        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            // Ctrl+S: toggle right sidebar panel
+            repl.state.sidebar_visible = !repl.state.sidebar_visible;
+            Ok(())
+        }
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            // Ctrl+D: toggle tool output collapse
+            repl.chat.collapsed_tools = !repl.chat.collapsed_tools;
+            Ok(())
+        }
         KeyCode::Enter => {
             // If completion suggestions are visible, apply the selected one
             if !repl.state.completion_suggestions.is_empty() {
@@ -99,6 +114,17 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Char(c) => {
             repl.prompt.add_char(c);
+            // Detect `@` typed at end of prompt to open file picker
+            if c == '@' {
+                let input = repl.prompt.input();
+                if input.ends_with('@') && (input.len() == 1 || input.as_bytes()[input.len() - 2] == b' ') {
+                    let selector = crate::widgets::select::FileSelectorWidget::new(
+                        " @ File Reference ".to_string(),
+                    );
+                    repl.state.file_selector = Some(selector);
+                    repl.state.file_selector_for_at = true;
+                }
+            }
             update_inline_completions(repl);
             Ok(())
         }
@@ -532,7 +558,7 @@ pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String>
         "web-search" | "websearch" | "search-web" => &[],
         "review" => &["HEAD~1", "main...HEAD"],
         "local-models" | "local" => &[],
-        "diff" => &["--staged", "--stat", "--overview", "--word-diff", "-w", "HEAD~1", "main...HEAD"],
+        "diff" => &["view", "--staged", "--stat", "--overview", "--word-diff", "-w", "HEAD~1", "main...HEAD"],
         "ci" | "gh-actions" => &["status", "runs", "workflows", "view", "trigger", "help"],
         "history" => &["--export"],
         "export" | "save" => &["--format json", "--format markdown"],
@@ -796,14 +822,28 @@ fn handle_file_selector_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                         .unwrap_or_else(|| ".".to_string());
                     format!("{base}/{name}")
                 });
+            let was_at_mode = repl.state.file_selector_for_at;
             repl.state.file_selector = None;
+            repl.state.file_selector_for_at = false;
 
             if let Some(path) = selected_path {
-                repl.prompt.set_input(path);
-                repl.chat.add_message(
-                    ChatRole::System,
-                    "File selected — press Enter to send as query, or edit the path.".to_string(),
-                );
+                if was_at_mode {
+                    // Insert path at cursor, replacing the trailing '@'
+                    let input = repl.prompt.input().to_string();
+                    if let Some(pos) = input.rfind('@') {
+                        let mut new_input = String::with_capacity(input.len() + path.len());
+                        new_input.push_str(&input[..pos]);
+                        new_input.push_str(&path);
+                        new_input.push_str(&input[pos + 1..]);
+                        repl.prompt.set_input(new_input);
+                    }
+                } else {
+                    repl.prompt.set_input(path);
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        "File selected — press Enter to send as query, or edit the path.".to_string(),
+                    );
+                }
             }
         }
         KeyCode::Backspace => {
@@ -817,6 +857,17 @@ fn handle_file_selector_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             }
         }
         KeyCode::Esc => {
+            // If opened by @, remove the trailing '@' from prompt
+            if repl.state.file_selector_for_at {
+                let input = repl.prompt.input().to_string();
+                if let Some(pos) = input.rfind('@') {
+                    let mut new_input = String::with_capacity(input.len());
+                    new_input.push_str(&input[..pos]);
+                    new_input.push_str(&input[pos + 1..]);
+                    repl.prompt.set_input(new_input);
+                }
+                repl.state.file_selector_for_at = false;
+            }
             repl.state.file_selector = None;
         }
         _ => {}
@@ -866,6 +917,48 @@ fn handle_multi_select_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Esc => {
             repl.state.multi_select = None;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Handle keyboard input when the diff viewer overlay is active.
+fn handle_diff_viewer_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
+    // Compute max entries count from diff_data
+    let max_entries = {
+        let diff = &repl.diff_data;
+        let mut count = 0usize;
+        let mut seen = std::collections::HashSet::new();
+        for turn in diff.get_session_diffs() {
+            for fc in &turn.files_modified {
+                if seen.insert(fc.path.clone()) {
+                    count += 1;
+                }
+            }
+            count += turn.files_created.len() + turn.files_deleted.len();
+        }
+        count
+    };
+
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            if let Some(ref mut viewer) = repl.state.diff_viewer {
+                viewer.move_down(max_entries);
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if let Some(ref mut viewer) = repl.state.diff_viewer {
+                viewer.move_up();
+            }
+        }
+        KeyCode::Enter => {
+            if let Some(ref mut viewer) = repl.state.diff_viewer {
+                viewer.toggle_expand();
+            }
+        }
+        KeyCode::Esc | KeyCode::Char('q') => {
+            repl.state.diff_viewer = None;
         }
         _ => {}
     }

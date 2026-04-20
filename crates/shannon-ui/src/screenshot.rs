@@ -94,13 +94,15 @@ fn render_scene(scene: &SceneData) -> String {
                 &state.working_directory,
                 Some(spinner),
                 pb,
+                None,
+                &state.theme,
             );
 
             // Overlays (mutually exclusive in normal rendering order)
 
             // Permission dialog
             if let Some(ref dialog) = state.permission_dialog {
-                render_permission_dialog(f, f.area(), dialog);
+                render_permission_dialog(f, f.area(), dialog, &state.theme);
             }
 
             // Model picker

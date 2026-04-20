@@ -13,6 +13,7 @@ use crate::{
     events::EventHandler,
     render::Renderer,
     repl_enhancement::{DiffData, ReplHistory, ReplRenderer},
+    theme::Theme,
     vim::VimHandler,
     widgets::{
         ChatWidget, ChatRole, PromptWidget,
@@ -45,6 +46,7 @@ use shannon_core::{
     query_engine::QueryEngine,
     state::StateManager,
     tools::ToolRegistry,
+    ContentBlock, MessageContent,
 };
 use shannon_commands::{Command, CommandBase, CommandRegistry, CommandParser, ExecutionContext, PromptCommand, builtin_commands, SharedExecutor};
 
@@ -114,6 +116,12 @@ pub struct ReplState {
     pub plan: PlanState,
     /// Execution sandbox mode (direct or Docker isolation)
     pub sandbox_mode: shannon_tools::SandboxMode,
+    /// Color theme for the terminal UI
+    pub theme: Theme,
+    /// Whether the right sidebar panel is visible
+    pub sidebar_visible: bool,
+    /// Active diff viewer overlay (activated by /diff command)
+    pub diff_viewer: Option<crate::widgets::diff_viewer::DiffViewerWidget>,
     /// Whether incremental reverse search (Ctrl+R) is active
     pub incremental_search_active: bool,
     /// Current search query for incremental search
@@ -126,6 +134,8 @@ pub struct ReplState {
     pub pasted_texts: std::collections::HashMap<usize, String>,
     /// Counter for the next paste number (increments with each large paste)
     pub paste_counter: usize,
+    /// Whether the file selector was opened by typing `@` (insert mode vs replace mode)
+    pub file_selector_for_at: bool,
 }
 
 /// State for plan mode
@@ -178,12 +188,16 @@ impl Default for ReplState {
             completion_suggestion_index: 0,
             plan: PlanState::default(),
             sandbox_mode: shannon_tools::SandboxMode::Direct,
+            theme: Theme::detect(),
+            sidebar_visible: false,
+            diff_viewer: None,
             incremental_search_active: false,
             incremental_search_query: String::new(),
             incremental_search_match_index: 0,
             incremental_search_saved_input: String::new(),
             pasted_texts: std::collections::HashMap::new(),
             paste_counter: 0,
+            file_selector_for_at: false,
         }
     }
 }
@@ -854,12 +868,36 @@ impl Repl {
     ///
     /// Loads messages from the given `SessionData` and injects them into the
     /// query engine so the next user message continues the prior conversation.
+    /// Also populates the chat widget so the user can see the restored history.
     /// Returns the number of messages restored.
     pub fn restore_session(&mut self, session_data: shannon_core::state::SessionData) -> usize {
         let msg_count = session_data.messages.len();
         if msg_count == 0 {
             return 0;
         }
+
+        // Populate chat widget with restored messages so the user can see them
+        for msg in &session_data.messages {
+            let role = match msg.role.as_str() {
+                "user" => ChatRole::User,
+                "assistant" => ChatRole::Assistant,
+                "system" => ChatRole::System,
+                _ => ChatRole::Tool, // "tool" and any unknown roles
+            };
+            let text = match &msg.content {
+                MessageContent::Text(t) => t.clone(),
+                MessageContent::Blocks(blocks) => blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            };
+            self.chat.add_message(role, text);
+        }
+
         if let Some(ref mut engine) = self.query_engine {
             let preview = session_data.first_user_message_preview(60);
             engine.replace_conversation(session_data.messages);
@@ -1113,6 +1151,31 @@ impl Repl {
     /// Get the current REPL state
     pub fn state(&self) -> &ReplState {
         &self.state
+    }
+
+    /// Build sidebar info from the current state, if the sidebar is visible.
+    pub fn sidebar_info(&self) -> Option<crate::widgets::SidebarInfo> {
+        if !self.state.sidebar_visible {
+            return None;
+        }
+        let mut modified_files: Vec<(String, usize, usize)> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for turn in self.diff_data.get_session_diffs() {
+            for fc in &turn.files_modified {
+                if seen.insert(fc.path.clone()) {
+                    modified_files.push((fc.path.clone(), fc.additions, fc.deletions));
+                }
+            }
+        }
+        Some(crate::widgets::SidebarInfo {
+            model: self.state.model.clone(),
+            tokens_used: self.state.tokens_used,
+            cost_usd: self.state.total_cost_usd,
+            tools_invoked: self.tools_invoked,
+            modified_files,
+            total_additions: self.diff_data.total_additions(),
+            total_deletions: self.diff_data.total_deletions(),
+        })
     }
 
     /// Get mutable reference to the REPL state

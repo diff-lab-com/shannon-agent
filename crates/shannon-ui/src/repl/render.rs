@@ -2,6 +2,7 @@
 
 use crate::{
     Result,
+    theme::Theme,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::{
@@ -21,6 +22,14 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
     let prompt = &repl.prompt;
     let state = repl.state.clone();
     let spinner = &repl.state.spinner;
+    let theme = repl.state.theme.clone();
+
+    // Build sidebar info via Repl method (pub(crate) fields only accessible from mod.rs)
+    let sidebar_info = repl.sidebar_info();
+
+    // Clone diff viewer state and data for rendering inside closure
+    let diff_viewer_state = repl.state.diff_viewer.clone();
+    let diff_data = repl.diff_data.clone();
 
     terminal.draw(|f| {
         let pb = if state.progress_bar_visible {
@@ -28,10 +37,11 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         } else {
             None
         };
+        let sidebar_ref = sidebar_info.as_ref();
 
         // Determine which overlay to render
         if let Some(ref dialog) = state.permission_dialog {
-            render_permission_dialog(f, f.area(), dialog);
+            render_permission_dialog(f, f.area(), dialog, &theme);
         } else if state.active_dialog.is_some()
             || state.input_dialog.is_some()
             || state.fuzzy_picker.is_some()
@@ -43,7 +53,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             crate::widgets::MainLayoutWidget::render_complete_with_spinner(
                 f, chat, prompt, &state.status,
                 state.model.as_deref(), Some(state.tokens_used),
-                &state.working_directory, Some(spinner), pb,
+                &state.working_directory, Some(spinner), pb, sidebar_ref, &theme,
             );
             // Then render the active overlay
             if let Some(ref dialog) = state.active_dialog {
@@ -63,7 +73,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             crate::widgets::MainLayoutWidget::render_complete_with_spinner(
                 f, chat, prompt, &state.status,
                 state.model.as_deref(), Some(state.tokens_used),
-                &state.working_directory, Some(spinner), pb,
+                &state.working_directory, Some(spinner), pb, sidebar_ref, &theme,
             );
         }
 
@@ -77,6 +87,11 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
                 height: mp_height,
             };
             state.multi_progress.render(f, mp_area);
+        }
+
+        // Overlay diff viewer if active
+        if let Some(ref viewer) = diff_viewer_state {
+            viewer.render(f, f.area(), &diff_data, &theme);
         }
 
         // Overlay completion suggestions popup above the prompt
@@ -93,7 +108,9 @@ pub fn render_permission_dialog(
     frame: &mut ratatui::Frame,
     area: Rect,
     dialog: &shannon_core::permissions::PermissionPrompt,
+    theme: &Theme,
 ) {
+    let _ = theme; // TODO: replace hardcoded colors with theme colors
     // Calculate dialog area (centered) — taller if diff preview present
     let base_height: u16 = if dialog.diff_preview.is_some() { 30 } else { 20 };
     let dialog_width = 70.min(area.width.saturating_sub(4));

@@ -3,6 +3,7 @@
 //! Provides markdown rendering enhancements including syntax-highlighted
 //! code blocks and structured diff display.
 
+use crate::theme::Theme;
 use crate::widgets;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -57,14 +58,16 @@ impl Renderer {
         self.render_main_content(frame, chunks[0]);
 
         // Render status bar
-        widgets::StatusBarWidget::render(frame, chunks[1], &self.status_message);
+        let theme = Theme::detect();
+        widgets::StatusBarWidget::render(frame, chunks[1], &self.status_message, &theme);
 
         Ok(())
     }
 
     /// Render the main content area
     fn render_main_content(&self, frame: &mut Frame, area: Rect) {
-        widgets::WelcomeWidget::render(frame, area);
+        let theme = Theme::detect();
+        widgets::WelcomeWidget::render(frame, area, &theme);
     }
 
     /// Update the status message

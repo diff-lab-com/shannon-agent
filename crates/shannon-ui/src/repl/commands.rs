@@ -115,7 +115,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
     let is_plugin_command = repl.plugin_manager.get_plugin_commands()
         .iter().any(|c| c.name == cmd_name);
     // Commands handled in the match block but not in the global registry
-    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "route", "mcp", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "rewind", "notify", "create-pr", "patch", "sandbox", "find", "grep", "conv-search", "copy", "paste", "add", "watch", "bind", "project", "terminal-setup"];
+    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "route", "mcp", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "rewind", "notify", "create-pr", "patch", "sandbox", "find", "grep", "conv-search", "copy", "paste", "add", "watch", "bind", "project", "terminal-setup", "theme", "diff"];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
     if command_exists || is_plugin_command || is_repl_command {
@@ -174,6 +174,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "watch" => handle_watch(repl, args)?,
             "bind" => handle_bind(repl, args)?,
             "project" => handle_project(repl, args)?,
+            "theme" => handle_theme(repl, args)?,
             _ => handle_other_command(repl, cmd_name, args)?,
         }
         Ok(())
@@ -2935,6 +2936,28 @@ fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
 
     let trimmed = args.trim();
 
+    // /diff view — open interactive diff viewer overlay
+    if trimmed == "view" || trimmed == "--view" {
+        let file_count = {
+            let diff = &repl.diff_data;
+            let mut count = 0usize;
+            let mut seen = std::collections::HashSet::new();
+            for turn in diff.get_session_diffs() {
+                for fc in &turn.files_modified {
+                    if seen.insert(fc.path.clone()) {
+                        count += 1;
+                    }
+                }
+                count += turn.files_created.len() + turn.files_deleted.len();
+            }
+            count
+        };
+        let mut viewer = crate::widgets::diff_viewer::DiffViewerWidget::new();
+        viewer.sync_expanded(file_count);
+        repl.state.diff_viewer = Some(viewer);
+        return Ok(());
+    }
+
     // /diff accept-all — keep all unstaged changes
     if trimmed == "accept-all" || trimmed == "keep-all" {
         let output = std::process::Command::new("git")
@@ -3941,6 +3964,49 @@ fn handle_doctor(repl: &mut Repl, _args: &str) -> Result<()> {
     let results = run_all_checks();
     let report = format_doctor_report(&results);
     repl.chat.add_message(ChatRole::System, report);
+    Ok(())
+}
+
+/// /theme — switch color theme or list available themes.
+fn handle_theme(repl: &mut Repl, args: &str) -> Result<()> {
+    use crate::theme::Theme;
+
+    let args = args.trim();
+
+    if args.is_empty() || args == "list" {
+        let current = &repl.state.theme.name;
+        let available = Theme::available();
+        let mut msg = String::from("Available themes:\n");
+        for name in available {
+            if *name == *current {
+                msg.push_str(&format!("  * {name} (current)\n"));
+            } else {
+                msg.push_str(&format!("    {name}\n"));
+            }
+        }
+        msg.push_str("\nUsage: /theme <name>");
+        repl.chat.add_message(ChatRole::System, msg);
+        return Ok(());
+    }
+
+    match Theme::named(args) {
+        Some(theme) => {
+            let name = theme.name;
+            repl.state.theme = theme;
+            repl.chat.add_message(
+                ChatRole::System,
+                format!("Theme switched to '{name}'."),
+            );
+        }
+        None => {
+            let available = Theme::available().join(", ");
+            repl.chat.add_message(
+                ChatRole::System,
+                format!("Unknown theme '{args}'. Available: {available}"),
+            );
+        }
+    }
+
     Ok(())
 }
 
