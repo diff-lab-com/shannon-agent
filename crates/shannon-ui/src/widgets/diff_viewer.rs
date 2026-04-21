@@ -9,6 +9,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem},
     Frame,
 };
+use std::collections::HashMap;
 
 /// Full-screen overlay for viewing diffs
 #[derive(Debug, Clone)]
@@ -19,6 +20,8 @@ pub struct DiffViewerWidget {
     pub selected_index: usize,
     /// Which files are expanded to show their diff details
     pub expanded: Vec<bool>,
+    /// Cached diff output per file path
+    pub diff_cache: HashMap<String, Vec<String>>,
 }
 
 impl DiffViewerWidget {
@@ -28,7 +31,44 @@ impl DiffViewerWidget {
             scroll_offset: 0,
             selected_index: 0,
             expanded: Vec::new(),
+            diff_cache: HashMap::new(),
         }
+    }
+
+    /// Load git diff for a file, using cache if available.
+    fn load_diff(&mut self, path: &str) {
+        if self.diff_cache.contains_key(path) {
+            return;
+        }
+        // Try git diff for the file (staged + unstaged vs HEAD)
+        let output = std::process::Command::new("git")
+            .args(["diff", "HEAD", "--", path])
+            .output();
+
+        let lines = match output {
+            Ok(o) if o.status.success() => {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .take(200) // cap to avoid huge diffs
+                    .map(String::from)
+                    .collect()
+            }
+            _ => {
+                // Fallback: try unstaged diff
+                let output2 = std::process::Command::new("git")
+                    .args(["diff", "--", path])
+                    .output();
+                match output2 {
+                    Ok(o) => String::from_utf8_lossy(&o.stdout)
+                        .lines()
+                        .take(200)
+                        .map(String::from)
+                        .collect(),
+                    Err(_) => vec!["(unable to read diff)".to_string()],
+                }
+            }
+        };
+        self.diff_cache.insert(path.to_string(), lines);
     }
 
     /// Get unique modified files from diff data
@@ -67,11 +107,33 @@ impl DiffViewerWidget {
         }
     }
 
-    /// Toggle expansion of the currently selected file
-    pub fn toggle_expand(&mut self) {
+    /// Toggle expansion of the currently selected file, loading diff on expand.
+    pub fn toggle_expand(&mut self, diff_data: &DiffData) {
         if let Some(e) = self.expanded.get_mut(self.selected_index) {
             *e = !*e;
+            // Load diff content when expanding
+            if *e {
+                let path = self.get_selected_path(diff_data);
+                if let Some(path) = path {
+                    self.load_diff(&path);
+                }
+            }
         }
+    }
+
+    /// Get the file path for the currently selected entry.
+    fn get_selected_path(&self, diff_data: &DiffData) -> Option<String> {
+        let files = Self::unique_files(diff_data);
+        let mut all_entries: Vec<Entry> = files.into_iter().map(Entry::Modified).collect();
+        for turn in diff_data.get_session_diffs() {
+            for p in &turn.files_created {
+                all_entries.push(Entry::Created(p.clone()));
+            }
+            for p in &turn.files_deleted {
+                all_entries.push(Entry::Deleted(p.clone()));
+            }
+        }
+        all_entries.get(self.selected_index).and_then(|e| e.path().map(String::from))
     }
 
     /// Render the diff viewer as a full-screen overlay
@@ -110,7 +172,7 @@ impl DiffViewerWidget {
             items.push(ListItem::new(line));
         } else {
             // Also list created and deleted files
-            let mut all_entries: Vec<Entry> = files.into_iter().map(|fc| Entry::Modified(fc)).collect();
+            let mut all_entries: Vec<Entry> = files.into_iter().map(Entry::Modified).collect();
             for turn in diff_data.get_session_diffs() {
                 for p in &turn.files_created {
                     all_entries.push(Entry::Created(p.clone()));
@@ -161,14 +223,41 @@ impl DiffViewerWidget {
                 };
                 items.push(ListItem::new(line));
 
-                // Show diff summary when expanded
+                // Show actual diff when expanded
                 if is_expanded {
-                    if let Entry::Modified(fc) = entry {
-                        let detail = format!("  {} (+{} additions, -{} deletions)", fc.path, fc.additions, fc.deletions);
-                        items.push(ListItem::new(Line::from(Span::styled(
-                            truncate_to(&detail, inner_width),
-                            Style::default().fg(theme.text_dim),
-                        ))));
+                    if let Some(path) = entry.path() {
+                        if let Some(diff_lines) = self.diff_cache.get(path) {
+                            if diff_lines.is_empty() {
+                                items.push(ListItem::new(Line::from(Span::styled(
+                                    "  (no changes)",
+                                    Style::default().fg(theme.text_dim),
+                                ))));
+                            } else {
+                                for line in diff_lines.iter() {
+                                    let color = if line.starts_with('-') && !line.starts_with("---") {
+                                        theme.diff_removed
+                                    } else if line.starts_with('+') && !line.starts_with("+++") {
+                                        theme.diff_added
+                                    } else if line.starts_with('@') {
+                                        theme.primary
+                                    } else if line.starts_with("diff ") || line.starts_with("index ") {
+                                        theme.muted
+                                    } else {
+                                        theme.text_dim
+                                    };
+                                    let display = truncate_to(&format!("  {line}"), inner_width);
+                                    items.push(ListItem::new(Line::from(Span::styled(
+                                        display,
+                                        Style::default().fg(color),
+                                    ))));
+                                }
+                            }
+                        } else {
+                            items.push(ListItem::new(Line::from(Span::styled(
+                                "  (loading diff...)",
+                                Style::default().fg(theme.text_dim),
+                            ))));
+                        }
                     }
                 }
             }
@@ -200,6 +289,16 @@ enum Entry {
     Modified(FileChange),
     Created(String),
     Deleted(String),
+}
+
+impl Entry {
+    /// Get the file path for this entry.
+    fn path(&self) -> Option<&str> {
+        match self {
+            Entry::Modified(fc) => Some(&fc.path),
+            Entry::Created(p) | Entry::Deleted(p) => Some(p),
+        }
+    }
 }
 
 /// Truncate a file path to fit within max chars, keeping the filename

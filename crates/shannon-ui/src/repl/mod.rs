@@ -816,6 +816,11 @@ impl Repl {
                 if let Some(provider) = prefs.provider {
                     s.selected_provider = Some(provider);
                 }
+                if let Some(theme_name) = prefs.theme {
+                    if let Some(theme) = Theme::named(&theme_name) {
+                        s.theme = theme;
+                    }
+                }
                 s
             },
             running: false,

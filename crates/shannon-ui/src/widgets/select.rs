@@ -261,6 +261,18 @@ impl FileSelectorWidget {
         self
     }
 
+    /// Get current filter pattern
+    pub fn get_filter(&self) -> Option<&str> {
+        self.filter.as_deref()
+    }
+
+    /// Update filter and refresh file list
+    pub fn set_filter_pattern(&mut self, pattern: &str) {
+        self.filter = if pattern.is_empty() { None } else { Some(pattern.to_string()) };
+        self.focused_index = 0;
+        let _ = self.refresh();
+    }
+
     /// Refresh file list from current path
     pub fn refresh(&mut self) -> std::io::Result<()> {
         let mut dirs = Vec::new();
@@ -388,6 +400,20 @@ impl FileSelectorWidget {
                 Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
             ),
         ]));
+
+        // Show filter if active
+        if let Some(ref f) = self.filter {
+            if !f.is_empty() {
+                content.push(Line::from(vec![
+                    Span::styled("Filter: ", Style::default().fg(Color::Cyan)),
+                    Span::styled(
+                        f.as_str(),
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(" (type to filter, Backspace to clear)", Style::default().fg(Color::DarkGray)),
+                ]));
+            }
+        }
 
         // Show directories
         if !self.directories.is_empty() {

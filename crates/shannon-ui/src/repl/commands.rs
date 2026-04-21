@@ -242,6 +242,7 @@ fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
         crate::repl::preferences::save_preferences(&crate::repl::preferences::Preferences {
             model: repl.state.model.clone(),
             provider: repl.state.selected_provider.clone(),
+            theme: Some(repl.state.theme.name.to_string()),
         });
         repl.chat.add_message(
             ChatRole::System,
@@ -710,7 +711,7 @@ fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
         "svg" => "image/svg+xml",
         _ => {
             repl.chat.add_message(ChatRole::System,
-                format!("Unsupported image format: {}. Supported: PNG, JPG, GIF, WebP, BMP, SVG", path));
+                format!("Unsupported image format: {path}. Supported: PNG, JPG, GIF, WebP, BMP, SVG"));
             return Ok(());
         }
     };
@@ -789,12 +790,12 @@ fn handle_image_paste(repl: &mut Repl, prompt_args: &str) -> Result<()> {
                                 .args(["--type", "image/png"])
                                 .stdout(std::process::Stdio::from(f2))
                                 .output(),
-                            Err(e) => Err(e.into()),
+                            Err(e) => Err(e),
                         }
                     }
                 }
             }
-            Err(e) => Err(e.into()),
+            Err(e) => Err(e),
         }
     };
 
@@ -2205,9 +2206,9 @@ fn handle_team(repl: &mut Repl, args: &str) -> Result<()> {
                 let mut config = shannon_agents::MultiAgentConfig::new(agent_configs);
                 config.default_system_prompt = Some("You are a helpful AI coding assistant. Complete the assigned task concisely and accurately.".to_string());
                 // Create executor from the REPL's LLM client if available
-                let executor = repl.query_engine.as_ref().and_then(|engine| {
+                let executor = repl.query_engine.as_ref().map(|engine| {
                     let client = engine.client().clone();
-                    Some(shared_executor(client))
+                    shared_executor(client)
                 });
                 repl.chat.add_message(ChatRole::System, "Starting parallel execution...".to_string());
                 let result = repl.runtime.block_on(MultiAgentSpawner::spawn(config, executor));
@@ -2397,9 +2398,9 @@ fn handle_agents(repl: &mut Repl, args: &str) -> Result<()> {
             let agent_config = SpawnAgentConfig::new(name.to_string(), task.to_string());
             let config = MultiAgentConfig::new(vec![agent_config]);
 
-            let executor = repl.query_engine.as_ref().and_then(|engine| {
+            let executor = repl.query_engine.as_ref().map(|engine| {
                 let client = engine.client().clone();
-                Some(shared_executor(client))
+                shared_executor(client)
             });
 
             repl.chat.add_message(ChatRole::System, format!("Running agent '{name}'..."));
@@ -2463,8 +2464,7 @@ Patterns match against the start of your query. Examples:
             repl.model_routes.retain(|(p, _)| p.to_lowercase() != pattern.to_lowercase());
             repl.model_routes.push((pattern.to_lowercase(), model.to_string()));
             repl.chat.add_message(ChatRole::System, format!(
-                "Route added: queries starting with '{}' → {}",
-                pattern, model,
+                "Route added: queries starting with '{pattern}' → {model}",
             ));
         }
         "remove" => {
@@ -2488,7 +2488,7 @@ Patterns match against the start of your query. Examples:
             } else {
                 let mut out = format!("Routing rules ({}):\n", repl.model_routes.len());
                 for (pattern, model) in &repl.model_routes {
-                    out.push_str(&format!("  '{}' → {}\n", pattern, model));
+                    out.push_str(&format!("  '{pattern}' → {model}\n"));
                 }
                 repl.chat.add_message(ChatRole::System, out);
             }
@@ -2511,15 +2511,13 @@ Patterns match against the start of your query. Examples:
             match matched {
                 Some((pattern, model)) => {
                     repl.chat.add_message(ChatRole::System, format!(
-                        "Query '{}' matches pattern '{}' → would use model: {}",
-                        query, pattern, model,
+                        "Query '{query}' matches pattern '{pattern}' → would use model: {model}",
                     ));
                 }
                 None => {
                     let current = repl.state.model.as_deref().unwrap_or("default");
                     repl.chat.add_message(ChatRole::System, format!(
-                        "Query '{}' matches no routing rules → would use default model: {}",
-                        query, current,
+                        "Query '{query}' matches no routing rules → would use default model: {current}",
                     ));
                 }
             }
@@ -2626,9 +2624,9 @@ fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
             match save_config(&config) {
                 Ok(()) => {
                     if existed {
-                        repl.chat.add_message(ChatRole::System, format!("Updated MCP server '{}' → {}", name, command));
+                        repl.chat.add_message(ChatRole::System, format!("Updated MCP server '{name}' → {command}"));
                     } else {
-                        repl.chat.add_message(ChatRole::System, format!("Added MCP server '{}' → {}", name, command));
+                        repl.chat.add_message(ChatRole::System, format!("Added MCP server '{name}' → {command}"));
                     }
                 }
                 Err(e) => {
@@ -2664,7 +2662,7 @@ fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
                     let env_str = if entry.env.is_empty() {
                         "none".to_string()
                     } else {
-                        entry.env.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>().join(", ")
+                        entry.env.keys().cloned().collect::<Vec<_>>().join(", ")
                     };
                     repl.chat.add_message(ChatRole::System, format!(
                         "Server: {}\n  Command: {}\n  Args: {}\n  Env vars: {}",
@@ -2687,7 +2685,7 @@ fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
             let config = load_config();
             match config.mcp_servers.get(name) {
                 Some(entry) => {
-                    repl.chat.add_message(ChatRole::System, format!("Testing connection to '{}'...", name));
+                    repl.chat.add_message(ChatRole::System, format!("Testing connection to '{name}'..."));
                     // Try to create a stdio transport and check if the command exists
                     let command = &entry.command;
                     let which_output = std::process::Command::new("which")
@@ -3978,7 +3976,7 @@ fn handle_theme(repl: &mut Repl, args: &str) -> Result<()> {
         let available = Theme::available();
         let mut msg = String::from("Available themes:\n");
         for name in available {
-            if *name == *current {
+            if name == *current {
                 msg.push_str(&format!("  * {name} (current)\n"));
             } else {
                 msg.push_str(&format!("    {name}\n"));
@@ -3993,6 +3991,13 @@ fn handle_theme(repl: &mut Repl, args: &str) -> Result<()> {
         Some(theme) => {
             let name = theme.name;
             repl.state.theme = theme;
+            crate::repl::preferences::save_preferences(
+                &crate::repl::preferences::Preferences {
+                    model: repl.state.model.clone(),
+                    provider: repl.state.selected_provider.clone(),
+                    theme: Some(name.to_string()),
+                },
+            );
             repl.chat.add_message(
                 ChatRole::System,
                 format!("Theme switched to '{name}'."),
@@ -4020,7 +4025,7 @@ fn handle_terminal_setup(repl: &mut Repl) -> Result<()> {
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| shell.clone());
-    report.push_str(&format!("Shell: {} ({})\n", shell_name, shell));
+    report.push_str(&format!("Shell: {shell_name} ({shell})\n"));
 
     // 2. Terminal type
     let term = std::env::var("TERM").unwrap_or_else(|_| "not set".to_string());
@@ -4753,7 +4758,7 @@ fn handle_add(repl: &mut Repl, args: &str) -> Result<()> {
         msg.push_str(&format!("  + {file}\n"));
     }
     if !errors.is_empty() {
-        msg.push_str(&format!("\nErrors:\n"));
+        msg.push_str("\nErrors:\n");
         for err in &errors {
             msg.push_str(&format!("  ! {err}\n"));
         }
@@ -4989,7 +4994,7 @@ fn handle_bind(repl: &mut Repl, args: &str) -> Result<()> {
         msg.push_str("  Key              Action\n");
         msg.push_str("  ──────────────── ─────────────────────────────────\n");
         for (key, action) in default_keybindings() {
-            msg.push_str(&format!("  {:<16} {}\n", key, action));
+            msg.push_str(&format!("  {key:<16} {action}\n"));
         }
         msg.push_str("\nCustom keybindings can be set in ~/.shannon/keybindings.toml\n");
         msg.push_str("Format: [[bind]]\n  key = \"Ctrl+J\"\n  action = \"submit\"\n");
@@ -5038,7 +5043,7 @@ fn handle_bind(repl: &mut Repl, args: &str) -> Result<()> {
                 Ok(content) => {
                     let line_count = content.lines().filter(|l| l.starts_with("[[bind]]")).count();
                     repl.chat.add_message(ChatRole::System,
-                        format!("Loaded keybindings config ({} custom binding(s) defined).\nKeybindings take effect on next restart.", line_count));
+                        format!("Loaded keybindings config ({line_count} custom binding(s) defined).\nKeybindings take effect on next restart."));
                 }
                 Err(e) => {
                     repl.chat.add_message(ChatRole::System,
@@ -5083,7 +5088,7 @@ fn handle_project(repl: &mut Repl, args: &str) -> Result<()> {
         if let Some(ref engine) = repl.query_engine {
             let perms = engine.permissions();
             let mode = perms.read().map(|p| p.approval_mode()).unwrap_or(shannon_core::permissions::ApprovalMode::Suggest);
-            msg.push_str(&format!("\n  Permission mode: {:?}", mode));
+            msg.push_str(&format!("\n  Permission mode: {mode:?}"));
         }
 
         if repl.state.plan.active {
@@ -5174,6 +5179,7 @@ mode = \"suggest\"    # suggest | auto-edit | full-auto | readonly\n\
             crate::repl::preferences::save_preferences(&crate::repl::preferences::Preferences {
                 model: repl.state.model.clone(),
                 provider: repl.state.selected_provider.clone(),
+                theme: Some(repl.state.theme.name.to_string()),
             });
             repl.chat.add_message(ChatRole::System,
                 format!("Project model set to: {model}"));

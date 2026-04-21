@@ -484,12 +484,24 @@ impl ChatWidget {
             list_items
         };
 
+        // Build scroll indicator title
+        let title = if self.messages.len() > 1 {
+            let is_at_bottom = self.scroll_offset >= self.messages.len().saturating_sub(1);
+            if is_at_bottom {
+                " Chat ".to_string()
+            } else {
+                format!(" Chat ({}/{}) ", self.scroll_offset + 1, self.messages.len())
+            }
+        } else {
+            " Chat ".to_string()
+        };
+
         let list = List::new(items)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(theme.border))
-                    .title(" Chat ")
+                    .title(title)
             );
 
         frame.render_widget(list, area);
@@ -686,7 +698,7 @@ impl PromptWidget {
 
         let rows: usize = input.split('\n').map(|line| {
             let chars = line.chars().count();
-            if chars == 0 { 1 } else { (chars + inner_width - 1) / inner_width }
+            if chars == 0 { 1 } else { chars.div_ceil(inner_width) }
         }).sum();
 
         let needed = (rows + 2) as u16; // +2 for top/bottom borders
@@ -722,7 +734,7 @@ impl PromptWidget {
                 1
             } else {
                 let c = line.chars().count();
-                if inner_width > 0 { (c + inner_width - 1) / inner_width } else { 1 }
+                if inner_width > 0 { c.div_ceil(inner_width) } else { 1 }
             };
 
             if row_idx == cursor_row {
@@ -874,11 +886,11 @@ impl SidebarWidget {
             for (path, adds, dels) in info.modified_files.iter().take(8) {
                 let fname = path.split('/').next_back().unwrap_or(path);
                 let changes = if *adds > 0 && *dels > 0 {
-                    format!("+{}-{}", adds, dels)
+                    format!("+{adds}-{dels}")
                 } else if *adds > 0 {
-                    format!("+{}", adds)
+                    format!("+{adds}")
                 } else {
-                    format!("-{}", dels)
+                    format!("-{dels}")
                 };
                 lines.push(Line::from(vec![
                     Span::styled(truncate_to(fname, w - 8), Style::default().fg(theme.text)),

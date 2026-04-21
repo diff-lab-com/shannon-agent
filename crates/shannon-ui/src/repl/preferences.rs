@@ -10,6 +10,8 @@ use shannon_core::api::LlmProvider;
 pub struct Preferences {
     pub model: Option<String>,
     pub provider: Option<LlmProvider>,
+    /// Theme name (e.g. "default_dark", "default_light", "dracula")
+    pub theme: Option<String>,
 }
 
 fn preferences_path() -> Option<PathBuf> {

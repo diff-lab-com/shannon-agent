@@ -110,7 +110,6 @@ pub fn render_permission_dialog(
     dialog: &shannon_core::permissions::PermissionPrompt,
     theme: &Theme,
 ) {
-    let _ = theme; // TODO: replace hardcoded colors with theme colors
     // Calculate dialog area (centered) — taller if diff preview present
     let base_height: u16 = if dialog.diff_preview.is_some() { 30 } else { 20 };
     let dialog_width = 70.min(area.width.saturating_sub(4));
@@ -139,11 +138,11 @@ pub fn render_permission_dialog(
     };
 
     let risk_color = match dialog.risk_level {
-        shannon_core::permissions::RiskLevel::Safe => Color::Green,
-        shannon_core::permissions::RiskLevel::Low => Color::Yellow,
-        shannon_core::permissions::RiskLevel::Medium => Color::Magenta,
-        shannon_core::permissions::RiskLevel::High => Color::Red,
-        shannon_core::permissions::RiskLevel::Critical => Color::Red,
+        shannon_core::permissions::RiskLevel::Safe => theme.success,
+        shannon_core::permissions::RiskLevel::Low => theme.warning,
+        shannon_core::permissions::RiskLevel::Medium => theme.accent,
+        shannon_core::permissions::RiskLevel::High => theme.error,
+        shannon_core::permissions::RiskLevel::Critical => theme.error,
     };
 
     let mut content_lines = vec![
@@ -153,13 +152,13 @@ pub fn render_permission_dialog(
         ]),
         Line::from(""),
         Line::from(vec![
-            Span::styled("Tool: ", Style::default().fg(Color::Gray)),
-            Span::styled(&dialog.tool_name, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled("Tool: ", Style::default().fg(theme.muted)),
+            Span::styled(&dialog.tool_name, Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
         ]),
         Line::from(""),
         Line::from(vec![
-            Span::styled("Description: ", Style::default().fg(Color::Gray)),
-            Span::styled(&dialog.description, Style::default().fg(Color::White)),
+            Span::styled("Description: ", Style::default().fg(theme.muted)),
+            Span::styled(&dialog.description, Style::default().fg(theme.text)),
         ]),
         Line::from(""),
     ];
@@ -167,26 +166,26 @@ pub fn render_permission_dialog(
     // Show diff preview for file edit/write, raw input for other tools
     if let Some(ref diff) = dialog.diff_preview {
         content_lines.push(Line::from(vec![
-            Span::styled("-- Diff Preview ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled("--------------------------", Style::default().fg(Color::DarkGray)),
+            Span::styled("-- Diff Preview ", Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
+            Span::styled("--------------------------", Style::default().fg(theme.text_dim)),
         ]));
         let diff_lines: Vec<&str> = diff.lines().collect();
         for line in diff_lines.iter().take(15) {
             let color = if line.starts_with('-') && !line.starts_with("---") {
-                Color::Red
+                theme.diff_removed
             } else if line.starts_with('+') && !line.starts_with("+++") {
-                Color::Green
+                theme.diff_added
             } else if line.starts_with('@') {
-                Color::Cyan
+                theme.primary
             } else {
-                Color::White
+                theme.text
             };
             content_lines.push(Line::from(Span::styled(line.to_string(), Style::default().fg(color))));
         }
         if diff_lines.len() > 15 {
             content_lines.push(Line::from(Span::styled(
                 format!("... ({} more lines)", diff_lines.len().saturating_sub(15)),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_dim),
             )));
         }
     } else {
@@ -198,19 +197,19 @@ pub fn render_permission_dialog(
     content_lines.push(Line::from(""));
     content_lines.push(Line::from(""));
     content_lines.push(Line::from(vec![
-        Span::styled("[Enter] ", Style::default().fg(Color::Green)),
-        Span::styled("Allow Once    ", Style::default().fg(Color::White)),
-        Span::styled("[A] ", Style::default().fg(Color::Cyan)),
-        Span::styled("Always Allow  ", Style::default().fg(Color::White)),
-        Span::styled("[Esc] ", Style::default().fg(Color::Red)),
-        Span::styled("Deny", Style::default().fg(Color::White)),
+        Span::styled("[Enter] ", Style::default().fg(theme.success)),
+        Span::styled("Allow Once    ", Style::default().fg(theme.text)),
+        Span::styled("[A] ", Style::default().fg(theme.primary)),
+        Span::styled("Always Allow  ", Style::default().fg(theme.text)),
+        Span::styled("[Esc] ", Style::default().fg(theme.error)),
+        Span::styled("Deny", Style::default().fg(theme.text)),
     ]));
 
     let paragraph = Paragraph::new(content_lines)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan))
+                .border_style(Style::default().fg(theme.primary))
                 .border_type(ratatui::widgets::BorderType::Rounded)
                 .title(" Permission Required "),
         )

@@ -89,6 +89,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
     let streaming_progress: Arc<Mutex<f64>> = Arc::new(Mutex::new(0.0));
     let streaming_multi_progress: Arc<Mutex<Vec<(String, f64, ratatui::style::Color)>>> = Arc::new(Mutex::new(Vec::new()));
     let streaming_tokens: Arc<Mutex<(u64, u64)>> = Arc::new(Mutex::new((0, 0))); // (input, output)
+    let streaming_tools: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
     let streaming_budget: Arc<Mutex<Option<f64>>> = Arc::new(Mutex::new(None));
     // Incremental delta: only new tokens since last UI render
     let streaming_delta: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
@@ -100,9 +101,14 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
     let progress_clone = streaming_progress.clone();
     let multi_progress_clone = streaming_multi_progress.clone();
     let tokens_clone = streaming_tokens.clone();
+    let tools_clone = streaming_tools.clone();
     let budget_clone = streaming_budget.clone();
     let delta_clone = streaming_delta.clone();
     let permission_tx = repl.permission_req_tx.clone();
+
+    // Save pre-stream values so we can show real-time totals during streaming
+    let pre_stream_tokens = repl.state.tokens_used;
+    let pre_stream_tools = repl.tools_invoked;
 
     // Spawn the query processing in a separate thread
     let query_handle = repl.runtime.spawn(async move {
@@ -138,6 +144,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                 }
                 Ok(QueryEvent::ToolUseRequest { tool_name, tool_input, .. }) => {
                     steps_done += 1;
+                    if let Ok(mut tc) = tools_clone.lock() { *tc += 1; }
                     progress_status = format!("Running: {tool_name} (step {steps_done})");
                     let tool_display = format!("\n🔧 Using: {} with input: {}", tool_name,
                         serde_json::to_string_pretty(&tool_input).unwrap_or_else(|_| "invalid".to_string()));
@@ -192,7 +199,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                     if let Ok(mut t) = tokens_clone.lock() { *t = (input_tokens, output_tokens); }
                     let total = input_tokens + output_tokens;
                     let total_fmt = if total >= 1000 { format!("{:.1}k", total as f64 / 1000.0) } else { total.to_string() };
-                    progress_status = format!("Processing... ({} tokens, ${cost_usd:.4})", total_fmt);
+                    progress_status = format!("Processing... ({total_fmt} tokens, ${cost_usd:.4})");
                     if let Ok(mut s) = status_clone.lock() { *s = progress_status.clone(); }
                 }
                 Ok(QueryEvent::Cost { total_cost_usd, input_tokens, output_tokens, .. }) => {
@@ -290,13 +297,21 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                 if cost > 0.0 { repl.state.total_cost_usd = cost; }
             }
 
-            // Update token display in real-time during streaming (display only, accumulation happens at query end)
+            // Update token display in real-time during streaming
             if let Ok((input, output)) = streaming_tokens.lock().map(|g| *g) {
                 if input > 0 || output > 0 {
+                    repl.state.tokens_used = pre_stream_tokens + input + output;
                     let total = input + output;
                     let total_fmt = if total >= 1000 { format!("{:.1}k", total as f64 / 1000.0) } else { total.to_string() };
                     let cost_fmt = if repl.state.total_cost_usd > 0.0 { format!(" | ${:.4}", repl.state.total_cost_usd) } else { String::new() };
-                    repl.state.status = format!("{} ({} tokens{})", current_status, total_fmt, cost_fmt);
+                    repl.state.status = format!("{current_status} ({total_fmt} tokens{cost_fmt})");
+                }
+            }
+
+            // Update tool count in real-time during streaming
+            if let Ok(tc) = streaming_tools.lock().map(|g| *g) {
+                if tc > 0 {
+                    repl.tools_invoked = pre_stream_tools + tc;
                 }
             }
 
@@ -331,12 +346,13 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
             let state = repl.state.clone();
             let spinner = &repl.state.spinner;
             let pb = if repl.state.progress_bar_visible { Some(&repl.state.progress_bar) } else { None };
+            let sidebar_info = repl.sidebar_info();
 
             polling_terminal.draw(|f| {
                 crate::widgets::MainLayoutWidget::render_complete_with_spinner(
                     f, chat, prompt, &state.status,
                     state.model.as_deref(), Some(state.tokens_used),
-                    &state.working_directory, Some(spinner), pb, None, &state.theme,
+                    &state.working_directory, Some(spinner), pb, sidebar_info.as_ref(), &state.theme,
                 );
                 if state.multi_progress_visible {
                     let mp_height = 3u16.min(f.area().height.saturating_sub(10));
@@ -398,8 +414,8 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
 
             let rendered = repl.output_renderer.render_output(&response, "assistant");
             repl.chat.update_message(assistant_msg_index, rendered);
-            repl.state.tokens_used += tokens;
-            repl.tools_invoked += tools;
+            repl.state.tokens_used = pre_stream_tokens + tokens;
+            repl.tools_invoked = pre_stream_tools + tools;
 
             if turn.total_files_touched() > 0 {
                 repl.diff_data.record_turn_diff(turn);

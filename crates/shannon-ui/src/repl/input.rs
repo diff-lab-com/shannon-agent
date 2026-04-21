@@ -707,6 +707,7 @@ fn handle_input_dialog_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                                 &crate::repl::preferences::Preferences {
                                     model: repl.state.model.clone(),
                                     provider: repl.state.selected_provider.clone(),
+                                    theme: Some(repl.state.theme.name.to_string()),
                                 },
                             );
                             repl.chat.add_message(
@@ -786,6 +787,30 @@ fn handle_fuzzy_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
 }
 
 fn handle_file_selector_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
+    // In @ mode, alphanumeric characters filter the file list
+    if repl.state.file_selector_for_at {
+        match key.code {
+            KeyCode::Char(c) if c.is_alphanumeric() || c == '_' || c == '.' || c == '/' => {
+                if let Some(ref mut sel) = repl.state.file_selector {
+                    let current_filter = sel.get_filter().unwrap_or("").to_string();
+                    let new_filter = format!("{current_filter}{c}");
+                    sel.set_filter_pattern(&new_filter);
+                }
+                return Ok(());
+            }
+            KeyCode::Backspace => {
+                if let Some(ref mut sel) = repl.state.file_selector {
+                    let current_filter = sel.get_filter().unwrap_or("").to_string();
+                    if !current_filter.is_empty() {
+                        sel.set_filter_pattern(&current_filter[..current_filter.len() - 1]);
+                    }
+                }
+                return Ok(());
+            }
+            _ => {} // fall through to normal handling
+        }
+    }
+
     match key.code {
         KeyCode::Up => {
             if let Some(ref mut sel) = repl.state.file_selector {
@@ -954,7 +979,7 @@ fn handle_diff_viewer_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Enter => {
             if let Some(ref mut viewer) = repl.state.diff_viewer {
-                viewer.toggle_expand();
+                viewer.toggle_expand(&repl.diff_data);
             }
         }
         KeyCode::Esc | KeyCode::Char('q') => {
@@ -1002,6 +1027,7 @@ fn handle_model_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                     &crate::repl::preferences::Preferences {
                         model: Some(model_id.clone()),
                         provider: Some(provider),
+                        theme: Some(repl.state.theme.name.to_string()),
                     },
                 );
                 repl.chat.add_message(
