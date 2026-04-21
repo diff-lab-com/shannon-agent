@@ -10,7 +10,7 @@ use ratatui::style::Color;
 /// interface can be restyled by swapping the theme.
 #[derive(Debug, Clone)]
 pub struct Theme {
-    pub name: &'static str,
+    pub name: String,
 
     // Role colors
     pub user_msg: Color,
@@ -50,7 +50,7 @@ impl Theme {
     /// Default dark theme (Shannon's original palette).
     pub fn default_dark() -> Self {
         Self {
-            name: "dark",
+            name: "dark".to_string(),
             user_msg: Color::Green,
             assistant_msg: Color::Cyan,
             system_msg: Color::Yellow,
@@ -78,7 +78,7 @@ impl Theme {
     /// Light theme for light terminal backgrounds.
     pub fn default_light() -> Self {
         Self {
-            name: "light",
+            name: "light".to_string(),
             user_msg: Color::Rgb(0, 100, 0),       // dark green
             assistant_msg: Color::Rgb(0, 80, 160),  // dark blue
             system_msg: Color::Rgb(180, 120, 0),    // dark gold
@@ -106,7 +106,7 @@ impl Theme {
     /// Dracula-inspired theme.
     pub fn dracula() -> Self {
         Self {
-            name: "dracula",
+            name: "dracula".to_string(),
             user_msg: Color::Rgb(80, 250, 123),     // green
             assistant_msg: Color::Rgb(189, 147, 249), // purple
             system_msg: Color::Rgb(241, 250, 140),  // yellow
@@ -155,18 +155,17 @@ impl Theme {
     }
 
     /// List available theme names (built-in + custom from `~/.shannon/themes/`).
-    pub fn available() -> Vec<&'static str> {
-        let mut names: Vec<&'static str> = vec!["dark", "light", "dracula"];
+    pub fn available() -> Vec<String> {
+        let mut names: Vec<String> = vec!["dark".to_string(), "light".to_string(), "dracula".to_string()];
         if let Some(dir) = dirs::home_dir().map(|h| h.join(".shannon").join("themes")) {
             if let Ok(entries) = std::fs::read_dir(&dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     if path.extension().map(|e| e == "json").unwrap_or(false) {
                         if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                            // Leak the string to get &'static str (loaded once, lives forever)
-                            let leaked: &'static str = Box::leak(stem.to_string().into_boxed_str());
-                            if !names.contains(&leaked) {
-                                names.push(leaked);
+                            let name = stem.to_string();
+                            if !names.contains(&name) {
+                                names.push(name);
                             }
                         }
                     }
@@ -205,7 +204,7 @@ fn load_custom_theme(name: &str) -> Option<Theme> {
     let file: ThemeFile = serde_json::from_str(&content).ok()?;
     let base = Theme::default_dark();
     Some(Theme {
-        name: Box::leak(name.to_string().into_boxed_str()),
+        name: name.to_string(),
         user_msg: resolve_color(&file.user_msg, base.user_msg),
         assistant_msg: resolve_color(&file.assistant_msg, base.assistant_msg),
         system_msg: resolve_color(&file.system_msg, base.system_msg),
@@ -344,9 +343,9 @@ mod tests {
     #[test]
     fn test_theme_available() {
         let names = Theme::available();
-        assert!(names.contains(&"dark"));
-        assert!(names.contains(&"light"));
-        assert!(names.contains(&"dracula"));
+        assert!(names.contains(&"dark".to_string()));
+        assert!(names.contains(&"light".to_string()));
+        assert!(names.contains(&"dracula".to_string()));
     }
 
     #[test]

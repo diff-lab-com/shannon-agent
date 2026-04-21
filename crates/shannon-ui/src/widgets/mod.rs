@@ -262,6 +262,8 @@ pub struct ChatMessage {
     pub image_lines: Option<Vec<ratatui::text::Line<'static>>>,
     /// Whether this tool message represents an error
     pub is_error: bool,
+    /// Tool name for collapsed display (e.g., "bash", "write")
+    pub tool_name: Option<String>,
 }
 
 /// Role of the chat message sender
@@ -291,6 +293,7 @@ impl ChatWidget {
             timestamp: chrono::Utc::now(),
             image_lines: None,
             is_error: false,
+            tool_name: None,
         };
 
         let index = self.messages.len();
@@ -320,6 +323,7 @@ impl ChatWidget {
             timestamp: chrono::Utc::now(),
             image_lines: Some(image_lines),
             is_error: false,
+            tool_name: None,
         };
 
         let index = self.messages.len();
@@ -347,6 +351,24 @@ impl ChatWidget {
             let last_index = self.messages.len() - 1;
             self.update_message(last_index, content);
         }
+    }
+
+    /// Add a tool result message with tool name and error status
+    pub fn add_tool_message(&mut self, tool_name: String, content: String, is_error: bool) -> usize {
+        let message = ChatMessage {
+            role: ChatRole::Tool,
+            content,
+            timestamp: chrono::Utc::now(),
+            image_lines: None,
+            is_error,
+            tool_name: Some(tool_name),
+        };
+        let index = self.messages.len();
+        self.messages.push_back(message);
+        if !self.messages.is_empty() {
+            self.scroll_offset = self.messages.len() - 1;
+        }
+        index
     }
 
     /// Clear all messages
@@ -378,13 +400,30 @@ impl ChatWidget {
                 let timestamp = msg.timestamp.format("%H:%M:%S").to_string();
                 let clean_content = strip_ansi(&msg.content);
                 let first_line = clean_content.lines().next().unwrap_or("");
-                let prefix_len = timestamp.len() + 6; // "[HH:MM:SS] ⏵ "
-                let available = inner_width.saturating_sub(prefix_len);
-                let summary = if first_line.chars().count() > available {
-                    let truncated: String = first_line.chars().take(available.saturating_sub(3)).collect();
-                    format!("{truncated}...")
+                // Build summary: use tool_name as label if available, else fall back to first line
+                let tool_label = msg.tool_name.as_deref().unwrap_or("tool");
+                let summary_text = if msg.tool_name.is_some() {
+                    // Show first line as the detail after the tool name
+                    let detail = first_line.strip_prefix(tool_label)
+                        .map(|s| s.trim_start_matches(|c: char| c == ':' || c == ' '))
+                        .unwrap_or(first_line);
+                    if detail.is_empty() {
+                        tool_label.to_string()
+                    } else {
+                        format!("{tool_label}: {detail}")
+                    }
                 } else {
                     first_line.to_string()
+                };
+                let label_len = tool_label.len() + timestamp.len() + 8; // "[HH:MM:SS] ⏵ label: "
+                let _available = inner_width.saturating_sub(label_len);
+                let ts_len = timestamp.len();
+                let max_summary_width = inner_width.saturating_sub(ts_len + 6);
+                let summary = if summary_text.chars().count() > max_summary_width {
+                    let truncated: String = summary_text.chars().take(max_summary_width.saturating_sub(3)).collect();
+                    format!("{truncated}...")
+                } else {
+                    summary_text
                 };
                 let (status_icon, status_color) = if msg.is_error {
                     ("✗", theme.error)
@@ -396,7 +435,7 @@ impl ChatWidget {
                     Span::styled(timestamp, Style::default().fg(theme.muted)),
                     Span::styled("] ", Style::default().fg(theme.muted)),
                     Span::styled("⏵ ", Style::default().fg(theme.tool_msg)),
-                    Span::styled(summary, Style::default().fg(theme.text_dim)),
+                    Span::styled(truncate_to(&summary, max_summary_width), Style::default().fg(theme.text_dim)),
                     Span::styled(" ", Style::default().fg(theme.text_dim)),
                     Span::styled(status_icon, Style::default().fg(status_color)),
                 ]));
@@ -415,46 +454,72 @@ impl ChatWidget {
 
             // Strip ANSI escape codes — ratatui doesn't interpret them
             let clean_content = strip_ansi(&msg.content);
-            let content_lines: Vec<&str> = clean_content.split('\n').collect();
 
-            for (i, content_line) in content_lines.iter().enumerate() {
-                if i == 0 {
-                    // First line: timestamp + role + content
-                    let prefix_len = timestamp.len() + role_name.len() + 5; // "[00:00:00] Role: "
-                    let available = inner_width.saturating_sub(prefix_len);
-                    let text = if content_line.chars().count() > available {
-                        let truncated: String = content_line.chars().take(available.saturating_sub(3)).collect();
-                        format!("{truncated}...")
-                    } else {
-                        content_line.to_string()
-                    };
+            // Parse into segments: normal text and code blocks
+            let segments = parse_markdown_segments(&clean_content);
+            let mut first_line = true;
 
-                    let item = ListItem::new(Line::from(vec![
-                        Span::styled("[", Style::default().fg(theme.muted)),
-                        Span::styled(timestamp.clone(), Style::default().fg(theme.muted)),
-                        Span::styled("] ", Style::default().fg(theme.muted)),
-                        Span::styled(role_name, Style::default().fg(role_color).add_modifier(Modifier::BOLD)),
-                        Span::styled(": ", Style::default().fg(theme.text_dim)),
-                        Span::styled(text, Style::default().fg(theme.text)),
-                    ]));
-                    list_items.push(item);
-                } else {
-                    // Continuation lines: indented
-                    let indent_len = timestamp.len() + role_name.len() + 5;
-                    let indent = " ".repeat(indent_len);
-                    let available = inner_width.saturating_sub(indent_len);
-                    let text = if content_line.chars().count() > available {
-                        let truncated: String = content_line.chars().take(available.saturating_sub(3)).collect();
-                        format!("{truncated}...")
-                    } else {
-                        content_line.to_string()
-                    };
+            for segment in &segments {
+                match segment {
+                    MdSegment::Text(lines) => {
+                        for content_line in lines {
+                            if first_line {
+                                let prefix_len = timestamp.len() + role_name.len() + 5;
+                                let available = inner_width.saturating_sub(prefix_len);
+                                let text = truncate_line(content_line, available);
+                                let item = ListItem::new(Line::from(vec![
+                                    Span::styled("[", Style::default().fg(theme.muted)),
+                                    Span::styled(timestamp.clone(), Style::default().fg(theme.muted)),
+                                    Span::styled("] ", Style::default().fg(theme.muted)),
+                                    Span::styled(role_name, Style::default().fg(role_color).add_modifier(Modifier::BOLD)),
+                                    Span::styled(": ", Style::default().fg(theme.text_dim)),
+                                    Span::styled(text, Style::default().fg(theme.text)),
+                                ]));
+                                list_items.push(item);
+                                first_line = false;
+                            } else {
+                                let indent_len = timestamp.len() + role_name.len() + 5;
+                                let indent = " ".repeat(indent_len);
+                                let available = inner_width.saturating_sub(indent_len);
+                                let text = truncate_line(content_line, available);
+                                let item = ListItem::new(Line::from(vec![
+                                    Span::styled(indent, Style::default().fg(theme.muted)),
+                                    Span::styled(text, Style::default().fg(theme.text)),
+                                ]));
+                                list_items.push(item);
+                            }
+                        }
+                    }
+                    MdSegment::CodeBlock { lang, code } => {
+                        let indent_len = timestamp.len() + role_name.len() + 3;
+                        let indent = " ".repeat(indent_len);
+                        let available = inner_width.saturating_sub(indent_len);
 
-                    let item = ListItem::new(Line::from(vec![
-                        Span::styled(indent, Style::default().fg(theme.muted)),
-                        Span::styled(text, Style::default().fg(theme.text)),
-                    ]));
-                    list_items.push(item);
+                        // Code block header
+                        let header = format!("╭─ {} ─", lang.as_deref().unwrap_or("code"));
+                        list_items.push(ListItem::new(Line::from(vec![
+                            Span::styled(indent.clone(), Style::default().fg(theme.muted)),
+                            Span::styled(truncate_to(&header, available), Style::default().fg(theme.accent)),
+                        ])));
+
+                        // Code lines with syntax highlighting
+                        for code_line in code.lines() {
+                            let spans = highlight_code_line(code_line, lang.as_deref(), theme);
+                            let mut line_spans = vec![
+                                Span::styled(indent.clone(), Style::default().fg(theme.muted)),
+                                Span::styled("│ ", Style::default().fg(theme.accent)),
+                            ];
+                            line_spans.extend(spans);
+                            list_items.push(ListItem::new(Line::from(line_spans)));
+                        }
+
+                        // Code block footer
+                        list_items.push(ListItem::new(Line::from(vec![
+                            Span::styled(indent, Style::default().fg(theme.muted)),
+                            Span::styled(truncate_to("╰────────", available), Style::default().fg(theme.accent)),
+                        ])));
+                        first_line = false;
+                    }
                 }
             }
 
@@ -822,6 +887,10 @@ pub struct SidebarInfo {
     pub total_additions: usize,
     /// Total deletions across all files
     pub total_deletions: usize,
+    /// Number of tool errors in session
+    pub error_count: usize,
+    /// Context window size for the current model (for progress bar)
+    pub context_window: usize,
 }
 
 /// Right sidebar panel showing session metadata
@@ -854,11 +923,26 @@ impl SidebarWidget {
         // Context usage
         lines.push(Line::from(Span::styled("Context", Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD))));
         let tokens_str = format_tokens(info.tokens_used);
-        lines.push(Line::from(Span::styled(tokens_str, Style::default().fg(theme.text))));
-        // Simple token bar
-        let bar_filled = (info.tokens_used % 1000) as usize / 100; // rough visual
-        let bar_str = format!("{}{}", "█".repeat(bar_filled.min(w/2)), "░".repeat((w/2).saturating_sub(bar_filled)));
-        lines.push(Line::from(Span::styled(truncate_to(&bar_str, w), Style::default().fg(theme.secondary))));
+        let pct = if info.context_window > 0 {
+            ((info.tokens_used as f64 / info.context_window as f64) * 100.0).min(100.0)
+        } else {
+            0.0
+        };
+        let pct_label = format!("{tokens_str} ({pct:.0}%)");
+        lines.push(Line::from(Span::styled(pct_label, Style::default().fg(theme.text))));
+        // Progress bar based on actual context window percentage
+        let bar_width = w.saturating_sub(2).max(4);
+        let filled = (pct / 100.0 * bar_width as f64).round() as usize;
+        let filled = filled.min(bar_width);
+        let bar_color = if pct > 90.0 {
+            theme.error
+        } else if pct > 75.0 {
+            theme.warning
+        } else {
+            theme.secondary
+        };
+        let bar_str = format!(" {}{}", "█".repeat(filled), "░".repeat(bar_width.saturating_sub(filled)));
+        lines.push(Line::from(Span::styled(truncate_to(&bar_str, w), Style::default().fg(bar_color))));
         lines.push(Line::from(""));
 
         // Cost
@@ -870,6 +954,12 @@ impl SidebarWidget {
         // Tools
         lines.push(Line::from(Span::styled("Tools", Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD))));
         lines.push(Line::from(Span::styled(info.tools_invoked.to_string(), Style::default().fg(theme.text))));
+        if info.error_count > 0 {
+            lines.push(Line::from(Span::styled(
+                format!("  {} errors", info.error_count),
+                Style::default().fg(theme.error),
+            )));
+        }
         lines.push(Line::from(""));
 
         // Modified files
@@ -919,6 +1009,164 @@ impl SidebarWidget {
     pub fn width() -> u16 {
         SIDEBAR_WIDTH
     }
+}
+
+/// Markdown segment: either plain text or a fenced code block.
+enum MdSegment {
+    /// Regular text lines
+    Text(Vec<String>),
+    /// Fenced code block with optional language tag
+    CodeBlock { lang: Option<String>, code: String },
+}
+
+/// Parse content into markdown segments (text and code blocks).
+fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
+    let mut segments = Vec::new();
+    let mut current_text: Vec<String> = Vec::new();
+    let mut in_code = false;
+    let mut code_lines: Vec<String> = Vec::new();
+    let mut lang: Option<String> = None;
+
+    for line in content.lines() {
+        if line.starts_with("```") {
+            if in_code {
+                // End of code block
+                segments.push(MdSegment::CodeBlock {
+                    lang: lang.take(),
+                    code: code_lines.join("\n"),
+                });
+                code_lines.clear();
+                in_code = false;
+            } else {
+                // Start of code block
+                if !current_text.is_empty() {
+                    segments.push(MdSegment::Text(std::mem::take(&mut current_text)));
+                }
+                let lang_str = line.trim_start_matches('`').trim();
+                lang = if lang_str.is_empty() { None } else { Some(lang_str.to_string()) };
+                in_code = true;
+            }
+        } else if in_code {
+            code_lines.push(line.to_string());
+        } else {
+            current_text.push(line.to_string());
+        }
+    }
+
+    // Flush remaining
+    if in_code {
+        segments.push(MdSegment::CodeBlock {
+            lang,
+            code: code_lines.join("\n"),
+        });
+    }
+    if !current_text.is_empty() {
+        segments.push(MdSegment::Text(current_text));
+    }
+
+    segments
+}
+
+/// Truncate a line to fit within max_chars, with ellipsis.
+fn truncate_line(s: &str, max_chars: usize) -> String {
+    truncate_to(s, max_chars)
+}
+
+/// Common keywords for basic syntax highlighting.
+const KEYWORDS: &[&str] = &[
+    "fn", "let", "mut", "pub", "struct", "enum", "impl", "trait", "mod", "use",
+    "if", "else", "match", "for", "while", "loop", "return", "break", "continue",
+    "async", "await", "move", "ref", "self", "super", "crate", "where", "type",
+    "const", "static", "true", "false", "Some", "None", "Ok", "Err",
+    "def", "class", "import", "from", "with", "as", "try", "except", "raise",
+    "function", "var", "const", "let", "new", "this", "typeof", "instanceof",
+    "NULL", "True", "False",
+];
+
+/// Highlight a single code line into colored spans.
+fn highlight_code_line(line: &str, _lang: Option<&str>, theme: &Theme) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut current = String::new();
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        // Check for line comments
+        if chars[i] == '/' && i + 1 < chars.len() && chars[i + 1] == '/' {
+            if !current.is_empty() {
+                spans.push(Span::styled(std::mem::take(&mut current), Style::default().fg(theme.text)));
+            }
+            let comment: String = chars[i..].iter().collect();
+            spans.push(Span::styled(truncate_to(&comment, 200), Style::default().fg(theme.muted)));
+            return spans;
+        }
+        if chars[i] == '#' && (_lang == Some("python") || _lang == Some("py") || _lang == Some("bash") || _lang == Some("sh") || _lang == None) {
+            if !current.is_empty() {
+                spans.push(Span::styled(std::mem::take(&mut current), Style::default().fg(theme.text)));
+            }
+            let comment: String = chars[i..].iter().collect();
+            spans.push(Span::styled(truncate_to(&comment, 200), Style::default().fg(theme.muted)));
+            return spans;
+        }
+        // Check for strings (double quote)
+        if chars[i] == '"' || chars[i] == '\'' {
+            if !current.is_empty() {
+                spans.push(Span::styled(std::mem::take(&mut current), Style::default().fg(theme.text)));
+            }
+            let quote = chars[i];
+            current.push(quote);
+            i += 1;
+            while i < chars.len() && chars[i] != quote {
+                current.push(chars[i]);
+                if chars[i] == '\\' && i + 1 < chars.len() {
+                    i += 1;
+                    current.push(chars[i]);
+                }
+                i += 1;
+            }
+            if i < chars.len() {
+                current.push(chars[i]);
+                i += 1;
+            }
+            spans.push(Span::styled(std::mem::take(&mut current), Style::default().fg(theme.success)));
+            continue;
+        }
+        // Check for word boundaries (keywords)
+        if chars[i].is_alphanumeric() || chars[i] == '_' {
+            current.push(chars[i]);
+            i += 1;
+            // Continue reading word
+            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                current.push(chars[i]);
+                i += 1;
+            }
+            // Check if it's a keyword
+            if KEYWORDS.contains(&current.as_str()) {
+                spans.push(Span::styled(std::mem::take(&mut current), Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)));
+            }
+            continue;
+        }
+        // Numbers
+        if chars[i].is_ascii_digit() {
+            if !current.is_empty() {
+                spans.push(Span::styled(std::mem::take(&mut current), Style::default().fg(theme.text)));
+            }
+            while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.' || chars[i] == '_') {
+                current.push(chars[i]);
+                i += 1;
+            }
+            spans.push(Span::styled(std::mem::take(&mut current), Style::default().fg(theme.warning)));
+            continue;
+        }
+        // Punctuation/operators
+        current.push(chars[i]);
+        i += 1;
+    }
+
+    if !current.is_empty() {
+        spans.push(Span::styled(current, Style::default().fg(theme.text)));
+    }
+    spans
 }
 
 /// Truncate a string to fit within `max_chars` characters, appending "…" if truncated.
@@ -1300,6 +1548,7 @@ mod tests {
             timestamp: chrono::Utc::now(),
             image_lines: None,
             is_error: false,
+            tool_name: None,
         };
         assert_eq!(msg.content, "Test message");
         assert_eq!(msg.role, ChatRole::User);
@@ -1509,5 +1758,143 @@ mod tests {
         chat.rewind(1);
         // scroll_offset should be updated to 1 (new last message)
         assert_eq!(chat.scroll_offset, 1);
+    }
+
+    // ── Markdown Parsing Tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_parse_markdown_plain_text() {
+        let segments = parse_markdown_segments("Hello\nWorld");
+        assert_eq!(segments.len(), 1);
+        match &segments[0] {
+            MdSegment::Text(lines) => {
+                assert_eq!(lines.len(), 2);
+                assert_eq!(lines[0], "Hello");
+                assert_eq!(lines[1], "World");
+            }
+            _ => panic!("Expected Text segment"),
+        }
+    }
+
+    #[test]
+    fn test_parse_markdown_code_block() {
+        let input = "Before\n```rust\nfn main() {}\n```\nAfter";
+        let segments = parse_markdown_segments(input);
+        assert_eq!(segments.len(), 3);
+        match &segments[0] {
+            MdSegment::Text(lines) => assert!(lines[0] == "Before"),
+            _ => panic!("Expected Text"),
+        }
+        match &segments[1] {
+            MdSegment::CodeBlock { lang, code } => {
+                assert_eq!(lang.as_deref(), Some("rust"));
+                assert_eq!(code, "fn main() {}");
+            }
+            _ => panic!("Expected CodeBlock"),
+        }
+        match &segments[2] {
+            MdSegment::Text(lines) => assert!(lines[0] == "After"),
+            _ => panic!("Expected Text"),
+        }
+    }
+
+    #[test]
+    fn test_parse_markdown_code_block_no_lang() {
+        let input = "```\nsome code\n```";
+        let segments = parse_markdown_segments(input);
+        assert_eq!(segments.len(), 1);
+        match &segments[0] {
+            MdSegment::CodeBlock { lang, code } => {
+                assert!(lang.is_none());
+                assert_eq!(code, "some code");
+            }
+            _ => panic!("Expected CodeBlock"),
+        }
+    }
+
+    #[test]
+    fn test_highlight_code_keywords() {
+        let theme = Theme::default_dark();
+        let spans = highlight_code_line("fn main() { let x = 1; }", None, &theme);
+        assert!(!spans.is_empty());
+    }
+
+    #[test]
+    fn test_highlight_code_string() {
+        let theme = Theme::default_dark();
+        let spans = highlight_code_line(r#"let s = "hello";"#, Some("rust"), &theme);
+        assert!(!spans.is_empty());
+    }
+
+    #[test]
+    fn test_highlight_code_comment() {
+        let theme = Theme::default_dark();
+        let spans = highlight_code_line("// this is a comment", Some("rust"), &theme);
+        assert_eq!(spans.len(), 1); // entire line is one comment span
+    }
+
+    // ── Tool Message Tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_add_tool_message() {
+        let mut chat = ChatWidget::new(100);
+        let idx = chat.add_tool_message("bash".to_string(), "cargo test\nall passed".to_string(), false);
+        assert_eq!(chat.len(), 1);
+        let msg = &chat.messages[idx];
+        assert_eq!(msg.role, ChatRole::Tool);
+        assert_eq!(msg.tool_name.as_deref(), Some("bash"));
+        assert!(!msg.is_error);
+    }
+
+    #[test]
+    fn test_add_tool_message_error() {
+        let mut chat = ChatWidget::new(100);
+        chat.add_tool_message("bash".to_string(), "error: build failed".to_string(), true);
+        let msg = &chat.messages[0];
+        assert!(msg.is_error);
+        assert_eq!(msg.tool_name.as_deref(), Some("bash"));
+    }
+
+    // ── SidebarInfo Tests ───────────────────────────────────────────────
+
+    #[test]
+    fn test_sidebar_info_context_window() {
+        let info = SidebarInfo {
+            model: Some("test-model".to_string()),
+            tokens_used: 5000,
+            cost_usd: 0.05,
+            tools_invoked: 3,
+            modified_files: vec![],
+            total_additions: 0,
+            total_deletions: 0,
+            error_count: 1,
+            context_window: 200_000,
+        };
+        assert_eq!(info.context_window, 200_000);
+        assert_eq!(info.error_count, 1);
+    }
+
+    // ── Truncation Tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_truncate_to_short() {
+        assert_eq!(truncate_to("hi", 10), "hi");
+    }
+
+    #[test]
+    fn test_truncate_to_exact() {
+        assert_eq!(truncate_to("abc", 3), "abc");
+    }
+
+    #[test]
+    fn test_truncate_to_long() {
+        assert_eq!(truncate_to("abcdef", 4), "abc…");
+    }
+
+    #[test]
+    fn test_format_tokens() {
+        assert_eq!(format_tokens(500), "500");
+        assert_eq!(format_tokens(1500), "1.5k");
+        assert_eq!(format_tokens(1_500_000), "1.5M");
     }
 }

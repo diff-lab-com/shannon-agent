@@ -16,6 +16,37 @@ use shannon_core::query_engine::{QueryContext, QueryEvent};
 
 use super::Repl;
 
+/// Shared streaming state between the async query task and the UI polling loop.
+struct StreamingState {
+    buffer: String,
+    status: String,
+    done: bool,
+    cost: f64,
+    progress: f64,
+    multi_progress: Vec<(String, f64, ratatui::style::Color)>,
+    tokens: (u64, u64), // (input, output)
+    tools: usize,
+    budget: Option<f64>,
+    delta: String,
+}
+
+impl Default for StreamingState {
+    fn default() -> Self {
+        Self {
+            buffer: String::new(),
+            status: "Processing...".to_string(),
+            done: false,
+            cost: 0.0,
+            progress: 0.0,
+            multi_progress: Vec::new(),
+            tokens: (0, 0),
+            tools: 0,
+            budget: None,
+            delta: String::new(),
+        }
+    }
+}
+
 /// Handle a query (send to AI)
 pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
     repl.state.status = t!("status.processing").to_string();
@@ -82,28 +113,8 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
 
     // Shared state between the async query task and the main UI loop
     use std::sync::{Arc, Mutex};
-    let streaming_buffer: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
-    let streaming_status: Arc<Mutex<String>> = Arc::new(Mutex::new("Processing...".to_string()));
-    let streaming_done: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
-    let streaming_cost: Arc<Mutex<f64>> = Arc::new(Mutex::new(0.0));
-    let streaming_progress: Arc<Mutex<f64>> = Arc::new(Mutex::new(0.0));
-    let streaming_multi_progress: Arc<Mutex<Vec<(String, f64, ratatui::style::Color)>>> = Arc::new(Mutex::new(Vec::new()));
-    let streaming_tokens: Arc<Mutex<(u64, u64)>> = Arc::new(Mutex::new((0, 0))); // (input, output)
-    let streaming_tools: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
-    let streaming_budget: Arc<Mutex<Option<f64>>> = Arc::new(Mutex::new(None));
-    // Incremental delta: only new tokens since last UI render
-    let streaming_delta: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
-
-    let buffer_clone = streaming_buffer.clone();
-    let status_clone = streaming_status.clone();
-    let done_clone = streaming_done.clone();
-    let cost_clone = streaming_cost.clone();
-    let progress_clone = streaming_progress.clone();
-    let multi_progress_clone = streaming_multi_progress.clone();
-    let tokens_clone = streaming_tokens.clone();
-    let tools_clone = streaming_tools.clone();
-    let budget_clone = streaming_budget.clone();
-    let delta_clone = streaming_delta.clone();
+    let streaming: Arc<Mutex<StreamingState>> = Arc::new(Mutex::new(StreamingState::default()));
+    let ss = streaming.clone();
     let permission_tx = repl.permission_req_tx.clone();
 
     // Save pre-stream values so we can show real-time totals during streaming
@@ -134,24 +145,13 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                 }
                 Ok(QueryEvent::Text { content, .. }) => {
                     response_text.push_str(&content);
-                    if let Ok(mut buf) = buffer_clone.lock() {
-                        *buf = response_text.clone();
-                    }
-                    // Push incremental delta for UI
-                    if let Ok(mut d) = delta_clone.lock() {
-                        d.push_str(&content);
+                    if let Ok(mut s) = ss.lock() {
+                        s.buffer = response_text.clone();
+                        s.delta.push_str(&content);
                     }
                 }
                 Ok(QueryEvent::ToolUseRequest { tool_name, tool_input, .. }) => {
                     steps_done += 1;
-                    if let Ok(mut tc) = tools_clone.lock() { *tc += 1; }
-                    progress_status = format!("Running: {tool_name} (step {steps_done})");
-                    let tool_display = format!("\n🔧 Using: {} with input: {}", tool_name,
-                        serde_json::to_string_pretty(&tool_input).unwrap_or_else(|_| "invalid".to_string()));
-                    response_text.push_str(&tool_display);
-                    tool_calls.push(tool_name.clone());
-                    _tools_in_session += 1;
-
                     {
                         let colors = [
                             ratatui::style::Color::Cyan,
@@ -161,13 +161,20 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                             ratatui::style::Color::Blue,
                         ];
                         let color = colors[tool_calls.len() % colors.len()];
-                        if let Ok(mut mp) = multi_progress_clone.lock() {
-                            mp.push((tool_name.clone(), 0.0, color));
+                        if let Ok(mut s) = ss.lock() {
+                            s.tools += 1;
+                            s.multi_progress.push((tool_name.clone(), 0.0, color));
+                            s.status = format!("Running: {tool_name} (step {steps_done})");
+                            s.buffer = response_text.clone();
                         }
                     }
 
-                    if let Ok(mut s) = status_clone.lock() { *s = progress_status.clone(); }
-                    if let Ok(mut buf) = buffer_clone.lock() { *buf = response_text.clone(); }
+                    progress_status = format!("Running: {tool_name} (step {steps_done})");
+                    let tool_display = format!("\n🔧 Using: {} with input: {}", tool_name,
+                        serde_json::to_string_pretty(&tool_input).unwrap_or_else(|_| "invalid".to_string()));
+                    response_text.push_str(&tool_display);
+                    tool_calls.push(tool_name.clone());
+                    _tools_in_session += 1;
 
                     if tool_name == "write" || tool_name == "edit" || tool_name == "WriteTool" {
                         if let Some(path) = tool_input.get("file_path").and_then(|v| v.as_str()) {
@@ -178,9 +185,9 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                 Ok(QueryEvent::ToolUseResult { tool_name, result, is_error, .. }) => {
                     let formatted = crate::tool_format::format_tool_result(&tool_name, &result, is_error);
                     response_text.push_str(&format!("\n{formatted}"));
-                    if let Ok(mut buf) = buffer_clone.lock() { *buf = response_text.clone(); }
-                    if let Ok(mut mp) = multi_progress_clone.lock() {
-                        if let Some(bar) = mp.iter_mut().find(|(l, _, _)| l == &tool_name) {
+                    if let Ok(mut s) = ss.lock() {
+                        s.buffer = response_text.clone();
+                        if let Some(bar) = s.multi_progress.iter_mut().find(|(l, _, _)| l == &tool_name) {
                             bar.1 = 1.0;
                         }
                     }
@@ -192,42 +199,48 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                 Ok(QueryEvent::Progress { message, .. }) => {
                     progress_status = format!("Processing: {message}");
                     response_text.push_str(&format!("\n⏳ {message}"));
-                    if let Ok(mut s) = status_clone.lock() { *s = progress_status.clone(); }
-                    if let Ok(mut buf) = buffer_clone.lock() { *buf = response_text.clone(); }
+                    if let Ok(mut s) = ss.lock() {
+                        s.status = progress_status.clone();
+                        s.buffer = response_text.clone();
+                    }
                 }
                 Ok(QueryEvent::Usage { input_tokens, output_tokens, cost_usd, .. }) => {
-                    if let Ok(mut t) = tokens_clone.lock() { *t = (input_tokens, output_tokens); }
+                    if let Ok(mut s) = ss.lock() { s.tokens = (input_tokens, output_tokens); }
                     let total = input_tokens + output_tokens;
                     let total_fmt = if total >= 1000 { format!("{:.1}k", total as f64 / 1000.0) } else { total.to_string() };
                     progress_status = format!("Processing... ({total_fmt} tokens, ${cost_usd:.4})");
-                    if let Ok(mut s) = status_clone.lock() { *s = progress_status.clone(); }
+                    if let Ok(mut s) = ss.lock() { s.status = progress_status.clone(); }
                 }
                 Ok(QueryEvent::Cost { total_cost_usd, input_tokens, output_tokens, .. }) => {
                     tokens_in_turn = input_tokens + output_tokens;
-                    if let Ok(mut c) = cost_clone.lock() { *c = total_cost_usd; }
+                    let budget_limit;
+                    {
+                        let mut s = ss.lock().unwrap_or_else(|e| e.into_inner());
+                        s.cost = total_cost_usd;
+                        budget_limit = s.budget;
+                    }
                     // Budget warning: alert when cost exceeds 80% of limit
-                    if let Ok(budget) = budget_clone.lock() {
-                        if let Some(limit) = *budget {
-                            if total_cost_usd > limit * 0.8 && total_cost_usd <= limit {
-                                response_text.push_str(&format!(
-                                    "\n\n⚠️ Budget warning: ${total_cost_usd:.4} / ${limit:.2} ({:.0}% used)",
-                                    (total_cost_usd / limit) * 100.0
-                                ));
-                            } else if total_cost_usd > limit {
-                                response_text.push_str(&format!(
-                                    "\n\n🚨 Budget exceeded: ${total_cost_usd:.4} > ${limit:.2}"
-                                ));
-                            }
+                    if let Some(limit) = budget_limit {
+                        if total_cost_usd > limit * 0.8 && total_cost_usd <= limit {
+                            response_text.push_str(&format!(
+                                "\n\n⚠️ Budget warning: ${total_cost_usd:.4} / ${limit:.2} ({:.0}% used)",
+                                (total_cost_usd / limit) * 100.0
+                            ));
+                        } else if total_cost_usd > limit {
+                            response_text.push_str(&format!(
+                                "\n\n🚨 Budget exceeded: ${total_cost_usd:.4} > ${limit:.2}"
+                            ));
                         }
                     }
                 }
                 Ok(QueryEvent::ToolProgress { progress, tool_name, .. }) => {
                     let pct = (progress * 100.0) as u32;
                     response_text.push_str(&format!("\n⏳ Tool progress: {pct}%"));
-                    if let Ok(mut p) = progress_clone.lock() { *p = progress as f64; }
-                    if let Ok(mut buf) = buffer_clone.lock() { *buf = response_text.clone(); }
-                    progress_status = format!("{tool_name}: {pct}%");
-                    if let Ok(mut s) = status_clone.lock() { *s = progress_status.clone(); }
+                    if let Ok(mut s) = ss.lock() {
+                        s.progress = progress as f64;
+                        s.buffer = response_text.clone();
+                        s.status = format!("{tool_name}: {pct}%");
+                    }
                 }
                 Ok(QueryEvent::Completed { .. }) => {
                     let mut summary_parts = Vec::new();
@@ -239,9 +252,9 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                         };
                         summary_parts.push(format!("{turn_fmt} tokens this turn"));
                     }
-                    if let Ok(cost) = cost_clone.lock() {
-                        if *cost > 0.0 {
-                            summary_parts.push(format!("${:.4} total", *cost));
+                    if let Ok(s) = ss.lock() {
+                        if s.cost > 0.0 {
+                            summary_parts.push(format!("${:.4} total", s.cost));
                         }
                     }
                     if !summary_parts.is_empty() {
@@ -270,19 +283,24 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
         let mut needs_render = false;
 
         loop {
-            let is_done = done_clone.lock().map(|g| *g).unwrap_or(false);
+            let is_done = streaming.lock().map(|s| s.done).unwrap_or(false);
             let query_finished = is_done || query_handle.is_finished();
 
-            let current_status = streaming_status.lock().map(|g| g.clone()).unwrap_or_default();
-
-            // Drain incremental delta instead of cloning entire buffer
+            let current_status;
             {
-                let mut delta = streaming_delta.lock().unwrap_or_else(|e| e.into_inner());
-                if !delta.is_empty() {
-                    rendered_text.push_str(&delta);
-                    delta.clear();
+                let s = streaming.lock().unwrap_or_else(|e| e.into_inner());
+                current_status = s.status.clone();
+
+                // Drain incremental delta
+                if !s.delta.is_empty() {
+                    rendered_text.push_str(&s.delta);
                     needs_render = true;
                 }
+            }
+            // Clear delta after draining
+            {
+                let mut s = streaming.lock().unwrap_or_else(|e| e.into_inner());
+                s.delta.clear();
             }
 
             if needs_render {
@@ -293,12 +311,12 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
 
             repl.state.status = current_status.clone();
 
-            if let Ok(cost) = streaming_cost.lock().map(|g| *g) {
-                if cost > 0.0 { repl.state.total_cost_usd = cost; }
-            }
+            {
+                let s = streaming.lock().unwrap_or_else(|e| e.into_inner());
+                if s.cost > 0.0 { repl.state.total_cost_usd = s.cost; }
 
-            // Update token display in real-time during streaming
-            if let Ok((input, output)) = streaming_tokens.lock().map(|g| *g) {
+                // Update token display in real-time during streaming
+                let (input, output) = s.tokens;
                 if input > 0 || output > 0 {
                     repl.state.tokens_used = pre_stream_tokens + input + output;
                     let total = input + output;
@@ -306,33 +324,27 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                     let cost_fmt = if repl.state.total_cost_usd > 0.0 { format!(" | ${:.4}", repl.state.total_cost_usd) } else { String::new() };
                     repl.state.status = format!("{current_status} ({total_fmt} tokens{cost_fmt})");
                 }
-            }
 
-            // Update tool count in real-time during streaming
-            if let Ok(tc) = streaming_tools.lock().map(|g| *g) {
-                if tc > 0 {
-                    repl.tools_invoked = pre_stream_tools + tc;
+                // Update tool count in real-time during streaming
+                if s.tools > 0 {
+                    repl.tools_invoked = pre_stream_tools + s.tools;
                 }
-            }
 
-            if let Ok(progress_val) = streaming_progress.lock().map(|g| *g) {
-                if progress_val > 0.0 {
+                if s.progress > 0.0 {
                     repl.state.progress_bar_visible = true;
-                    repl.state.progress_bar.set_progress(progress_val);
+                    repl.state.progress_bar.set_progress(s.progress);
                     if let Some(ref tool) = repl.state.active_tool {
                         repl.state.progress_bar.set_title(tool.clone());
                     }
                 } else {
                     repl.state.progress_bar_visible = false;
                 }
-            }
 
-            if let Ok(mp_data) = streaming_multi_progress.lock().map(|g| g.clone()) {
-                if !mp_data.is_empty() {
+                if !s.multi_progress.is_empty() {
                     repl.state.multi_progress_visible = true;
                     repl.state.multi_progress.clear();
-                    for (label, progress, color) in mp_data {
-                        repl.state.multi_progress = repl.state.multi_progress.clone().add_bar(label, progress, color);
+                    for (label, progress, color) in s.multi_progress.iter() {
+                        repl.state.multi_progress = repl.state.multi_progress.clone().add_bar(label.clone(), *progress, *color);
                     }
                 } else {
                     repl.state.multi_progress_visible = false;
@@ -378,12 +390,10 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
 
                     if is_cancel {
                         query_handle.abort();
-                        if let Ok(mut buf) = streaming_buffer.lock() {
-                            buf.push_str("\n\n⚠️ Cancelled by user.");
-                            rendered_text = buf.clone();
-                        }
-                        if let Ok(mut s) = streaming_status.lock() {
-                            *s = t!("status.cancelled_status").to_string();
+                        if let Ok(mut s) = streaming.lock() {
+                            s.buffer.push_str("\n\n⚠️ Cancelled by user.");
+                            rendered_text = s.buffer.clone();
+                            s.status = t!("status.cancelled_status").to_string();
                         }
                         break;
                     }
@@ -456,7 +466,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
             repl.query_engine = Some(new_engine);
 
             if is_cancelled {
-                let current = streaming_buffer.lock().map(|g| g.clone()).unwrap_or_default();
+                let current = streaming.lock().map(|s| s.buffer.clone()).unwrap_or_default();
                 repl.chat.update_message(assistant_msg_index, current);
                 repl.state.status = t!("status.ready").to_string();
             } else {

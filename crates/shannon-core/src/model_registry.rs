@@ -240,6 +240,16 @@ pub fn all_model_ids() -> Vec<&'static str> {
     MODEL_CATALOG.iter().map(|m| m.id).collect()
 }
 
+/// Look up a model's context window by its ID. Returns a reasonable default
+/// (200 000) if the model is not found in the catalog.
+pub fn context_window_for(model_id: &str) -> usize {
+    MODEL_CATALOG
+        .iter()
+        .find(|m| m.id == model_id)
+        .map(|m| m.context_window)
+        .unwrap_or(200_000)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

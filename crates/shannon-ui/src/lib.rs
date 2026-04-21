@@ -7,6 +7,7 @@ rust_i18n::i18n!("../../locales", fallback = "en");
 
 pub mod repl;
 pub mod theme;
+pub mod keybindings;
 mod widgets;
 mod events;
 mod render;

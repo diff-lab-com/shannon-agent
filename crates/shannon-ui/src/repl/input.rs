@@ -57,8 +57,9 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         return handle_incremental_search(repl, key);
     }
 
+    let kb = &repl.state.keybindings;
     match key.code {
-        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        _ if kb.reverse_search.matches(&key) => {
             // Activate incremental reverse search
             repl.state.incremental_search_active = true;
             repl.state.incremental_search_query.clear();
@@ -67,11 +68,11 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             repl.state.status = "(reverse-i-search) ``: ".to_string();
             Ok(())
         }
-        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        _ if kb.command_palette.matches(&key) => {
             open_command_palette(repl);
             Ok(())
         }
-        KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        _ if kb.quit.matches(&key) => {
             repl.running = false;
             Ok(())
         }
@@ -85,13 +86,13 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             super::commands::handle_image_paste_from_input(repl)?;
             Ok(())
         }
-        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            // Ctrl+S: toggle right sidebar panel
+        _ if kb.toggle_sidebar.matches(&key) => {
+            // Toggle right sidebar panel
             repl.state.sidebar_visible = !repl.state.sidebar_visible;
             Ok(())
         }
-        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            // Ctrl+D: toggle tool output collapse
+        _ if kb.toggle_tool_collapse.matches(&key) => {
+            // Toggle tool output collapse
             repl.chat.collapsed_tools = !repl.chat.collapsed_tools;
             Ok(())
         }

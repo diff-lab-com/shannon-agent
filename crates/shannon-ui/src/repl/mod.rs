@@ -118,6 +118,8 @@ pub struct ReplState {
     pub sandbox_mode: shannon_tools::SandboxMode,
     /// Color theme for the terminal UI
     pub theme: Theme,
+    /// Configurable keybindings
+    pub keybindings: crate::keybindings::KeyBindings,
     /// Whether the right sidebar panel is visible
     pub sidebar_visible: bool,
     /// Active diff viewer overlay (activated by /diff command)
@@ -189,6 +191,7 @@ impl Default for ReplState {
             plan: PlanState::default(),
             sandbox_mode: shannon_tools::SandboxMode::Direct,
             theme: Theme::detect(),
+            keybindings: crate::keybindings::load_keybindings(),
             sidebar_visible: false,
             diff_viewer: None,
             incremental_search_active: false,
@@ -1048,6 +1051,29 @@ impl Repl {
                     tracing::debug!("SessionEnd hook error: {e}");
                 }
             });
+
+            // Auto-save session for --resume support
+            if self.current_turn > 0 {
+                let messages = engine.conversation_history();
+                let metadata = shannon_core::state::SessionPersistMetadata {
+                    model: self.state.model.clone().unwrap_or_default(),
+                    created_at: self.session_started_at.unwrap_or_else(chrono::Utc::now),
+                    updated_at: chrono::Utc::now(),
+                    total_input_tokens: self.state.tokens_used,
+                    total_output_tokens: 0,
+                    turn_count: messages.iter().filter(|m| m.role == "user").count(),
+                    title: None,
+                    parent_session_id: None,
+                    branch_point_message_index: None,
+                };
+                if let Err(e) = self.state_manager.save_session(
+                    &engine.session_id(),
+                    &messages,
+                    &metadata,
+                ) {
+                    tracing::debug!("Auto-save session error: {e}");
+                }
+            }
         }
 
         // Restore terminal
@@ -1172,6 +1198,12 @@ impl Repl {
                 }
             }
         }
+        let error_count = self.chat.iter_messages()
+            .filter(|(_, m)| m.role == ChatRole::Tool && m.is_error)
+            .count();
+        let context_window = self.state.model.as_deref()
+            .map(|m| shannon_core::model_registry::context_window_for(m))
+            .unwrap_or(200_000);
         Some(crate::widgets::SidebarInfo {
             model: self.state.model.clone(),
             tokens_used: self.state.tokens_used,
@@ -1180,6 +1212,8 @@ impl Repl {
             modified_files,
             total_additions: self.diff_data.total_additions(),
             total_deletions: self.diff_data.total_deletions(),
+            error_count,
+            context_window,
         })
     }
 

@@ -3989,7 +3989,7 @@ fn handle_theme(repl: &mut Repl, args: &str) -> Result<()> {
 
     match Theme::named(args) {
         Some(theme) => {
-            let name = theme.name;
+            let name = theme.name.clone();
             repl.state.theme = theme;
             crate::repl::preferences::save_preferences(
                 &crate::repl::preferences::Preferences {
