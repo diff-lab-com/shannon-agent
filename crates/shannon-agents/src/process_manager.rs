@@ -190,6 +190,12 @@ pub struct AgentProcessManager {
     event_tx: mpsc::Sender<AgentEvent>,
 }
 
+impl Default for AgentProcessManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AgentProcessManager {
     /// Create a new process manager.
     pub fn new() -> Self {
@@ -328,16 +334,16 @@ impl AgentProcessManager {
         let line = frame_message(&msg)
             .map_err(|e| AgentProcessError::Protocol(e.to_string()))?;
         handle.stdin.write_all(line.as_bytes()).await
-            .map_err(|e| AgentProcessError::Io(e))?;
+            .map_err(AgentProcessError::Io)?;
         handle.stdin.flush().await
-            .map_err(|e| AgentProcessError::Io(e))?;
+            .map_err(AgentProcessError::Io)?;
 
         drop(agents);
 
         // Wait for response
         rx.await.map_err(|_| AgentProcessError::Protocol(
             format!("Agent '{agent_name}' dropped response channel for RPC {rpc_id}")
-        ))?.map_err(|e| AgentProcessError::Protocol(e))
+        ))?.map_err(AgentProcessError::Protocol)
     }
 
     /// Send a notification (no response expected) to an agent.
@@ -356,9 +362,9 @@ impl AgentProcessManager {
         let line = frame_message(&msg)
             .map_err(|e| AgentProcessError::Protocol(e.to_string()))?;
         handle.stdin.write_all(line.as_bytes()).await
-            .map_err(|e| AgentProcessError::Io(e))?;
+            .map_err(AgentProcessError::Io)?;
         handle.stdin.flush().await
-            .map_err(|e| AgentProcessError::Io(e))?;
+            .map_err(AgentProcessError::Io)?;
 
         Ok(())
     }
@@ -845,7 +851,7 @@ impl AgentProcessManager {
         );
         let line = frame_message(&response).map_err(|e| AgentProcessError::SpawnFailed {
             agent: agent_name.to_string(),
-            source: std::io::Error::new(std::io::ErrorKind::Other, e.to_string()),
+            source: std::io::Error::other(e.to_string()),
         })?;
 
         use tokio::io::AsyncWriteExt;

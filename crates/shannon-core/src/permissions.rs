@@ -330,6 +330,7 @@ impl ToolPermissionPolicy {
 
 /// Memory of user permission choices (persists across prompts)
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct PermissionMemory {
     /// Always-allowed tools (exact match)
     always_allowed: HashSet<String>,
@@ -492,19 +493,6 @@ impl PermissionMemory {
     }
 }
 
-impl Default for PermissionMemory {
-    fn default() -> Self {
-        Self {
-            always_allowed: HashSet::new(),
-            always_denied: HashSet::new(),
-            allowed_patterns: Vec::new(),
-            allowed_globset: None,
-            denied_patterns: Vec::new(),
-            denied_globset: None,
-            session_choices: HashMap::new(),
-        }
-    }
-}
 
 /// Permission level for operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

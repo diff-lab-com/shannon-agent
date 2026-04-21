@@ -63,8 +63,10 @@ pub enum SandboxError {
 /// Which network access to allow in the sandbox.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum NetworkAccess {
     /// No network access (default)
+    #[default]
     None,
     /// Full network access
     Full,
@@ -73,11 +75,6 @@ pub enum NetworkAccess {
     AllowList(Vec<String>),
 }
 
-impl Default for NetworkAccess {
-    fn default() -> Self {
-        NetworkAccess::None
-    }
-}
 
 /// Configuration for sandboxed command execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]

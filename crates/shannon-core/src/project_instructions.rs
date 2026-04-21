@@ -264,7 +264,7 @@ impl InstructionWatcher {
         // Check if mtimes changed or files added/removed
         let changed = new_mtimes.len() != self.mtimes.len()
             || new_mtimes.iter().any(|(path, mtime)| {
-                self.mtimes.get(&*path).map_or(true, |old| old != mtime)
+                self.mtimes.get(path) != Some(mtime)
             });
 
         if !changed {
@@ -275,8 +275,8 @@ impl InstructionWatcher {
         let changed_paths: Vec<String> = new_mtimes
             .keys()
             .filter(|p| {
-                self.mtimes.get(&**p).map_or(true, |old| {
-                    new_mtimes.get(&**p).map_or(false, |cur| cur != old)
+                self.mtimes.get(&**p).is_none_or(|old| {
+                    new_mtimes.get(&**p).is_some_and(|cur| cur != old)
                 })
             })
             .map(|p| p.to_string_lossy().to_string())

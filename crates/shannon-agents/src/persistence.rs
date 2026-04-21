@@ -120,18 +120,18 @@ impl FilePersistence {
     pub fn save_team(&self, team: &TeamConfigFile) -> Result<(), AgentError> {
         let team_dir = self.team_dir(&team.name);
         std::fs::create_dir_all(&team_dir)
-            .map_err(|e| AgentError::Io(e))?;
+            .map_err(AgentError::Io)?;
 
         let config_path = team_dir.join("config.json");
         let json = serde_json::to_string_pretty(team)
-            .map_err(|e| AgentError::Serialization(e))?;
+            .map_err(AgentError::Serialization)?;
 
         // Write atomically via temp file + rename
         let tmp_path = config_path.with_extension("json.tmp");
         std::fs::write(&tmp_path, &json)
-            .map_err(|e| AgentError::Io(e))?;
+            .map_err(AgentError::Io)?;
         std::fs::rename(&tmp_path, &config_path)
-            .map_err(|e| AgentError::Io(e))?;
+            .map_err(AgentError::Io)?;
 
         Ok(())
     }
@@ -140,9 +140,9 @@ impl FilePersistence {
     pub fn load_team(&self, team_name: &str) -> Result<TeamConfigFile, AgentError> {
         let config_path = self.team_dir(team_name).join("config.json");
         let json = std::fs::read_to_string(&config_path)
-            .map_err(|e| AgentError::Io(e))?;
+            .map_err(AgentError::Io)?;
         serde_json::from_str(&json)
-            .map_err(|e| AgentError::Serialization(e))
+            .map_err(AgentError::Serialization)
     }
 
     /// List all team names on disk.
@@ -153,8 +153,8 @@ impl FilePersistence {
         }
 
         let mut teams = Vec::new();
-        for entry in std::fs::read_dir(&teams_dir).map_err(|e| AgentError::Io(e))? {
-            let entry = entry.map_err(|e| AgentError::Io(e))?;
+        for entry in std::fs::read_dir(&teams_dir).map_err(AgentError::Io)? {
+            let entry = entry.map_err(AgentError::Io)?;
             if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                 let config_path = entry.path().join("config.json");
                 if config_path.exists() {
@@ -173,7 +173,7 @@ impl FilePersistence {
         let team_dir = self.team_dir(team_name);
         if team_dir.exists() {
             std::fs::remove_dir_all(&team_dir)
-                .map_err(|e| AgentError::Io(e))?;
+                .map_err(AgentError::Io)?;
         }
         Ok(())
     }
@@ -184,14 +184,14 @@ impl FilePersistence {
     pub fn save_task(&self, team_name: &str, task: &TaskFile) -> Result<(), AgentError> {
         let tasks_dir = self.tasks_dir(team_name);
         std::fs::create_dir_all(&tasks_dir)
-            .map_err(|e| AgentError::Io(e))?;
+            .map_err(AgentError::Io)?;
 
         let task_path = tasks_dir.join(format!("{}.json", task.id));
         let json = serde_json::to_string_pretty(task)
-            .map_err(|e| AgentError::Serialization(e))?;
+            .map_err(AgentError::Serialization)?;
 
         std::fs::write(&task_path, json)
-            .map_err(|e| AgentError::Io(e))?;
+            .map_err(AgentError::Io)?;
 
         Ok(())
     }
@@ -204,8 +204,8 @@ impl FilePersistence {
         }
 
         let mut tasks = Vec::new();
-        for entry in std::fs::read_dir(&tasks_dir).map_err(|e| AgentError::Io(e))? {
-            let entry = entry.map_err(|e| AgentError::Io(e))?;
+        for entry in std::fs::read_dir(&tasks_dir).map_err(AgentError::Io)? {
+            let entry = entry.map_err(AgentError::Io)?;
             let path = entry.path();
 
             // Only read .json files, skip .highwatermark and other files
@@ -217,7 +217,7 @@ impl FilePersistence {
                 }
 
                 let json = std::fs::read_to_string(&path)
-                    .map_err(|e| AgentError::Io(e))?;
+                    .map_err(AgentError::Io)?;
                 if let Ok(task) = serde_json::from_str::<TaskFile>(&json) {
                     tasks.push(task);
                 }
@@ -234,7 +234,7 @@ impl FilePersistence {
         let task_path = self.tasks_dir(team_name).join(format!("{task_id}.json"));
         if task_path.exists() {
             std::fs::remove_file(&task_path)
-                .map_err(|e| AgentError::Io(e))?;
+                .map_err(AgentError::Io)?;
         }
         Ok(())
     }
@@ -248,7 +248,7 @@ impl FilePersistence {
             return Ok(0);
         }
         let content = std::fs::read_to_string(&path)
-            .map_err(|e| AgentError::Io(e))?;
+            .map_err(AgentError::Io)?;
         content.trim().parse::<u64>()
             .map_err(|_| AgentError::Configuration(
                 format!("Invalid highwatermark file: {path:?}")
@@ -259,11 +259,11 @@ impl FilePersistence {
     pub fn write_highwatermark(&self, team_name: &str, value: u64) -> Result<(), AgentError> {
         let tasks_dir = self.tasks_dir(team_name);
         std::fs::create_dir_all(&tasks_dir)
-            .map_err(|e| AgentError::Io(e))?;
+            .map_err(AgentError::Io)?;
 
         let path = tasks_dir.join(".highwatermark");
         std::fs::write(&path, value.to_string())
-            .map_err(|e| AgentError::Io(e))?;
+            .map_err(AgentError::Io)?;
 
         Ok(())
     }
@@ -287,14 +287,14 @@ impl FilePersistence {
     ) -> Result<(), AgentError> {
         let inbox_dir = self.team_dir(team_name).join("inboxes");
         std::fs::create_dir_all(&inbox_dir)
-            .map_err(|e| AgentError::Io(e))?;
+            .map_err(AgentError::Io)?;
 
         let inbox_path = inbox_dir.join(format!("{agent_name}.json"));
 
         // Load existing messages
         let mut messages: Vec<InboxMessage> = if inbox_path.exists() {
             let json = std::fs::read_to_string(&inbox_path)
-                .map_err(|e| AgentError::Io(e))?;
+                .map_err(AgentError::Io)?;
             serde_json::from_str(&json).unwrap_or_default()
         } else {
             Vec::new()
@@ -304,9 +304,9 @@ impl FilePersistence {
 
         // Write back
         let json = serde_json::to_string_pretty(&messages)
-            .map_err(|e| AgentError::Serialization(e))?;
+            .map_err(AgentError::Serialization)?;
         std::fs::write(&inbox_path, json)
-            .map_err(|e| AgentError::Io(e))?;
+            .map_err(AgentError::Io)?;
 
         Ok(())
     }
@@ -326,12 +326,12 @@ impl FilePersistence {
         }
 
         let json = std::fs::read_to_string(&inbox_path)
-            .map_err(|e| AgentError::Io(e))?;
+            .map_err(AgentError::Io)?;
         let messages: Vec<InboxMessage> = serde_json::from_str(&json).unwrap_or_default();
 
         // Clear the inbox after reading
         std::fs::write(&inbox_path, "[]")
-            .map_err(|e| AgentError::Io(e))?;
+            .map_err(AgentError::Io)?;
 
         Ok(messages)
     }

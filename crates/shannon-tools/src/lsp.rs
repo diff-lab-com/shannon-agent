@@ -1918,8 +1918,7 @@ fn parse_code_actions(result: &serde_json::Value) -> Result<Vec<CodeActionItem>,
             let kind = item.get("kind").and_then(|v| v.as_str()).map(|s| s.to_string());
             let is_preferred = item.get("isPreferred").and_then(|v| v.as_bool());
             let diagnostics = item.get("diagnostics")
-                .and_then(|v| v.as_array())
-                .map(|arr| arr.clone());
+                .and_then(|v| v.as_array()).cloned();
 
             actions.push(CodeActionItem {
                 title: title.to_string(),

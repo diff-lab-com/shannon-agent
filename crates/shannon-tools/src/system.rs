@@ -440,7 +440,7 @@ impl DockerSandbox {
         if let Some(env_vars) = env {
             for (key, value) in env_vars {
                 args.push("-e".to_string());
-                args.push(format!("{}={}", key, value));
+                args.push(format!("{key}={value}"));
             }
         }
 

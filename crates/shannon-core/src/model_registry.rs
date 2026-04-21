@@ -162,7 +162,7 @@ pub fn all_providers() -> Vec<LlmProvider> {
         .iter()
         .map(|m| m.provider.clone())
         .collect();
-    providers.sort_by(|a, b| provider_order(a).cmp(&provider_order(b)));
+    providers.sort_by_key(provider_order);
     providers.dedup();
     providers
 }

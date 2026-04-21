@@ -104,7 +104,10 @@ mod compact_config_tests {
         let cfg = CompactConfig::default();
         assert_eq!(cfg.max_output_tokens, 2000);
         assert_eq!(cfg.keep_recent_count, 10);
-        assert!((cfg.trigger_threshold - 0.8).abs() < f32::EPSILON);
+        assert!((cfg.trigger_threshold - 0.92).abs() < f32::EPSILON);
+        assert!((cfg.warning_threshold - 0.85).abs() < f32::EPSILON);
+        assert!((cfg.critical_threshold - 0.97).abs() < f32::EPSILON);
+        assert_eq!(cfg.reserved_summary_tokens, 20000);
         assert!(cfg.enable_micro_compact);
         assert_eq!(cfg.micro_compact_threshold, 4096);
         assert!(cfg.enable_session_memory_compact);
@@ -118,7 +121,7 @@ mod compact_config_tests {
         // All other fields should remain at defaults.
         assert_eq!(cfg.max_output_tokens, 2000);
         assert_eq!(cfg.keep_recent_count, 10);
-        assert!((cfg.trigger_threshold - 0.8).abs() < f32::EPSILON);
+        assert!((cfg.trigger_threshold - 0.92).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -172,6 +175,7 @@ mod compact_config_tests {
     fn validate_accepts_trigger_threshold_of_exactly_one() {
         let cfg = CompactConfig {
             trigger_threshold: 1.0,
+            critical_threshold: 1.0,
             ..Default::default()
         };
         assert!(cfg.validate().is_ok());
@@ -212,6 +216,9 @@ mod compact_config_tests {
             max_output_tokens: 500,
             keep_recent_count: 3,
             trigger_threshold: 0.6,
+            warning_threshold: 0.85,
+            critical_threshold: 0.97,
+            reserved_summary_tokens: 20_000,
             enable_micro_compact: false,
             micro_compact_threshold: 2048,
             enable_session_memory_compact: false,
@@ -776,6 +783,8 @@ mod compact_engine_tests {
             CompactConfig {
                 max_context_tokens: 100,
                 trigger_threshold: 0.5,
+                warning_threshold: 0.4,
+                critical_threshold: 0.6,
                 ..Default::default()
             },
             Box::new(RuleBasedSummarizer::new()),
@@ -833,6 +842,8 @@ mod compact_engine_tests {
             CompactConfig {
                 max_context_tokens: 50,
                 trigger_threshold: 0.5,
+                warning_threshold: 0.4,
+                critical_threshold: 0.6,
                 ..Default::default()
             },
             Box::new(RuleBasedSummarizer::new()),
@@ -1353,6 +1364,8 @@ mod workflow_tests {
             CompactConfig {
                 max_context_tokens: 200,
                 trigger_threshold: 0.5,
+                warning_threshold: 0.4,
+                critical_threshold: 0.6,
                 keep_recent_count: 4,
                 ..Default::default()
             },

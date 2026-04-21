@@ -102,15 +102,15 @@ impl McpToolAdapter {
     /// to save context, and the real schema is retrieved on demand via
     /// `mcp__tool_search`.
     pub fn swap_schema_for_deferred(&mut self) -> Value {
-        let real_schema = std::mem::replace(
+        
+        std::mem::replace(
             &mut self.input_schema,
             serde_json::json!({
                 "type": "object",
                 "properties": {},
                 "description": format!("Use mcp__tool_search with tool_name=\"{}\" to get the full parameter schema.", self.tool_name)
             }),
-        );
-        real_schema
+        )
     }
 
     /// Get a reference to the tool's registry name (e.g. `mcp__server__tool`).

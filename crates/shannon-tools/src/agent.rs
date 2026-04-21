@@ -439,8 +439,7 @@ impl AgentTool {
             agent_type,
             status,
             message: format!(
-                "Sub-agent completed ({} tool(s) used).",
-                tools_used
+                "Sub-agent completed ({tools_used} tool(s) used)."
             ),
             result: Some(result_text),
         })

@@ -798,7 +798,7 @@ impl QueryEngine {
 
                                                 // Budget warning at 80% usage
                                                 if let Some(ratio) = tracker.budget_usage_ratio() {
-                                                    if ratio >= 0.8 && ratio < 0.81 {
+                                                    if (0.8..0.81).contains(&ratio) {
                                                         let limit = tracker.budget_limit_usd.unwrap_or(0.0);
                                                         let total = tracker.total_cost();
                                                         let _ = tx.send(Ok(QueryEvent::Progress {
@@ -932,8 +932,7 @@ impl QueryEngine {
                                                                     ) => {
                                                                         consecutive_denials += 1;
                                                                         let denied_msg = format!(
-                                                                            "Permission denied: {}",
-                                                                            prompt_desc
+                                                                            "Permission denied: {prompt_desc}"
                                                                         );
                                                                         let _ = tx.send(Ok(QueryEvent::ToolUseResult {
                                                                             query_id,
@@ -1202,7 +1201,7 @@ impl QueryEngine {
                                                 }
 
                                                 // Soft-limit warning: inject a message telling the model to stop retrying
-                                                if consecutive_denials >= DENIAL_SOFT_LIMIT && consecutive_denials < DENIAL_HARD_LIMIT {
+                                                if (DENIAL_SOFT_LIMIT..DENIAL_HARD_LIMIT).contains(&consecutive_denials) {
                                                     let warning = format!(
                                                         "The user has denied {consecutive_denials} consecutive tool calls. \
                                                          Stop retrying the same or similar operations. \
@@ -1224,7 +1223,7 @@ impl QueryEngine {
                                                             text: assistant_text.clone(),
                                                         });
                                                     }
-                                                    assistant_blocks.extend(assistant_tool_uses.drain(..));
+                                                    assistant_blocks.append(&mut assistant_tool_uses);
                                                     if !assistant_blocks.is_empty() {
                                                         conversation.messages.push(Message {
                                                             role: "assistant".to_string(),
@@ -1237,7 +1236,7 @@ impl QueryEngine {
                                                 // stage changes and commit automatically.
                                                 if config.auto_commit && file_edits_made {
                                                     file_edits_made = false; // reset for next turn
-                                                    let _ = (|| async {
+                                                    let _ = async {
                                                         let add_output = tokio::process::Command::new("git")
                                                             .args(["add", "-A"])
                                                             .output()
@@ -1283,7 +1282,7 @@ impl QueryEngine {
                                                                 }
                                                             }
                                                         }
-                                                    })().await;
+                                                    }.await;
                                                 }
 
                                                 let _ = tx.send(Ok(QueryEvent::TurnCompleted {

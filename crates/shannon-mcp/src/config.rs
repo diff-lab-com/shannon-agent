@@ -339,7 +339,7 @@ pub fn expand_env_vars(input: &str) -> String {
                             "Required environment variable not set"
                         );
                         // Return the original pattern so it's visible in logs
-                        format!("${{{}:{}}}", var_name, modifier)
+                        format!("${{{var_name}:{modifier}}}")
                     } else if !modifier.is_empty() {
                         // Default value (after :-)
                         modifier.clone()
@@ -464,9 +464,7 @@ pub fn discover_config(project_dir: &Path) -> Result<McpConfig, ConfigError> {
                 );
                 // Earlier configs take precedence — only insert if not already present
                 for (name, server_conf) in config.mcp_servers {
-                    if !merged.mcp_servers.contains_key(&name) {
-                        merged.mcp_servers.insert(name, server_conf);
-                    }
+                    merged.mcp_servers.entry(name).or_insert(server_conf);
                 }
                 found_any = true;
             }

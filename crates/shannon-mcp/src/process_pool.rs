@@ -346,7 +346,6 @@ fn truncate_tool_result(content: &str, budget: usize) -> String {
     let truncated = &content[..end];
     let cut = truncated
         .rfind("\n\n")
-        .map(|pos| pos)
         .or_else(|| truncated.rfind('\n'))
         .unwrap_or(end);
     let cut = if content.is_char_boundary(cut) { cut } else { end };
@@ -385,8 +384,7 @@ fn compress_json(value: &serde_json::Value, budget: usize) -> String {
             let remaining = items.len() - shown;
             if remaining > 0 {
                 result.push_str(&format!(
-                    "  // ... {} more items\n",
-                    remaining
+                    "  // ... {remaining} more items\n"
                 ));
             }
             result.push(']');
@@ -411,7 +409,7 @@ fn compress_json(value: &serde_json::Value, budget: usize) -> String {
                 } else {
                     val_str
                 };
-                let line = format!("  \"{}\": {},\n", key, display_val);
+                let line = format!("  \"{key}\": {display_val},\n");
                 if result.len() + line.len() + 30 > budget {
                     let remaining = total_keys - keys_shown;
                     result.push_str(&format!("  // ... {remaining} more keys\n"));
@@ -1624,8 +1622,8 @@ impl RemoteMcpServerHandle {
             })?;
 
             // Check if this is the response to our request.
-            let matches_our_id = request_id.as_ref().map_or(false, |rid| {
-                value.get("id").map_or(false, |rid2| rid2 == rid)
+            let matches_our_id = request_id.as_ref().is_some_and(|rid| {
+                value.get("id") == Some(rid)
             });
 
             if matches_our_id {
@@ -3936,21 +3934,21 @@ impl McpProcessPool {
     pub async fn has_tools(&self, server_name: &str) -> bool {
         self.get_capabilities(server_name)
             .await
-            .map_or(false, |c| c.tools.is_some())
+            .is_some_and(|c| c.tools.is_some())
     }
 
     /// Check whether a server supports the `resources` capability.
     pub async fn has_resources(&self, server_name: &str) -> bool {
         self.get_capabilities(server_name)
             .await
-            .map_or(false, |c| c.resources.is_some())
+            .is_some_and(|c| c.resources.is_some())
     }
 
     /// Check whether a server supports the `prompts` capability.
     pub async fn has_prompts(&self, server_name: &str) -> bool {
         self.get_capabilities(server_name)
             .await
-            .map_or(false, |c| c.prompts.is_some())
+            .is_some_and(|c| c.prompts.is_some())
     }
 
     /// Get the negotiated protocol version for a server.
@@ -4246,20 +4244,20 @@ impl Tool for PooledMcpToolAdapter {
     fn is_read_only(&self) -> bool {
         self.annotations
             .as_ref()
-            .map_or(false, |a| a.read_only_hint)
+            .is_some_and(|a| a.read_only_hint)
     }
 
     fn is_concurrency_safe(&self) -> bool {
         // Idempotent or read-only tools are safe to run concurrently.
         self.annotations
             .as_ref()
-            .map_or(false, |a| a.read_only_hint || a.idempotent_hint)
+            .is_some_and(|a| a.read_only_hint || a.idempotent_hint)
     }
 
     fn is_destructive(&self) -> bool {
         self.annotations
             .as_ref()
-            .map_or(false, |a| a.destructive_hint)
+            .is_some_and(|a| a.destructive_hint)
     }
 }
 

@@ -427,7 +427,7 @@ impl Teammate {
                     return Ok(AgentMessage::new_text(
                         self.name.clone(),
                         message.from,
-                        format!("Task {} accepted", task_id),
+                        format!("Task {task_id} accepted"),
                     ));
                 }
                 ProtocolMessage::TaskResult { task_id, success, output } => {

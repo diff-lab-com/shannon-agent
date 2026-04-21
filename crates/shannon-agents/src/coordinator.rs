@@ -314,7 +314,7 @@ impl AgentCoordinator {
                             Some(CoordinatorEvent::AgentOutput {
                                 team: String::new(), // filled by subscriber
                                 agent: agent_name,
-                                chunk: format!("[{}] {}", task_id, chunk),
+                                chunk: format!("[{task_id}] {chunk}"),
                             })
                         }
                         AgentEvent::TaskComplete { agent_name, task_id, success, output } => {
@@ -452,7 +452,7 @@ impl AgentCoordinator {
 
         // Inject team manifest into agent's system prompt so it knows its teammates
         let mut config = config;
-        let manifest = self.team_manifest_internal(&team).await;
+        let manifest = self.team_manifest_internal(team).await;
         let manifest_suffix = format!(
             "\n\n## Your Team: {}\n{}",
             manifest.name,
@@ -847,7 +847,7 @@ impl AgentCoordinator {
             team_name: team_name.to_string(),
             agent_name: None,
             subject: subject.clone(),
-            priority: format!("{:?}", priority),
+            priority: format!("{priority:?}"),
         });
 
         Ok(task_id)
@@ -920,7 +920,7 @@ impl AgentCoordinator {
             team_name: team_name.to_string(),
             agent_name: None,
             subject: subject.clone(),
-            priority: format!("{:?}", priority),
+            priority: format!("{priority:?}"),
         });
 
         Ok(task_id)
@@ -1465,7 +1465,7 @@ impl AgentCoordinator {
             let message = AgentMessage::new_text(
                 responder.to_string(),
                 requester.to_string(),
-                format!("Plan rejected. Feedback: {}", feedback_text),
+                format!("Plan rejected. Feedback: {feedback_text}"),
             );
             requester_agent.send(message).await?;
 
@@ -2280,7 +2280,7 @@ impl AgentCoordinator {
 
         let from = reply_to.to_string();
         let agent_name_owned = agent_name.to_string();
-        let task_key = format!("{}:{}", team_name, agent_name);
+        let task_key = format!("{team_name}:{agent_name}");
         let message = AgentMessage::new_text(from.clone(), agent_name_owned.clone(), content);
 
         // Drop the teams lock before spawning the task
@@ -2378,7 +2378,7 @@ impl AgentCoordinator {
     ///
     /// Returns true if the task was found and aborted, false if it wasn't running.
     pub async fn cancel_background_task(&self, team_name: &str, agent_name: &str) -> bool {
-        let key = format!("{}:{}", team_name, agent_name);
+        let key = format!("{team_name}:{agent_name}");
         let mut tasks = self.background_tasks.write().await;
         if let Some(handle) = tasks.remove(&key) {
             handle.abort();

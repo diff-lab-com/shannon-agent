@@ -1460,8 +1460,7 @@ impl CompactEngine {
                     match self.summarizer.micro_summarize(msg, self.config.max_output_tokens) {
                         Ok(summary) => {
                             msg.content = MessageContent::Text(format!(
-                                "[Micro-compressed from {} tokens]\n{summary}",
-                                tokens
+                                "[Micro-compressed from {tokens} tokens]\n{summary}"
                             ));
                             total_micro_compacted += 1;
                         }
@@ -1470,8 +1469,7 @@ impl CompactEngine {
                             let text = extract_text_content(msg);
                             let truncated = truncate_text(&text, self.config.max_output_tokens * 4);
                             msg.content = MessageContent::Text(format!(
-                                "[Truncated from {} tokens]\n{truncated}",
-                                tokens
+                                "[Truncated from {tokens} tokens]\n{truncated}"
                             ));
                             total_micro_compacted += 1;
                         }

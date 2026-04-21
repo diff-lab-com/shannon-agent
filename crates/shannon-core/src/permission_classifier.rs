@@ -1183,7 +1183,7 @@ fn strip_command_wrappers(command: &str) -> &str {
         // "cd <dir> && <cmd>" or "cd <dir>; <cmd>"
         if stripped.starts_with("cd ") {
             if let Some(pos) = stripped.find("&&").or_else(|| stripped.find(';')) {
-                remaining = &stripped[pos + 2..].trim_start();
+                remaining = stripped[pos + 2..].trim_start();
                 continue;
             }
         }
@@ -1192,7 +1192,7 @@ fn strip_command_wrappers(command: &str) -> &str {
         let wrappers = ["timeout", "nice", "ionice", "chrt", "taskset", "nohup"];
         let mut found = false;
         for w in wrappers {
-            if stripped.starts_with(w) && stripped.chars().nth(w.len()).map_or(true, |c| c.is_whitespace()) {
+            if stripped.starts_with(w) && stripped.chars().nth(w.len()).is_none_or(|c| c.is_whitespace()) {
                 // Skip the wrapper and its first argument (usually a number or flag)
                 let after_wrapper = &stripped[w.len()..].trim_start();
                 // Skip one token (the argument to the wrapper)
