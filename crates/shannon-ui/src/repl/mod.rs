@@ -138,6 +138,16 @@ pub struct ReplState {
     pub paste_counter: usize,
     /// Whether the file selector was opened by typing `@` (insert mode vs replace mode)
     pub file_selector_for_at: bool,
+    /// Toast notification: (message, when it started)
+    pub toast: Option<(String, std::time::Instant)>,
+    /// Whether the model is thinking (no text tokens received yet)
+    pub thinking_phase: bool,
+    /// Whether streaming is currently active
+    pub streaming_active: bool,
+    /// When the current streaming operation started
+    pub streaming_start: Option<std::time::Instant>,
+    /// Current vim mode label for display ("INSERT" or "NORMAL")
+    pub vim_mode: String,
 }
 
 /// State for plan mode
@@ -201,6 +211,11 @@ impl Default for ReplState {
             pasted_texts: std::collections::HashMap::new(),
             paste_counter: 0,
             file_selector_for_at: false,
+            toast: None,
+            thinking_phase: false,
+            streaming_active: false,
+            streaming_start: None,
+            vim_mode: "INSERT".to_string(),
         }
     }
 }

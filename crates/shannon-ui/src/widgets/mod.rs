@@ -250,6 +250,8 @@ pub struct ChatWidget {
     scroll_offset: usize,
     /// Whether tool output messages are shown in collapsed (single-line) form
     pub collapsed_tools: bool,
+    /// Whether streaming is active (show trailing cursor)
+    pub streaming_active: bool,
 }
 
 /// A single chat message
@@ -282,6 +284,7 @@ impl ChatWidget {
             messages: VecDeque::with_capacity(capacity),
             scroll_offset: 0,
             collapsed_tools: true,
+            streaming_active: false,
         }
     }
 
@@ -443,17 +446,63 @@ impl ChatWidget {
                 continue;
             }
 
-            let (role_name, role_color) = match msg.role {
-                ChatRole::User => ("User", theme.user_msg),
-                ChatRole::Assistant => ("Assistant", theme.assistant_msg),
-                ChatRole::System => ("System", theme.system_msg),
-                ChatRole::Tool => ("Tool", theme.tool_msg),
+            let (role_icon, role_name, role_color) = match msg.role {
+                ChatRole::User => (">", "You", theme.user_msg),
+                ChatRole::Assistant => ("✻", "Assistant", theme.assistant_msg),
+                ChatRole::System => ("!", "System", theme.system_msg),
+                ChatRole::Tool => ("⚙", "Tool", theme.tool_msg),
             };
 
             let timestamp = msg.timestamp.format("%H:%M:%S").to_string();
 
             // Strip ANSI escape codes — ratatui doesn't interpret them
             let clean_content = strip_ansi(&msg.content);
+
+            // Detect and render diff content inline for tool messages
+            if msg.role == ChatRole::Tool && is_diff_content(&clean_content) {
+                let prefix_len = timestamp.len() + role_icon.len() + role_name.len() + 7;
+                let indent = " ".repeat(prefix_len);
+                let available = inner_width.saturating_sub(prefix_len);
+                let mut first_line = true;
+                for line in clean_content.lines().take(50) {
+                    if first_line {
+                        let text = truncate_line(line, available);
+                        let color = diff_line_color(line, theme);
+                        let item = ListItem::new(Line::from(vec![
+                            Span::styled("[", Style::default().fg(theme.muted)),
+                            Span::styled(timestamp.clone(), Style::default().fg(theme.muted)),
+                            Span::styled("] ", Style::default().fg(theme.muted)),
+                            Span::styled(role_icon, Style::default().fg(role_color).add_modifier(Modifier::BOLD)),
+                            Span::styled(" ", Style::default()),
+                            Span::styled(role_name, Style::default().fg(role_color).add_modifier(Modifier::BOLD)),
+                            Span::styled(": ", Style::default().fg(theme.text_dim)),
+                            Span::styled(text, Style::default().fg(color)),
+                        ]));
+                        list_items.push(item);
+                        first_line = false;
+                    } else {
+                        let text = truncate_line(line, available);
+                        let color = diff_line_color(line, theme);
+                        list_items.push(ListItem::new(Line::from(vec![
+                            Span::styled(indent.clone(), Style::default().fg(theme.muted)),
+                            Span::styled(text, Style::default().fg(color)),
+                        ])));
+                    }
+                }
+                if clean_content.lines().count() > 50 {
+                    list_items.push(ListItem::new(Line::from(Span::styled(
+                        format!("{indent}... ({} more lines)", clean_content.lines().count().saturating_sub(50)),
+                        Style::default().fg(theme.muted),
+                    ))));
+                }
+                // Image lines
+                if let Some(ref img_lines) = msg.image_lines {
+                    for img_line in img_lines {
+                        list_items.push(ListItem::new(img_line.clone()));
+                    }
+                }
+                continue;
+            }
 
             // Parse into segments: normal text and code blocks
             let segments = parse_markdown_segments(&clean_content);
@@ -464,34 +513,36 @@ impl ChatWidget {
                     MdSegment::Text(lines) => {
                         for content_line in lines {
                             if first_line {
-                                let prefix_len = timestamp.len() + role_name.len() + 5;
+                                let prefix_len = timestamp.len() + role_icon.len() + role_name.len() + 7;
                                 let available = inner_width.saturating_sub(prefix_len);
                                 let text = truncate_line(content_line, available);
-                                let item = ListItem::new(Line::from(vec![
+                                let mut spans = vec![
                                     Span::styled("[", Style::default().fg(theme.muted)),
                                     Span::styled(timestamp.clone(), Style::default().fg(theme.muted)),
                                     Span::styled("] ", Style::default().fg(theme.muted)),
+                                    Span::styled(role_icon, Style::default().fg(role_color).add_modifier(Modifier::BOLD)),
+                                    Span::styled(" ", Style::default()),
                                     Span::styled(role_name, Style::default().fg(role_color).add_modifier(Modifier::BOLD)),
                                     Span::styled(": ", Style::default().fg(theme.text_dim)),
-                                    Span::styled(text, Style::default().fg(theme.text)),
-                                ]));
-                                list_items.push(item);
+                                ];
+                                spans.extend(parse_inline_formatting(&text, theme.text));
+                                list_items.push(ListItem::new(Line::from(spans)));
                                 first_line = false;
                             } else {
-                                let indent_len = timestamp.len() + role_name.len() + 5;
+                                let indent_len = timestamp.len() + role_icon.len() + role_name.len() + 7;
                                 let indent = " ".repeat(indent_len);
                                 let available = inner_width.saturating_sub(indent_len);
                                 let text = truncate_line(content_line, available);
-                                let item = ListItem::new(Line::from(vec![
+                                let mut spans = vec![
                                     Span::styled(indent, Style::default().fg(theme.muted)),
-                                    Span::styled(text, Style::default().fg(theme.text)),
-                                ]));
-                                list_items.push(item);
+                                ];
+                                spans.extend(parse_inline_formatting(&text, theme.text));
+                                list_items.push(ListItem::new(Line::from(spans)));
                             }
                         }
                     }
                     MdSegment::CodeBlock { lang, code } => {
-                        let indent_len = timestamp.len() + role_name.len() + 3;
+                        let indent_len = timestamp.len() + role_icon.len() + role_name.len() + 5;
                         let indent = " ".repeat(indent_len);
                         let available = inner_width.saturating_sub(indent_len);
 
@@ -520,6 +571,27 @@ impl ChatWidget {
                         ])));
                         first_line = false;
                     }
+                    MdSegment::Header { level, text } => {
+                        let indent_len = if first_line {
+                            timestamp.len() + role_icon.len() + role_name.len() + 7
+                        } else {
+                            timestamp.len() + role_icon.len() + role_name.len() + 7
+                        };
+                        let indent = " ".repeat(indent_len);
+                        let available = inner_width.saturating_sub(indent_len);
+                        let header_text = truncate_to(text, available);
+                        let style = match level {
+                            1 => Style::default().fg(theme.primary).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                            2 => Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
+                            _ => Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+                        };
+                        let item = ListItem::new(Line::from(vec![
+                            Span::styled(indent, Style::default().fg(theme.muted)),
+                            Span::styled(header_text, style),
+                        ]));
+                        list_items.push(item);
+                        first_line = false;
+                    }
                 }
             }
 
@@ -529,6 +601,13 @@ impl ChatWidget {
                     list_items.push(ListItem::new(img_line.clone()));
                 }
             }
+        }
+
+        // Streaming cursor: append a blinking cursor block at the end
+        if self.streaming_active {
+            list_items.push(ListItem::new(Line::from(
+                Span::styled("▌", Style::default().fg(theme.primary).add_modifier(Modifier::SLOW_BLINK)),
+            )));
         }
 
         // Slice list_items to fit the visible area.
@@ -544,7 +623,28 @@ impl ChatWidget {
             // scroll_offset = msg index; map to approximate line offset.
             let scroll_back = self.messages.len().saturating_sub(1).saturating_sub(self.scroll_offset);
             let start = max_start.saturating_sub(scroll_back).min(max_start);
-            list_items[start..].to_vec()
+
+            // Scroll indicators
+            let has_above = start > 0;
+            let has_below = start + visible_rows < total;
+
+            let mut sliced: Vec<ListItem<'static>> = Vec::with_capacity(visible_rows);
+            if has_above && visible_rows > 2 {
+                sliced.push(ListItem::new(Line::from(Span::styled(
+                    "  ─── ▲ More above ───",
+                    Style::default().fg(theme.muted),
+                ))));
+                sliced.extend(list_items[start..start + visible_rows - if has_below { 2 } else { 1 }].to_vec());
+            } else {
+                sliced.extend(list_items[start..start + visible_rows - if has_below { 1 } else { 0 }].to_vec());
+            }
+            if has_below && sliced.len() < visible_rows {
+                sliced.push(ListItem::new(Line::from(Span::styled(
+                    "  ─── ▼ More below ───",
+                    Style::default().fg(theme.muted),
+                ))));
+            }
+            sliced
         } else {
             list_items
         };
@@ -654,6 +754,8 @@ pub struct PromptWidget {
     /// Inner input buffer with full multi-line support
     buffer: crate::repl_enhancement::InputBuffer,
     placeholder: String,
+    /// Vim mode label for display ("INSERT" or "NORMAL")
+    vim_mode: String,
 }
 
 impl PromptWidget {
@@ -662,6 +764,7 @@ impl PromptWidget {
         Self {
             buffer: crate::repl_enhancement::InputBuffer::new(),
             placeholder: "Type your message...".to_string(),
+            vim_mode: "INSERT".to_string(),
         }
     }
 
@@ -669,6 +772,11 @@ impl PromptWidget {
     pub fn with_placeholder(mut self, placeholder: String) -> Self {
         self.placeholder = placeholder;
         self
+    }
+
+    /// Set the vim mode label for display in the border title
+    pub fn set_vim_mode(&mut self, mode: &str) {
+        self.vim_mode = mode.to_string();
     }
 
     /// Get the current input text
@@ -842,12 +950,18 @@ impl PromptWidget {
             }
         }
 
+        let title = if self.vim_mode.is_empty() {
+            " Input ".to_string()
+        } else {
+            format!(" Input [{}] ", self.vim_mode)
+        };
+
         let paragraph = Paragraph::new(display_lines)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(theme.border))
-                    .title(" Input "),
+                    .title(title),
             )
             .alignment(Alignment::Left);
 
@@ -899,6 +1013,13 @@ pub struct SidebarWidget;
 /// Minimum terminal width for the sidebar to appear
 const SIDEBAR_WIDTH: u16 = 28;
 const MIN_MAIN_WIDTH: u16 = 50;
+/// Below this width, auto-hide sidebar even if toggled on
+const MIN_SIDEBAR_WIDTH: u16 = 80;
+/// Below this width, collapse header to single line
+const COLLAPSE_HEADER_WIDTH: u16 = 60;
+/// Minimum usable terminal size
+const MIN_TERMINAL_WIDTH: u16 = 30;
+const MIN_TERMINAL_HEIGHT: u16 = 8;
 
 impl SidebarWidget {
     /// Render the sidebar panel
@@ -1011,10 +1132,12 @@ impl SidebarWidget {
     }
 }
 
-/// Markdown segment: either plain text or a fenced code block.
+/// Markdown segment: plain text, header, or fenced code block.
 enum MdSegment {
     /// Regular text lines
     Text(Vec<String>),
+    /// Markdown header (## Header)
+    Header { level: usize, text: String },
     /// Fenced code block with optional language tag
     CodeBlock { lang: Option<String>, code: String },
 }
@@ -1049,7 +1172,18 @@ fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
         } else if in_code {
             code_lines.push(line.to_string());
         } else {
-            current_text.push(line.to_string());
+            // Detect markdown headers: # Header, ## Header, etc.
+            let header_level = line.chars().take_while(|c| *c == '#').count();
+            if header_level > 0 && header_level <= 6 && line.chars().nth(header_level) == Some(' ') {
+                // Flush accumulated text before the header
+                if !current_text.is_empty() {
+                    segments.push(MdSegment::Text(std::mem::take(&mut current_text)));
+                }
+                let header_text = line[header_level + 1..].trim().to_string();
+                segments.push(MdSegment::Header { level: header_level, text: header_text });
+            } else {
+                current_text.push(line.to_string());
+            }
         }
     }
 
@@ -1065,6 +1199,68 @@ fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
     }
 
     segments
+}
+
+/// Parse inline markdown formatting (**bold** and *italic*) into styled Spans.
+fn parse_inline_formatting(text: &str, base_color: ratatui::style::Color) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut pos = 0;
+    let bytes = text.as_bytes();
+
+    while pos < text.len() {
+        if bytes[pos] == b'*' && pos + 1 < text.len() && bytes[pos + 1] == b'*' {
+            // **bold**
+            let search_start = pos + 2;
+            if let Some(end) = text[search_start..].find("**") {
+                let close_start = search_start + end;
+                let bold_text = &text[search_start..close_start];
+                spans.push(Span::styled(
+                    bold_text.to_string(),
+                    Style::default().fg(base_color).add_modifier(Modifier::BOLD),
+                ));
+                pos = close_start + 2;
+                continue;
+            }
+        } else if bytes[pos] == b'*'
+            && (pos + 1 >= text.len() || bytes[pos + 1] != b'*')
+        {
+            // *italic* (single star, not double)
+            let search_start = pos + 1;
+            if let Some(end) = text[search_start..].find('*') {
+                let close_start = search_start + end;
+                let italic_text = &text[search_start..close_start];
+                spans.push(Span::styled(
+                    italic_text.to_string(),
+                    Style::default().fg(base_color).add_modifier(Modifier::ITALIC),
+                ));
+                pos = close_start + 1;
+                continue;
+            }
+        }
+        // Plain character — collect until next * or end
+        let plain_start = pos;
+        while pos < text.len() && bytes[pos] != b'*' {
+            pos += 1;
+        }
+        if pos > plain_start {
+            spans.push(Span::styled(
+                text[plain_start..pos].to_string(),
+                Style::default().fg(base_color),
+            ));
+        } else {
+            // Unmatched *, treat as plain
+            spans.push(Span::styled(
+                "*".to_string(),
+                Style::default().fg(base_color),
+            ));
+            pos += 1;
+        }
+    }
+
+    if spans.is_empty() {
+        spans.push(Span::styled(text.to_string(), Style::default().fg(base_color)));
+    }
+    spans
 }
 
 /// Truncate a line to fit within max_chars, with ellipsis.
@@ -1192,6 +1388,38 @@ fn format_tokens(count: u64) -> String {
     }
 }
 
+/// Check if content looks like diff output.
+fn is_diff_content(content: &str) -> bool {
+    let lines: Vec<&str> = content.lines().take(20).collect();
+    if lines.is_empty() { return false; }
+    let diff_indicators = lines.iter().filter(|l| {
+        l.starts_with("diff --git")
+            || l.starts_with("--- a/")
+            || l.starts_with("+++ b/")
+            || l.starts_with("@@")
+    }).count();
+    let add_rem = lines.iter().filter(|l| {
+        (l.starts_with('+') && !l.starts_with("+++"))
+            || (l.starts_with('-') && !l.starts_with("---"))
+    }).count();
+    diff_indicators >= 1 && add_rem >= 2
+}
+
+/// Get the color for a diff line.
+fn diff_line_color(line: &str, theme: &Theme) -> ratatui::style::Color {
+    if line.starts_with('+') && !line.starts_with("+++") {
+        theme.diff_added
+    } else if line.starts_with('-') && !line.starts_with("---") {
+        theme.diff_removed
+    } else if line.starts_with('@') {
+        theme.primary
+    } else if line.starts_with("diff --git") || line.starts_with("---") || line.starts_with("+++") {
+        theme.diff_header
+    } else {
+        theme.text
+    }
+}
+
 /// Main UI layout widget
 pub struct MainLayoutWidget;
 
@@ -1222,9 +1450,25 @@ impl MainLayoutWidget {
     /// When sidebar is visible and terminal is wide enough, splits the middle area horizontally.
     /// Returns (header_area, chat_area, prompt_area, status_area, sidebar_area, full_area)
     pub fn layout_with_sidebar(area: Rect, prompt_height: u16, sidebar_visible: bool) -> (Rect, Rect, Rect, Rect, Option<Rect>, Rect) {
-        let (header_area, chat_area, prompt_area, status_area, full) = Self::layout(area, prompt_height);
+        // Responsive: collapse header on very narrow terminals
+        let header_height: u16 = if area.width < COLLAPSE_HEADER_WIDTH { 1 } else { HeaderWidget::height() as u16 };
+        let effective_sidebar = sidebar_visible && area.width >= MIN_SIDEBAR_WIDTH;
 
-        if sidebar_visible && SidebarWidget::fits(area.width) {
+        let (header_area, chat_area, prompt_area, status_area, full) = {
+            let chunks = ratatui::layout::Layout::default()
+                .direction(Direction::Vertical)
+                .margin(1)
+                .constraints([
+                    Constraint::Length(header_height),
+                    Constraint::Min(0),
+                    Constraint::Length(prompt_height),
+                    Constraint::Length(1),
+                ])
+                .split(area);
+            (chunks[0], chunks[1], chunks[2], chunks[3], area)
+        };
+
+        if effective_sidebar && SidebarWidget::fits(area.width) {
             // Split the vertical strip (header + chat + prompt) horizontally
             // The sidebar spans header + chat rows
             let sidebar_h = SidebarWidget::width();
@@ -1244,7 +1488,7 @@ impl MainLayoutWidget {
                 .direction(Direction::Vertical)
                 .margin(1)
                 .constraints([
-                    Constraint::Length(HeaderWidget::height() as u16),
+                    Constraint::Length(header_height),
                     Constraint::Min(0),
                     Constraint::Length(prompt_height),
                     Constraint::Length(1),
@@ -1295,6 +1539,19 @@ impl MainLayoutWidget {
         theme: &Theme,
     ) {
         let area = frame.area();
+
+        // Show warning if terminal is too small
+        if area.width < MIN_TERMINAL_WIDTH || area.height < MIN_TERMINAL_HEIGHT {
+            let msg = format!(
+                "Terminal too small: {}x{}. Need at least {}x{}.",
+                area.width, area.height, MIN_TERMINAL_WIDTH, MIN_TERMINAL_HEIGHT
+            );
+            let warning = Paragraph::new(msg)
+                .style(Style::default().fg(theme.error))
+                .alignment(Alignment::Center);
+            frame.render_widget(warning, area);
+            return;
+        }
 
         let prompt_height = prompt.needed_height(area.width);
         let sidebar_visible = sidebar_info.is_some();

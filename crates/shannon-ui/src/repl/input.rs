@@ -115,6 +115,8 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Char(c) => {
             repl.prompt.add_char(c);
+            repl.prompt.set_vim_mode("INSERT");
+            repl.state.vim_mode = "INSERT".to_string();
             // Detect `@` typed at end of prompt to open file picker
             if c == '@' {
                 let input = repl.prompt.input();
@@ -193,6 +195,8 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                 clear_completions(repl);
                 return Ok(());
             }
+            repl.prompt.set_vim_mode("NORMAL");
+            repl.state.vim_mode = "NORMAL".to_string();
             let action = repl.vim_handler.process_key(key);
             handle_vim_action(repl, action);
             Ok(())
@@ -736,13 +740,34 @@ fn handle_input_dialog_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
 }
 
 fn open_command_palette(repl: &mut Repl) {
-    let command_names = repl.runtime.block_on(repl.command_registry.list_names());
-    let items: Vec<SelectItem<String>> = command_names.into_iter().map(|name| {
-        let display = format!("/{name}");
-        SelectItem::new(display.clone(), display)
-    }).collect();
+    let mut items: Vec<SelectItem<String>> = Vec::new();
 
-    let picker = crate::widgets::select::FuzzyPickerWidget::new("Command Palette".to_string())
+    // Slash commands
+    let command_names = repl.runtime.block_on(repl.command_registry.list_names());
+    for name in &command_names {
+        let display = format!("/{name}");
+        items.push(SelectItem::new(format!("  Command: {display}"), display.clone()));
+    }
+
+    // Theme entries
+    for theme_name in &["dark", "light", "dracula"] {
+        let cmd = format!("/theme {theme_name}");
+        let indicator = if repl.state.theme.name == *theme_name { " (active)" } else { "" };
+        items.push(SelectItem::new(format!("  Theme: {theme_name}{indicator}"), cmd));
+    }
+
+    // Current model shortcut
+    if let Some(ref model) = repl.state.model {
+        items.push(SelectItem::new(
+            format!("  Model: {model} (current)"),
+            format!("/model {model}"),
+        ));
+    }
+
+    // Model picker shortcut
+    items.push(SelectItem::new("  Model: Browse all...".to_string(), "/model".to_string()));
+
+    let picker = crate::widgets::select::FuzzyPickerWidget::new("Command Palette  (Ctrl+P)".to_string())
         .with_items(items);
     repl.state.fuzzy_picker = Some(picker);
 }

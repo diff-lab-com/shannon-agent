@@ -94,6 +94,29 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             viewer.render(f, f.area(), &diff_data, &theme);
         }
 
+        // Overlay toast notification if active
+        if let Some((ref msg, started)) = state.toast {
+            let elapsed = started.elapsed().as_secs();
+            let toast_text = format!(" {msg} ({elapsed}s) ");
+            let toast_width = toast_text.chars().count() as u16;
+            let y = f.area().bottom().saturating_sub(5);
+            let x = f.area().x + 1;
+            let toast_area = ratatui::layout::Rect {
+                x,
+                y,
+                width: toast_width.min(f.area().width.saturating_sub(2)),
+                height: 1,
+            };
+            let toast = Paragraph::new(toast_text)
+                .style(ratatui::style::Style::default().fg(theme.text).bg(theme.accent));
+            f.render_widget(toast, toast_area);
+        }
+
+        // Overlay history search bar when Ctrl+R active
+        if state.incremental_search_active {
+            render_history_search_overlay(f, f.area(), &state);
+        }
+
         // Overlay completion suggestions popup above the prompt
         if !state.completion_suggestions.is_empty() {
             render_completion_suggestions(f, f.area(), &state.completion_suggestions, state.completion_suggestion_index);
@@ -278,6 +301,65 @@ pub(crate) fn render_completion_suggestions(
         );
 
     frame.render_widget(paragraph, popup_area);
+}
+
+/// Render a history search overlay bar at the bottom of the screen.
+fn render_history_search_overlay(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    state: &super::ReplState,
+) {
+    let bar_height = 3u16;
+    let bar_width = area.width.saturating_sub(4).min(60);
+    let y = area.bottom().saturating_sub(bar_height + 5);
+    let x = (area.width.saturating_sub(bar_width)) / 2;
+
+    let bar_area = Rect {
+        x: area.x + x,
+        y,
+        width: bar_width,
+        height: bar_height,
+    };
+
+    frame.render_widget(Clear, bar_area);
+
+    let query_display = if state.incremental_search_query.is_empty() {
+        "(type to search)".to_string()
+    } else {
+        state.incremental_search_query.clone()
+    };
+
+    let query_color = if state.incremental_search_query.is_empty() {
+        Color::DarkGray
+    } else {
+        Color::Yellow
+    };
+
+    let lines = vec![
+        Line::from(vec![
+            Span::styled(" Ctrl+R ", Style::default().fg(Color::Black).bg(Color::Cyan)),
+            Span::styled(" reverse-i-search  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(&query_display, Style::default().fg(query_color).add_modifier(Modifier::BOLD)),
+            Span::styled("▌", Style::default().fg(Color::Cyan)),
+        ]),
+        Line::from(vec![
+            Span::styled(" ↑↓ navigate  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Enter", Style::default().fg(Color::Green)),
+            Span::styled(" accept  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Esc", Style::default().fg(Color::Red)),
+            Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
+        ]),
+    ];
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .border_type(ratatui::widgets::BorderType::Rounded),
+        );
+
+    frame.render_widget(paragraph, bar_area);
 }
 
 /// Truncate a string to fit within a visual width, appending "…" if truncated.

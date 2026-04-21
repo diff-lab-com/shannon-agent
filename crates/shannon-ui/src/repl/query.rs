@@ -28,6 +28,8 @@ struct StreamingState {
     tools: usize,
     budget: Option<f64>,
     delta: String,
+    /// Whether the model is still thinking (no text tokens yet)
+    thinking_phase: bool,
 }
 
 impl Default for StreamingState {
@@ -43,6 +45,7 @@ impl Default for StreamingState {
             tools: 0,
             budget: None,
             delta: String::new(),
+            thinking_phase: true,
         }
     }
 }
@@ -148,6 +151,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                     if let Ok(mut s) = ss.lock() {
                         s.buffer = response_text.clone();
                         s.delta.push_str(&content);
+                        s.thinking_phase = false;
                     }
                 }
                 Ok(QueryEvent::ToolUseRequest { tool_name, tool_input, .. }) => {
@@ -281,6 +285,14 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
         let mut polling_terminal = Terminal::new(terminal_backend)?;
         let mut rendered_text = String::new();
         let mut needs_render = false;
+        let mut thinking_dots: usize = 0;
+        let stream_start = std::time::Instant::now();
+
+        // Activate streaming state
+        repl.state.streaming_active = true;
+        repl.state.thinking_phase = true;
+        repl.state.streaming_start = Some(stream_start);
+        repl.chat.streaming_active = true;
 
         loop {
             let is_done = streaming.lock().map(|s| s.done).unwrap_or(false);
@@ -310,6 +322,24 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
             }
 
             repl.state.status = current_status.clone();
+
+            // Thinking indicator: animated dots while model thinks
+            let is_thinking = streaming.lock().map(|s| s.thinking_phase).unwrap_or(false);
+            repl.state.thinking_phase = is_thinking;
+            if is_thinking {
+                thinking_dots = (thinking_dots + 1) % 4;
+                let dots = ".".repeat(thinking_dots);
+                repl.state.status = format!("Thinking{dots}");
+            }
+
+            // Toast for long operations (>5s)
+            let elapsed = stream_start.elapsed();
+            if elapsed.as_secs() >= 5 && repl.state.toast.is_none() {
+                let tool_name = streaming.lock().ok()
+                    .and_then(|s| s.multi_progress.last().map(|(n, _, _)| n.clone()))
+                    .unwrap_or_else(|| "query".to_string());
+                repl.state.toast = Some((format!("Running {tool_name}…"), stream_start));
+            }
 
             {
                 let s = streaming.lock().unwrap_or_else(|e| e.into_inner());
@@ -402,6 +432,13 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
 
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
+
+        // Clear streaming state
+        repl.state.streaming_active = false;
+        repl.state.thinking_phase = false;
+        repl.state.streaming_start = None;
+        repl.chat.streaming_active = false;
+        repl.state.toast = None;
     }
 
     shannon_core::prevent_sleep::stop_prevent_sleep();
