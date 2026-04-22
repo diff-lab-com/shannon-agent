@@ -195,6 +195,7 @@ pub fn render_permission_dialog(
             Span::styled("--------------------------", Style::default().fg(theme.text_dim)),
         ]));
         let diff_lines: Vec<&str> = diff.lines().collect();
+        let lang = crate::widgets::detect_diff_language(diff);
         for line in diff_lines.iter().take(15) {
             let color = if line.starts_with('-') && !line.starts_with("---") {
                 theme.diff_removed
@@ -205,7 +206,8 @@ pub fn render_permission_dialog(
             } else {
                 theme.text
             };
-            content_lines.push(Line::from(Span::styled(line.to_string(), Style::default().fg(color))));
+            let spans = crate::widgets::highlight_diff_line(line, lang.as_deref(), color);
+            content_lines.push(Line::from(spans));
         }
         if diff_lines.len() > 15 {
             content_lines.push(Line::from(Span::styled(

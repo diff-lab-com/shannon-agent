@@ -16,6 +16,23 @@ use ratatui::{
     Frame,
 };
 use std::collections::VecDeque;
+use std::sync::LazyLock;
+use syntect::easy::HighlightLines;
+use syntect::highlighting::ThemeSet;
+use syntect::parsing::SyntaxSet;
+
+/// Lazy-initialized syntect state for diff syntax highlighting.
+static DIFF_SYNTAX: LazyLock<(SyntaxSet, syntect::highlighting::Theme)> = LazyLock::new(|| {
+    let ss = SyntaxSet::load_defaults_newlines();
+    let ts = ThemeSet::load_defaults();
+    let theme = ts.themes["base16-eighties.dark"].clone();
+    (ss, theme)
+});
+
+/// Convert a syntect Color to a ratatui Color.
+fn syntect_to_ratatui(c: syntect::highlighting::Color) -> ratatui::style::Color {
+    ratatui::style::Color::Rgb(c.r, c.g, c.b)
+}
 
 /// Header bar widget showing session information
 pub struct HeaderWidget;
@@ -485,15 +502,15 @@ impl ChatWidget {
 
             // Detect and render diff content inline for tool messages
             if msg.role == ChatRole::Tool && is_diff_content(&clean_content) {
+                let lang = detect_diff_language(&clean_content);
                 let prefix_len = timestamp.len() + role_icon.len() + role_name.len() + 7;
                 let indent = " ".repeat(prefix_len);
-                let available = inner_width.saturating_sub(prefix_len);
                 let mut first_line = true;
                 for line in clean_content.lines().take(50) {
+                    let color = diff_line_color(line, theme);
+                    let diff_spans = highlight_diff_line(line, lang.as_deref(), color);
                     if first_line {
-                        let text = truncate_line(line, available);
-                        let color = diff_line_color(line, theme);
-                        let item = ListItem::new(Line::from(vec![
+                        let mut spans = vec![
                             Span::styled("[", Style::default().fg(theme.muted)),
                             Span::styled(timestamp.clone(), Style::default().fg(theme.muted)),
                             Span::styled("] ", Style::default().fg(theme.muted)),
@@ -501,17 +518,16 @@ impl ChatWidget {
                             Span::styled(" ", Style::default()),
                             Span::styled(role_name, Style::default().fg(role_color).add_modifier(Modifier::BOLD)),
                             Span::styled(": ", Style::default().fg(theme.text_dim)),
-                            Span::styled(text, Style::default().fg(color)),
-                        ]));
-                        list_items.push(item);
+                        ];
+                        spans.extend(diff_spans);
+                        list_items.push(ListItem::new(Line::from(spans)));
                         first_line = false;
                     } else {
-                        let text = truncate_line(line, available);
-                        let color = diff_line_color(line, theme);
-                        list_items.push(ListItem::new(Line::from(vec![
+                        let mut spans = vec![
                             Span::styled(indent.clone(), Style::default().fg(theme.muted)),
-                            Span::styled(text, Style::default().fg(color)),
-                        ])));
+                        ];
+                        spans.extend(diff_spans);
+                        list_items.push(ListItem::new(Line::from(spans)));
                     }
                 }
                 if clean_content.lines().count() > 50 {
@@ -1481,6 +1497,97 @@ fn diff_line_color(line: &str, theme: &Theme) -> ratatui::style::Color {
     } else {
         theme.text
     }
+}
+
+/// Detect the programming language from diff header lines.
+pub(crate) fn detect_diff_language(content: &str) -> Option<String> {
+    let ext_to_lang = |ext: &str| -> String {
+        match ext {
+            "rs" => "rust".to_string(),
+            "py" => "python".to_string(),
+            "js" | "jsx" => "javascript".to_string(),
+            "ts" | "tsx" => "typescript".to_string(),
+            "go" => "go".to_string(),
+            "java" => "java".to_string(),
+            "c" | "h" => "c".to_string(),
+            "cpp" | "cc" | "cxx" | "hpp" => "cpp".to_string(),
+            "rb" => "ruby".to_string(),
+            "sh" | "bash" => "bash".to_string(),
+            "json" => "json".to_string(),
+            "toml" => "toml".to_string(),
+            "yaml" | "yml" => "yaml".to_string(),
+            "md" => "markdown".to_string(),
+            "html" | "htm" => "html".to_string(),
+            "css" => "css".to_string(),
+            "sql" => "sql".to_string(),
+            other => other.to_string(),
+        }
+    };
+
+    for line in content.lines().take(10) {
+        if let Some(path) = line.strip_prefix("--- a/").or_else(|| line.strip_prefix("+++ b/")) {
+            if let Some(ext) = path.rsplit('.').next() {
+                return Some(ext_to_lang(ext));
+            }
+        }
+        if line.starts_with("diff --git") {
+            if let Some(b_path) = line.split(" b/").nth(1) {
+                if let Some(ext) = b_path.rsplit('.').next() {
+                    return Some(ext_to_lang(ext));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Syntax-highlight a single diff line's content, returning colored Spans.
+/// The `prefix` ("+" or "-") and `base_color` set the diff-line color,
+/// while the content after the prefix gets syntax highlighting.
+pub(crate) fn highlight_diff_line(line: &str, lang: Option<&str>, base_color: ratatui::style::Color) -> Vec<Span<'static>> {
+    // Determine prefix and content
+    let (prefix, content) = if (line.starts_with('+') && !line.starts_with("+++"))
+        || (line.starts_with('-') && !line.starts_with("---"))
+    {
+        (&line[..1], &line[1..])
+    } else {
+        ("", line)
+    };
+
+    let mut spans = vec![Span::styled(prefix.to_string(), Style::default().fg(base_color))];
+
+    if content.is_empty() {
+        return spans;
+    }
+
+    // Try syntax highlighting if we have a language
+    if let Some(lang) = lang {
+        let (ref ss, ref theme) = *DIFF_SYNTAX;
+        if let Some(syntax) = ss.find_syntax_by_token(lang).or_else(|| ss.find_syntax_by_extension(lang)) {
+            let mut highlighter = HighlightLines::new(syntax, theme);
+            match highlighter.highlight_line(content, ss) {
+                Ok(ranges) => {
+                    for (style, text) in ranges {
+                        let fg = syntect_to_ratatui(style.foreground);
+                        let mut s = Style::default().fg(fg);
+                        if style.font_style.contains(syntect::highlighting::FontStyle::BOLD) {
+                            s = s.add_modifier(Modifier::BOLD);
+                        }
+                        if style.font_style.contains(syntect::highlighting::FontStyle::ITALIC) {
+                            s = s.add_modifier(Modifier::ITALIC);
+                        }
+                        spans.push(Span::styled(text.to_string(), s));
+                    }
+                    return spans;
+                }
+                Err(_) => {} // fall through to plain
+            }
+        }
+    }
+
+    // Fallback: plain content with base color
+    spans.push(Span::styled(content.to_string(), Style::default().fg(base_color)));
+    spans
 }
 
 /// Main UI layout widget
