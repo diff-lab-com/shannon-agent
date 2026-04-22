@@ -632,7 +632,7 @@ fn handle_memory(repl: &mut Repl, args: &str) -> Result<()> {
     Ok(())
 }
 
-fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
+pub(crate) fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
     use base64::Engine;
     use shannon_core::api::{ContentBlock, ImageSource};
 

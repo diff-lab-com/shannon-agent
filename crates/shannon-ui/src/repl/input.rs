@@ -893,14 +893,32 @@ fn handle_file_selector_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
 
             if let Some(path) = selected_path {
                 if was_at_mode {
-                    // Insert path at cursor, replacing the trailing '@'
-                    let input = repl.prompt.input().to_string();
-                    if let Some(pos) = input.rfind('@') {
-                        let mut new_input = String::with_capacity(input.len() + path.len());
-                        new_input.push_str(&input[..pos]);
-                        new_input.push_str(&path);
-                        new_input.push_str(&input[pos + 1..]);
-                        repl.prompt.set_input(new_input);
+                    // Check if the selected file is an image — auto-attach instead of inserting path
+                    let is_image = path.rsplit('.').next()
+                        .map(|ext| matches!(ext.to_lowercase().as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg"))
+                        .unwrap_or(false);
+
+                    if is_image {
+                        // Remove the trailing '@' from prompt
+                        let input = repl.prompt.input().to_string();
+                        if let Some(pos) = input.rfind('@') {
+                            let mut new_input = String::with_capacity(input.len());
+                            new_input.push_str(&input[..pos]);
+                            new_input.push_str(&input[pos + 1..]);
+                            repl.prompt.set_input(new_input);
+                        }
+                        // Attach image automatically
+                        let _ = super::commands::handle_image(repl, &path);
+                    } else {
+                        // Insert path at cursor, replacing the trailing '@'
+                        let input = repl.prompt.input().to_string();
+                        if let Some(pos) = input.rfind('@') {
+                            let mut new_input = String::with_capacity(input.len() + path.len());
+                            new_input.push_str(&input[..pos]);
+                            new_input.push_str(&path);
+                            new_input.push_str(&input[pos + 1..]);
+                            repl.prompt.set_input(new_input);
+                        }
                     }
                 } else {
                     repl.prompt.set_input(path);
