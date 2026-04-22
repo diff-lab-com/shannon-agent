@@ -23,7 +23,7 @@ pub use repl::{Repl, ReplState};
 pub use events::{Event, EventHandler};
 pub use render::Renderer;
 pub use render::render_diff;
-pub use widgets::{ChatWidget, ChatRole, ChatMessage, PromptWidget, MainLayoutWidget};
+pub use widgets::{ChatWidget, ChatRole, ChatMessage, PromptWidget, MainLayoutWidget, HeaderWidget, StatusBarWidget, SidebarInfo};
 pub use theme::Theme;
 pub use terminal_image::{
     ImageProtocol, ImageRenderConfig,
