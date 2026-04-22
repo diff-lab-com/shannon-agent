@@ -474,6 +474,9 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
             // patterns, persist them to the memory store automatically.
             auto_save_memory(repl, &response);
 
+            // Check context pressure and auto-compact if needed
+            repl.check_context_pressure();
+
             repl.state.query_steps_done = steps;
             repl.state.query_steps_total = steps;
             repl.state.progress_bar_visible = false;

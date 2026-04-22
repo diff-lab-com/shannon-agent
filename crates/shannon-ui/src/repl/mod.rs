@@ -1262,6 +1262,68 @@ impl Repl {
         })
     }
 
+    /// Check context pressure and auto-compact if needed.
+    /// Returns true if auto-compaction was performed.
+    pub fn check_context_pressure(&mut self) -> bool {
+        let context_window = self.state.model.as_deref()
+            .map(|m| shannon_core::model_registry::context_window_for(m))
+            .unwrap_or(200_000) as u64;
+
+        if context_window == 0 || self.state.tokens_used == 0 {
+            return false;
+        }
+
+        let usage_ratio = self.state.tokens_used as f64 / context_window as f64;
+
+        if usage_ratio > 0.90 {
+            // Auto-compact: context pressure critical (>90%)
+            self.do_auto_compact();
+            return true;
+        } else if usage_ratio > 0.75 {
+            // Warning: context pressure high (>75%)
+            let pct = (usage_ratio * 100.0) as u32;
+            self.state.toast = Some((
+                format!("  Context: {pct}% — /compact to reduce  "),
+                std::time::Instant::now(),
+            ));
+        }
+        false
+    }
+
+    /// Perform auto-compaction using truncate strategy (no LLM call needed).
+    fn do_auto_compact(&mut self) {
+        use shannon_core::compact::CompactEngine;
+
+        let Some(ref mut engine) = self.query_engine else { return };
+
+        let history = engine.conversation_history();
+        if history.len() < 4 {
+            return; // Not enough to compact
+        }
+
+        let compact_engine = match CompactEngine::with_defaults() {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+
+        let before = history.len();
+        let mut messages = history;
+
+        // Use truncate strategy for auto-compact — fast, no extra API call
+        if let Ok(result) = compact_engine.micro_compact(&mut messages) {
+            let _ = compact_engine.post_compact_cleanup(&mut messages);
+            engine.replace_conversation(messages);
+
+            let after = engine.conversation_history().len();
+            self.state.toast = Some((
+                format!("  Auto-compacted: {before}→{after} messages  "),
+                std::time::Instant::now(),
+            ));
+            tracing::info!("Auto-compacted context: {before}→{after} messages, {:.0}% reduction",
+                result.reduction_ratio * 100.0);
+        }
+    }
+
     /// Get mutable reference to the REPL state
     pub fn state_mut(&mut self) -> &mut ReplState {
         &mut self.state
