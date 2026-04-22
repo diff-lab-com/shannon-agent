@@ -53,7 +53,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             crate::widgets::MainLayoutWidget::render_complete_with_spinner(
                 f, chat, prompt, &state.status,
                 state.model.as_deref(), Some(state.tokens_used),
-                &state.working_directory, Some(spinner), pb, sidebar_ref, &theme,
+                &state.working_directory, Some(spinner), pb, sidebar_ref, &theme, state.sidebar_tab,
             );
             // Then render the active overlay
             if let Some(ref dialog) = state.active_dialog {
@@ -73,7 +73,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             crate::widgets::MainLayoutWidget::render_complete_with_spinner(
                 f, chat, prompt, &state.status,
                 state.model.as_deref(), Some(state.tokens_used),
-                &state.working_directory, Some(spinner), pb, sidebar_ref, &theme,
+                &state.working_directory, Some(spinner), pb, sidebar_ref, &theme, state.sidebar_tab,
             );
         }
 

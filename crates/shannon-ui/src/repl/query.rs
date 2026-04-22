@@ -394,7 +394,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                 crate::widgets::MainLayoutWidget::render_complete_with_spinner(
                     f, chat, prompt, &state.status,
                     state.model.as_deref(), Some(state.tokens_used),
-                    &state.working_directory, Some(spinner), pb, sidebar_info.as_ref(), &state.theme,
+                    &state.working_directory, Some(spinner), pb, sidebar_info.as_ref(), &state.theme, state.sidebar_tab,
                 );
                 if state.multi_progress_visible {
                     let mp_height = 3u16.min(f.area().height.saturating_sub(10));

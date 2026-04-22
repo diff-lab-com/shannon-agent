@@ -96,6 +96,7 @@ fn render_scene(scene: &SceneData) -> String {
                 pb,
                 None,
                 &state.theme,
+                state.sidebar_tab,
             );
 
             // Overlays (mutually exclusive in normal rendering order)

@@ -224,6 +224,15 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             handle_tab_completion(repl)?;
             Ok(())
         }
+        KeyCode::BackTab => {
+            if repl.state.sidebar_visible {
+                repl.state.sidebar_tab = match repl.state.sidebar_tab {
+                    crate::repl::SidebarTab::Context => crate::repl::SidebarTab::Files,
+                    crate::repl::SidebarTab::Files => crate::repl::SidebarTab::Context,
+                };
+            }
+            Ok(())
+        }
         _ => Ok(()),
     }
 }

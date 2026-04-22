@@ -150,6 +150,18 @@ pub struct ReplState {
     pub vim_mode: String,
     /// Whether leader key mode is active (waiting for second key after Ctrl+X)
     pub leader_active: bool,
+    /// Active tab in the sidebar panel
+    pub sidebar_tab: SidebarTab,
+}
+
+/// Tabs available in the sidebar panel
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SidebarTab {
+    /// Model info, tokens, cost, tools
+    #[default]
+    Context,
+    /// Modified files list
+    Files,
 }
 
 /// State for plan mode
@@ -219,6 +231,7 @@ impl Default for ReplState {
             streaming_start: None,
             vim_mode: "INSERT".to_string(),
             leader_active: false,
+            sidebar_tab: SidebarTab::default(),
         }
     }
 }

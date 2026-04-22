@@ -1035,7 +1035,7 @@ const MIN_TERMINAL_HEIGHT: u16 = 8;
 
 impl SidebarWidget {
     /// Render the sidebar panel
-    pub fn render(frame: &mut Frame, area: Rect, info: &SidebarInfo, theme: &Theme) {
+    pub fn render(frame: &mut Frame, area: Rect, info: &SidebarInfo, theme: &Theme, tab: crate::repl::SidebarTab) {
         let block = Block::default()
             .borders(Borders::LEFT)
             .border_style(Style::default().fg(theme.border))
@@ -1047,85 +1047,123 @@ impl SidebarWidget {
         let mut lines: Vec<Line<'static>> = Vec::new();
         let w = inner.width as usize;
 
-        // Model section
-        lines.push(Line::from(Span::styled("Model", Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD))));
-        let model_name = info.model.as_deref().unwrap_or("unknown");
-        lines.push(Line::from(Span::styled(truncate_to(model_name, w), Style::default().fg(theme.primary))));
-        lines.push(Line::from(""));
-
-        // Context usage
-        lines.push(Line::from(Span::styled("Context", Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD))));
-        let tokens_str = format_tokens(info.tokens_used);
-        let pct = if info.context_window > 0 {
-            ((info.tokens_used as f64 / info.context_window as f64) * 100.0).min(100.0)
+        // Tab header
+        let ctx_label = if tab == crate::repl::SidebarTab::Context { " Context " } else { " Context " };
+        let files_label = if tab == crate::repl::SidebarTab::Files { " Files " } else { " Files " };
+        let ctx_style = if tab == crate::repl::SidebarTab::Context {
+            Style::default().fg(theme.primary).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
         } else {
-            0.0
+            Style::default().fg(theme.muted)
         };
-        let pct_label = format!("{tokens_str} ({pct:.0}%)");
-        lines.push(Line::from(Span::styled(pct_label, Style::default().fg(theme.text))));
-        // Progress bar based on actual context window percentage
-        let bar_width = w.saturating_sub(2).max(4);
-        let filled = (pct / 100.0 * bar_width as f64).round() as usize;
-        let filled = filled.min(bar_width);
-        let bar_color = if pct > 90.0 {
-            theme.error
-        } else if pct > 75.0 {
-            theme.warning
+        let files_style = if tab == crate::repl::SidebarTab::Files {
+            Style::default().fg(theme.primary).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
         } else {
-            theme.secondary
+            Style::default().fg(theme.muted)
         };
-        let bar_str = format!(" {}{}", "█".repeat(filled), "░".repeat(bar_width.saturating_sub(filled)));
-        lines.push(Line::from(Span::styled(truncate_to(&bar_str, w), Style::default().fg(bar_color))));
+        let sep = Style::default().fg(theme.border);
+        lines.push(Line::from(vec![
+            Span::styled(ctx_label, ctx_style),
+            Span::styled("|", sep),
+            Span::styled(files_label, files_style),
+        ]));
         lines.push(Line::from(""));
 
-        // Cost
-        lines.push(Line::from(Span::styled("Cost", Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD))));
-        let cost_str = format!("${:.4}", info.cost_usd);
-        lines.push(Line::from(Span::styled(cost_str, Style::default().fg(theme.warning))));
-        lines.push(Line::from(""));
+        match tab {
+            crate::repl::SidebarTab::Context => {
+                // Model section
+                lines.push(Line::from(Span::styled("Model", Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD))));
+                let model_name = info.model.as_deref().unwrap_or("unknown");
+                lines.push(Line::from(Span::styled(truncate_to(model_name, w), Style::default().fg(theme.primary))));
+                lines.push(Line::from(""));
 
-        // Tools
-        lines.push(Line::from(Span::styled("Tools", Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD))));
-        lines.push(Line::from(Span::styled(info.tools_invoked.to_string(), Style::default().fg(theme.text))));
-        if info.error_count > 0 {
-            lines.push(Line::from(Span::styled(
-                format!("  {} errors", info.error_count),
-                Style::default().fg(theme.error),
-            )));
-        }
-        lines.push(Line::from(""));
-
-        // Modified files
-        if !info.modified_files.is_empty() {
-            lines.push(Line::from(Span::styled("Files", Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD))));
-            let _total = format!("+{} -{}", info.total_additions, info.total_deletions);
-            lines.push(Line::from(vec![
-                Span::styled("+", Style::default().fg(theme.success)),
-                Span::styled(info.total_additions.to_string(), Style::default().fg(theme.success)),
-                Span::styled(" ", Style::default().fg(theme.text_dim)),
-                Span::styled("-", Style::default().fg(theme.error)),
-                Span::styled(info.total_deletions.to_string(), Style::default().fg(theme.error)),
-            ]));
-            for (path, adds, dels) in info.modified_files.iter().take(8) {
-                let fname = path.split('/').next_back().unwrap_or(path);
-                let changes = if *adds > 0 && *dels > 0 {
-                    format!("+{adds}-{dels}")
-                } else if *adds > 0 {
-                    format!("+{adds}")
+                // Context usage
+                lines.push(Line::from(Span::styled("Context", Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD))));
+                let tokens_str = format_tokens(info.tokens_used);
+                let pct = if info.context_window > 0 {
+                    ((info.tokens_used as f64 / info.context_window as f64) * 100.0).min(100.0)
                 } else {
-                    format!("-{dels}")
+                    0.0
                 };
-                lines.push(Line::from(vec![
-                    Span::styled(truncate_to(fname, w - 8), Style::default().fg(theme.text)),
-                    Span::styled(" ", Style::default().fg(theme.text_dim)),
-                    Span::styled(changes, Style::default().fg(theme.muted)),
-                ]));
+                let pct_label = format!("{tokens_str} ({pct:.0}%)");
+                lines.push(Line::from(Span::styled(pct_label, Style::default().fg(theme.text))));
+                // Progress bar based on actual context window percentage
+                let bar_width = w.saturating_sub(2).max(4);
+                let filled = (pct / 100.0 * bar_width as f64).round() as usize;
+                let filled = filled.min(bar_width);
+                let bar_color = if pct > 90.0 {
+                    theme.error
+                } else if pct > 75.0 {
+                    theme.warning
+                } else {
+                    theme.secondary
+                };
+                let bar_str = format!(" {}{}", "█".repeat(filled), "░".repeat(bar_width.saturating_sub(filled)));
+                lines.push(Line::from(Span::styled(truncate_to(&bar_str, w), Style::default().fg(bar_color))));
+                lines.push(Line::from(""));
+
+                // Cost
+                lines.push(Line::from(Span::styled("Cost", Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD))));
+                let cost_str = format!("${:.4}", info.cost_usd);
+                lines.push(Line::from(Span::styled(cost_str, Style::default().fg(theme.warning))));
+                lines.push(Line::from(""));
+
+                // Tools
+                lines.push(Line::from(Span::styled("Tools", Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD))));
+                lines.push(Line::from(Span::styled(info.tools_invoked.to_string(), Style::default().fg(theme.text))));
+                if info.error_count > 0 {
+                    lines.push(Line::from(Span::styled(
+                        format!("  {} errors", info.error_count),
+                        Style::default().fg(theme.error),
+                    )));
+                }
             }
-            if info.modified_files.len() > 8 {
-                lines.push(Line::from(Span::styled(
-                    format!("  ...+{} more", info.modified_files.len() - 8),
-                    Style::default().fg(theme.muted),
-                )));
+            crate::repl::SidebarTab::Files => {
+                if info.modified_files.is_empty() {
+                    lines.push(Line::from(Span::styled("No modified files", Style::default().fg(theme.muted))));
+                } else {
+                    // Summary line
+                    lines.push(Line::from(vec![
+                        Span::styled("+", Style::default().fg(theme.success)),
+                        Span::styled(info.total_additions.to_string(), Style::default().fg(theme.success)),
+                        Span::styled(" ", Style::default().fg(theme.text_dim)),
+                        Span::styled("-", Style::default().fg(theme.error)),
+                        Span::styled(info.total_deletions.to_string(), Style::default().fg(theme.error)),
+                        Span::styled(format!("  ({} files)", info.modified_files.len()), Style::default().fg(theme.muted)),
+                    ]));
+                    lines.push(Line::from(""));
+
+                    // Show up to 20 files (more space since this is a dedicated tab)
+                    for (path, adds, dels) in info.modified_files.iter().take(20) {
+                        let fname = path.split('/').next_back().unwrap_or(path);
+                        let changes = if *adds > 0 && *dels > 0 {
+                            format!("+{adds}-{dels}")
+                        } else if *adds > 0 {
+                            format!("+{adds}")
+                        } else {
+                            format!("-{dels}")
+                        };
+                        lines.push(Line::from(vec![
+                            Span::styled(truncate_to(fname, w.saturating_sub(8)), Style::default().fg(theme.text)),
+                            Span::styled(" ", Style::default().fg(theme.text_dim)),
+                            Span::styled(changes, Style::default().fg(theme.muted)),
+                        ]));
+                        // Show parent path if it fits
+                        if let Some(parent) = path.strip_suffix(fname).and_then(|p| p.strip_suffix('/')) {
+                            if !parent.is_empty() && w > 20 {
+                                lines.push(Line::from(Span::styled(
+                                    format!("  {}", truncate_to(parent, w - 2)),
+                                    Style::default().fg(theme.text_dim),
+                                )));
+                            }
+                        }
+                    }
+                    if info.modified_files.len() > 20 {
+                        lines.push(Line::from(Span::styled(
+                            format!("  ...+{} more", info.modified_files.len() - 20),
+                            Style::default().fg(theme.muted),
+                        )));
+                    }
+                }
             }
         }
 
@@ -1532,7 +1570,7 @@ impl MainLayoutWidget {
         working_dir: &str,
         theme: &Theme,
     ) {
-        Self::render_complete_with_spinner(frame, chat, prompt, status, model, tokens_used, working_dir, None, None, None, theme);
+        Self::render_complete_with_spinner(frame, chat, prompt, status, model, tokens_used, working_dir, None, None, None, theme, crate::repl::SidebarTab::default());
     }
 
     /// Render the complete UI with spinner animation support
@@ -1549,6 +1587,7 @@ impl MainLayoutWidget {
         progress_bar: Option<&crate::widgets::progress::ProgressBarWidget>,
         sidebar_info: Option<&SidebarInfo>,
         theme: &Theme,
+        sidebar_tab: crate::repl::SidebarTab,
     ) {
         let area = frame.area();
 
@@ -1579,7 +1618,7 @@ impl MainLayoutWidget {
         // Render sidebar if visible and there's space
         if let (Some(info), Some(sb_area)) = (sidebar_info, sidebar_area) {
             if sb_area.width > 5 && sb_area.height > 3 {
-                SidebarWidget::render(frame, sb_area, info, theme);
+                SidebarWidget::render(frame, sb_area, info, theme, sidebar_tab);
             }
         }
     }
@@ -2165,5 +2204,33 @@ mod tests {
         assert_eq!(format_tokens(500), "500");
         assert_eq!(format_tokens(1500), "1.5k");
         assert_eq!(format_tokens(1_500_000), "1.5M");
+    }
+
+    // ── Sidebar Tab Tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_sidebar_tab_default() {
+        assert_eq!(crate::repl::SidebarTab::default(), crate::repl::SidebarTab::Context);
+    }
+
+    #[test]
+    fn test_sidebar_tab_cycle() {
+        let mut tab = crate::repl::SidebarTab::Context;
+        tab = match tab {
+            crate::repl::SidebarTab::Context => crate::repl::SidebarTab::Files,
+            crate::repl::SidebarTab::Files => crate::repl::SidebarTab::Context,
+        };
+        assert_eq!(tab, crate::repl::SidebarTab::Files);
+        tab = match tab {
+            crate::repl::SidebarTab::Context => crate::repl::SidebarTab::Files,
+            crate::repl::SidebarTab::Files => crate::repl::SidebarTab::Context,
+        };
+        assert_eq!(tab, crate::repl::SidebarTab::Context);
+    }
+
+    #[test]
+    fn test_sidebar_fits() {
+        assert!(SidebarWidget::fits(80));
+        assert!(!SidebarWidget::fits(60));
     }
 }
