@@ -986,6 +986,7 @@ fn handle_mode(repl: &mut Repl, args: &str) -> Result<()> {
         Some(mode) => {
             let query_engine = repl.query_engine.as_ref().expect("query engine missing");
             query_engine.permissions().write().expect("permissions rwlock poisoned").set_approval_mode(mode);
+            repl.state.approval_mode_label = mode.short_label().to_string();
             {
                 repl.chat.add_message(
                     ChatRole::System,
@@ -3909,6 +3910,7 @@ fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
                             perms.set_approval_mode(shannon_core::permissions::ApprovalMode::Suggest);
                         }
                     }
+                    repl.state.approval_mode_label = "SUGGEST".to_string();
                     repl.chat.add_message(ChatRole::System,
                         "Permission mode: **suggest** (strict)\n\
                          All potentially dangerous tools require explicit approval.".to_string());
@@ -3919,6 +3921,7 @@ fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
                             perms.set_approval_mode(shannon_core::permissions::ApprovalMode::FullAuto);
                         }
                     }
+                    repl.state.approval_mode_label = "FULL".to_string();
                     repl.chat.add_message(ChatRole::System,
                         "Permission mode: **full-auto**\n\
                          All tools are automatically approved. Use with caution.".to_string());
@@ -3929,6 +3932,7 @@ fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
                             perms.set_approval_mode(shannon_core::permissions::ApprovalMode::Readonly);
                         }
                     }
+                    repl.state.approval_mode_label = "RO".to_string();
                     repl.chat.add_message(ChatRole::System,
                         "Permission mode: **readonly**\n\
                          Tools will only read, not modify files.".to_string());
@@ -5215,6 +5219,7 @@ mode = \"suggest\"    # suggest | auto-edit | full-auto | readonly\n\
                     if let Ok(mut perms) = engine.permissions().write() {
                         perms.set_approval_mode(mode);
                     }
+                    repl.state.approval_mode_label = mode.short_label().to_string();
                 }
                 repl.chat.add_message(ChatRole::System,
                     format!("Permission mode set to: {value}"));

@@ -152,6 +152,8 @@ pub struct ReplState {
     pub leader_active: bool,
     /// Active tab in the sidebar panel
     pub sidebar_tab: SidebarTab,
+    /// Cached approval mode label for display (updated on mode change)
+    pub approval_mode_label: String,
 }
 
 /// Tabs available in the sidebar panel
@@ -232,6 +234,7 @@ impl Default for ReplState {
             vim_mode: "INSERT".to_string(),
             leader_active: false,
             sidebar_tab: SidebarTab::default(),
+            approval_mode_label: "AUTO".to_string(),
         }
     }
 }

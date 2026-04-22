@@ -133,6 +133,34 @@ impl ApprovalMode {
         &["default", "plan", "auto", "full-auto", "bypassPermissions", "dontAsk", "readonly"]
     }
 
+    /// Cycle to the next commonly-used mode (Shift+Tab pattern).
+    /// Cycles through: Suggest → AutoEdit → Plan → FullAuto → Readonly → Suggest
+    /// Skips BypassPermissions and DontAsk (those are set explicitly via /mode).
+    pub fn cycle_next(self) -> Self {
+        match self {
+            Self::Suggest => Self::AutoEdit,
+            Self::AutoEdit => Self::Plan,
+            Self::Plan => Self::FullAuto,
+            Self::FullAuto => Self::Readonly,
+            Self::Readonly => Self::Suggest,
+            // BypassPermissions and DontAsk cycle back to Suggest
+            Self::BypassPermissions | Self::DontAsk => Self::Suggest,
+        }
+    }
+
+    /// Short label for display in the status bar (max ~10 chars).
+    pub fn short_label(&self) -> &'static str {
+        match self {
+            Self::Suggest => "SUGGEST",
+            Self::Plan => "PLAN",
+            Self::AutoEdit => "AUTO",
+            Self::FullAuto => "FULL",
+            Self::BypassPermissions => "BYPASS",
+            Self::DontAsk => "YOLO",
+            Self::Readonly => "RO",
+        }
+    }
+
     /// Description of this mode for help text.
     pub fn description(&self) -> &'static str {
         match self {

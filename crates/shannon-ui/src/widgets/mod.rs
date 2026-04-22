@@ -181,6 +181,7 @@ impl StatusBarWidget {
         spinner: Option<&crate::widgets::progress::SpinnerWidget>,
         progress_bar: Option<&crate::widgets::progress::ProgressBarWidget>,
         theme: &Theme,
+        approval_mode: Option<&str>,
     ) {
         // Build span with owned strings for proper lifetime
         let mut span_vec: Vec<Span<'static>> = Vec::new();
@@ -234,6 +235,18 @@ impl StatusBarWidget {
                     Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD),
                 ));
             }
+        }
+
+        // Approval mode indicator
+        if let Some(mode_label) = approval_mode {
+            span_vec.push(sep());
+            let mode_style = match mode_label {
+                label if label == "SUGGEST" || label == "PLAN" || label == "RO" => Style::default().fg(theme.warning),
+                label if label == "AUTO" => Style::default().fg(theme.success),
+                label if label == "FULL" => Style::default().fg(theme.primary),
+                _ => Style::default().fg(theme.text_dim),
+            };
+            span_vec.push(Span::styled(mode_label.to_string(), mode_style.add_modifier(Modifier::BOLD)));
         }
 
         let paragraph = Paragraph::new(Line::from(span_vec))
@@ -1570,7 +1583,7 @@ impl MainLayoutWidget {
         working_dir: &str,
         theme: &Theme,
     ) {
-        Self::render_complete_with_spinner(frame, chat, prompt, status, model, tokens_used, working_dir, None, None, None, theme, crate::repl::SidebarTab::default());
+        Self::render_complete_with_spinner(frame, chat, prompt, status, model, tokens_used, working_dir, None, None, None, theme, crate::repl::SidebarTab::default(), None);
     }
 
     /// Render the complete UI with spinner animation support
@@ -1588,6 +1601,7 @@ impl MainLayoutWidget {
         sidebar_info: Option<&SidebarInfo>,
         theme: &Theme,
         sidebar_tab: crate::repl::SidebarTab,
+        approval_mode: Option<&str>,
     ) {
         let area = frame.area();
 
@@ -1613,7 +1627,7 @@ impl MainLayoutWidget {
         HeaderWidget::render(frame, header_area, model, tokens_used, working_dir, theme);
         chat.render(frame, chat_area, theme);
         prompt.render(frame, prompt_area, theme);
-        StatusBarWidget::render_with_spinner(frame, status_area, status, model, tokens_used, spinner, progress_bar, theme);
+        StatusBarWidget::render_with_spinner(frame, status_area, status, model, tokens_used, spinner, progress_bar, theme, approval_mode);
 
         // Render sidebar if visible and there's space
         if let (Some(info), Some(sb_area)) = (sidebar_info, sidebar_area) {

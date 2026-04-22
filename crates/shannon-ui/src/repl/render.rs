@@ -54,6 +54,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
                 f, chat, prompt, &state.status,
                 state.model.as_deref(), Some(state.tokens_used),
                 &state.working_directory, Some(spinner), pb, sidebar_ref, &theme, state.sidebar_tab,
+                Some(&state.approval_mode_label),
             );
             // Then render the active overlay
             if let Some(ref dialog) = state.active_dialog {
@@ -74,6 +75,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
                 f, chat, prompt, &state.status,
                 state.model.as_deref(), Some(state.tokens_used),
                 &state.working_directory, Some(spinner), pb, sidebar_ref, &theme, state.sidebar_tab,
+                Some(&state.approval_mode_label),
             );
         }
 

@@ -225,11 +225,16 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             Ok(())
         }
         KeyCode::BackTab => {
-            if repl.state.sidebar_visible {
-                repl.state.sidebar_tab = match repl.state.sidebar_tab {
-                    crate::repl::SidebarTab::Context => crate::repl::SidebarTab::Files,
-                    crate::repl::SidebarTab::Files => crate::repl::SidebarTab::Context,
-                };
+            // Cycle approval mode (Shift+Tab — universal pattern in Claude Code/Codex/Gemini CLI)
+            if let Some(ref query_engine) = repl.query_engine {
+                let mut perms = query_engine.permissions().write().expect("permissions rwlock poisoned");
+                let next = perms.approval_mode().cycle_next();
+                perms.set_approval_mode(next);
+                let label = next.short_label();
+                drop(perms);
+                repl.state.approval_mode_label = label.to_string();
+                repl.state.status = format!("Mode: {label}");
+                repl.state.toast = Some((format!("  Mode: {label}  "), std::time::Instant::now()));
             }
             Ok(())
         }

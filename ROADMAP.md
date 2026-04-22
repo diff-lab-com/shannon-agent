@@ -395,7 +395,59 @@ Phase 5 (Agent Teams):  AT-6 → AT-1 → AT-3 → AT-5 → AT-4 → AT-7 → AT
 
 ## Future Considerations (P1-P3)
 
-Moved to [docs/ROADMAP-FUTURE.md](docs/ROADMAP-FUTURE.md) for later review:
+### Competitive Analysis Deferred Items (2026-04-23)
+
+Based on comparison against Claude Code, Codex CLI, OpenCode, Aider, Cursor, and Gemini CLI.
+These items are deferred from the current sprint for future evaluation.
+
+#### P0-Future: PTY Pseudo-Terminal (Gemini CLI Pattern)
+- **Why**: Interactive programs (vim, htop, npm init) currently block the session
+- **Competitor**: Gemini CLI spawns a PTY, takes snapshots, renders inline — handles any interactive program
+- **Approach**: Integrate `portable-pty` crate into `BashTool`, detect interactive commands, switch to PTY snapshot mode
+- **Effort**: High (7+ days)
+- **Impact**: Solves a universal pain point; only Gemini CLI has this
+
+#### P0-Future: RepoMap (Aider Pattern)
+- **Why**: Shannon has SmartContext (path/identifier detection) but no global repo structure overview
+- **Competitor**: Aider's RepoMap is its signature feature — tree-sitter-based concise map of all classes, functions, types
+- **Approach**: Integrate tree-sitter, build project-level RepoMap, inject into context with token budget
+- **Effort**: High (5+ days, tree-sitter + language grammars)
+- **Impact**: Significantly improves code understanding accuracy
+
+#### P1-Future: Computer Use / GUI Interaction (Claude Code Pattern)
+- **Why**: Frontend developers need to see and interact with rendered UIs
+- **Competitor**: Claude Code supports macOS Computer Use — screenshot, click, fill forms
+- **Approach**: Leverage existing screenshot + terminal_image system, add screenshot→analyze→coordinate return
+- **Effort**: High (platform-specific APIs)
+- **Impact**: Strong differentiator for frontend workflows
+
+#### P1-Future: @ Reference Enhancement (Gemini CLI Pattern)
+- **Why**: Shannon has @ file picker with image auto-attach
+- **Competitor**: Gemini CLI @ supports files, images, PDFs, audio, URLs — all reference types
+- **Approach**: Extend @ to support PDFs (reuse /pdf backend), URLs (WebFetchTool result injection), folders (directory tree injection)
+- **Effort**: Low-Medium (2 days)
+
+#### P2-Future: Client-Server Architecture (OpenCode Pattern)
+- **Why**: Shannon is a single-process REPL
+- **Competitor**: OpenCode C/S architecture allows local server + remote control from mobile/another PC
+- **Approach**: Split `shannon serve` (existing HTTP API) + TUI client, support remote sessions
+- **Effort**: Large (architecture change)
+
+#### P2-Future: Docker Sandbox Default (Codex CLI Pattern)
+- **Why**: Shannon has DockerSandbox config but incomplete integration
+- **Competitor**: Codex CLI defaults to Docker container execution, only exposes project directory
+- **Approach**: Complete Docker sandbox as opt-in default, reduce permission prompts
+- **Effort**: Medium (3-5 days)
+
+#### P2-Future: Google Search Grounding (Gemini CLI Pattern)
+- **Why**: Shannon has WebSearchTool and WebFetchTool but no auto-grounding
+- **Competitor**: Gemini CLI embeds Google Search in conversations for real-time information
+- **Approach**: Auto-detect queries needing current info, trigger web search, inject results
+- **Effort**: Low (tools exist, needs routing logic)
+
+---
+
+### Previously Deferred Items
 
 - P1: Auto-commit, Undo/Snapshot, Repo Map (tree-sitter), Auto-test Loop, LSP Integration, IDE Extensions
 - P2: HTTP API Server, Architect Mode, Session Export, PDF Processing, Debug Instrumentation
