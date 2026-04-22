@@ -1162,6 +1162,17 @@ impl Repl {
             crate::events::Event::Tick => {
                 // Advance spinner animation during query processing
                 if self.state.status != "Ready" {
+                    // Set phase based on current state for diverse animation
+                    let phase = if self.state.thinking_phase {
+                        crate::widgets::progress::SpinnerPhase::Thinking
+                    } else if self.state.streaming_active {
+                        crate::widgets::progress::SpinnerPhase::Streaming
+                    } else if self.state.active_tool.is_some() {
+                        crate::widgets::progress::SpinnerPhase::Tool
+                    } else {
+                        crate::widgets::progress::SpinnerPhase::Default
+                    };
+                    self.state.spinner.set_phase(phase);
                     self.state.spinner.tick();
                 }
             }

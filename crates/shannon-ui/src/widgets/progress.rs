@@ -198,21 +198,48 @@ impl Default for ProgressBarWidget {
     }
 }
 
+/// Animation phase for the spinner — each phase uses distinct frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpinnerPhase {
+    /// Model is thinking (no tokens received yet)
+    Thinking,
+    /// Tokens are streaming in
+    Streaming,
+    /// A tool is executing
+    Tool,
+    /// Default/idle processing
+    Default,
+}
+
 /// Spinner widget for indeterminate progress
 #[derive(Debug, Clone)]
 pub struct SpinnerWidget {
     frames: Vec<&'static str>,
     current_frame: usize,
     message: Option<String>,
+    phase: SpinnerPhase,
 }
+
+/// Braille dots — smooth rotation (default)
+const FRAMES_DEFAULT: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// Full braille circle — mesmerizing spin for thinking
+const FRAMES_THINKING: &[&str] = &["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
+
+/// Quarter-circle rotation for tool execution
+const FRAMES_TOOL: &[&str] = &["◐", "◓", "◑", "◒"];
+
+/// Arrow wave for streaming
+const FRAMES_STREAMING: &[&str] = &["⠁⠉⠙", "⠉⠙⠹", "⠙⠹⠸", "⠹⠸⠼", "⠸⠼⠴", "⠼⠴⠦"];
 
 impl SpinnerWidget {
     /// Create a new spinner
     pub fn new() -> Self {
         Self {
-            frames: vec!["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
+            frames: FRAMES_DEFAULT.to_vec(),
             current_frame: 0,
             message: None,
+            phase: SpinnerPhase::Default,
         }
     }
 
@@ -226,6 +253,26 @@ impl SpinnerWidget {
     pub fn with_frames(mut self, frames: Vec<&'static str>) -> Self {
         self.frames = frames;
         self
+    }
+
+    /// Set the animation phase, switching to the appropriate frame set.
+    /// Resets frame index if the phase changes.
+    pub fn set_phase(&mut self, phase: SpinnerPhase) {
+        if self.phase != phase {
+            self.phase = phase;
+            self.frames = match phase {
+                SpinnerPhase::Thinking => FRAMES_THINKING.to_vec(),
+                SpinnerPhase::Streaming => FRAMES_STREAMING.to_vec(),
+                SpinnerPhase::Tool => FRAMES_TOOL.to_vec(),
+                SpinnerPhase::Default => FRAMES_DEFAULT.to_vec(),
+            };
+            self.current_frame = 0;
+        }
+    }
+
+    /// Get the current phase
+    pub fn phase(&self) -> SpinnerPhase {
+        self.phase
     }
 
     /// Advance to next frame
@@ -449,6 +496,29 @@ mod tests {
 
         spinner.tick();
         assert_eq!(spinner.current_frame, 2);
+    }
+
+    #[test]
+    fn test_spinner_phase_switching() {
+        let mut spinner = SpinnerWidget::new();
+        assert_eq!(spinner.frames.len(), 10); // default braille
+
+        spinner.set_phase(SpinnerPhase::Thinking);
+        assert_eq!(spinner.frames.len(), 8); // full braille circle
+        assert_eq!(spinner.current_frame, 0); // reset on phase change
+
+        spinner.set_phase(SpinnerPhase::Thinking); // same phase — no reset
+        assert_eq!(spinner.current_frame, 0);
+
+        spinner.tick();
+        assert_eq!(spinner.current_frame, 1);
+
+        spinner.set_phase(SpinnerPhase::Tool);
+        assert_eq!(spinner.frames.len(), 4); // quarter circle
+        assert_eq!(spinner.current_frame, 0); // reset on phase change
+
+        spinner.set_phase(SpinnerPhase::Default);
+        assert_eq!(spinner.frames.len(), 10); // back to default
     }
 
     #[test]
