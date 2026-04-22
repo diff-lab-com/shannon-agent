@@ -216,14 +216,24 @@ pub fn render_permission_dialog(
         content_lines.push(Line::from(serde_json::to_string_pretty(&dialog.tool_input).unwrap_or_else(|_| "(invalid)".to_string()).to_string()));
     }
 
+    // Show risk reason if available
+    if !dialog.risk_reason.is_empty() {
+        content_lines.push(Line::from(""));
+        content_lines.push(Line::from(vec![
+            Span::styled("Why: ", Style::default().fg(theme.muted)),
+            Span::styled(&dialog.risk_reason, Style::default().fg(theme.text_dim)),
+        ]));
+    }
+
     // Add options
-    content_lines.push(Line::from(""));
     content_lines.push(Line::from(""));
     content_lines.push(Line::from(vec![
         Span::styled("[Enter] ", Style::default().fg(theme.success)),
         Span::styled("Allow Once    ", Style::default().fg(theme.text)),
         Span::styled("[A] ", Style::default().fg(theme.primary)),
         Span::styled("Always Allow  ", Style::default().fg(theme.text)),
+        Span::styled("[E] ", Style::default().fg(theme.warning)),
+        Span::styled("Edit+Run  ", Style::default().fg(theme.text)),
         Span::styled("[Esc] ", Style::default().fg(theme.error)),
         Span::styled("Deny", Style::default().fg(theme.text)),
     ]));

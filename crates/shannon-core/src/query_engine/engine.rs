@@ -962,6 +962,19 @@ impl QueryEngine {
                                                                                 crate::permissions::PermissionChoice::AlwaysAllow,
                                                                             );
                                                                     }
+                                                                    Some(
+                                                                        crate::permissions::PermissionChoice::EditAndRun,
+                                                                    ) => {
+                                                                        // User edited the command; treat as allow-once
+                                                                        let _ = permissions
+                                                                            .write()
+                                                                            .expect("permissions rwlock poisoned")
+                                                                            .process_permission_choice(
+                                                                                session_id_for_permissions,
+                                                                                &prompt_for_choice,
+                                                                                crate::permissions::PermissionChoice::EditAndRun,
+                                                                            );
+                                                                    }
                                                                     None => {
                                                                         let error_msg =
                                                                             "Permission channel closed"

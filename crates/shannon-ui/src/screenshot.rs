@@ -281,6 +281,7 @@ fn scene_permission() -> SceneData {
                 .to_string(),
         ),
         is_destructive: false,
+        risk_reason: "File write operation".to_string(),
     });
 
     SceneData {

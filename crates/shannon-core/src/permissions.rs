@@ -58,6 +58,8 @@ pub enum PermissionChoice {
     AllowOnce,
     /// Always allow this tool
     AlwaysAllow,
+    /// Open in editor to modify before running
+    EditAndRun,
 }
 
 /// Approval policy mode controlling how tool execution is authorized.
@@ -187,6 +189,8 @@ pub struct PermissionPrompt {
     /// Whether this tool is flagged as destructive (MCP `destructiveHint`).
     /// Destructive tools always require confirmation and show a warning.
     pub is_destructive: bool,
+    /// Explanation of why this risk level was assigned
+    pub risk_reason: String,
 }
 
 impl PermissionPrompt {
@@ -206,6 +210,7 @@ impl PermissionPrompt {
             is_confirmation: false,
             diff_preview: None,
             is_destructive: false,
+            risk_reason: String::new(),
         }
     }
 
@@ -220,6 +225,7 @@ impl PermissionPrompt {
             is_confirmation: true,
             diff_preview: None,
             is_destructive: false,
+            risk_reason: String::new(),
         }
     }
 
@@ -425,6 +431,9 @@ impl PermissionMemory {
             }
             PermissionChoice::AllowOnce => {
                 // Don't remember allow-once choices
+            }
+            PermissionChoice::EditAndRun => {
+                // Don't remember edit-and-run choices
             }
         }
     }
@@ -825,6 +834,7 @@ impl PermissionManager {
                 is_confirmation: false,
                 diff_preview: None,
                 is_destructive: self.is_tool_destructive(tool_name),
+                risk_reason: format!("Tool '{tool_name}' is in the always-denied list"),
             });
         }
 
@@ -862,6 +872,7 @@ impl PermissionManager {
             is_confirmation: false,
             diff_preview: None,
             is_destructive,
+            risk_reason: format!("{risk_level:?} risk based on tool policy and approval mode"),
         })
     }
 
@@ -881,6 +892,11 @@ impl PermissionManager {
             }
             PermissionChoice::AllowOnce | PermissionChoice::AlwaysAllow => {
                 // Remember the choice
+                self.memory.remember_choice(session_id, prompt.tool_name.clone(), choice);
+                Ok(())
+            }
+            PermissionChoice::EditAndRun => {
+                // User edited the command; treat as allow-once
                 self.memory.remember_choice(session_id, prompt.tool_name.clone(), choice);
                 Ok(())
             }
@@ -1095,6 +1111,7 @@ impl PermissionManager {
             is_confirmation: false,
             diff_preview: None,
             is_destructive,
+            risk_reason: format!("{risk_level:?} risk: policy-based classification for '{tool_name}'"),
         }))
     }
 }
