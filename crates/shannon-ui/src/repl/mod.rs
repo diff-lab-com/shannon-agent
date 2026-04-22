@@ -148,6 +148,8 @@ pub struct ReplState {
     pub streaming_start: Option<std::time::Instant>,
     /// Current vim mode label for display ("INSERT" or "NORMAL")
     pub vim_mode: String,
+    /// Whether leader key mode is active (waiting for second key after Ctrl+X)
+    pub leader_active: bool,
 }
 
 /// State for plan mode
@@ -216,6 +218,7 @@ impl Default for ReplState {
             streaming_active: false,
             streaming_start: None,
             vim_mode: "INSERT".to_string(),
+            leader_active: false,
         }
     }
 }

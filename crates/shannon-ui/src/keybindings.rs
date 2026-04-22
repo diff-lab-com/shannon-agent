@@ -26,6 +26,8 @@ pub struct KeyBindings {
     pub reverse_search: KeyBinding,
     /// Open model picker
     pub model_picker: KeyBinding,
+    /// Activate leader key mode (Ctrl+X then second key)
+    pub leader: KeyBinding,
 }
 
 impl Default for KeyBindings {
@@ -37,6 +39,7 @@ impl Default for KeyBindings {
             command_palette: KeyBinding::ctrl('p'),
             reverse_search: KeyBinding::ctrl('r'),
             model_picker: KeyBinding::ctrl('m'),
+            leader: KeyBinding::ctrl('x'),
         }
     }
 }
@@ -65,6 +68,7 @@ struct KeyBindingsFile {
     command_palette: Option<String>,
     reverse_search: Option<String>,
     model_picker: Option<String>,
+    leader: Option<String>,
 }
 
 /// Parse a key string like "ctrl+q", "ctrl+s", "escape", "f1" into a KeyBinding.
@@ -121,6 +125,7 @@ pub fn load_keybindings() -> KeyBindings {
         command_palette: file.command_palette.as_deref().and_then(parse_key).unwrap_or(defaults.command_palette),
         reverse_search: file.reverse_search.as_deref().and_then(parse_key).unwrap_or(defaults.reverse_search),
         model_picker: file.model_picker.as_deref().and_then(parse_key).unwrap_or(defaults.model_picker),
+        leader: file.leader.as_deref().and_then(parse_key).unwrap_or(defaults.leader),
     }
 }
 

@@ -392,6 +392,18 @@ impl ChatWidget {
         }
     }
 
+    /// Scroll to latest message (bottom)
+    pub fn scroll_to_latest(&mut self) {
+        self.scroll_offset = 0;
+    }
+
+    /// Scroll to oldest message (top)
+    pub fn scroll_to_top(&mut self) {
+        if !self.messages.is_empty() {
+            self.scroll_offset = self.messages.len() - 1;
+        }
+    }
+
     /// Render the chat widget
     pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let mut list_items = Vec::new();

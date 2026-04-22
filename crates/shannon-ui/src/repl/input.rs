@@ -57,6 +57,11 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         return handle_incremental_search(repl, key);
     }
 
+    // If leader key mode is active, handle the second key
+    if repl.state.leader_active {
+        return handle_leader_key(repl, key);
+    }
+
     let kb = &repl.state.keybindings;
     match key.code {
         _ if kb.reverse_search.matches(&key) => {
@@ -94,6 +99,12 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         _ if kb.toggle_tool_collapse.matches(&key) => {
             // Toggle tool output collapse
             repl.chat.collapsed_tools = !repl.chat.collapsed_tools;
+            Ok(())
+        }
+        _ if kb.leader.matches(&key) => {
+            // Enter leader key mode — wait for second key
+            repl.state.leader_active = true;
+            repl.state.status = "C-x  (d)iff (s)idebar (m)odel (c)ollapse (b)ottom (t)heme (g)top".to_string();
             Ok(())
         }
         KeyCode::Enter => {
@@ -1015,6 +1026,64 @@ fn handle_diff_viewer_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             repl.state.diff_viewer = None;
         }
         _ => {}
+    }
+    Ok(())
+}
+
+/// Handle the second key after leader (Ctrl+X) was pressed.
+fn handle_leader_key(repl: &mut Repl, key: KeyEvent) -> Result<()> {
+    repl.state.leader_active = false;
+    repl.state.status = "Ready".to_string();
+
+    match key.code {
+        KeyCode::Char('d') => {
+            // Open diff viewer
+            let file_count = {
+                let diff = &repl.diff_data;
+                let mut count = 0;
+                for turn in diff.get_session_diffs() {
+                    count += turn.files_modified.len() + turn.files_created.len() + turn.files_deleted.len();
+                }
+                count
+            };
+            let mut viewer = crate::widgets::diff_viewer::DiffViewerWidget::new();
+            viewer.sync_expanded(file_count);
+            repl.state.diff_viewer = Some(viewer);
+        }
+        KeyCode::Char('s') => {
+            repl.state.sidebar_visible = !repl.state.sidebar_visible;
+        }
+        KeyCode::Char('m') => {
+            open_command_palette(repl);
+        }
+        KeyCode::Char('c') => {
+            repl.chat.collapsed_tools = !repl.chat.collapsed_tools;
+        }
+        KeyCode::Char('b') => {
+            // Scroll chat to bottom (latest)
+            repl.chat.scroll_to_latest();
+        }
+        KeyCode::Char('t') => {
+            // Cycle theme: dark → light → dracula → dark
+            let current = repl.state.theme.name.as_str();
+            let next = match current {
+                "dark" => crate::theme::Theme::default_light(),
+                "light" => crate::theme::Theme::dracula(),
+                _ => crate::theme::Theme::default_dark(),
+            };
+            repl.state.theme = next;
+            repl.state.toast = Some((format!("Theme: {}", repl.state.theme.name), std::time::Instant::now()));
+        }
+        KeyCode::Char('g') => {
+            // Scroll chat to top (oldest)
+            repl.chat.scroll_to_top();
+        }
+        KeyCode::Esc => {
+            // Cancelled — already reset above
+        }
+        _ => {
+            repl.state.toast = Some(("Unknown leader key".to_string(), std::time::Instant::now()));
+        }
     }
     Ok(())
 }
