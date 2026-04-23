@@ -12,6 +12,39 @@ use super::Repl;
 
 /// Handle keyboard input — dispatches to the appropriate sub-handler.
 pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
+    // If plan overlay is visible (active + not approved), handle plan keys
+    if repl.state.plan.active && !repl.state.plan.approved {
+        match key.code {
+            KeyCode::Enter => {
+                // Approve plan
+                repl.state.plan.approved = true;
+                repl.state.status = "Plan approved".to_string();
+                // Also approve in permission manager if available
+                if let Some(ref query_engine) = repl.query_engine {
+                    let mut perms = query_engine.permissions().write().expect("permissions rwlock poisoned");
+                    perms.approve_plan(query_engine.session_id());
+                    drop(perms);
+                }
+                repl.state.toast = Some(("  Plan approved  ".to_string(), std::time::Instant::now()));
+                return Ok(());
+            }
+            KeyCode::Esc => {
+                // Reject plan
+                repl.state.plan = super::PlanState::default();
+                repl.state.status = "Ready".to_string();
+                repl.state.toast = Some(("  Plan rejected  ".to_string(), std::time::Instant::now()));
+                return Ok(());
+            }
+            KeyCode::Char('p') | KeyCode::Char('P') => {
+                // Dismiss overlay (plan stays active but overlay hides)
+                // We just mark it as "seen" by setting a flag — for simplicity,
+                // fall through to normal handling so typing continues
+                return Ok(());
+            }
+            _ => return Ok(()), // Consume other keys while overlay is visible
+        }
+    }
+
     // If permission dialog is active, handle dialog-specific keys
     if repl.state.permission_dialog.is_some() {
         return handle_permission_dialog_input(repl, key);

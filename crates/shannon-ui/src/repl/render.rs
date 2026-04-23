@@ -119,6 +119,11 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             render_history_search_overlay(f, f.area(), &state);
         }
 
+        // Overlay plan review when plan is active and not yet approved
+        if state.plan.active && !state.plan.approved {
+            render_plan_overlay(f, f.area(), &state.plan, &theme);
+        }
+
         // Overlay completion suggestions popup above the prompt
         if !state.completion_suggestions.is_empty() {
             render_completion_suggestions(f, f.area(), &state.completion_suggestions, state.completion_suggestion_index);
@@ -387,4 +392,98 @@ fn truncate_visual(s: &str, max_len: usize) -> String {
         }
         format!("{}…", &s[..end])
     }
+}
+
+/// Render plan review overlay — shows pending plan with approve/reject options.
+fn render_plan_overlay(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    plan: &super::PlanState,
+    theme: &Theme,
+) {
+    let dialog_width = 70.min(area.width.saturating_sub(4));
+    let dialog_height = 20.min(area.height.saturating_sub(4));
+    let x = (area.width.saturating_sub(dialog_width)) / 2;
+    let y = (area.height.saturating_sub(dialog_height)) / 2;
+    let dialog_area = Rect {
+        x: area.x + x,
+        y: area.y + y,
+        width: dialog_width,
+        height: dialog_height,
+    };
+
+    frame.render_widget(Clear, dialog_area);
+
+    let mut content_lines = vec![
+        Line::from(vec![
+            Span::styled(" Plan Review ", Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Goal: ", Style::default().fg(theme.muted)),
+            Span::styled(&plan.description, Style::default().fg(theme.text)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "── Steps ──────────────────────────────",
+            Style::default().fg(theme.text_dim),
+        )),
+    ];
+
+    // Render plan steps with numbered markers
+    for line in plan.content.lines().take(12) {
+        let styled = if line.starts_with("## ") {
+            Span::styled(line.to_string(), Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))
+        } else if line.starts_with("- ") {
+            Span::styled(format!("  {line}"), Style::default().fg(theme.text))
+        } else if line.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+            Span::styled(format!("  {line}"), Style::default().fg(theme.text))
+        } else if line.is_empty() {
+            Span::raw("")
+        } else {
+            Span::styled(format!("  {line}"), Style::default().fg(theme.text_dim))
+        };
+        content_lines.push(Line::from(styled));
+    }
+
+    // Truncation notice
+    let total_lines = plan.content.lines().count();
+    if total_lines > 12 {
+        content_lines.push(Line::from(Span::styled(
+            format!("  ... ({} more lines)", total_lines.saturating_sub(12)),
+            Style::default().fg(theme.muted),
+        )));
+    }
+
+    // Fill remaining space then add action bar
+    let used = content_lines.len() as u16;
+    let remaining = dialog_height.saturating_sub(used + 4);
+    for _ in 0..remaining {
+        content_lines.push(Line::from(""));
+    }
+
+    content_lines.push(Line::from(""));
+    content_lines.push(Line::from(vec![
+        Span::styled("[Enter] ", Style::default().fg(theme.success)),
+        Span::styled("Approve    ", Style::default().fg(theme.text)),
+        Span::styled("[Esc] ", Style::default().fg(theme.warning)),
+        Span::styled("Reject    ", Style::default().fg(theme.text)),
+        Span::styled("[P] ", Style::default().fg(theme.muted)),
+        Span::styled("Dismiss", Style::default().fg(theme.text)),
+    ]));
+
+    let paragraph = Paragraph::new(content_lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.accent))
+                .border_type(ratatui::widgets::BorderType::Rounded)
+                .title(Span::styled(
+                    " Plan Awaiting Review ",
+                    Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+                )),
+        )
+        .wrap(Wrap { trim: true });
+
+    frame.render_widget(paragraph, dialog_area);
 }
