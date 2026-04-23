@@ -423,7 +423,6 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                         query_handle.abort();
                         if let Ok(mut s) = streaming.lock() {
                             s.buffer.push_str("\n\n⚠️ Cancelled by user.");
-                            rendered_text = s.buffer.clone();
                             s.status = t!("status.cancelled_status").to_string();
                         }
                         break;
