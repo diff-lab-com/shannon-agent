@@ -1046,6 +1046,8 @@ pub struct SidebarInfo {
     pub error_count: usize,
     /// Context window size for the current model (for progress bar)
     pub context_window: usize,
+    /// Active sub-agents for the Agents tab
+    pub active_agents: Vec<crate::repl::AgentDisplay>,
 }
 
 /// Right sidebar panel showing session metadata
@@ -1077,8 +1079,9 @@ impl SidebarWidget {
         let w = inner.width as usize;
 
         // Tab header
-        let ctx_label = if tab == crate::repl::SidebarTab::Context { " Context " } else { " Context " };
+        let ctx_label = if tab == crate::repl::SidebarTab::Context { " Ctx " } else { " Ctx " };
         let files_label = if tab == crate::repl::SidebarTab::Files { " Files " } else { " Files " };
+        let agents_label = if tab == crate::repl::SidebarTab::Agents { " Agents " } else { " Agents " };
         let ctx_style = if tab == crate::repl::SidebarTab::Context {
             Style::default().fg(theme.primary).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
         } else {
@@ -1089,11 +1092,18 @@ impl SidebarWidget {
         } else {
             Style::default().fg(theme.muted)
         };
+        let agents_style = if tab == crate::repl::SidebarTab::Agents {
+            Style::default().fg(theme.primary).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+        } else {
+            Style::default().fg(theme.muted)
+        };
         let sep = Style::default().fg(theme.border);
         lines.push(Line::from(vec![
             Span::styled(ctx_label, ctx_style),
             Span::styled("|", sep),
             Span::styled(files_label, files_style),
+            Span::styled("|", sep),
+            Span::styled(agents_label, agents_style),
         ]));
         lines.push(Line::from(""));
 
@@ -1189,6 +1199,72 @@ impl SidebarWidget {
                     if info.modified_files.len() > 20 {
                         lines.push(Line::from(Span::styled(
                             format!("  ...+{} more", info.modified_files.len() - 20),
+                            Style::default().fg(theme.muted),
+                        )));
+                    }
+                }
+            }
+            crate::repl::SidebarTab::Agents => {
+                if info.active_agents.is_empty() {
+                    lines.push(Line::from(Span::styled("No active agents", Style::default().fg(theme.muted))));
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(Span::styled("Use /team or /agent", Style::default().fg(theme.text_dim))));
+                    lines.push(Line::from(Span::styled("to spawn agents", Style::default().fg(theme.text_dim))));
+                } else {
+                    // Count active vs total
+                    let active_count = info.active_agents.iter().filter(|a| a.active).count();
+                    let total = info.active_agents.len();
+                    lines.push(Line::from(Span::styled(
+                        format!("{active_count}/{total} active"),
+                        Style::default().fg(theme.text),
+                    )));
+                    lines.push(Line::from(""));
+
+                    for agent in info.active_agents.iter().take(15) {
+                        let status_icon = match agent.status.as_str() {
+                            "running" => "●",
+                            "spawning" => "◐",
+                            "idle" => "○",
+                            "completed" => "✓",
+                            s if s.starts_with("failed") => "✗",
+                            _ => "·",
+                        };
+                        let status_color = match agent.status.as_str() {
+                            "running" => theme.success,
+                            "spawning" => theme.warning,
+                            "idle" => theme.muted,
+                            "completed" => theme.secondary,
+                            s if s.starts_with("failed") => theme.error,
+                            _ => theme.text_dim,
+                        };
+                        let name_display = truncate_to(&agent.name, w.saturating_sub(6));
+                        lines.push(Line::from(vec![
+                            Span::styled(status_icon, Style::default().fg(status_color)),
+                            Span::styled(" ", Style::default()),
+                            Span::styled(name_display, Style::default().fg(theme.text)),
+                        ]));
+                        // Status line
+                        let turns_label = if agent.max_turns > 0 {
+                            format!("  {}/{} turns", agent.turns_used, agent.max_turns)
+                        } else {
+                            format!("  {}", agent.status)
+                        };
+                        lines.push(Line::from(Span::styled(
+                            truncate_to(&turns_label, w),
+                            Style::default().fg(theme.text_dim),
+                        )));
+                        if let Some(ref team) = agent.team {
+                            if team != "_global" {
+                                lines.push(Line::from(Span::styled(
+                                    format!("  team: {}", truncate_to(team, w.saturating_sub(8))),
+                                    Style::default().fg(theme.muted),
+                                )));
+                            }
+                        }
+                    }
+                    if info.active_agents.len() > 15 {
+                        lines.push(Line::from(Span::styled(
+                            format!("  ...+{} more", info.active_agents.len() - 15),
                             Style::default().fg(theme.muted),
                         )));
                     }
@@ -2298,6 +2374,7 @@ mod tests {
             total_deletions: 0,
             error_count: 1,
             context_window: 200_000,
+            active_agents: vec![],
         };
         assert_eq!(info.context_window, 200_000);
         assert_eq!(info.error_count, 1);
@@ -2337,15 +2414,11 @@ mod tests {
     #[test]
     fn test_sidebar_tab_cycle() {
         let mut tab = crate::repl::SidebarTab::Context;
-        tab = match tab {
-            crate::repl::SidebarTab::Context => crate::repl::SidebarTab::Files,
-            crate::repl::SidebarTab::Files => crate::repl::SidebarTab::Context,
-        };
+        tab = tab.next();
         assert_eq!(tab, crate::repl::SidebarTab::Files);
-        tab = match tab {
-            crate::repl::SidebarTab::Context => crate::repl::SidebarTab::Files,
-            crate::repl::SidebarTab::Files => crate::repl::SidebarTab::Context,
-        };
+        tab = tab.next();
+        assert_eq!(tab, crate::repl::SidebarTab::Agents);
+        tab = tab.next();
         assert_eq!(tab, crate::repl::SidebarTab::Context);
     }
 

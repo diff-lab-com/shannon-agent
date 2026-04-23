@@ -125,8 +125,12 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             Ok(())
         }
         _ if kb.toggle_sidebar.matches(&key) => {
-            // Toggle right sidebar panel
-            repl.state.sidebar_visible = !repl.state.sidebar_visible;
+            // Toggle right sidebar panel; if already visible, cycle tabs
+            if repl.state.sidebar_visible {
+                repl.state.sidebar_tab = repl.state.sidebar_tab.next();
+            } else {
+                repl.state.sidebar_visible = true;
+            }
             Ok(())
         }
         _ if kb.toggle_tool_collapse.matches(&key) => {

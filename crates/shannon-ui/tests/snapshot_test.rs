@@ -174,6 +174,7 @@ fn test_sidebar_info_default() {
         total_deletions: 0,
         error_count: 0,
         context_window: 200000,
+        active_agents: vec![],
     };
 
     assert_eq!(info.model.as_deref(), Some("test-model"));
@@ -197,6 +198,7 @@ fn test_sidebar_info_with_files() {
         total_deletions: 4,
         error_count: 1,
         context_window: 200000,
+        active_agents: vec![],
     };
 
     assert_eq!(info.modified_files.len(), 2);

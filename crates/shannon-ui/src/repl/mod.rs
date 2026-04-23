@@ -154,6 +154,8 @@ pub struct ReplState {
     pub sidebar_tab: SidebarTab,
     /// Cached approval mode label for display (updated on mode change)
     pub approval_mode_label: String,
+    /// Active sub-agents for sidebar display (refreshed from agent_registry)
+    pub active_agents: Vec<AgentDisplay>,
 }
 
 /// Tabs available in the sidebar panel
@@ -164,6 +166,35 @@ pub enum SidebarTab {
     Context,
     /// Modified files list
     Files,
+    /// Active sub-agents status
+    Agents,
+}
+
+impl SidebarTab {
+    /// Cycle to the next tab: Context → Files → Agents → Context
+    pub fn next(self) -> Self {
+        match self {
+            SidebarTab::Context => SidebarTab::Files,
+            SidebarTab::Files => SidebarTab::Agents,
+            SidebarTab::Agents => SidebarTab::Context,
+        }
+    }
+}
+
+/// Display info for a single sub-agent in the sidebar
+#[derive(Debug, Clone)]
+pub struct AgentDisplay {
+    /// Agent name
+    pub name: String,
+    /// Current status string (spawning/running/idle/completed/failed)
+    pub status: String,
+    /// Whether the agent is still active (not completed/failed)
+    pub active: bool,
+    /// Team this agent belongs to
+    pub team: Option<String>,
+    /// Number of turns used / max turns
+    pub turns_used: u32,
+    pub max_turns: u32,
 }
 
 /// State for plan mode
@@ -235,6 +266,7 @@ impl Default for ReplState {
             leader_active: false,
             sidebar_tab: SidebarTab::default(),
             approval_mode_label: "AUTO".to_string(),
+            active_agents: Vec::new(),
         }
     }
 }
@@ -1063,6 +1095,11 @@ impl Repl {
                 }
             }
 
+            // Refresh agent states for sidebar display
+            if self.agent_registry.is_some() {
+                self.refresh_agents();
+            }
+
             // Draw UI
             render::draw_frame(&mut terminal, self)?;
 
@@ -1249,6 +1286,17 @@ impl Repl {
         let context_window = self.state.model.as_deref()
             .map(|m| shannon_core::model_registry::context_window_for(m))
             .unwrap_or(200_000);
+
+        // Refresh active_agents from registry if available
+        let active_agents = if self.agent_registry.is_some() {
+            // We can't easily call async .list() from this sync method,
+            // so use the cached state.active_agents which is refreshed
+            // in the main loop after coordinator events.
+            self.state.active_agents.clone()
+        } else {
+            Vec::new()
+        };
+
         Some(crate::widgets::SidebarInfo {
             model: self.state.model.clone(),
             tokens_used: self.state.tokens_used,
@@ -1259,6 +1307,7 @@ impl Repl {
             total_deletions: self.diff_data.total_deletions(),
             error_count,
             context_window,
+            active_agents,
         })
     }
 
@@ -1288,6 +1337,25 @@ impl Repl {
             ));
         }
         false
+    }
+
+    /// Refresh active_agents from the SubAgentRegistry for sidebar display.
+    /// Called from the main loop tick; uses the tokio runtime for async access.
+    pub fn refresh_agents(&mut self) {
+        if let Some(ref registry) = self.agent_registry {
+            let agents = self.runtime.block_on(registry.list_agents());
+            self.state.active_agents = agents.into_iter().map(|a| {
+                let active = matches!(a.status, shannon_agents::AgentStatus::Running | shannon_agents::AgentStatus::Spawning | shannon_agents::AgentStatus::Idle);
+                AgentDisplay {
+                    name: a.name,
+                    status: a.status.to_string(),
+                    active,
+                    team: a.team,
+                    turns_used: a.turns_used,
+                    max_turns: a.config.max_turns,
+                }
+            }).collect();
+        }
     }
 
     /// Perform auto-compaction using truncate strategy (no LLM call needed).
