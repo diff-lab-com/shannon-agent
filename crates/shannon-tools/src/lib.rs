@@ -213,7 +213,7 @@ pub fn register_default_tools(registry: &mut ToolRegistry) -> Result<std::sync::
     // Note: ToolSearchTool requires Arc<RwLock<ToolRegistry>> — register separately if needed
 
     // ── Cron ───────────────────────────────────────────────────────────
-    registry.register(Box::new(CronTool::new()))?;
+    registry.register(Box::new(CronTool::with_persistence()))?;
 
     // ── ScheduleWakeup (/loop dynamic pacing) ──────────────────────────
     registry.register(Box::new(ScheduleWakeupTool::new()))?;

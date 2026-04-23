@@ -25,6 +25,7 @@ use chrono::{Datelike, Duration, Local, NaiveDateTime, Timelike, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -634,7 +635,12 @@ pub struct CronTool {
     description: String,
     store: CronStore,
     max_jobs: usize,
+    /// Optional path for persisting durable jobs. If None, no persistence occurs.
+    persistence_path: Option<PathBuf>,
 }
+
+/// Default file name for durable cron jobs.
+const DURABLE_CRON_FILE: &str = "durable_cron_jobs.json";
 
 impl CronTool {
     pub fn new() -> Self {
@@ -642,7 +648,23 @@ impl CronTool {
             description: "Schedule recurring or one-shot prompts for time-based task execution".to_string(),
             store: Arc::new(RwLock::new(HashMap::new())),
             max_jobs: 50,
+            persistence_path: None,
         }
+    }
+
+    /// Create a CronTool with persistence enabled.
+    /// Durable jobs are saved to/loaded from `~/.shannon/{DURABLE_CRON_FILE}`.
+    pub fn with_persistence() -> Self {
+        let path = dirs::home_dir()
+            .map(|h| h.join(".shannon").join(DURABLE_CRON_FILE));
+        let mut tool = Self {
+            description: "Schedule recurring or one-shot prompts for time-based task execution".to_string(),
+            store: Arc::new(RwLock::new(HashMap::new())),
+            max_jobs: 50,
+            persistence_path: path,
+        };
+        tool.load_durable_jobs();
+        tool
     }
 
     /// Create a new CronTool with a shared store (for testing).
@@ -651,12 +673,108 @@ impl CronTool {
             description: "Schedule recurring or one-shot prompts for time-based task execution".to_string(),
             store,
             max_jobs: 50,
+            persistence_path: None,
         }
     }
 
     /// Get a reference to the underlying store (for testing).
     pub fn store(&self) -> &CronStore {
         &self.store
+    }
+
+    /// Load durable jobs from disk into the in-memory store.
+    /// Called during construction when persistence is enabled.
+    fn load_durable_jobs(&mut self) {
+        let path = match &self.persistence_path {
+            Some(p) => p.clone(),
+            None => return,
+        };
+
+        if !path.exists() {
+            return;
+        }
+
+        match std::fs::read_to_string(&path) {
+            Ok(content) => {
+                match serde_json::from_str::<Vec<CronJob>>(&content) {
+                    Ok(jobs) => {
+                        if let Ok(mut store) = self.store.write() {
+                            let now = Utc::now();
+                            for job in jobs {
+                                // Skip expired jobs during load
+                                if let Some(ref expires_at) = job.expires_at {
+                                    if let Ok(expiry) = chrono::DateTime::parse_from_rfc3339(expires_at) {
+                                        if expiry <= now {
+                                            continue;
+                                        }
+                                    }
+                                }
+                                // Recalculate next_run for recurring jobs
+                                let mut job = job;
+                                let now_local = Local::now();
+                                if job.recurring {
+                                    if let Some(next) = calculate_next_fire(&job.cron, now_local.naive_local()) {
+                                        let local = Local.from_local_datetime(&next).single().unwrap_or(now_local);
+                                        job.next_run = Some(local.to_rfc3339());
+                                    }
+                                }
+                                store.insert(job.id.clone(), job);
+                            }
+                        }
+                        tracing::debug!("Loaded durable cron jobs from {}", path.display());
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to parse durable cron jobs: {e}");
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to read durable cron jobs from {}: {e}", path.display());
+            }
+        }
+    }
+
+    /// Persist durable jobs to disk.
+    /// Called after create/delete operations when persistence is enabled.
+    fn save_durable_jobs(&self) {
+        let path = match &self.persistence_path {
+            Some(p) => p.clone(),
+            None => return,
+        };
+
+        let store = match self.store.read() {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("Failed to acquire store lock for saving: {e}");
+                return;
+            }
+        };
+
+        let durable_jobs: Vec<&CronJob> = store.values()
+            .filter(|j| j.durable)
+            .collect();
+
+        if durable_jobs.is_empty() {
+            // Remove the file if no durable jobs remain
+            let _ = std::fs::remove_file(&path);
+            return;
+        }
+
+        // Ensure parent directory exists
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        match serde_json::to_string_pretty(&durable_jobs) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&path, json) {
+                    tracing::warn!("Failed to write durable cron jobs to {}: {e}", path.display());
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to serialize durable cron jobs: {e}");
+            }
+        }
     }
 
     /// Create a new cron job
@@ -724,6 +842,9 @@ impl CronTool {
             store.insert(id.clone(), job);
         }
 
+        // Persist durable jobs to disk if enabled
+        self.save_durable_jobs();
+
         let human_schedule = cron_to_human(&input.cron);
 
         Ok(CronCreateOutput {
@@ -758,6 +879,9 @@ impl CronTool {
             })?;
             store.remove(&input.id);
         }
+
+        // Persist durable jobs to disk if enabled
+        self.save_durable_jobs();
 
         Ok(CronDeleteOutput { id: input.id })
     }
