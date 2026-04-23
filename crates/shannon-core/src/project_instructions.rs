@@ -5,6 +5,12 @@ use std::path::{Path, PathBuf};
 /// Default filenames to search for, in priority order.
 const INSTRUCTION_FILES: &[&str] = &["CLAUDE.md", "AGENTS.md", "GEMINI.md"];
 
+/// Default maximum recursion depth for @import resolution.
+const DEFAULT_MAX_IMPORT_DEPTH: usize = 5;
+
+/// Default maximum total imported content size in bytes.
+const DEFAULT_MAX_IMPORT_SIZE: usize = 100 * 1024;
+
 /// Result of loading project instructions.
 #[derive(Debug, Clone)]
 pub struct ProjectInstructions {
@@ -12,6 +18,8 @@ pub struct ProjectInstructions {
     pub content: String,
     /// Which files were found and loaded.
     pub loaded_files: Vec<String>,
+    /// Files pulled in via @import references.
+    pub imported_files: Vec<String>,
 }
 
 /// Load project instructions from the given directory and all parent directories.
@@ -59,17 +67,28 @@ pub fn load_from_directory(dir: &Path) -> Option<ProjectInstructions> {
         .collect();
 
     let mut content = String::from("# Project Instructions\n\n");
+    let mut all_imported_files: Vec<String> = Vec::new();
     for (path, file_content) in &found {
         let display_name = path
             .strip_prefix(dir)
             .unwrap_or(path)
             .to_string_lossy();
-        content.push_str(&format!("--- {display_name} ---\n\n{file_content}\n\n"));
+        let source_dir = path.parent().unwrap_or(dir);
+        let (resolved, imported) = resolve_content_imports(
+            file_content,
+            source_dir,
+            dir,
+            DEFAULT_MAX_IMPORT_DEPTH,
+            DEFAULT_MAX_IMPORT_SIZE,
+        );
+        all_imported_files.extend(imported);
+        content.push_str(&format!("--- {display_name} ---\n\n{resolved}\n\n"));
     }
 
     Some(ProjectInstructions {
         content,
         loaded_files,
+        imported_files: all_imported_files,
     })
 }
 
@@ -78,6 +97,257 @@ pub fn load_from_cwd() -> Option<ProjectInstructions> {
     std::env::current_dir()
         .ok()
         .and_then(|dir| load_from_directory(&dir))
+}
+
+/// Resolve `@import` references in content, relative to the source file.
+///
+/// An import reference is `@` followed by a path containing alphanumeric characters,
+/// `/`, `.`, `-`, and `_`. References inside fenced code blocks (between ``` markers)
+/// are left untouched.
+///
+/// Returns the resolved content and a list of imported file paths.
+fn resolve_content_imports(
+    content: &str,
+    source_dir: &Path,
+    project_root: &Path,
+    max_depth: usize,
+    max_total_size: usize,
+) -> (String, Vec<String>) {
+    let mut visited = std::collections::HashSet::<String>::new();
+    let mut total_bytes = 0usize;
+    let mut imported_files: Vec<String> = Vec::new();
+    let resolved = resolve_content_imports_inner(
+        content,
+        source_dir,
+        project_root,
+        max_depth,
+        max_total_size,
+        &mut total_bytes,
+        &mut visited,
+        &mut imported_files,
+    );
+    (resolved, imported_files)
+}
+
+/// Inner recursive implementation that shares a visited set and byte counter.
+fn resolve_content_imports_inner(
+    content: &str,
+    source_dir: &Path,
+    project_root: &Path,
+    remaining_depth: usize,
+    max_total_size: usize,
+    total_imported_bytes: &mut usize,
+    visited: &mut std::collections::HashSet<String>,
+    imported_files: &mut Vec<String>,
+) -> String {
+    let mut resolved = String::with_capacity(content.len());
+    let mut in_code_block = false;
+
+    for line in content.lines() {
+        // Track fenced code block boundaries
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_code_block = !in_code_block;
+            resolved.push_str(line);
+            resolved.push('\n');
+            continue;
+        }
+
+        if in_code_block {
+            resolved.push_str(line);
+            resolved.push_str("\n");
+            continue;
+        }
+
+        // Process @import references in this line
+        let processed = process_import_line_inner(
+            line,
+            source_dir,
+            project_root,
+            remaining_depth,
+            max_total_size,
+            total_imported_bytes,
+            visited,
+            imported_files,
+        );
+        resolved.push_str(&processed);
+        resolved.push('\n');
+    }
+
+    // Remove trailing newline if the original didn't have one
+    if !content.ends_with('\n') && resolved.ends_with('\n') {
+        resolved.pop();
+    }
+
+    resolved
+}
+
+/// Process a single line, replacing @import references with file content.
+fn process_import_line_inner(
+    line: &str,
+    source_dir: &Path,
+    project_root: &Path,
+    remaining_depth: usize,
+    max_total_size: usize,
+    total_imported_bytes: &mut usize,
+    visited: &mut std::collections::HashSet<String>,
+    imported_files: &mut Vec<String>,
+) -> String {
+    let mut result = String::with_capacity(line.len());
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '@' && (i == 0 || !chars[i - 1].is_alphanumeric()) {
+            // Try to extract a valid import path after @
+            if let Some(path_str) = extract_import_path(&chars[i + 1..]) {
+                let full_path = source_dir.join(&path_str);
+
+                // Security: reject path traversal outside the project root
+                match full_path.canonicalize() {
+                    Ok(canonical) => {
+                        let root_canonical = match project_root.canonicalize() {
+                            Ok(c) => c,
+                            Err(_) => project_root.to_path_buf(),
+                        };
+                        if !canonical.starts_with(&root_canonical) {
+                            eprintln!(
+                                "warning: @import path '{}' escapes project directory, skipping",
+                                path_str
+                            );
+                            result.push('@');
+                            i += 1;
+                            continue;
+                        }
+                    }
+                    Err(_) => {
+                        // Path doesn't exist yet, will be caught by read below
+                    }
+                }
+
+                // Check remaining depth
+                if remaining_depth == 0 {
+                    eprintln!(
+                        "warning: @import max depth exceeded for '{}', skipping",
+                        path_str
+                    );
+                    result.push('@');
+                    i += 1;
+                    continue;
+                }
+
+                // Try to read and inline the file
+                match std::fs::read_to_string(&full_path) {
+                    Ok(file_content) => {
+                        let new_bytes = file_content.len();
+                        if *total_imported_bytes + new_bytes > max_total_size {
+                            eprintln!(
+                                "warning: @import total size limit exceeded at '{}', skipping",
+                                path_str
+                            );
+                            result.push('@');
+                            i += 1;
+                            continue;
+                        }
+
+                        // Detect circular import using canonical path via visited set
+                        let visit_key = match full_path.canonicalize() {
+                            Ok(c) => c.to_string_lossy().to_string(),
+                            Err(_) => full_path.to_string_lossy().to_string(),
+                        };
+                        if visited.contains(&visit_key) {
+                            eprintln!(
+                                "warning: circular @import detected for '{}', skipping",
+                                path_str
+                            );
+                            result.push('@');
+                            i += 1;
+                            continue;
+                        }
+
+                        *total_imported_bytes += new_bytes;
+                        visited.insert(visit_key);
+
+                        let rel_path = full_path
+                            .strip_prefix(project_root)
+                            .unwrap_or(&full_path)
+                            .to_string_lossy()
+                            .to_string();
+                        imported_files.push(rel_path);
+
+                        // Recursively resolve imports in the imported file
+                        let import_dir = full_path.parent().unwrap_or(source_dir);
+                        let nested_content = resolve_content_imports_inner(
+                            &file_content,
+                            import_dir,
+                            project_root,
+                            remaining_depth - 1,
+                            max_total_size,
+                            total_imported_bytes,
+                            visited,
+                            imported_files,
+                        );
+
+                        result.push_str(&format!(
+                            "--- {} (imported) ---\n{}\n---\n",
+                            path_str, nested_content
+                        ));
+
+                        // Skip past the @path in the original line
+                        i += 1 + path_str.len();
+                        continue;
+                    }
+                    Err(e) => {
+                        eprintln!("warning: @import file '{}' not found: {}", path_str, e);
+                        result.push('@');
+                        i += 1;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        result.push(chars[i]);
+        i += 1;
+    }
+
+    result
+}
+
+/// Extract a valid import path from the characters following `@`.
+/// A valid path contains alphanumeric characters, `/`, `.`, `-`, and `_`.
+/// Returns None if no valid path is found (e.g., `@` is followed by a space or special char).
+fn extract_import_path(chars: &[char]) -> Option<String> {
+    if chars.is_empty() {
+        return None;
+    }
+    let first = chars[0];
+    // First character must be alphanumeric, '.', '/', '_', or '-'
+    if !first.is_alphanumeric() && first != '.' && first != '/' && first != '_' && first != '-' {
+        return None;
+    }
+
+    let mut end = 0;
+    for (i, &c) in chars.iter().enumerate() {
+        if c.is_alphanumeric() || c == '/' || c == '.' || c == '-' || c == '_' {
+            end = i + 1;
+        } else {
+            break;
+        }
+    }
+
+    if end == 0 {
+        return None;
+    }
+
+    let path: String = chars[..end].iter().collect();
+
+    // Must have at least one non-extension character (reject bare "@.md")
+    if path.starts_with('.') && !path.contains('/') {
+        return None;
+    }
+
+    Some(path)
 }
 
 /// Gather git context (branch, recent commits, status summary) as a string.
@@ -148,15 +418,26 @@ pub fn git_context(dir: &Path) -> Option<String> {
 pub fn load_full_context(dir: &Path) -> Option<ProjectInstructions> {
     let mut all_content = String::new();
     let mut all_files: Vec<String> = Vec::new();
+    let mut all_imported: Vec<String> = Vec::new();
 
     // Load user-level instructions from ~/.claude/CLAUDE.md (global user instructions)
     if let Some(home) = dirs::home_dir() {
+        let claude_dir = home.join(".claude");
         for filename in INSTRUCTION_FILES {
-            let home_file = home.join(".claude").join(filename);
+            let home_file = claude_dir.join(filename);
             if home_file.is_file() {
                 if let Ok(content) = std::fs::read_to_string(&home_file) {
                     if !content.trim().is_empty() {
-                        all_content.push_str(&format!("--- ~/.claude/{filename} ---\n\n{content}\n\n"));
+                        let (resolved, imported) = resolve_content_imports(
+                            &content,
+                            &claude_dir,
+                            &claude_dir,
+                            DEFAULT_MAX_IMPORT_DEPTH,
+                            DEFAULT_MAX_IMPORT_SIZE,
+                        );
+                        all_imported.extend(imported);
+                        all_content
+                            .push_str(&format!("--- ~/.claude/{filename} ---\n\n{resolved}\n\n"));
                         all_files.push(format!("~/.claude/{filename}"));
                     }
                 }
@@ -168,6 +449,7 @@ pub fn load_full_context(dir: &Path) -> Option<ProjectInstructions> {
     if let Some(proj) = load_from_directory(dir) {
         all_content.push_str(&proj.content);
         all_files.extend(proj.loaded_files);
+        all_imported.extend(proj.imported_files);
     }
 
     // Load git context
@@ -182,6 +464,7 @@ pub fn load_full_context(dir: &Path) -> Option<ProjectInstructions> {
         Some(ProjectInstructions {
             content: all_content,
             loaded_files: all_files,
+            imported_files: all_imported,
         })
     }
 }
@@ -434,6 +717,318 @@ mod tests {
         let instr = result.unwrap();
         assert!(instr.content.contains("Test instructions"));
         assert!(instr.loaded_files.contains(&"CLAUDE.md".to_string()));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    // -----------------------------------------------------------------------
+    // @import resolution tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_import_simple() {
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(tmp.join("rules.md"), "Always use Rust best practices.").unwrap();
+        fs::write(tmp.join("CLAUDE.md"), "# Project\n\n@rules.md\n").unwrap();
+
+        let result = load_from_directory(&tmp).unwrap();
+        assert!(
+            result.content.contains("Always use Rust best practices"),
+            "Imported content should appear: {:?}",
+            result.content
+        );
+        assert!(
+            result.content.contains("rules.md (imported)"),
+            "Should have import header"
+        );
+        assert!(
+            result.imported_files.iter().any(|f| f.contains("rules.md")),
+            "rules.md should be in imported_files: {:?}",
+            result.imported_files
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_import_nested() {
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(tmp.join("deep.md"), "Nested content here.").unwrap();
+        fs::write(tmp.join("rules.md"), "Rules file.\n\n@deep.md\n").unwrap();
+        fs::write(tmp.join("CLAUDE.md"), "# Project\n\n@rules.md\n").unwrap();
+
+        let result = load_from_directory(&tmp).unwrap();
+        assert!(
+            result.content.contains("Nested content here"),
+            "Nested import should resolve: {:?}",
+            result.content
+        );
+        assert!(
+            result.imported_files.iter().any(|f| f.contains("rules.md")),
+            "rules.md in imported_files"
+        );
+        assert!(
+            result.imported_files.iter().any(|f| f.contains("deep.md")),
+            "deep.md in imported_files"
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_import_circular_detection() {
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        // A imports B, B imports A -- should stop at circular detection
+        fs::write(tmp.join("a.md"), "Content A.\n@b.md\n").unwrap();
+        fs::write(tmp.join("b.md"), "Content B.\n@a.md\n").unwrap();
+        fs::write(tmp.join("CLAUDE.md"), "# Project\n\n@a.md\n").unwrap();
+
+        let result = load_from_directory(&tmp).unwrap();
+        // Should contain both files' content but not loop infinitely
+        assert!(
+            result.content.contains("Content A"),
+            "Should contain A: {:?}",
+            result.content
+        );
+        assert!(
+            result.content.contains("Content B"),
+            "Should contain B: {:?}",
+            result.content
+        );
+        // A should appear only once in imported_files
+        let a_count = result
+            .imported_files
+            .iter()
+            .filter(|f| f.contains("a.md"))
+            .count();
+        assert_eq!(a_count, 1, "a.md should appear exactly once in imported_files");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_import_missing_file() {
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(
+            tmp.join("CLAUDE.md"),
+            "# Project\n\n@nonexistent.md\nMore text.\n",
+        )
+        .unwrap();
+
+        let result = load_from_directory(&tmp).unwrap();
+        // Should not fail, just leave the @reference as-is
+        assert!(
+            result.content.contains("More text"),
+            "Content after missing import should still appear: {:?}",
+            result.content
+        );
+        assert!(
+            result.imported_files.is_empty(),
+            "No files should be imported: {:?}",
+            result.imported_files
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_import_in_code_block_not_resolved() {
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(tmp.join("rules.md"), "Secret rules.").unwrap();
+        fs::write(
+            tmp.join("CLAUDE.md"),
+            "# Project\n\n```\n@rules.md\n```\n",
+        )
+        .unwrap();
+
+        let result = load_from_directory(&tmp).unwrap();
+        // The @rules.md inside code block should NOT be resolved
+        assert!(
+            !result.content.contains("Secret rules"),
+            "Code block import should NOT be resolved: {:?}",
+            result.content
+        );
+        assert!(
+            result.content.contains("@rules.md"),
+            "Original @reference should remain in code block: {:?}",
+            result.content
+        );
+        assert!(
+            result.imported_files.is_empty(),
+            "No imports from code blocks"
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_import_size_limit() {
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        // Create a large file
+        let big_content = "X".repeat(200);
+        fs::write(tmp.join("big.md"), &big_content).unwrap();
+        fs::write(tmp.join("CLAUDE.md"), "# Project\n\n@big.md\n").unwrap();
+
+        // Resolve with a very small size limit (50 bytes)
+        let (resolved, imported) = resolve_content_imports(
+            "@big.md\n",
+            &tmp,
+            &tmp,
+            DEFAULT_MAX_IMPORT_DEPTH,
+            50,
+        );
+        // The file is too large to import under the 50-byte limit
+        assert!(
+            !resolved.contains("XXX"),
+            "Large import should be skipped: {:?}",
+            resolved
+        );
+        assert!(imported.is_empty(), "No files imported due to size limit");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_import_path_traversal_rejected() {
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        let subdir = tmp.join("project");
+        fs::create_dir_all(&subdir).unwrap();
+        // Write a file outside the project dir
+        fs::write(tmp.join("secret.txt"), "secret data").unwrap();
+        fs::write(
+            subdir.join("CLAUDE.md"),
+            "# Project\n\n@../secret.txt\n",
+        )
+        .unwrap();
+
+        let result = load_from_directory(&subdir).unwrap();
+        // Path traversal should be rejected
+        assert!(
+            !result.content.contains("secret data"),
+            "Path traversal should be blocked: {:?}",
+            result.content
+        );
+        assert!(
+            result.imported_files.is_empty(),
+            "No imports from path traversal"
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_import_multiple_in_one_file() {
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(tmp.join("rules.md"), "Rule one.").unwrap();
+        fs::write(tmp.join("flags.md"), "Flag settings.").unwrap();
+        fs::write(
+            tmp.join("CLAUDE.md"),
+            "# Project\n\n@rules.md\n\nSome text.\n\n@flags.md\n",
+        )
+        .unwrap();
+
+        let result = load_from_directory(&tmp).unwrap();
+        assert!(
+            result.content.contains("Rule one"),
+            "First import: {:?}",
+            result.content
+        );
+        assert!(
+            result.content.contains("Flag settings"),
+            "Second import: {:?}",
+            result.content
+        );
+        assert!(
+            result.content.contains("Some text"),
+            "Text between imports preserved: {:?}",
+            result.content
+        );
+        assert_eq!(
+            result.imported_files.len(),
+            2,
+            "Should have 2 imported files: {:?}",
+            result.imported_files
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_import_subdirectory_path() {
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(tmp.join("docs")).unwrap();
+        fs::write(tmp.join("docs/guide.md"), "Guide content.").unwrap();
+        fs::write(
+            tmp.join("CLAUDE.md"),
+            "# Project\n\n@docs/guide.md\n",
+        )
+        .unwrap();
+
+        let result = load_from_directory(&tmp).unwrap();
+        assert!(
+            result.content.contains("Guide content"),
+            "Subdirectory import should resolve: {:?}",
+            result.content
+        );
+        assert!(
+            result.imported_files
+                .iter()
+                .any(|f| f.contains("guide.md")),
+            "guide.md in imported_files"
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_extract_import_path_valid() {
+        assert_eq!(
+            extract_import_path(&"rules.md".chars().collect::<Vec<_>>()),
+            Some("rules.md".to_string())
+        );
+        assert_eq!(
+            extract_import_path(&"docs/guide.md".chars().collect::<Vec<_>>()),
+            Some("docs/guide.md".to_string())
+        );
+        assert_eq!(
+            extract_import_path(&"my-file_v2.md".chars().collect::<Vec<_>>()),
+            Some("my-file_v2.md".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_import_path_invalid() {
+        // Space after @
+        assert_eq!(
+            extract_import_path(&" rules.md".chars().collect::<Vec<_>>()),
+            None
+        );
+        // Empty
+        assert_eq!(extract_import_path(&[]), None);
+        // Special chars
+        assert_eq!(
+            extract_import_path(&"@nested".chars().collect::<Vec<_>>()),
+            None
+        );
+    }
+
+    #[test]
+    fn test_import_max_depth() {
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        // Create a chain: CLAUDE.md -> a.md -> b.md -> c.md -> d.md -> e.md -> f.md
+        fs::write(tmp.join("f.md"), "Deepest content.").unwrap();
+        fs::write(tmp.join("e.md"), "Level E.\n@f.md\n").unwrap();
+        fs::write(tmp.join("d.md"), "Level D.\n@e.md\n").unwrap();
+        fs::write(tmp.join("c.md"), "Level C.\n@d.md\n").unwrap();
+        fs::write(tmp.join("b.md"), "Level B.\n@c.md\n").unwrap();
+        fs::write(tmp.join("a.md"), "Level A.\n@b.md\n").unwrap();
+        fs::write(tmp.join("CLAUDE.md"), "# Project\n\n@a.md\n").unwrap();
+
+        // With max depth 5, should get several levels deep but not infinite loop
+        let result = load_from_directory(&tmp).unwrap();
+        assert!(
+            result.content.contains("Level A"),
+            "Should contain A"
+        );
+        // The key is that we don't infinite loop and don't panic
         let _ = fs::remove_dir_all(&tmp);
     }
 }

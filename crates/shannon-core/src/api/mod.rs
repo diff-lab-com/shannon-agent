@@ -343,6 +343,8 @@ mod tests {
             top_k: None,
             stop_sequences: None,
             budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
         };
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains("stream"));

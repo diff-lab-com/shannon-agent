@@ -1247,6 +1247,532 @@ fn decision_to_risk(decision: RuleDecision) -> RiskLevel {
     }
 }
 
+// ===========================================================================
+// Tool Permission Rule System (Tool(specifier) glob matching)
+// ===========================================================================
+//
+// Implements granular permission rules with `Tool(specifier)` syntax and glob
+// pattern matching, inspired by Claude Code's `Tool(specifier)` permission
+// model and OpenCode's per-tool allow/ask/deny rules with wildcards.
+//
+// This system is complementary to the existing `PermissionClassifier`.  Where
+// the classifier uses regex-based rules with JSON-defined schemas, this system
+// provides a lighter-weight, string-based rule format suitable for
+// configuration files and command-line flags:
+//
+//   "Bash"                    -- matches all Bash tool calls
+//   "Bash(git *)"            -- matches Bash calls whose input starts with "git "
+//   "Edit(/src/**/*.rs)"      -- matches Edit calls on paths under /src/
+//   "*"                       -- matches all tools (wildcard)
+//   "Read(*.toml)"            -- matches Read calls on .toml files
+
+/// Simple glob matcher supporting `*` (any sequence), `?` (single char), and
+/// `**` (cross-directory match).
+///
+/// This is intentionally lightweight -- no external crate needed.
+///
+/// - `*` matches zero or more of **any** character (like `.*` in regex)
+/// - `**` is treated identically to `*` in this implementation (provided for
+///   familiarity with path-glob conventions)
+/// - `?` matches exactly one character (any)
+///
+/// # Examples
+///
+/// ```
+/// assert!(match_glob("npm run *", "npm run build"));
+/// assert!(match_glob("/src/**/*.rs", "/src/foo/bar.rs"));
+/// assert!(match_glob("rm *", "rm -rf /"));
+/// ```
+pub fn match_glob(pattern: &str, text: &str) -> bool {
+    match_glob_impl(pattern, text)
+}
+
+/// Recursive glob matching implementation.
+///
+/// Walks the pattern character by character.  When a `*` or `**` is
+/// encountered it greedily tries to match the rest of the pattern against
+/// every remaining suffix of the text.
+fn match_glob_impl(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = text.chars().collect();
+    glob_recursive(&p, 0, &t, 0)
+}
+
+fn glob_recursive(p: &[char], pi: usize, t: &[char], ti: usize) -> bool {
+    // Fast path: both exhausted
+    if pi == p.len() && ti == t.len() {
+        return true;
+    }
+
+    // Pattern exhausted but text remains -- no match
+    if pi == p.len() {
+        return false;
+    }
+
+    // Check for ** (double star) -- consume both stars and optionally the
+    // following '/' so that "/src/**/*.rs" matches "/src/main.rs" (zero dirs).
+    if p[pi] == '*' && pi + 1 < p.len() && p[pi + 1] == '*' {
+        let after_stars = pi + 2;
+        // Skip a trailing '/' after ** for patterns like "/src/**/foo"
+        let next_pi = if after_stars < p.len() && p[after_stars] == '/' {
+            after_stars + 1
+        } else {
+            after_stars
+        };
+        return glob_star(p, next_pi, t, ti);
+    }
+
+    // Single * -- match zero or more characters (any character)
+    if p[pi] == '*' {
+        return glob_star(p, pi + 1, t, ti);
+    }
+
+    // Text exhausted but pattern remains -- no match
+    if ti >= t.len() {
+        return false;
+    }
+
+    // ? matches exactly one character
+    if p[pi] == '?' {
+        return glob_recursive(p, pi + 1, t, ti + 1);
+    }
+
+    // Literal match
+    if p[pi] == t[ti] {
+        return glob_recursive(p, pi + 1, t, ti + 1);
+    }
+
+    false
+}
+
+/// Handle `*` (and `**`) wildcard: try matching the rest of the pattern
+/// against every remaining suffix of the text, starting from `ti`.
+fn glob_star(p: &[char], next_pi: usize, t: &[char], ti: usize) -> bool {
+    // Try matching with the star consuming 0, 1, 2, ... characters
+    let mut pos = ti;
+    loop {
+        if glob_recursive(p, next_pi, t, pos) {
+            return true;
+        }
+        if pos >= t.len() {
+            break;
+        }
+        pos += 1;
+    }
+    false
+}
+
+/// A glob pattern wrapper that stores both the original pattern string and
+/// provides matching via [`match_glob`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GlobPattern {
+    /// The original glob pattern string.
+    pub pattern: String,
+}
+
+impl GlobPattern {
+    /// Create a new `GlobPattern`.
+    pub fn new(pattern: impl Into<String>) -> Self {
+        Self {
+            pattern: pattern.into(),
+        }
+    }
+
+    /// Test whether `text` matches this glob pattern.
+    pub fn matches(&self, text: &str) -> bool {
+        match_glob(&self.pattern, text)
+    }
+}
+
+impl std::fmt::Display for GlobPattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.pattern)
+    }
+}
+
+/// Result of evaluating a tool permission rule against a tool invocation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionEval {
+    /// The decision reached by rule evaluation.
+    pub decision: RuleDecision,
+    /// Description of the rule that matched, if any.
+    pub matched_rule: Option<String>,
+}
+
+impl PermissionEval {
+    /// Convenience: returns `true` when the decision is `Allow`.
+    pub fn is_allowed(&self) -> bool {
+        self.decision == RuleDecision::Allow
+    }
+
+    /// Convenience: returns `true` when the decision is `Deny`.
+    pub fn is_denied(&self) -> bool {
+        self.decision == RuleDecision::Deny
+    }
+
+    /// Convenience: returns `true` when the decision is `Ask`.
+    pub fn is_ask(&self) -> bool {
+        self.decision == RuleDecision::Ask
+    }
+}
+
+/// A single permission rule matching tool calls with glob patterns.
+///
+/// Supports the `Tool(specifier)` syntax:
+/// - `"Bash"` matches all Bash invocations
+/// - `"Bash(git *)"` matches Bash invocations whose input matches `git *`
+/// - `"Edit(/src/**/*.rs)"` matches Edit invocations whose input matches the path glob
+/// - `"*"` matches all tools
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolPermissionRule {
+    /// Which tool this rule applies to, e.g. "Bash", "Edit", "Write", "*" (all).
+    pub tool: String,
+    /// Optional glob pattern for the tool input.
+    pub specifier: Option<GlobPattern>,
+    /// The decision for matching calls.
+    pub decision: RuleDecision,
+    /// Where this rule came from (for diagnostics).
+    pub source: RuleSource,
+}
+
+impl ToolPermissionRule {
+    /// Create a new rule for a tool with the given decision.
+    pub fn new(tool: impl Into<String>, decision: RuleDecision) -> Self {
+        Self {
+            tool: tool.into(),
+            specifier: None,
+            decision,
+            source: RuleSource::Settings,
+        }
+    }
+
+    /// Builder: add a specifier glob pattern.
+    pub fn with_specifier(mut self, pattern: impl Into<String>) -> Self {
+        self.specifier = Some(GlobPattern::new(pattern));
+        self
+    }
+
+    /// Builder: set the rule source.
+    pub fn with_source(mut self, source: RuleSource) -> Self {
+        self.source = source;
+        self
+    }
+
+    /// Test whether this rule matches the given tool invocation.
+    ///
+    /// A rule matches when:
+    /// 1. Its `tool` field is `"*"` or equals `tool_name`.
+    /// 2. Its `specifier` is `None` **or** the specifier glob matches
+    ///    `tool_input`.
+    pub fn matches(&self, tool_name: &str, tool_input: &str) -> bool {
+        // Tool name check: "*" matches everything
+        if self.tool != "*" && self.tool != tool_name {
+            return false;
+        }
+
+        // Specifier check: if present, the input must match the glob
+        if let Some(ref spec) = self.specifier {
+            if !spec.matches(tool_input) {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// Produce a human-readable description of this rule (for diagnostics).
+    pub fn description(&self) -> String {
+        match &self.specifier {
+            Some(spec) => format!("{}({}) [{}] from {}", self.tool, spec.pattern, self.decision, self.source),
+            None => format!("{} [{}] from {}", self.tool, self.decision, self.source),
+        }
+    }
+}
+
+/// Evaluate a policy from a list of rules.
+///
+/// Rules are evaluated in priority order: first all deny rules (to ensure
+/// deny always wins), then ask, then allow.  Within the same decision tier,
+/// rules are evaluated in insertion order and the first match wins.  If no
+/// rule matches, the configured default is used.
+#[derive(Debug, Clone)]
+pub struct ToolPermissionEvaluator {
+    /// Deny rules, checked first.
+    deny_rules: Vec<ToolPermissionRule>,
+    /// Ask rules, checked second.
+    ask_rules: Vec<ToolPermissionRule>,
+    /// Allow rules, checked third.
+    allow_rules: Vec<ToolPermissionRule>,
+}
+
+impl ToolPermissionEvaluator {
+    /// Create a new evaluator from a list of rules.
+    ///
+    /// Rules are partitioned into deny/ask/allow buckets automatically.
+    pub fn new(rules: Vec<ToolPermissionRule>) -> Self {
+        let mut deny_rules = Vec::new();
+        let mut ask_rules = Vec::new();
+        let mut allow_rules = Vec::new();
+
+        for rule in rules {
+            match rule.decision {
+                RuleDecision::Deny => deny_rules.push(rule),
+                RuleDecision::Ask => ask_rules.push(rule),
+                RuleDecision::Allow => allow_rules.push(rule),
+            }
+        }
+
+        Self {
+            deny_rules,
+            ask_rules,
+            allow_rules,
+        }
+    }
+
+    /// Evaluate all rules against the given tool invocation.
+    ///
+    /// Returns a [`PermissionEval`] describing the outcome.
+    pub fn evaluate(&self, tool_name: &str, tool_input: &str) -> PermissionEval {
+        // Priority 1: deny rules
+        for rule in &self.deny_rules {
+            if rule.matches(tool_name, tool_input) {
+                return PermissionEval {
+                    decision: RuleDecision::Deny,
+                    matched_rule: Some(rule.description()),
+                };
+            }
+        }
+
+        // Priority 2: ask rules
+        for rule in &self.ask_rules {
+            if rule.matches(tool_name, tool_input) {
+                return PermissionEval {
+                    decision: RuleDecision::Ask,
+                    matched_rule: Some(rule.description()),
+                };
+            }
+        }
+
+        // Priority 3: allow rules
+        for rule in &self.allow_rules {
+            if rule.matches(tool_name, tool_input) {
+                return PermissionEval {
+                    decision: RuleDecision::Allow,
+                    matched_rule: Some(rule.description()),
+                };
+            }
+        }
+
+        // No rule matched
+        PermissionEval {
+            decision: RuleDecision::Ask,
+            matched_rule: None,
+        }
+    }
+}
+
+/// Parse a single `Tool(specifier)` rule string into a [`ToolPermissionRule`].
+///
+/// Supported formats:
+/// - `"Bash"` -- tool name only, no specifier
+/// - `"Bash(git *)"` -- tool with specifier glob
+/// - `"Edit(/src/**/*.rs)"` -- tool with path-style specifier
+/// - `"*"` -- wildcard matching all tools
+/// - `"*(npm run *)"` -- wildcard tool with specifier
+///
+/// The specifier is the content between the outermost parentheses.
+pub fn parse_tool_rule(
+    s: &str,
+    decision: RuleDecision,
+    source: RuleSource,
+) -> Result<ToolPermissionRule, PermissionClassifierError> {
+    let trimmed = s.trim();
+
+    if trimmed.is_empty() {
+        return Err(PermissionClassifierError::ParseError(
+            "rule string is empty".into(),
+        ));
+    }
+
+    // Look for opening parenthesis
+    if let Some(open) = trimmed.find('(') {
+        // Must have a closing parenthesis
+        let close = trimmed.rfind(')').ok_or_else(|| {
+            PermissionClassifierError::ParseError(format!(
+                "rule '{trimmed}' has opening '(' but no closing ')'"
+            ))
+        })?;
+
+        let tool = trimmed[..open].to_string();
+        let specifier = trimmed[open + 1..close].to_string();
+
+        if tool.is_empty() {
+            return Err(PermissionClassifierError::ParseError(format!(
+                "rule '{trimmed}' has empty tool name before '('"
+            )));
+        }
+
+        if specifier.is_empty() {
+            // "Bash()" is equivalent to "Bash"
+            Ok(ToolPermissionRule {
+                tool,
+                specifier: None,
+                decision,
+                source,
+            })
+        } else {
+            Ok(ToolPermissionRule {
+                tool,
+                specifier: Some(GlobPattern::new(specifier)),
+                decision,
+                source,
+            })
+        }
+    } else {
+        // No parentheses -- just a tool name (possibly "*")
+        Ok(ToolPermissionRule {
+            tool: trimmed.to_string(),
+            specifier: None,
+            decision,
+            source,
+        })
+    }
+}
+
+/// A complete permission policy: an ordered list of rules plus a default
+/// decision for when no rule matches.
+///
+/// # Example
+///
+/// ```
+/// let policy = PermissionPolicy::from_config(
+///     &[
+///         "Bash(npm run *)".into(),
+///         "Bash(rm *)".into(),
+///         "Edit(/src/**/*.rs)".into(),
+///         "Read".into(),
+///     ],
+///     RuleDecision::Allow,
+/// ).unwrap();
+///
+/// let eval = policy.evaluate("Bash", "npm run build");
+/// assert!(eval.is_allowed());
+/// ```
+#[derive(Debug, Clone)]
+pub struct PermissionPolicy {
+    /// The rule evaluator.
+    evaluator: ToolPermissionEvaluator,
+    /// Decision when no rule matches.
+    default_decision: RuleDecision,
+}
+
+impl PermissionPolicy {
+    /// Build a policy from a list of rule strings, where each string uses the
+    /// `Tool(specifier)` format, paired with a decision and a default fallback.
+    ///
+    /// Each rule string is paired with the same `decision` (typically callers
+    /// invoke this once per decision type -- first with `Deny`, then `Ask`,
+    /// then `Allow`).  Alternatively, use [`PermissionPolicyBuilder`] for
+    /// fine-grained control.
+    pub fn from_config(
+        rules: &[String],
+        default: RuleDecision,
+    ) -> Result<Self, PermissionClassifierError> {
+        let parsed: Result<Vec<_>, _> = rules
+            .iter()
+            .map(|s| parse_tool_rule(s, default, RuleSource::Settings))
+            .collect();
+        let parsed = parsed?;
+
+        Ok(Self {
+            evaluator: ToolPermissionEvaluator::new(parsed),
+            default_decision: default,
+        })
+    }
+
+    /// Create a policy from pre-built rules with mixed decisions and a
+    /// default.
+    pub fn from_rules(
+        rules: Vec<ToolPermissionRule>,
+        default: RuleDecision,
+    ) -> Self {
+        Self {
+            evaluator: ToolPermissionEvaluator::new(rules),
+            default_decision: default,
+        }
+    }
+
+    /// Evaluate the policy against a tool invocation.
+    pub fn evaluate(&self, tool_name: &str, tool_input: &str) -> PermissionEval {
+        let mut result = self.evaluator.evaluate(tool_name, tool_input);
+
+        if result.matched_rule.is_none() {
+            // No rule matched -- use the default
+            result.decision = self.default_decision;
+        }
+
+        result
+    }
+}
+
+/// Fluent builder for constructing a [`PermissionPolicy`] with mixed decision
+/// types.
+pub struct PermissionPolicyBuilder {
+    rules: Vec<ToolPermissionRule>,
+    default_decision: RuleDecision,
+}
+
+impl PermissionPolicyBuilder {
+    /// Start building a policy with the given default decision.
+    pub fn new(default: RuleDecision) -> Self {
+        Self {
+            rules: Vec::new(),
+            default_decision: default,
+        }
+    }
+
+    /// Add an allow rule.
+    pub fn allow(mut self, rule_str: &str) -> Result<Self, PermissionClassifierError> {
+        self.rules.push(parse_tool_rule(
+            rule_str,
+            RuleDecision::Allow,
+            RuleSource::Settings,
+        )?);
+        Ok(self)
+    }
+
+    /// Add a deny rule.
+    pub fn deny(mut self, rule_str: &str) -> Result<Self, PermissionClassifierError> {
+        self.rules.push(parse_tool_rule(
+            rule_str,
+            RuleDecision::Deny,
+            RuleSource::Settings,
+        )?);
+        Ok(self)
+    }
+
+    /// Add an ask rule.
+    pub fn ask(mut self, rule_str: &str) -> Result<Self, PermissionClassifierError> {
+        self.rules.push(parse_tool_rule(
+            rule_str,
+            RuleDecision::Ask,
+            RuleSource::Settings,
+        )?);
+        Ok(self)
+    }
+
+    /// Add a pre-built rule.
+    pub fn rule(mut self, rule: ToolPermissionRule) -> Self {
+        self.rules.push(rule);
+        self
+    }
+
+    /// Build the final policy.
+    pub fn build(self) -> PermissionPolicy {
+        PermissionPolicy::from_rules(self.rules, self.default_decision)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1919,5 +2445,475 @@ mod tests {
     fn strip_wrappers_unit() {
         assert!(strip_command_wrappers("cd /tmp && ls").starts_with("ls"));
         assert!(strip_command_wrappers("timeout 10 cargo test").starts_with("cargo"));
+    }
+
+    // ======================================================================
+    // Tool Permission Rule System -- glob matching
+    // ======================================================================
+
+    #[test]
+    fn glob_match_star_any() {
+        assert!(match_glob("npm run *", "npm run build"));
+        assert!(match_glob("npm run *", "npm run test"));
+        assert!(match_glob("npm run *", "npm run "));
+        assert!(!match_glob("npm run *", "npm build"));
+    }
+
+    #[test]
+    fn glob_match_star_matches_everything() {
+        // Single * matches any character including /
+        assert!(match_glob("*.rs", "main.rs"));
+        assert!(match_glob("*.rs", "src/main.rs"));
+        assert!(match_glob("*.rs", "deep/nested/path.rs"));
+    }
+
+    #[test]
+    fn glob_match_doublestar_cross_slash() {
+        // ** should match across /
+        assert!(match_glob("/src/**/*.rs", "/src/main.rs"));
+        assert!(match_glob("/src/**/*.rs", "/src/foo/bar.rs"));
+        assert!(match_glob("/src/**/*.rs", "/src/a/b/c.rs"));
+        assert!(!match_glob("/src/**/*.rs", "/lib/main.rs"));
+    }
+
+    #[test]
+    fn glob_match_question_mark() {
+        assert!(match_glob("file?.txt", "file1.txt"));
+        assert!(match_glob("file?.txt", "fileA.txt"));
+        assert!(!match_glob("file?.txt", "file.txt"));
+        assert!(!match_glob("file?.txt", "file12.txt"));
+    }
+
+    #[test]
+    fn glob_match_exact() {
+        assert!(match_glob("git status", "git status"));
+        assert!(!match_glob("git status", "git log"));
+    }
+
+    #[test]
+    fn glob_match_star_all() {
+        assert!(match_glob("*", "anything"));
+        assert!(match_glob("*", "npm run build"));
+    }
+
+    #[test]
+    fn glob_match_git_prefix() {
+        assert!(match_glob("git *", "git status"));
+        assert!(match_glob("git *", "git log --oneline"));
+        assert!(!match_glob("git *", "npm test"));
+    }
+
+    // ======================================================================
+    // ToolPermissionRule parsing
+    // ======================================================================
+
+    #[test]
+    fn parse_rule_bare_tool() {
+        let rule = parse_tool_rule("Bash", RuleDecision::Allow, RuleSource::Settings).unwrap();
+        assert_eq!(rule.tool, "Bash");
+        assert!(rule.specifier.is_none());
+        assert_eq!(rule.decision, RuleDecision::Allow);
+    }
+
+    #[test]
+    fn parse_rule_tool_with_specifier() {
+        let rule = parse_tool_rule("Bash(git *)", RuleDecision::Allow, RuleSource::Settings).unwrap();
+        assert_eq!(rule.tool, "Bash");
+        assert!(rule.specifier.is_some());
+        assert_eq!(rule.specifier.unwrap().pattern, "git *");
+    }
+
+    #[test]
+    fn parse_rule_path_specifier() {
+        let rule = parse_tool_rule("Edit(/src/**/*.rs)", RuleDecision::Allow, RuleSource::Settings).unwrap();
+        assert_eq!(rule.tool, "Edit");
+        assert_eq!(rule.specifier.unwrap().pattern, "/src/**/*.rs");
+    }
+
+    #[test]
+    fn parse_rule_wildcard_tool() {
+        let rule = parse_tool_rule("*", RuleDecision::Deny, RuleSource::Settings).unwrap();
+        assert_eq!(rule.tool, "*");
+        assert!(rule.specifier.is_none());
+    }
+
+    #[test]
+    fn parse_rule_wildcard_with_specifier() {
+        let rule = parse_tool_rule("*(npm run *)", RuleDecision::Allow, RuleSource::Settings).unwrap();
+        assert_eq!(rule.tool, "*");
+        assert_eq!(rule.specifier.unwrap().pattern, "npm run *");
+    }
+
+    #[test]
+    fn parse_rule_empty_fails() {
+        assert!(parse_tool_rule("", RuleDecision::Allow, RuleSource::Settings).is_err());
+        assert!(parse_tool_rule("  ", RuleDecision::Allow, RuleSource::Settings).is_err());
+    }
+
+    #[test]
+    fn parse_rule_unclosed_paren_fails() {
+        assert!(parse_tool_rule("Bash(git *", RuleDecision::Allow, RuleSource::Settings).is_err());
+    }
+
+    #[test]
+    fn parse_rule_empty_specifier_is_none() {
+        // "Bash()" is equivalent to "Bash"
+        let rule = parse_tool_rule("Bash()", RuleDecision::Allow, RuleSource::Settings).unwrap();
+        assert_eq!(rule.tool, "Bash");
+        assert!(rule.specifier.is_none());
+    }
+
+    #[test]
+    fn parse_rule_source_preserved() {
+        let rule = parse_tool_rule("Read", RuleDecision::Allow, RuleSource::Explicit).unwrap();
+        assert_eq!(rule.source, RuleSource::Explicit);
+    }
+
+    // ======================================================================
+    // ToolPermissionRule matching
+    // ======================================================================
+
+    #[test]
+    fn tool_rule_matches_exact_tool() {
+        let rule = ToolPermissionRule::new("Bash", RuleDecision::Allow);
+        assert!(rule.matches("Bash", "anything"));
+        assert!(!rule.matches("Edit", "anything"));
+    }
+
+    #[test]
+    fn tool_rule_matches_wildcard_tool() {
+        let rule = ToolPermissionRule::new("*", RuleDecision::Allow);
+        assert!(rule.matches("Bash", "anything"));
+        assert!(rule.matches("Edit", "anything"));
+        assert!(rule.matches("Write", "anything"));
+    }
+
+    #[test]
+    fn tool_rule_matches_specifier() {
+        let rule = ToolPermissionRule::new("Bash", RuleDecision::Allow)
+            .with_specifier("npm run *");
+        assert!(rule.matches("Bash", "npm run build"));
+        assert!(rule.matches("Bash", "npm run test"));
+        assert!(!rule.matches("Bash", "cargo build"));
+    }
+
+    #[test]
+    fn tool_rule_wildcard_with_specifier() {
+        let rule = ToolPermissionRule::new("*", RuleDecision::Allow)
+            .with_specifier("npm run *");
+        assert!(rule.matches("Bash", "npm run build"));
+        assert!(rule.matches("SomeTool", "npm run test"));
+        assert!(!rule.matches("Bash", "cargo build"));
+    }
+
+    #[test]
+    fn tool_rule_path_specifier() {
+        let rule = ToolPermissionRule::new("Edit", RuleDecision::Allow)
+            .with_specifier("/src/**/*.rs");
+        assert!(rule.matches("Edit", "/src/main.rs"));
+        assert!(rule.matches("Edit", "/src/foo/bar.rs"));
+        assert!(!rule.matches("Edit", "/lib/main.rs"));
+        assert!(!rule.matches("Write", "/src/main.rs")); // wrong tool
+    }
+
+    // ======================================================================
+    // ToolPermissionEvaluator -- priority ordering
+    // ======================================================================
+
+    #[test]
+    fn evaluator_deny_wins_over_allow() {
+        let rules = vec![
+            ToolPermissionRule::new("Bash", RuleDecision::Allow),
+            ToolPermissionRule::new("Bash", RuleDecision::Deny),
+        ];
+        let eval = ToolPermissionEvaluator::new(rules);
+        let result = eval.evaluate("Bash", "ls");
+        assert!(result.is_denied());
+    }
+
+    #[test]
+    fn evaluator_deny_wins_over_allow_with_specifier() {
+        let rules = vec![
+            ToolPermissionRule::new("Bash", RuleDecision::Allow)
+                .with_specifier("npm run *"),
+            ToolPermissionRule::new("Bash", RuleDecision::Deny)
+                .with_specifier("npm run *"),
+        ];
+        let eval = ToolPermissionEvaluator::new(rules);
+        let result = eval.evaluate("Bash", "npm run build");
+        assert!(result.is_denied());
+    }
+
+    #[test]
+    fn evaluator_deny_with_specifier_allows_non_matching() {
+        let rules = vec![
+            ToolPermissionRule::new("Bash", RuleDecision::Allow),
+            ToolPermissionRule::new("Bash", RuleDecision::Deny)
+                .with_specifier("rm *"),
+        ];
+        let eval = ToolPermissionEvaluator::new(rules);
+        // "npm run build" doesn't match the deny specifier, so allow wins
+        let result = eval.evaluate("Bash", "npm run build");
+        assert!(result.is_allowed());
+        // "rm -rf /" matches the deny specifier
+        let result = eval.evaluate("Bash", "rm -rf /");
+        assert!(result.is_denied());
+    }
+
+    #[test]
+    fn evaluator_ask_between_deny_and_allow() {
+        let rules = vec![
+            ToolPermissionRule::new("Bash", RuleDecision::Allow),
+            ToolPermissionRule::new("Bash", RuleDecision::Ask)
+                .with_specifier("curl *"),
+        ];
+        let eval = ToolPermissionEvaluator::new(rules);
+        // curl matches ask (ask is higher priority than allow)
+        let result = eval.evaluate("Bash", "curl http://example.com");
+        assert!(result.is_ask());
+        // npm matches allow
+        let result = eval.evaluate("Bash", "npm run build");
+        assert!(result.is_allowed());
+    }
+
+    #[test]
+    fn evaluator_no_match_returns_ask() {
+        let rules = vec![
+            ToolPermissionRule::new("Bash", RuleDecision::Allow),
+        ];
+        let eval = ToolPermissionEvaluator::new(rules);
+        let result = eval.evaluate("Edit", "/src/main.rs");
+        assert!(result.is_ask()); // default when no rule matches
+        assert!(result.matched_rule.is_none());
+    }
+
+    #[test]
+    fn evaluator_wildcard_tool_deny() {
+        let rules = vec![
+            ToolPermissionRule::new("*", RuleDecision::Deny),
+        ];
+        let eval = ToolPermissionEvaluator::new(rules);
+        assert!(eval.evaluate("Bash", "ls").is_denied());
+        assert!(eval.evaluate("Edit", "/src/main.rs").is_denied());
+        assert!(eval.evaluate("Write", "/tmp/x").is_denied());
+    }
+
+    #[test]
+    fn evaluator_wildcard_tool_with_specifier() {
+        let rules = vec![
+            ToolPermissionRule::new("*", RuleDecision::Allow)
+                .with_specifier("/src/**"),
+            ToolPermissionRule::new("*", RuleDecision::Deny),
+        ];
+        let eval = ToolPermissionEvaluator::new(rules);
+        // /src/... matches the allow specifier, but deny has no specifier so
+        // it catches everything. However deny is checked first and matches
+        // everything, so deny wins.
+        // Actually: deny "*" matches all tools with no specifier, so it will
+        // deny /src/... too. To make allow work for /src/**, the deny rule
+        // needs a specifier too.
+        let result = eval.evaluate("Edit", "/src/main.rs");
+        assert!(result.is_denied()); // deny catches all
+    }
+
+    #[test]
+    fn evaluator_targeted_deny_with_wildcard_allow() {
+        let rules = vec![
+            ToolPermissionRule::new("*", RuleDecision::Allow),
+            ToolPermissionRule::new("Bash", RuleDecision::Deny)
+                .with_specifier("rm *"),
+        ];
+        let eval = ToolPermissionEvaluator::new(rules);
+        // rm matches deny
+        let result = eval.evaluate("Bash", "rm -rf /tmp");
+        assert!(result.is_denied());
+        // ls for Bash: deny specifier doesn't match, so allow wins
+        let result = eval.evaluate("Bash", "ls -la");
+        assert!(result.is_allowed());
+        // Edit: wildcard allow
+        let result = eval.evaluate("Edit", "/src/main.rs");
+        assert!(result.is_allowed());
+    }
+
+    // ======================================================================
+    // PermissionPolicy
+    // ======================================================================
+
+    #[test]
+    fn policy_from_config_basic() {
+        let policy = PermissionPolicy::from_config(
+            &["Bash(npm run *)".into(), "Read".into()],
+            RuleDecision::Allow,
+        )
+        .unwrap();
+
+        let eval = policy.evaluate("Bash", "npm run build");
+        assert!(eval.is_allowed());
+
+        let eval = policy.evaluate("Read", "/src/main.rs");
+        assert!(eval.is_allowed());
+
+        // Non-matching tool: falls through to default (Allow)
+        let eval = policy.evaluate("Write", "/src/main.rs");
+        assert!(eval.is_allowed());
+    }
+
+    #[test]
+    fn policy_default_used_when_no_rule_matches() {
+        // from_config assigns the same decision to all rules.
+        // Use the builder for mixed decisions.
+        let policy = PermissionPolicyBuilder::new(RuleDecision::Ask)
+            .allow("Bash")
+            .unwrap()
+            .build();
+
+        // Bash matches an allow rule -> Allow
+        let eval = policy.evaluate("Bash", "ls");
+        assert!(eval.is_allowed());
+
+        // Edit doesn't match any rule -> default Ask
+        let eval = policy.evaluate("Edit", "/src/main.rs");
+        assert!(eval.is_ask());
+    }
+
+    #[test]
+    fn policy_builder_mixed_decisions() {
+        let policy = PermissionPolicyBuilder::new(RuleDecision::Ask)
+            .deny("Bash(rm *)")
+            .unwrap()
+            .allow("Bash(npm run *)")
+            .unwrap()
+            .allow("Read")
+            .unwrap()
+            .build();
+
+        // rm matches deny
+        let eval = policy.evaluate("Bash", "rm -rf /tmp");
+        assert!(eval.is_denied());
+
+        // npm run matches allow
+        let eval = policy.evaluate("Bash", "npm run build");
+        assert!(eval.is_allowed());
+
+        // Read matches allow
+        let eval = policy.evaluate("Read", "/src/main.rs");
+        assert!(eval.is_allowed());
+
+        // Unknown tool/command -> default Ask
+        let eval = policy.evaluate("Bash", "some-unknown-command");
+        assert!(eval.is_ask());
+
+        // Unknown tool -> default Ask
+        let eval = policy.evaluate("Write", "/tmp/output");
+        assert!(eval.is_ask());
+    }
+
+    #[test]
+    fn policy_deny_always_wins() {
+        let policy = PermissionPolicyBuilder::new(RuleDecision::Allow)
+            .allow("Bash(npm run *)")
+            .unwrap()
+            .deny("Bash(npm run *)")
+            .unwrap()
+            .build();
+
+        // Even though allow was added first, deny always wins
+        let eval = policy.evaluate("Bash", "npm run build");
+        assert!(eval.is_denied());
+    }
+
+    #[test]
+    fn policy_wildcard_catchall() {
+        let policy = PermissionPolicyBuilder::new(RuleDecision::Deny)
+            .allow("Read")
+            .unwrap()
+            .allow("Glob")
+            .unwrap()
+            .allow("Grep")
+            .unwrap()
+            .build();
+
+        assert!(policy.evaluate("Read", "any").is_allowed());
+        assert!(policy.evaluate("Glob", "any").is_allowed());
+        assert!(policy.evaluate("Bash", "ls").is_denied()); // default
+    }
+
+    #[test]
+    fn policy_from_rules_mixed() {
+        let rules = vec![
+            ToolPermissionRule::new("Bash", RuleDecision::Allow)
+                .with_specifier("npm run *")
+                .with_source(RuleSource::Settings),
+            ToolPermissionRule::new("Bash", RuleDecision::Deny)
+                .with_specifier("rm *")
+                .with_source(RuleSource::Settings),
+            ToolPermissionRule::new("Edit", RuleDecision::Allow)
+                .with_specifier("/src/**/*.rs")
+                .with_source(RuleSource::Explicit),
+        ];
+
+        let policy = PermissionPolicy::from_rules(rules, RuleDecision::Ask);
+
+        assert!(policy.evaluate("Bash", "npm run build").is_allowed());
+        assert!(policy.evaluate("Bash", "rm -rf /").is_denied());
+        assert!(policy.evaluate("Edit", "/src/main.rs").is_allowed());
+        assert!(policy.evaluate("Edit", "/lib/main.rs").is_ask()); // no rule match -> default
+        assert!(policy.evaluate("Write", "/tmp/x").is_ask()); // no rule match -> default
+    }
+
+    // ======================================================================
+    // ToolPermissionRule description
+    // ======================================================================
+
+    #[test]
+    fn rule_description_no_specifier() {
+        let rule = ToolPermissionRule::new("Bash", RuleDecision::Allow);
+        assert_eq!(rule.description(), "Bash [allow] from settings");
+    }
+
+    #[test]
+    fn rule_description_with_specifier() {
+        let rule = ToolPermissionRule::new("Bash", RuleDecision::Deny)
+            .with_specifier("rm *");
+        assert_eq!(rule.description(), "Bash(rm *) [deny] from settings");
+    }
+
+    // ======================================================================
+    // GlobPattern
+    // ======================================================================
+
+    #[test]
+    fn glob_pattern_matches() {
+        let gp = GlobPattern::new("npm run *");
+        assert!(gp.matches("npm run build"));
+        assert!(!gp.matches("cargo build"));
+    }
+
+    #[test]
+    fn glob_pattern_display() {
+        let gp = GlobPattern::new("*.rs");
+        assert_eq!(format!("{gp}"), "*.rs");
+    }
+
+    // ======================================================================
+    // PermissionEval helpers
+    // ======================================================================
+
+    #[test]
+    fn permission_eval_helpers() {
+        let eval = PermissionEval {
+            decision: RuleDecision::Allow,
+            matched_rule: Some("test".into()),
+        };
+        assert!(eval.is_allowed());
+        assert!(!eval.is_denied());
+        assert!(!eval.is_ask());
+
+        let eval = PermissionEval {
+            decision: RuleDecision::Deny,
+            matched_rule: None,
+        };
+        assert!(!eval.is_allowed());
+        assert!(eval.is_denied());
     }
 }

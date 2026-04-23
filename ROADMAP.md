@@ -474,6 +474,18 @@ These items are deferred from the current sprint for future evaluation.
 
 ---
 
+#### 2026-04-24 竞品对比推迟项（Round 2）
+
+基于 Claude Code / Codex CLI / OpenCode 深度对比，以下高价值任务推迟到下一迭代周期。
+
+- **Remote TUI / 多设备续接**: 基于 BridgeService 暴露 WebSocket 端点，实现远程 TUI 客户端连接。参考 Codex CLI remote TUI (app-server + WebSocket)。Claude Code 支持手机续接本地会话。
+- **对话分享**: `/share` 生成可分享链接。将 session transcript 导出为静态 HTML/markdown，上传至匿名 pastebin 或自托管服务。参考 OpenCode `/share`。
+- **CSV Batch Agent Jobs**: CSV 每行启动一个 worker agent 的扇出模式，结果导回 CSV。结合已有 TeamCreate + TaskCreate 实现。参考 Codex CLI `spawn_agents_on_csv`。
+- **Guardian Reviewer (审批审查子agent)**: 专用只读 subagent 做审批决策，替代交互式用户确认。CI/CD 场景自动审批，企业合规审批策略集中管理。参考 Codex CLI guardian_subagent。在 hook 系统中添加 `agent` 类型 hook，触发时 spawn 审查 agent 做风险评估。
+- **企业级托管设置**: org-wide policy deployment，系统级策略文件 `/etc/shannon/policy.toml`（不可被用户覆盖），支持 MDM 部署。参考 Claude Code managed settings 和 Codex CLI requirements.toml。扩展现有 remote_settings.rs。
+
+---
+
 ### Previously Deferred Items
 
 - P1: Auto-commit, Repo Map (tree-sitter), Auto-test Loop, LSP Integration, IDE Extensions

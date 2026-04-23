@@ -1139,6 +1139,8 @@ mod tests {
             top_k: None,
             stop_sequences: None,
             budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
         }
     }
 
@@ -1713,6 +1715,8 @@ mod tests {
             top_k: None,
             stop_sequences: None,
             budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
         };
 
         let val = serialize_request(&req, &LlmProvider::Anthropic);
@@ -1755,6 +1759,8 @@ mod tests {
             top_k: None,
             stop_sequences: None,
             budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
         };
 
         let val = serialize_openai_request(&req);
@@ -1854,6 +1860,8 @@ mod tests {
             top_k: None,
             stop_sequences: None,
             budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
         };
         let val = serialize_gemini_request(&req);
         let contents = val["contents"].as_array().unwrap();

@@ -139,6 +139,8 @@ impl LlmClient {
             top_k: None,
             stop_sequences: None,
             budget_tokens: self.config.budget_tokens,
+            thinking_budget: None,
+            reasoning_effort: None,
         };
 
         let url = self.endpoint_url();
@@ -215,6 +217,8 @@ impl LlmClient {
             top_k: None,
             stop_sequences: None,
             budget_tokens: self.config.budget_tokens,
+            thinking_budget: None,
+            reasoning_effort: None,
         };
 
         let url = self.endpoint_url();
@@ -284,6 +288,8 @@ impl LlmClient {
             top_k: None,
             stop_sequences: None,
             budget_tokens: self.config.budget_tokens,
+            thinking_budget: None,
+            reasoning_effort: None,
         };
 
         let url = self.endpoint_url();
@@ -349,6 +355,8 @@ impl LlmClient {
             top_k: None,
             stop_sequences: None,
             budget_tokens: self.config.budget_tokens,
+            thinking_budget: None,
+            reasoning_effort: None,
         };
 
         let url = self.endpoint_url();

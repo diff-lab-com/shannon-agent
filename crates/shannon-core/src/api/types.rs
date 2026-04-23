@@ -609,6 +609,76 @@ impl LlmClientConfig {
 pub type ClaudeClientConfig = LlmClientConfig;
 
 // ============================================================================
+// Reasoning / Extended Thinking Types
+// ============================================================================
+
+/// Reasoning effort level for models that support adaptive thinking.
+///
+/// Maps to Anthropic's `budget_tokens` (via percentage of context window) and
+/// OpenAI's `reasoning_effort` parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReasoningEffort {
+    Low,
+    Medium,
+    High,
+    XHigh,
+    Max,
+}
+
+impl ReasoningEffort {
+    /// Convert to an Anthropic API `budget_tokens` value, computed as a
+    /// fraction of the model's maximum context window size.
+    pub fn to_anthropic_budget(&self, max_context: usize) -> usize {
+        let fraction = match self {
+            Self::Low => 0.1,
+            Self::Medium => 0.25,
+            Self::High => 0.5,
+            Self::XHigh => 0.7,
+            Self::Max => 0.8,
+        };
+        (max_context as f64 * fraction) as usize
+    }
+
+    /// Convert to the OpenAI API `reasoning_effort` string value.
+    ///
+    /// OpenAI only supports three levels: `low`, `medium`, `high`.
+    /// `XHigh` and `Max` both map to `high`.
+    pub fn to_openai_effort(&self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "high",
+            Self::Max => "high",
+        }
+    }
+}
+
+impl std::fmt::Display for ReasoningEffort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Low => write!(f, "low"),
+            Self::Medium => write!(f, "medium"),
+            Self::High => write!(f, "high"),
+            Self::XHigh => write!(f, "xhigh"),
+            Self::Max => write!(f, "max"),
+        }
+    }
+}
+
+/// A thinking block returned in assistant responses when extended thinking is
+/// enabled.
+///
+/// Anthropic returns `{ "type": "thinking", "thinking": "...", "signature": "..." }`.
+/// The `signature` field is optional and may not be present in all responses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThinkingBlock {
+    pub thinking: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+}
+
+// ============================================================================
 // Message Types
 // ============================================================================
 
@@ -724,6 +794,14 @@ pub struct MessageRequest {
     /// When set, enables extended thinking mode with the given token budget.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub budget_tokens: Option<u32>,
+    /// Explicit token budget for thinking (alternative to `reasoning_effort`).
+    /// Takes precedence over `reasoning_effort` when both are set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_budget: Option<usize>,
+    /// Reasoning effort level (alternative to `thinking_budget`).
+    /// Translated to the appropriate provider-specific parameter at request time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 // ============================================================================
@@ -1082,5 +1160,184 @@ mod tests {
         let cfg = LlmClientConfig::together_default();
         assert_eq!(cfg.provider, LlmProvider::Together);
         assert!(cfg.base_url.contains("together.xyz"));
+    }
+
+    // -- ReasoningEffort tests --
+
+    #[test]
+    fn test_reasoning_effort_anthropic_budget() {
+        // 200k context window (common for Claude models)
+        let ctx = 200_000;
+
+        assert_eq!(ReasoningEffort::Low.to_anthropic_budget(ctx), 20_000);
+        assert_eq!(ReasoningEffort::Medium.to_anthropic_budget(ctx), 50_000);
+        assert_eq!(ReasoningEffort::High.to_anthropic_budget(ctx), 100_000);
+        assert_eq!(ReasoningEffort::XHigh.to_anthropic_budget(ctx), 140_000);
+        assert_eq!(ReasoningEffort::Max.to_anthropic_budget(ctx), 160_000);
+    }
+
+    #[test]
+    fn test_reasoning_effort_anthropic_budget_small_context() {
+        let ctx = 8_000;
+
+        assert_eq!(ReasoningEffort::Low.to_anthropic_budget(ctx), 800);
+        assert_eq!(ReasoningEffort::Medium.to_anthropic_budget(ctx), 2_000);
+        assert_eq!(ReasoningEffort::High.to_anthropic_budget(ctx), 4_000);
+        assert_eq!(ReasoningEffort::XHigh.to_anthropic_budget(ctx), 5_600);
+        assert_eq!(ReasoningEffort::Max.to_anthropic_budget(ctx), 6_400);
+    }
+
+    #[test]
+    fn test_reasoning_effort_openai_effort_string() {
+        assert_eq!(ReasoningEffort::Low.to_openai_effort(), "low");
+        assert_eq!(ReasoningEffort::Medium.to_openai_effort(), "medium");
+        assert_eq!(ReasoningEffort::High.to_openai_effort(), "high");
+        // XHigh and Max both map to high since OpenAI only has 3 levels
+        assert_eq!(ReasoningEffort::XHigh.to_openai_effort(), "high");
+        assert_eq!(ReasoningEffort::Max.to_openai_effort(), "high");
+    }
+
+    #[test]
+    fn test_reasoning_effort_display() {
+        assert_eq!(ReasoningEffort::Low.to_string(), "low");
+        assert_eq!(ReasoningEffort::Medium.to_string(), "medium");
+        assert_eq!(ReasoningEffort::High.to_string(), "high");
+        assert_eq!(ReasoningEffort::XHigh.to_string(), "xhigh");
+        assert_eq!(ReasoningEffort::Max.to_string(), "max");
+    }
+
+    #[test]
+    fn test_reasoning_effort_serialize_deserialize() {
+        for effort in [
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+            ReasoningEffort::XHigh,
+            ReasoningEffort::Max,
+        ] {
+            let json = serde_json::to_string(&effort).unwrap();
+            let parsed: ReasoningEffort = serde_json::from_str(&json).unwrap();
+            assert_eq!(effort, parsed);
+        }
+    }
+
+    #[test]
+    fn test_reasoning_effort_json_values() {
+        // Verify the serialized JSON uses lowercase strings
+        let json = serde_json::to_string(&ReasoningEffort::Low).unwrap();
+        assert_eq!(json, "\"Low\"");
+        let json = serde_json::to_string(&ReasoningEffort::XHigh).unwrap();
+        assert_eq!(json, "\"XHigh\"");
+    }
+
+    // -- ThinkingBlock tests --
+
+    #[test]
+    fn test_thinking_block_serialize() {
+        let block = ThinkingBlock {
+            thinking: "Let me think about this...".to_string(),
+            signature: Some("sig_abc123".to_string()),
+        };
+        let json = serde_json::to_string(&block).unwrap();
+        assert!(json.contains(r#""thinking":"Let me think about this...""#));
+        assert!(json.contains(r#""signature":"sig_abc123""#));
+    }
+
+    #[test]
+    fn test_thinking_block_without_signature() {
+        let block = ThinkingBlock {
+            thinking: "Reasoning here".to_string(),
+            signature: None,
+        };
+        let json = serde_json::to_string(&block).unwrap();
+        assert!(json.contains(r#""thinking":"Reasoning here""#));
+        assert!(!json.contains("signature"));
+    }
+
+    #[test]
+    fn test_thinking_block_deserialize() {
+        let json = r#"{"thinking":"deep thoughts","signature":"sig_xyz"}"#;
+        let block: ThinkingBlock = serde_json::from_str(json).unwrap();
+        assert_eq!(block.thinking, "deep thoughts");
+        assert_eq!(block.signature.as_deref(), Some("sig_xyz"));
+    }
+
+    #[test]
+    fn test_thinking_block_deserialize_without_signature() {
+        let json = r#"{"thinking":"just thinking"}"#;
+        let block: ThinkingBlock = serde_json::from_str(json).unwrap();
+        assert_eq!(block.thinking, "just thinking");
+        assert!(block.signature.is_none());
+    }
+
+    // -- MessageRequest with thinking/reasoning fields --
+
+    #[test]
+    fn test_message_request_with_thinking_budget() {
+        let request = MessageRequest {
+            model: "claude-sonnet-4-20250514".to_string(),
+            max_tokens: 4096,
+            system: None,
+            system_blocks: None,
+            messages: vec![],
+            tools: None,
+            stream: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: Some(10_000),
+            reasoning_effort: None,
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains(r#""thinking_budget":10000"#));
+        assert!(!json.contains("reasoning_effort"));
+    }
+
+    #[test]
+    fn test_message_request_with_reasoning_effort() {
+        let request = MessageRequest {
+            model: "gpt-4o".to_string(),
+            max_tokens: 4096,
+            system: None,
+            system_blocks: None,
+            messages: vec![],
+            tools: None,
+            stream: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: Some(ReasoningEffort::High),
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains(r#""reasoning_effort":"High""#));
+        assert!(!json.contains("thinking_budget"));
+    }
+
+    #[test]
+    fn test_message_request_without_thinking_fields() {
+        let request = MessageRequest {
+            model: "test-model".to_string(),
+            max_tokens: 4096,
+            system: None,
+            system_blocks: None,
+            messages: vec![],
+            tools: None,
+            stream: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(!json.contains("thinking_budget"));
+        assert!(!json.contains("reasoning_effort"));
     }
 }

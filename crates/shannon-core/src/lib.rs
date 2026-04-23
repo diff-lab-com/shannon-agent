@@ -93,6 +93,7 @@ pub mod enhanced_suggestions;
 pub mod ui_adapter;
 pub mod sandbox;
 pub mod api_server;
+pub mod preference_memory;
 
 pub mod i18n;
 

@@ -23,6 +23,7 @@ mod process_manager;
 mod protocol;
 mod remote_tools;
 mod tmux;
+mod isolation;
 
 pub use coordinator::{AgentCoordinator, CoordinatorConfig, AssignmentStrategy, AgentMode, CoordinatorEvent, AgentInfo, TeamManifest, InboxSummary};
 pub use teammate::{Teammate, TeammateConfig, TeammateStatus, TeammateState};
@@ -65,6 +66,10 @@ pub use executor::{
     ChatTurn,
 };
 pub use tmux::TmuxManager;
+pub use isolation::{
+    IsolatedContext, IsolationConfig, SubagentSummary,
+    ContextMessage, ContextRole,
+};
 pub use process_manager::{
     AgentProcessManager, AgentProcessConfig, AgentProcessStatus,
     AgentProcessError, AgentEvent, HealthCheckConfig,
