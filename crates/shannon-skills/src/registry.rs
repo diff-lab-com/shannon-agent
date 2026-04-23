@@ -263,6 +263,27 @@ impl SkillRegistry {
         Ok(skill)
     }
 
+    /// Reload a skill from disk, replacing any existing registration.
+    ///
+    /// If a skill with the same id or display name already exists it is
+    /// removed first, then the fresh copy from `path` is loaded and
+    /// registered.
+    pub fn reload_skill(&self, path: &Path) -> SkillResult<Skill> {
+        let skill = load_skill_from_file(path)?;
+
+        // Remove by id first, then by name (covers the case where a previous
+        // version had a different id but the same display name).
+        let _ = self.remove(&skill.id);
+        if let Ok(old) = self.get_by_name(&skill.name) {
+            let _ = self.remove(&old.id);
+        }
+
+        let name = skill.name.clone();
+        self.register(skill.clone())?;
+        debug!("Reloaded skill: {} from {:?}", name, path);
+        Ok(skill)
+    }
+
     /// Resolve a skill name/alias to its ID
     pub fn resolve_id(&self, name: &str) -> SkillResult<SkillId> {
         let inner = self.inner.read()

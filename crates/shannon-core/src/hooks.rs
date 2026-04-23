@@ -7,11 +7,29 @@
 //!
 //! Hooks can be triggered on these events:
 //! - [`HookEvent::PreToolUse`]: Before a tool is executed
-//! - [`HookEvent::PostToolUse`]: After a tool completes
+//! - [`HookEvent::PostToolUse`]: After a tool completes successfully
+//! - [`HookEvent::PostToolUseFailure`]: After a tool fails
 //! - [`HookEvent::SessionStart`]: When a session begins
 //! - [`HookEvent::SessionEnd`]: When a session ends
 //! - [`HookEvent::Notification`]: When a notification is emitted
 //! - [`HookEvent::UserPromptSubmit`]: When the user submits a prompt
+//! - [`HookEvent::Stop`]: When the model stops generating
+//! - [`HookEvent::StopFailure`]: When the model stops due to an error
+//! - [`HookEvent::PreCompact`]: Before context compaction
+//! - [`HookEvent::PostCompact`]: After context compaction completes
+//! - [`HookEvent::SubagentStart`]: When a subagent is spawned
+//! - [`HookEvent::SubagentStop`]: When a subagent finishes
+//! - [`HookEvent::PermissionRequest`]: When a permission is requested
+//! - [`HookEvent::PermissionDenied`]: When a permission is denied
+//! - [`HookEvent::FileChanged`]: When a file is modified on disk
+//! - [`HookEvent::CwdChanged`]: When the working directory changes
+//!
+//! ## Hook Types
+//!
+//! Each hook definition supports a `type` field controlling execution:
+//! - `command` (default): Shell command via stdin/stdout protocol
+//! - `http`: POST JSON to a URL
+//! - `prompt`: Single-turn LLM evaluation
 //!
 //! ## Configuration
 //!
@@ -116,6 +134,18 @@ pub enum HookEventType {
     PermissionDenied,
     /// When the model stops generating
     Stop,
+    /// After a tool fails with an error
+    PostToolUseFailure,
+    /// After context compaction completes
+    PostCompact,
+    /// When the model stops due to an error
+    StopFailure,
+    /// When a file is modified on disk
+    FileChanged,
+    /// When the working directory changes
+    CwdChanged,
+    /// When a permission is requested (before user prompt)
+    PermissionRequest,
 }
 
 impl HookEventType {
@@ -136,6 +166,12 @@ impl HookEventType {
             "SubagentStop" => Some(Self::SubagentStop),
             "PermissionDenied" => Some(Self::PermissionDenied),
             "Stop" => Some(Self::Stop),
+            "PostToolUseFailure" => Some(Self::PostToolUseFailure),
+            "PostCompact" => Some(Self::PostCompact),
+            "StopFailure" => Some(Self::StopFailure),
+            "FileChanged" => Some(Self::FileChanged),
+            "CwdChanged" => Some(Self::CwdChanged),
+            "PermissionRequest" => Some(Self::PermissionRequest),
             _ => None,
         }
     }
@@ -158,6 +194,12 @@ impl std::fmt::Display for HookEventType {
             Self::SubagentStop => write!(f, "SubagentStop"),
             Self::PermissionDenied => write!(f, "PermissionDenied"),
             Self::Stop => write!(f, "Stop"),
+            Self::PostToolUseFailure => write!(f, "PostToolUseFailure"),
+            Self::PostCompact => write!(f, "PostCompact"),
+            Self::StopFailure => write!(f, "StopFailure"),
+            Self::FileChanged => write!(f, "FileChanged"),
+            Self::CwdChanged => write!(f, "CwdChanged"),
+            Self::PermissionRequest => write!(f, "PermissionRequest"),
         }
     }
 }
@@ -275,6 +317,50 @@ pub enum HookEvent {
         /// Whether the model should continue (exit code 2 = force continue)
         should_continue: bool,
     },
+    /// After a tool fails with an error
+    PostToolUseFailure {
+        /// Name of the tool that failed
+        tool_name: String,
+        /// Input/arguments for the tool
+        input: Value,
+        /// Error message from the tool
+        error: String,
+    },
+    /// After context compaction completes
+    PostCompact {
+        /// Number of messages before compaction
+        messages_before: usize,
+        /// Number of messages after compaction
+        messages_after: usize,
+        /// Estimated tokens freed
+        tokens_freed: usize,
+    },
+    /// When the model stops due to an error
+    StopFailure {
+        /// Error message that caused the stop
+        error: String,
+    },
+    /// When a file is modified on disk
+    FileChanged {
+        /// Path to the changed file
+        path: String,
+        /// Type of change (create, modify, delete)
+        change_type: String,
+    },
+    /// When the working directory changes
+    CwdChanged {
+        /// Previous working directory
+        old_cwd: String,
+        /// New working directory
+        new_cwd: String,
+    },
+    /// When a permission is requested (before user prompt)
+    PermissionRequest {
+        /// Name of the tool requesting permission
+        tool_name: String,
+        /// Description of what the tool will do
+        description: String,
+    },
 }
 
 impl HookEvent {
@@ -295,6 +381,12 @@ impl HookEvent {
             Self::SubagentStop { .. } => HookEventType::SubagentStop,
             Self::PermissionDenied { .. } => HookEventType::PermissionDenied,
             Self::Stop { .. } => HookEventType::Stop,
+            Self::PostToolUseFailure { .. } => HookEventType::PostToolUseFailure,
+            Self::PostCompact { .. } => HookEventType::PostCompact,
+            Self::StopFailure { .. } => HookEventType::StopFailure,
+            Self::FileChanged { .. } => HookEventType::FileChanged,
+            Self::CwdChanged { .. } => HookEventType::CwdChanged,
+            Self::PermissionRequest { .. } => HookEventType::PermissionRequest,
         }
     }
 
@@ -317,6 +409,12 @@ impl HookEvent {
             Self::SubagentStop { agent_id, .. } => agent_id.clone(),
             Self::PermissionDenied { tool_name, .. } => tool_name.clone(),
             Self::Stop { tool_calls_count, .. } => tool_calls_count.to_string(),
+            Self::PostToolUseFailure { tool_name, .. } => tool_name.clone(),
+            Self::PostCompact { tokens_freed, .. } => tokens_freed.to_string(),
+            Self::StopFailure { error } => error.clone(),
+            Self::FileChanged { path, .. } => path.clone(),
+            Self::CwdChanged { new_cwd, .. } => new_cwd.clone(),
+            Self::PermissionRequest { tool_name, .. } => tool_name.clone(),
         }
     }
 
@@ -419,12 +517,40 @@ impl HookResult {
     }
 }
 
+/// The type of hook execution strategy
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HookType {
+    /// Shell command execution (default). Receives event JSON on stdin.
+    Command,
+    /// HTTP POST to a URL with event JSON as body.
+    Http,
+    /// Single-turn LLM evaluation. The prompt receives the event JSON
+    /// and must return a JSON decision on stdout.
+    Prompt,
+}
+
+impl Default for HookType {
+    fn default() -> Self {
+        Self::Command
+    }
+}
+
 /// Definition of a single hook command within a hook group
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HookDef {
-    /// Shell command to execute
+    /// Shell command to execute (required for command type)
     pub command: String,
+    /// Hook execution type (default: "command")
+    #[serde(default)]
+    pub r#type: HookType,
+    /// URL to POST to (required for http type)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// HTTP headers for http type hooks
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub headers: HashMap<String, String>,
     /// Timeout in seconds (default: 30)
     #[serde(default = "default_hook_timeout")]
     pub timeout: u64,
@@ -442,10 +568,37 @@ fn default_hook_blocking() -> bool {
 }
 
 impl HookDef {
-    /// Create a new hook definition
+    /// Create a new command hook definition
     pub fn new(command: impl Into<String>) -> Self {
         Self {
             command: command.into(),
+            r#type: HookType::Command,
+            url: None,
+            headers: HashMap::new(),
+            timeout: default_hook_timeout(),
+            blocking: default_hook_blocking(),
+        }
+    }
+
+    /// Create an HTTP hook that POSTs event JSON to a URL
+    pub fn new_http(url: impl Into<String>) -> Self {
+        Self {
+            command: String::new(),
+            r#type: HookType::Http,
+            url: Some(url.into()),
+            headers: HashMap::new(),
+            timeout: default_hook_timeout(),
+            blocking: default_hook_blocking(),
+        }
+    }
+
+    /// Create a prompt hook that uses single-turn LLM evaluation
+    pub fn new_prompt(command: impl Into<String>) -> Self {
+        Self {
+            command: command.into(),
+            r#type: HookType::Prompt,
+            url: None,
+            headers: HashMap::new(),
             timeout: default_hook_timeout(),
             blocking: default_hook_blocking(),
         }
@@ -460,6 +613,12 @@ impl HookDef {
     /// Set whether this hook is blocking
     pub fn with_blocking(mut self, blocking: bool) -> Self {
         self.blocking = blocking;
+        self
+    }
+
+    /// Add a header for HTTP hooks
+    pub fn with_header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.insert(key.into(), value.into());
         self
     }
 
@@ -729,12 +888,34 @@ impl HookManager {
             }
 
             for hook_def in &config.hooks {
-                let result = if hook_def.blocking {
-                    self.execute_hook(&hook_def.command, hook_def.timeout_duration(), &event_json).await?
-                } else {
+                let result = if !hook_def.blocking {
                     // For non-blocking hooks, spawn and detach
-                    self.spawn_hook(&hook_def.command, &event_json)?;
+                    match &hook_def.r#type {
+                        HookType::Command => {
+                            self.spawn_hook(&hook_def.command, &event_json)?;
+                        }
+                        HookType::Http => {
+                            self.spawn_http_hook(hook_def, &event_json)?;
+                        }
+                        HookType::Prompt => {
+                            // Prompt hooks are always blocking (need LLM response)
+                            let result = self.execute_prompt_hook(hook_def, &event_json).await?;
+                            results.push(result);
+                        }
+                    }
                     continue;
+                } else {
+                    match &hook_def.r#type {
+                        HookType::Command => {
+                            self.execute_hook(&hook_def.command, hook_def.timeout_duration(), &event_json).await?
+                        }
+                        HookType::Http => {
+                            self.execute_http_hook(hook_def, &event_json).await?
+                        }
+                        HookType::Prompt => {
+                            self.execute_prompt_hook(hook_def, &event_json).await?
+                        }
+                    }
                 };
 
                 results.push(result);
@@ -819,6 +1000,161 @@ impl HookManager {
         });
 
         Ok(())
+    }
+
+    /// Execute an HTTP hook: POST event JSON to the configured URL
+    async fn execute_http_hook(
+        &self,
+        hook_def: &HookDef,
+        event_json: &[u8],
+    ) -> Result<HookResult, HookError> {
+        let url = hook_def.url.as_deref().ok_or_else(|| {
+            HookError::InvalidMatcher("HTTP hook requires a 'url' field".to_string())
+        })?;
+
+        let timeout = hook_def.timeout_duration();
+        let result = tokio::time::timeout(timeout, async {
+            let mut builder = reqwest::Client::new().post(url);
+            for (key, value) in &hook_def.headers {
+                builder = builder.header(key.as_str(), value.as_str());
+            }
+
+            let response = builder
+                .header("Content-Type", "application/json")
+                .body(event_json.to_vec())
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) => {
+                    let status = resp.status().as_u16() as i32;
+                    let body = resp.text().await.unwrap_or_default();
+                    let decision = if status >= 200 && status < 300 {
+                        // Try parsing decision from response body
+                        HookResult::parse_decision(&body)
+                    } else {
+                        HookDecision::Deny {
+                            reason: format!("HTTP hook returned status {status}"),
+                        }
+                    };
+                    Ok::<HookResult, HookError>(HookResult {
+                        exit_code: status as i32,
+                        stdout: body,
+                        stderr: String::new(),
+                        decision,
+                        command: format!("POST {url}"),
+                    })
+                }
+                Err(e) => Ok::<HookResult, HookError>(HookResult {
+                    exit_code: -1,
+                    stdout: String::new(),
+                    stderr: e.to_string(),
+                    decision: HookDecision::Allow, // Network errors don't block by default
+                    command: format!("POST {url}"),
+                }),
+            }
+        })
+        .await;
+
+        match result {
+            Ok(Ok(hook_result)) => Ok(hook_result),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(HookError::Timeout {
+                command: format!("POST {url}"),
+                timeout_secs: timeout.as_secs(),
+            }),
+        }
+    }
+
+    /// Spawn a non-blocking HTTP hook (fire and forget)
+    fn spawn_http_hook(&self, hook_def: &HookDef, event_json: &[u8]) -> Result<(), HookError> {
+        let url = hook_def.url.clone();
+        let headers = hook_def.headers.clone();
+        let event_json = event_json.to_vec();
+
+        tokio::spawn(async move {
+            if let Some(url) = url {
+                let mut builder = reqwest::Client::new().post(&url);
+                for (key, value) in &headers {
+                    builder = builder.header(key.as_str(), value.as_str());
+                }
+                let _ = builder
+                    .header("Content-Type", "application/json")
+                    .body(event_json)
+                    .send()
+                    .await;
+            }
+        });
+
+        Ok(())
+    }
+
+    /// Execute a prompt hook: single-turn LLM evaluation
+    ///
+    /// The command is treated as a prompt template. The event JSON is appended
+    /// as context. The LLM's first line of output is parsed as a HookDecision.
+    async fn execute_prompt_hook(
+        &self,
+        hook_def: &HookDef,
+        event_json: &[u8],
+    ) -> Result<HookResult, HookError> {
+        // For prompt hooks, we invoke the command as a shell command but
+        // pass the event JSON and expect a JSON decision back.
+        // This allows using any CLI tool that can evaluate prompts.
+        let timeout = hook_def.timeout_duration();
+        let command = &hook_def.command;
+
+        let result = tokio::time::timeout(timeout, async {
+            let mut child = tokio::process::Command::new("sh")
+                .arg("-c")
+                .arg(command)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()?;
+
+            if let Some(mut stdin) = child.stdin.take() {
+                use tokio::io::AsyncWriteExt;
+                let _ = stdin.write_all(event_json).await;
+                drop(stdin);
+            }
+
+            let output = child.wait_with_output().await?;
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            let exit_code = output.status.code().unwrap_or(-1);
+
+            // Prompt hooks: exit code 2 = deny
+            let decision = if exit_code == 2 {
+                HookDecision::Deny {
+                    reason: if stderr.is_empty() {
+                        "Prompt hook denied".to_string()
+                    } else {
+                        stderr.clone()
+                    },
+                }
+            } else {
+                HookResult::parse_decision(&stdout)
+            };
+
+            Ok::<HookResult, HookError>(HookResult {
+                exit_code,
+                stdout,
+                stderr,
+                decision,
+                command: format!("prompt: {}", command),
+            })
+        })
+        .await;
+
+        match result {
+            Ok(Ok(hook_result)) => Ok(hook_result),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(HookError::Timeout {
+                command: hook_def.command.clone(),
+                timeout_secs: timeout.as_secs(),
+            }),
+        }
     }
 
     /// Process hook results and determine the final outcome.
@@ -1826,6 +2162,9 @@ More lines"#;
             matcher: "Bash".to_string(),
             hooks: vec![HookDef {
                 command: "echo test".to_string(),
+                r#type: HookType::Command,
+                url: None,
+                headers: HashMap::new(),
                 timeout: 10,
                 blocking: false,
             }],

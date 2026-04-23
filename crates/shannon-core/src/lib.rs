@@ -73,6 +73,7 @@ pub mod bridge_service;
 pub mod session_history;
 pub mod compact;
 pub mod context_budget;
+pub mod context_pressure;
 pub mod model_registry;
 pub mod project_instructions;
 pub mod streaming_tool_executor;
@@ -195,6 +196,9 @@ pub use session_history::{
 pub use streaming_tool_executor::{StreamingToolExecutor, TrackedTool, ToolStatus};
 pub use tool_execution::{ToolExecutionService, ToolExecutionResult, ToolProgress, ToolProgressStatus};
 pub use compact::{CompactEngine, CompactConfig, CompactResult, CompactStrategy, MessageGroup, CompactError, AiSummarizer, RuleBasedSummarizer, Summarizer};
+pub use context_pressure::{
+    ContextPressureMonitor, PressureLevel, PressureMetrics, PressureRecommendation,
+};
 pub use tool_hooks::{
     ToolHookChain, ToolHook, ToolHookResult, ToolHookDecision, ToolHookContext,
     ToolHookError, PermissionToolHook, LoggingToolHook, StopOnDenyHook,

@@ -1,6 +1,6 @@
 # Shannon Code - Implementation Roadmap
 
-> Updated: 2026-04-17
+> Updated: 2026-04-23
 > Priority: P0 features referencing Claude Code's implementation approach
 > Goal: Claude Code MCP/Skill/Agent ecosystem compatibility
 
@@ -445,10 +445,37 @@ These items are deferred from the current sprint for future evaluation.
 - **Approach**: Auto-detect queries needing current info, trigger web search, inject results
 - **Effort**: Low (tools exist, needs routing logic)
 
+#### 2026-04-23 竞品对比推迟项
+
+基于 Claude Code / Codex CLI / OpenCode 三方对比，以下任务推迟到后续迭代。
+
+##### 高优先级（下一批次候选）
+
+- **CI/CD Headless 模式**: `shannon -p "task"` 非交互模式，`--allowedTools` 预授权，`--output-format json` 结构化输出。参考 Codex CLI `codex exec` 和 Claude Code `-p` flag。
+- **.git 路径默认只读保护**: Sandbox 层面默认保护 `.git/`、`.shannon/` 为只读，即使 workspace-write 模式。参考 Codex CLI protected paths。
+- **Surface-agnostic Agent 协议**: Core 层与 Surface 层解耦，async channel 驱动，JSON-RPC 协议。参考 Codex CLI Thread/Turn/Item 三层原语设计。关键：Core 是纯库，不知道上层是 TUI/Web/IDE。
+- **Guardian Agent 审批机制**: 专用只读 agent 做审批决策，替代交互式用户确认。CI/CD 场景自动审批，企业合规审批策略集中管理。参考 Codex CLI guardian subagent。
+- **技能 Progressive Disclosure**: 启动时只注入 metadata（名称+描述），调用时才加载完整 SKILL.md。节省 context window。参考 Codex CLI progressive disclosure skills。
+- **OpenTelemetry 集成**: `tracing-opentelemetry` crate，OTLP exporter，覆盖对话、API、工具调用事件。企业可观测性需求。参考 Codex CLI opt-in OTel。
+
+##### 中优先级
+
+- **`run` 子命令**: `shannon run "task"` 一次性执行，不进入交互 REPL。参考 OpenCode `opencode run`。
+- **Feature Flags 系统**: 轻量 runtime feature toggle，配置文件 + CLI 切换，灰度发布新功能。参考 Codex CLI `codex features enable/disable`。
+- **Plugin 系统兼容层**: 当前 plugin.json 与 Claude Code 格式结构相似但字段不同。增加 Claude Code plugin.json 兼容解析器，允许直接使用 Claude Code 生态插件。
+
+##### 低优先级（长期路线图）
+
+- **VS Code 扩展**: 利用已有 `api_server.rs` + `axum` 构建。优先于 Web UI。
+- **Web UI**: 浏览器版 Shannon Code，无需本地安装。
+- **桌面应用**: tauri 或 wry 构建轻量壳。参考 OpenCode desktop app。
+- **Remote TUI**: 在一台机器运行 agent，从另一台通过 WebSocket 交互。参考 Codex CLI remote TUI。
+- **CSV 批量 Subagent 编排**: 每个 CSV 行启动一个 worker agent，结果导回 CSV。参考 Codex CLI `spawn_agents_on_csv`。
+
 ---
 
 ### Previously Deferred Items
 
-- P1: Auto-commit, Undo/Snapshot, Repo Map (tree-sitter), Auto-test Loop, LSP Integration, IDE Extensions
+- P1: Auto-commit, Repo Map (tree-sitter), Auto-test Loop, LSP Integration, IDE Extensions
 - P2: HTTP API Server, Architect Mode, Session Export, PDF Processing, Debug Instrumentation
 - P3: Cross-surface Continuity, Cloud Execution, Agent SDK, Skills Marketplace, Voice Input

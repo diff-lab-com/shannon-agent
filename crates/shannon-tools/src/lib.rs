@@ -78,7 +78,11 @@ pub use todo::{
 pub use skill::{SkillTool, SkillInvokeInput, SkillInvokeOutput};
 pub use cron::{CronTool, CronCreateInput, CronCreateOutput, CronDeleteInput, CronDeleteOutput, CronListInput, CronListOutput};
 pub use schedule_wakeup::{ScheduleWakeupTool, WakeupRequest, ScheduleWakeupInput, AUTONOMOUS_LOOP_SENTINEL};
-pub use plan_mode::{PlanModeState, EnterPlanModeTool, ExitPlanModeTool, new_plan_mode_state, is_plan_mode_active};
+pub use plan_mode::{
+    PlanModeState, EnterPlanModeTool, ExitPlanModeTool, GetPlanStatusTool,
+    PlanManager, PlanEntry,
+    new_plan_mode_state, is_plan_mode_active,
+};
 pub use lsp::{
     GoToDefinitionTool, FindReferencesTool, HoverTool, DocumentSymbolTool,
     WorkspaceSymbolTool, RenameSymbolTool, CodeActionsTool,
@@ -191,10 +195,11 @@ pub fn register_default_tools(registry: &mut ToolRegistry) -> Result<std::sync::
     // ── Worktree ───────────────────────────────────────────────────────
     registry.register(Box::new(WorktreeTool::new()))?;
 
-    // ── Plan mode (shared state) ───────────────────────────────────────
-    let plan_state = new_plan_mode_state();
-    registry.register(Box::new(EnterPlanModeTool::new(plan_state.clone())))?;
-    registry.register(Box::new(ExitPlanModeTool::new(plan_state)))?;
+    // ── Plan mode (shared state + PlanManager) ──────────────────────────
+    let plan_manager = PlanManager::new();
+    registry.register(Box::new(EnterPlanModeTool::with_manager(plan_manager.clone())))?;
+    registry.register(Box::new(ExitPlanModeTool::with_manager(plan_manager.clone())))?;
+    registry.register(Box::new(GetPlanStatusTool::new(plan_manager)))?;
 
     // ── LSP ────────────────────────────────────────────────────────────
     registry.register(Box::new(GoToDefinitionTool::new()))?;

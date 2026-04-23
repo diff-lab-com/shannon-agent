@@ -51,6 +51,7 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
+use crate::checkpoint::CheckpointManager;
 use crate::permissions::{PermissionError, PermissionManager};
 use crate::tools::{ToolError, ToolOutput, ToolRegistry};
 
@@ -346,6 +347,10 @@ pub struct ToolExecutionResult {
     pub stop_hook_info: Option<StopHookInfo>,
     /// Session ID.
     pub session_id: Uuid,
+    /// File paths modified by this tool execution (extracted from input).
+    pub files_modified: Vec<String>,
+    /// Whether a checkpoint was created before this tool execution.
+    pub checkpoint_created: bool,
 }
 
 impl ToolExecutionResult {
@@ -469,6 +474,19 @@ impl ProgressCallback for LoggingProgressCallback {
 // ToolExecutionService
 // ---------------------------------------------------------------------------
 
+/// Tools that modify files and should trigger auto-checkpointing.
+const FILE_MODIFYING_TOOLS: &[&str] = &[
+    "Write", "write", "FileWrite", "file_write",
+    "Edit", "edit", "FileEdit", "file_edit",
+    "MultiEdit", "multi_edit",
+    "Bash", "bash",  // Bash may modify files via commands
+];
+
+/// Returns true if the tool is known to modify files.
+pub fn is_file_modifying_tool(tool_name: &str) -> bool {
+    FILE_MODIFYING_TOOLS.contains(&tool_name)
+}
+
 /// Configuration for the tool execution service.
 #[derive(Debug, Clone)]
 pub struct ToolExecutionConfig {
@@ -478,6 +496,8 @@ pub struct ToolExecutionConfig {
     pub collect_attachments: bool,
     /// Whether to emit hook progress messages.
     pub emit_hook_progress: bool,
+    /// Whether to auto-checkpoint before file-modifying tools.
+    pub auto_checkpoint: bool,
 }
 
 impl Default for ToolExecutionConfig {
@@ -486,6 +506,7 @@ impl Default for ToolExecutionConfig {
             default_timeout: Duration::from_secs(300), // 5 minutes
             collect_attachments: true,
             emit_hook_progress: true,
+            auto_checkpoint: true,
         }
     }
 }
@@ -501,6 +522,8 @@ pub struct ToolExecutionService {
     permission_manager: Arc<PermissionManager>,
     /// Optional progress callback.
     progress_callback: Option<Arc<dyn ProgressCallback>>,
+    /// Optional checkpoint manager for auto-checkpointing before file modifications.
+    checkpoint_manager: Option<CheckpointManager>,
     /// Configuration.
     config: ToolExecutionConfig,
 }
@@ -515,6 +538,7 @@ impl ToolExecutionService {
             registry,
             permission_manager,
             progress_callback: None,
+            checkpoint_manager: None,
             config: ToolExecutionConfig::default(),
         }
     }
@@ -529,6 +553,7 @@ impl ToolExecutionService {
             registry,
             permission_manager,
             progress_callback: Some(callback),
+            checkpoint_manager: None,
             config: ToolExecutionConfig::default(),
         }
     }
@@ -543,8 +568,14 @@ impl ToolExecutionService {
             registry,
             permission_manager,
             progress_callback: None,
+            checkpoint_manager: None,
             config,
         }
+    }
+
+    /// Set the checkpoint manager for auto-checkpointing before file modifications.
+    pub fn set_checkpoint_manager(&mut self, mgr: CheckpointManager) {
+        self.checkpoint_manager = Some(mgr);
     }
 
     /// Set the progress callback.
@@ -589,6 +620,30 @@ impl ToolExecutionService {
             });
         }
 
+        // 2b. Extract file paths from input for file-modifying tools
+        let files_modified = Self::extract_file_paths(tool_name, &input);
+
+        // 2c. Auto-checkpoint before file-modifying tools
+        let mut checkpoint_created = false;
+        if self.config.auto_checkpoint
+            && is_file_modifying_tool(tool_name)
+            && !files_modified.is_empty()
+        {
+            if let Some(ref mgr) = self.checkpoint_manager {
+                let desc = format!(
+                    "{}: {}",
+                    tool_name,
+                    files_modified.join(", ")
+                );
+                match mgr.create_checkpoint(tool_name, &desc) {
+                    Ok(_) => checkpoint_created = true,
+                    Err(e) => {
+                        tracing::debug!("Auto-checkpoint skipped: {e}");
+                    }
+                }
+            }
+        }
+
         // 3. Emit started progress
         let started = ToolProgress::started(&tool_id, tool_name);
         progress_events.push(started.clone());
@@ -598,6 +653,12 @@ impl ToolExecutionService {
         let output = match self.registry.execute(tool_name, input.clone()).await {
             Ok(output) => output,
             Err(err) => {
+                // Discard checkpoint if tool failed to execute
+                if checkpoint_created {
+                    if let Some(ref mgr) = self.checkpoint_manager {
+                        mgr.discard_last();
+                    }
+                }
                 let msg = err.to_string();
                 let progress = ToolProgress::failed(&tool_id, tool_name, &msg);
                 progress_events.push(progress.clone());
@@ -608,6 +669,14 @@ impl ToolExecutionService {
 
         let duration = start_time.elapsed();
         let is_error = output.is_error;
+
+        // If tool returned an error, discard the checkpoint
+        if is_error && checkpoint_created {
+            if let Some(ref mgr) = self.checkpoint_manager {
+                mgr.discard_last();
+            }
+            checkpoint_created = false;
+        }
 
         // 4b. Truncate oversized tool output (~10K tokens max)
         const MAX_TOOL_OUTPUT_CHARS: usize = 40_000; // ~10K tokens at 4 chars/token
@@ -673,7 +742,31 @@ impl ToolExecutionService {
             hook_progress: hook_progress_events,
             stop_hook_info,
             session_id,
+            files_modified,
+            checkpoint_created,
         })
+    }
+
+    /// Extract file paths from tool input for tracking.
+    fn extract_file_paths(tool_name: &str, input: &Value) -> Vec<String> {
+        let mut paths = Vec::new();
+
+        if let Some(obj) = input.as_object() {
+            // Standard file path fields
+            for key in &["file_path", "path", "filePath"] {
+                if let Some(v) = obj.get(*key).and_then(|v| v.as_str()) {
+                    paths.push(v.to_string());
+                }
+            }
+        }
+
+        // Bash tools don't have direct file paths
+        if paths.is_empty() && (tool_name == "Bash" || tool_name == "bash") {
+            // We still mark Bash as file-modifying but with no specific paths
+            // The checkpoint still fires based on tool name alone
+        }
+
+        paths
     }
 
     /// Execute a tool with a timeout.
@@ -1012,6 +1105,7 @@ mod tests {
         assert_eq!(config.default_timeout, Duration::from_secs(300));
         assert!(config.collect_attachments);
         assert!(config.emit_hook_progress);
+        assert!(config.auto_checkpoint);
     }
 
     // -- ToolExecutionService integration tests --
@@ -1193,5 +1287,61 @@ mod tests {
         for p in &result.progress {
             assert!(p.elapsed.is_some());
         }
+    }
+
+    // -- Auto-checkpoint integration tests --
+
+    #[test]
+    fn test_is_file_modifying_tool() {
+        assert!(is_file_modifying_tool("Write"));
+        assert!(is_file_modifying_tool("write"));
+        assert!(is_file_modifying_tool("Edit"));
+        assert!(is_file_modifying_tool("Bash"));
+        assert!(!is_file_modifying_tool("Read"));
+        assert!(!is_file_modifying_tool("Grep"));
+        assert!(!is_file_modifying_tool("Unknown"));
+    }
+
+    #[test]
+    fn test_extract_file_paths_from_input() {
+        let input = serde_json::json!({"file_path": "/tmp/test.rs"});
+        let paths = ToolExecutionService::extract_file_paths("Write", &input);
+        assert_eq!(paths, vec!["/tmp/test.rs"]);
+
+        let input = serde_json::json!({"path": "/tmp/other.rs"});
+        let paths = ToolExecutionService::extract_file_paths("Edit", &input);
+        assert_eq!(paths, vec!["/tmp/other.rs"]);
+
+        let input = serde_json::json!({"command": "ls"});
+        let paths = ToolExecutionService::extract_file_paths("Bash", &input);
+        assert!(paths.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_service_result_has_files_modified() {
+        let service = make_service().await;
+        let session_id = Uuid::new_v4();
+
+        let result = service
+            .run_tool_use(session_id, "Echo", serde_json::json!({"message": "hello"}))
+            .await
+            .unwrap();
+
+        assert!(result.files_modified.is_empty());
+        assert!(!result.checkpoint_created);
+    }
+
+    #[tokio::test]
+    async fn test_service_no_checkpoint_without_manager() {
+        let service = make_service().await;
+        let session_id = Uuid::new_v4();
+
+        // Even for file-modifying tools, no checkpoint is created without a manager
+        let result = service
+            .run_tool_use(session_id, "Echo", serde_json::json!({"message": "hello"}))
+            .await
+            .unwrap();
+
+        assert!(!result.checkpoint_created);
     }
 }

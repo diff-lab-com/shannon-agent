@@ -2666,6 +2666,7 @@ dependencies = [
  "serde_yaml",
  "shannon-types",
  "shell-words",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

@@ -57,6 +57,7 @@ pub mod loader;
 pub mod registry;
 pub mod bundled;
 pub mod discovery;
+pub mod watcher;
 
 // Re-export commonly used types
 pub use definition::{
@@ -67,6 +68,7 @@ pub use executor::SkillExecutor;
 pub use registry::SkillRegistry;
 pub use bundled::{BundledSkills, BundledSkillBuilder, init_bundled_skills};
 pub use discovery::SkillDiscovery;
+pub use watcher::SkillWatcher;
 pub use frontmatter::ParsedSkill;
 
 /// Library version
