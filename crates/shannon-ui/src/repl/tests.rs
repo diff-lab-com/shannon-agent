@@ -2856,3 +2856,226 @@ fn test_rewind_then_rewind_again() {
     assert_eq!(repl.chat.len(), 3);
     assert_eq!(repl.chat.get_message(0).unwrap().content, "Q1");
 }
+
+// --- Permission mode cycling tests ---
+
+#[test]
+fn test_approval_mode_cycle_sequence() {
+    use shannon_core::permissions::ApprovalMode;
+
+    // Verify the cycle order matches spec:
+    // Suggest → AutoEdit → Plan → FullAuto → Readonly → BypassPermissions → Suggest
+    let mode = ApprovalMode::Suggest;
+    assert_eq!(mode.cycle_next(), ApprovalMode::AutoEdit);
+
+    let mode = ApprovalMode::AutoEdit;
+    assert_eq!(mode.cycle_next(), ApprovalMode::Plan);
+
+    let mode = ApprovalMode::Plan;
+    assert_eq!(mode.cycle_next(), ApprovalMode::FullAuto);
+
+    let mode = ApprovalMode::FullAuto;
+    assert_eq!(mode.cycle_next(), ApprovalMode::Readonly);
+
+    let mode = ApprovalMode::Readonly;
+    assert_eq!(mode.cycle_next(), ApprovalMode::Suggest);
+
+    // BypassPermissions and DontAsk cycle back to Suggest
+    assert_eq!(ApprovalMode::BypassPermissions.cycle_next(), ApprovalMode::Suggest);
+    assert_eq!(ApprovalMode::DontAsk.cycle_next(), ApprovalMode::Suggest);
+}
+
+#[test]
+fn test_approval_mode_short_labels() {
+    use shannon_core::permissions::ApprovalMode;
+
+    assert_eq!(ApprovalMode::Suggest.short_label(), "SUGGEST");
+    assert_eq!(ApprovalMode::Plan.short_label(), "PLAN");
+    assert_eq!(ApprovalMode::AutoEdit.short_label(), "AUTO");
+    assert_eq!(ApprovalMode::FullAuto.short_label(), "FULL");
+    assert_eq!(ApprovalMode::BypassPermissions.short_label(), "BYPASS");
+    assert_eq!(ApprovalMode::DontAsk.short_label(), "YOLO");
+    assert_eq!(ApprovalMode::Readonly.short_label(), "RO");
+}
+
+#[test]
+fn test_approval_mode_default_is_auto() {
+    use shannon_core::permissions::ApprovalMode;
+
+    // The default ApprovalMode is AutoEdit (which shows as "AUTO")
+    assert_eq!(ApprovalMode::default(), ApprovalMode::AutoEdit);
+}
+
+#[test]
+fn test_repl_default_approval_label() {
+    let state = ReplState::default();
+    assert_eq!(state.approval_mode_label, "AUTO", "default label should match AutoEdit");
+}
+
+#[test]
+fn test_repl_set_bypass_pending_action() {
+    let mut repl = Repl::new().unwrap();
+
+    // Execute the set_bypass_mode pending action
+    super::commands::execute_pending_action(&mut repl, "set_bypass_mode").unwrap();
+
+    // Verify label updated
+    assert_eq!(repl.state.approval_mode_label, "BYPASS");
+
+    // Verify PermissionManager was updated
+    if let Some(ref engine) = repl.query_engine {
+        let perms = engine.permissions().read().unwrap();
+        assert_eq!(perms.approval_mode(), shannon_core::permissions::ApprovalMode::BypassPermissions);
+    }
+}
+
+// --- Permission config loading tests ---
+
+#[test]
+fn test_load_permission_rules_from_file() {
+    use std::io::Write;
+
+    // Create a temp directory with a settings file
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let settings_dir = tmp_dir.path().join(".shannon");
+    std::fs::create_dir_all(&settings_dir).unwrap();
+    let settings_path = settings_dir.join("settings.json");
+
+    let settings_content = serde_json::json!({
+        "permissions": {
+            "allow": ["Bash", "Read"],
+            "deny": ["Bash(rm -rf *)"]
+        }
+    });
+    let mut f = std::fs::File::create(&settings_path).unwrap();
+    f.write_all(serde_json::to_string_pretty(&settings_content).unwrap().as_bytes()).unwrap();
+
+    // Override cwd for the test
+    let orig_cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(tmp_dir.path()).unwrap();
+
+    let mut pm = PermissionManager::new();
+    super::load_permission_rules(&mut pm);
+
+    // Verify tool-level allow rules were applied
+    let memory = pm.memory();
+    let allowed = memory.always_allowed_tools();
+    assert!(allowed.contains(&"Bash".to_string()), "Bash should be allowed");
+    assert!(allowed.contains(&"Read".to_string()), "Read should be allowed");
+
+    // Cleanup
+    std::env::set_current_dir(orig_cwd).unwrap();
+}
+
+#[test]
+fn test_load_permission_rules_missing_file() {
+    // Ensure loading from a directory with no settings files does not panic
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let orig_cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(tmp_dir.path()).unwrap();
+
+    let mut pm = PermissionManager::new();
+    // Should not panic
+    super::load_permission_rules(&mut pm);
+
+    std::env::set_current_dir(orig_cwd).unwrap();
+}
+
+#[test]
+fn test_load_permission_rules_invalid_json() {
+    use std::io::Write;
+
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let settings_dir = tmp_dir.path().join(".shannon");
+    std::fs::create_dir_all(&settings_dir).unwrap();
+    let settings_path = settings_dir.join("settings.json");
+
+    let mut f = std::fs::File::create(&settings_path).unwrap();
+    f.write_all(b"not valid json{{{").unwrap();
+
+    let orig_cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(tmp_dir.path()).unwrap();
+
+    let mut pm = PermissionManager::new();
+    // Should not panic on invalid JSON
+    super::load_permission_rules(&mut pm);
+
+    std::env::set_current_dir(orig_cwd).unwrap();
+}
+
+#[test]
+fn test_load_permission_rules_claude_settings() {
+    use std::io::Write;
+
+    // Test .claude/settings.json compatibility
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let claude_dir = tmp_dir.path().join(".claude");
+    std::fs::create_dir_all(&claude_dir).unwrap();
+    let settings_path = claude_dir.join("settings.json");
+
+    let settings_content = serde_json::json!({
+        "permissions": {
+            "allow": ["mcp__*"],
+            "deny": ["Bash(curl *)"]
+        }
+    });
+    let mut f = std::fs::File::create(&settings_path).unwrap();
+    f.write_all(serde_json::to_string_pretty(&settings_content).unwrap().as_bytes()).unwrap();
+
+    let orig_cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(tmp_dir.path()).unwrap();
+
+    let mut pm = PermissionManager::new();
+    super::load_permission_rules(&mut pm);
+
+    // Pattern-based rules should be applied
+    let memory = pm.memory();
+    let allowed = memory.always_allowed_tools();
+    // Glob patterns are stored via allow_pattern, not as individual tools
+    // Verify at least that no panic occurred
+    drop(memory);
+
+    std::env::set_current_dir(orig_cwd).unwrap();
+}
+
+// --- Status bar display tests ---
+
+#[test]
+fn test_approval_mode_label_syncs_with_permissions() {
+    let mut repl = Repl::new().unwrap();
+
+    // Default should be AUTO (AutoEdit)
+    assert_eq!(repl.state.approval_mode_label, "AUTO");
+
+    // Use /mode to change to readonly
+    repl.prompt.set_input("/mode readonly".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+
+    assert_eq!(repl.state.approval_mode_label, "RO");
+
+    // Change back to default
+    repl.prompt.set_input("/mode default".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    assert_eq!(repl.state.approval_mode_label, "SUGGEST");
+}
+
+#[test]
+fn test_permission_mode_bypass_not_in_cycle() {
+    use shannon_core::permissions::ApprovalMode;
+
+    // Verify BypassPermissions is NOT reachable via cycle_next from any safe mode.
+    // It can only be set via /mode or the confirmation dialog.
+    let safe_modes = [
+        ApprovalMode::Suggest,
+        ApprovalMode::AutoEdit,
+        ApprovalMode::Plan,
+        ApprovalMode::FullAuto,
+        ApprovalMode::Readonly,
+    ];
+    for mode in &safe_modes {
+        // cycle_next never produces BypassPermissions from safe modes
+        // (Readonly cycles to Suggest, not BypassPermissions)
+        assert_ne!(mode.cycle_next(), ApprovalMode::BypassPermissions,
+            "cycle_next from {:?} should not produce BypassPermissions", mode);
+    }
+}

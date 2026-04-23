@@ -31,3 +31,6 @@ rust-i18n = { workspace = true }
 base64 = "0.22"
 image = { workspace = true }
 reqwest = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

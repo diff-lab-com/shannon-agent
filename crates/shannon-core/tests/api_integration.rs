@@ -2007,6 +2007,7 @@ mod permission_flow_tests {
                 QueryEvent::Completed { .. } => "Completed",
                 QueryEvent::Failed { .. } => "Failed",
                 QueryEvent::Thinking { .. } => "Thinking",
+                QueryEvent::Info { .. } => "Info",
             }).collect::<Vec<_>>()
         );
     }

@@ -470,6 +470,9 @@ pub enum QueryEvent {
         input_tokens: u64,
         output_tokens: u64,
     },
+
+    /// Informational event (e.g. compaction metrics, context pressure warnings)
+    Info { query_id: Uuid, message: String },
 }
 
 /// Streaming query result

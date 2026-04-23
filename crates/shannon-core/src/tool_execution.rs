@@ -52,6 +52,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::checkpoint::CheckpointManager;
+use crate::hooks::{HookDecision, HookEvent, HookManager};
 use crate::permissions::{PermissionError, PermissionManager};
 use crate::tools::{ToolError, ToolOutput, ToolRegistry};
 
@@ -524,6 +525,8 @@ pub struct ToolExecutionService {
     progress_callback: Option<Arc<dyn ProgressCallback>>,
     /// Optional checkpoint manager for auto-checkpointing before file modifications.
     checkpoint_manager: Option<CheckpointManager>,
+    /// Optional hook manager for PreToolUse/PostToolUse lifecycle hooks.
+    hook_manager: Option<Arc<tokio::sync::RwLock<HookManager>>>,
     /// Configuration.
     config: ToolExecutionConfig,
 }
@@ -539,6 +542,7 @@ impl ToolExecutionService {
             permission_manager,
             progress_callback: None,
             checkpoint_manager: None,
+            hook_manager: None,
             config: ToolExecutionConfig::default(),
         }
     }
@@ -554,6 +558,7 @@ impl ToolExecutionService {
             permission_manager,
             progress_callback: Some(callback),
             checkpoint_manager: None,
+            hook_manager: None,
             config: ToolExecutionConfig::default(),
         }
     }
@@ -569,6 +574,7 @@ impl ToolExecutionService {
             permission_manager,
             progress_callback: None,
             checkpoint_manager: None,
+            hook_manager: None,
             config,
         }
     }
@@ -581,6 +587,15 @@ impl ToolExecutionService {
     /// Set the progress callback.
     pub fn set_progress_callback(&mut self, callback: Arc<dyn ProgressCallback>) {
         self.progress_callback = Some(callback);
+    }
+
+    /// Set the hook manager for PreToolUse/PostToolUse lifecycle hooks.
+    ///
+    /// The hook manager is stored behind an `Arc<RwLock<...>>` so it can be
+    /// shared with other components (e.g. the query engine) that also need to
+    /// fire lifecycle events.
+    pub fn set_hook_manager(&mut self, hook_manager: Arc<tokio::sync::RwLock<HookManager>>) {
+        self.hook_manager = Some(hook_manager);
     }
 
     /// Execute a tool with permission checks, progress tracking, and metadata.
@@ -644,13 +659,52 @@ impl ToolExecutionService {
             }
         }
 
+        // 2d. Run PreToolUse hooks - deny blocks execution, modify can change input
+        let mut effective_input = input;
+        if let Some(ref hm) = self.hook_manager {
+            let hook_event = HookEvent::PreToolUse {
+                tool_name: tool_name.to_string(),
+                input: effective_input.clone(),
+            };
+            let hm_guard = hm.read().await;
+            match hm_guard.run_hooks(&hook_event).await {
+                Ok(results) => {
+                    let decision = HookManager::resolve_results(&results);
+                    match decision {
+                        HookDecision::Deny { reason } => {
+                            let msg = format!("Hook blocked: {reason}");
+                            let progress =
+                                ToolProgress::failed(&tool_id, tool_name, &msg);
+                            progress_events.push(progress.clone());
+                            self.emit_progress(progress).await;
+                            return Err(ToolExecutionError::HookBlocked(msg));
+                        }
+                        HookDecision::Modify { modified_input, .. } => {
+                            if let Some(new_input) = modified_input {
+                                tracing::debug!(
+                                    "PreToolUse hook modified input for tool '{}'",
+                                    tool_name
+                                );
+                                effective_input = new_input;
+                            }
+                        }
+                        HookDecision::Allow => {}
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("PreToolUse hook error for '{}': {e}", tool_name);
+                    // Hook errors do not block execution by default
+                }
+            }
+        }
+
         // 3. Emit started progress
         let started = ToolProgress::started(&tool_id, tool_name);
         progress_events.push(started.clone());
         self.emit_progress(started).await;
 
-        // 4. Execute the tool
-        let output = match self.registry.execute(tool_name, input.clone()).await {
+        // 4. Execute the tool (using effective_input which may have been modified by hooks)
+        let output = match self.registry.execute(tool_name, effective_input.clone()).await {
             Ok(output) => output,
             Err(err) => {
                 // Discard checkpoint if tool failed to execute
@@ -663,6 +717,10 @@ impl ToolExecutionService {
                 let progress = ToolProgress::failed(&tool_id, tool_name, &msg);
                 progress_events.push(progress.clone());
                 self.emit_progress(progress).await;
+
+                // Fire PostToolUseFailure hook
+                self.fire_post_failure_hook(tool_name, &effective_input, &msg).await;
+
                 return Err(ToolExecutionError::ExecutionFailed(msg));
             }
         };
@@ -704,8 +762,20 @@ impl ToolExecutionService {
             self.emit_progress(progress).await;
         }
 
+        // 5b. Fire PostToolUse / PostToolUseFailure hooks
+        {
+            let output_val = serde_json::to_value(&output.content).unwrap_or(Value::Null);
+            if is_error {
+                self.fire_post_failure_hook(tool_name, &effective_input, &output.content)
+                    .await;
+            } else {
+                self.fire_post_hook(tool_name, &effective_input, &output_val)
+                    .await;
+            }
+        }
+
         // 6. Build metadata
-        let metadata = ToolExecutionResult::build_metadata(tool_name, &input, &output);
+        let metadata = ToolExecutionResult::build_metadata(tool_name, &effective_input, &output);
 
         // 7. Extract attachments
         let attachments = if self.config.collect_attachments {
@@ -717,7 +787,7 @@ impl ToolExecutionService {
         // 8. Build stop hook info
         let stop_hook_info = Some(StopHookInfo {
             tool_name: tool_name.to_string(),
-            tool_input: input.clone(),
+            tool_input: effective_input.clone(),
             tool_output: output.clone(),
             duration,
             is_error,
@@ -839,6 +909,123 @@ impl ToolExecutionService {
         if let Some(callback) = &self.progress_callback {
             callback.on_progress(progress).await;
         }
+    }
+
+    // ── Hook helper methods ──────────────────────────────────────────────
+
+    /// Fire PostToolUse hooks after a successful tool execution.
+    ///
+    /// Errors are logged but do not propagate -- post-hooks are informational.
+    async fn fire_post_hook(&self, tool_name: &str, input: &Value, output: &Value) {
+        if let Some(ref hm) = self.hook_manager {
+            let event = HookEvent::PostToolUse {
+                tool_name: tool_name.to_string(),
+                input: input.clone(),
+                output: output.clone(),
+            };
+            let hm_guard = hm.read().await;
+            if let Err(e) = hm_guard.run_hooks(&event).await {
+                tracing::warn!("PostToolUse hook error for '{}': {e}", tool_name);
+            }
+        }
+    }
+
+    /// Fire PostToolUseFailure hooks after a tool execution failure.
+    ///
+    /// Errors are logged but do not propagate -- post-hooks are informational.
+    async fn fire_post_failure_hook(&self, tool_name: &str, input: &Value, error: &str) {
+        if let Some(ref hm) = self.hook_manager {
+            let event = HookEvent::PostToolUseFailure {
+                tool_name: tool_name.to_string(),
+                input: input.clone(),
+                error: error.to_string(),
+            };
+            let hm_guard = hm.read().await;
+            if let Err(e) = hm_guard.run_hooks(&event).await {
+                tracing::warn!("PostToolUseFailure hook error for '{}': {e}", tool_name);
+            }
+        }
+    }
+
+    // ── Session lifecycle methods ────────────────────────────────────────
+
+    /// Fire SessionStart hooks.
+    ///
+    /// Call this once when a session begins (e.g. from the REPL startup).
+    /// Errors are logged but do not propagate -- session hooks are informational.
+    pub async fn on_session_start(&self, session_id: &str) {
+        if let Some(ref hm) = self.hook_manager {
+            let event = HookEvent::SessionStart {
+                session_id: session_id.to_string(),
+            };
+            let hm_guard = hm.read().await;
+            if let Err(e) = hm_guard.run_hooks(&event).await {
+                tracing::warn!("SessionStart hook error: {e}");
+            }
+        }
+    }
+
+    /// Fire SessionEnd hooks.
+    ///
+    /// Call this once when a session ends (e.g. from the REPL shutdown).
+    /// Errors are logged but do not propagate -- session hooks are informational.
+    pub async fn on_session_end(&self, session_id: &str) {
+        if let Some(ref hm) = self.hook_manager {
+            let event = HookEvent::SessionEnd {
+                session_id: session_id.to_string(),
+            };
+            let hm_guard = hm.read().await;
+            if let Err(e) = hm_guard.run_hooks(&event).await {
+                tracing::warn!("SessionEnd hook error: {e}");
+            }
+        }
+    }
+
+    /// Fire UserPromptSubmit hooks and return the (possibly modified) prompt.
+    ///
+    /// Call this when the user submits input, before processing.
+    /// Returns `Ok(Some(prompt))` with the possibly-modified prompt text,
+    /// `Ok(None)` if no hooks are configured (passthrough), or an error
+    /// string if a hook denies the submission.
+    pub async fn on_user_prompt_submit(
+        &self,
+        prompt: &str,
+    ) -> std::result::Result<Option<String>, String> {
+        if let Some(ref hm) = self.hook_manager {
+            let event = HookEvent::UserPromptSubmit {
+                prompt: prompt.to_string(),
+            };
+            let hm_guard = hm.read().await;
+            match hm_guard.run_hooks(&event).await {
+                Ok(results) => {
+                    let decision = HookManager::resolve_results(&results);
+                    match decision {
+                        HookDecision::Deny { reason } => Err(reason),
+                        HookDecision::Modify { modified_input, .. } => {
+                            // If the hook provides modified_input, treat its string
+                            // value as the new prompt text.
+                            if let Some(Value::String(new_prompt)) = modified_input {
+                                Ok(Some(new_prompt))
+                            } else {
+                                Ok(None)
+                            }
+                        }
+                        HookDecision::Allow => Ok(None),
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("UserPromptSubmit hook error: {e}");
+                    Ok(None)
+                }
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Get the hook manager, if configured.
+    pub fn hook_manager(&self) -> Option<&Arc<tokio::sync::RwLock<HookManager>>> {
+        self.hook_manager.as_ref()
     }
 }
 
@@ -1343,5 +1530,371 @@ mod tests {
             .unwrap();
 
         assert!(!result.checkpoint_created);
+    }
+
+    // ── Hook integration tests ──────────────────────────────────────────────
+
+    /// Helper to build a service with a HookManager loaded from a temp hooks file.
+    async fn make_service_with_hooks(hooks_json: &str) -> ToolExecutionService {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let hooks_path = temp_dir.path().join("hooks.json");
+        std::fs::write(&hooks_path, hooks_json).unwrap();
+
+        let mut mgr = HookManager::with_paths(
+            std::path::PathBuf::from("/nonexistent"),
+            std::path::PathBuf::from("/nonexistent"),
+        );
+        mgr.load_from_path(&hooks_path).unwrap();
+
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(EchoTool)).unwrap();
+        registry.register(Box::new(FailTool)).unwrap();
+        registry.register(Box::new(PanicTool)).unwrap();
+
+        let mut service = ToolExecutionService::new(Arc::new(registry), Arc::new(PermissionManager::new()));
+        service.set_hook_manager(Arc::new(tokio::sync::RwLock::new(mgr)));
+        service
+    }
+
+    #[tokio::test]
+    async fn test_hook_pre_tool_use_allows_execution() {
+        // Hook that echoes something (default Allow decision)
+        let service = make_service_with_hooks(r#"{
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Echo",
+                        "hooks": [
+                            {"command": "echo 'pre-hook ran'", "timeout": 5, "blocking": true}
+                        ]
+                    }
+                ]
+            }
+        }"#).await;
+
+        let session_id = Uuid::new_v4();
+        let result = service
+            .run_tool_use(session_id, "Echo", serde_json::json!({"message": "hello"}))
+            .await
+            .unwrap();
+
+        assert_eq!(result.output.content, "hello");
+        assert!(!result.is_error);
+    }
+
+    #[tokio::test]
+    async fn test_hook_pre_tool_use_denies_execution() {
+        // Hook that denies the tool call
+        let service = make_service_with_hooks(r#"{
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "*",
+                        "hooks": [
+                            {"command": "echo '{\"decision\": \"deny\", \"reason\": \"policy blocks this\"}'", "timeout": 5, "blocking": true}
+                        ]
+                    }
+                ]
+            }
+        }"#).await;
+
+        let session_id = Uuid::new_v4();
+        let result = service
+            .run_tool_use(session_id, "Echo", serde_json::json!({"message": "hello"}))
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            ToolExecutionError::HookBlocked(msg) => {
+                assert!(msg.contains("policy blocks this"));
+            }
+            other => panic!("Expected HookBlocked, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_hook_pre_tool_use_modify_input() {
+        // Hook that modifies the tool input
+        let service = make_service_with_hooks(r#"{
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Echo",
+                        "hooks": [
+                            {"command": "echo '{\"decision\": \"modify\", \"modified_input\": {\"message\": \"modified!\"}}'", "timeout": 5, "blocking": true}
+                        ]
+                    }
+                ]
+            }
+        }"#).await;
+
+        let session_id = Uuid::new_v4();
+        let result = service
+            .run_tool_use(session_id, "Echo", serde_json::json!({"message": "original"}))
+            .await
+            .unwrap();
+
+        // The tool should have received the modified input
+        assert_eq!(result.output.content, "modified!");
+        assert!(!result.is_error);
+    }
+
+    #[tokio::test]
+    async fn test_hook_no_hook_manager_passes_through() {
+        // Service without a hook manager should work normally
+        let service = make_service().await;
+        assert!(service.hook_manager().is_none());
+
+        let session_id = Uuid::new_v4();
+        let result = service
+            .run_tool_use(session_id, "Echo", serde_json::json!({"message": "hello"}))
+            .await
+            .unwrap();
+
+        assert_eq!(result.output.content, "hello");
+    }
+
+    #[tokio::test]
+    async fn test_hook_post_tool_use_fires_on_success() {
+        // PostToolUse hook runs after success - the tool still executes
+        let service = make_service_with_hooks(r#"{
+            "hooks": {
+                "PostToolUse": [
+                    {
+                        "matcher": "*",
+                        "hooks": [
+                            {"command": "echo 'post-hook ran'", "timeout": 5, "blocking": true}
+                        ]
+                    }
+                ]
+            }
+        }"#).await;
+
+        let session_id = Uuid::new_v4();
+        let result = service
+            .run_tool_use(session_id, "Echo", serde_json::json!({"message": "test"}))
+            .await
+            .unwrap();
+
+        assert_eq!(result.output.content, "test");
+        assert!(!result.is_error);
+    }
+
+    #[tokio::test]
+    async fn test_hook_post_tool_use_failure_fires_on_error_output() {
+        // PostToolUseFailure hook fires when tool returns is_error=true
+        let service = make_service_with_hooks(r#"{
+            "hooks": {
+                "PostToolUseFailure": [
+                    {
+                        "matcher": "*",
+                        "hooks": [
+                            {"command": "echo 'failure-hook ran'", "timeout": 5, "blocking": true}
+                        ]
+                    }
+                ]
+            }
+        }"#).await;
+
+        let session_id = Uuid::new_v4();
+        let result = service
+            .run_tool_use(session_id, "Fail", serde_json::json!({}))
+            .await
+            .unwrap();
+
+        assert!(result.is_error);
+        assert_eq!(result.output.content, "something went wrong");
+    }
+
+    #[tokio::test]
+    async fn test_hook_post_failure_fires_on_execution_error() {
+        // PostToolUseFailure hook fires when tool execute() returns Err
+        let service = make_service_with_hooks(r#"{
+            "hooks": {
+                "PostToolUseFailure": [
+                    {
+                        "matcher": "*",
+                        "hooks": [
+                            {"command": "echo 'exec-error-hook ran'", "timeout": 5, "blocking": true}
+                        ]
+                    }
+                ]
+            }
+        }"#).await;
+
+        let session_id = Uuid::new_v4();
+        let result = service
+            .run_tool_use(session_id, "Panic", serde_json::json!({}))
+            .await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_hook_pre_denies_non_matching_tool() {
+        // A hook matching only "Bash" should not affect "Echo"
+        let service = make_service_with_hooks(r#"{
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [
+                            {"command": "echo '{\"decision\": \"deny\", \"reason\": \"bash blocked\"}'", "timeout": 5, "blocking": true}
+                        ]
+                    }
+                ]
+            }
+        }"#).await;
+
+        let session_id = Uuid::new_v4();
+        let result = service
+            .run_tool_use(session_id, "Echo", serde_json::json!({"message": "hello"}))
+            .await
+            .unwrap();
+
+        assert_eq!(result.output.content, "hello");
+    }
+
+    #[tokio::test]
+    async fn test_session_lifecycle_hooks() {
+        // SessionStart and SessionEnd hooks should fire without error
+        let service = make_service_with_hooks(r#"{
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "matcher": "*",
+                        "hooks": [
+                            {"command": "echo 'session started'", "timeout": 5, "blocking": true}
+                        ]
+                    }
+                ],
+                "SessionEnd": [
+                    {
+                        "matcher": "*",
+                        "hooks": [
+                            {"command": "echo 'session ended'", "timeout": 5, "blocking": true}
+                        ]
+                    }
+                ]
+            }
+        }"#).await;
+
+        // These should not panic or error
+        service.on_session_start("test-session-1").await;
+        service.on_session_end("test-session-1").await;
+    }
+
+    #[tokio::test]
+    async fn test_session_lifecycle_no_hook_manager() {
+        // Without a hook manager, lifecycle methods should be no-ops
+        let service = make_service().await;
+        service.on_session_start("test").await;
+        service.on_session_end("test").await;
+    }
+
+    #[tokio::test]
+    async fn test_user_prompt_submit_hook_allow() {
+        let service = make_service_with_hooks(r#"{
+            "hooks": {
+                "UserPromptSubmit": [
+                    {
+                        "matcher": "*",
+                        "hooks": [
+                            {"command": "echo 'prompt submitted'", "timeout": 5, "blocking": true}
+                        ]
+                    }
+                ]
+            }
+        }"#).await;
+
+        let result = service.on_user_prompt_submit("hello world").await;
+        assert!(result.is_ok());
+        // Allow returns None (no modification)
+        assert!(result.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_user_prompt_submit_hook_deny() {
+        let service = make_service_with_hooks(r#"{
+            "hooks": {
+                "UserPromptSubmit": [
+                    {
+                        "matcher": "*",
+                        "hooks": [
+                            {"command": "echo '{\"decision\": \"deny\", \"reason\": \"prompt rejected\"}'", "timeout": 5, "blocking": true}
+                        ]
+                    }
+                ]
+            }
+        }"#).await;
+
+        let result = service.on_user_prompt_submit("rm -rf /").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("prompt rejected"));
+    }
+
+    #[tokio::test]
+    async fn test_user_prompt_submit_hook_modify() {
+        let service = make_service_with_hooks(r#"{
+            "hooks": {
+                "UserPromptSubmit": [
+                    {
+                        "matcher": "*",
+                        "hooks": [
+                            {"command": "echo '{\"decision\": \"modify\", \"modified_input\": \"sanitized prompt\"}'", "timeout": 5, "blocking": true}
+                        ]
+                    }
+                ]
+            }
+        }"#).await;
+
+        let result = service.on_user_prompt_submit("dangerous input").await;
+        assert!(result.is_ok());
+        let modified = result.unwrap();
+        assert_eq!(modified, Some("sanitized prompt".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_user_prompt_submit_no_hook_manager() {
+        let service = make_service().await;
+        let result = service.on_user_prompt_submit("hello").await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_hook_pre_then_post_both_fire() {
+        // Both PreToolUse and PostToolUse should fire in order
+        let service = make_service_with_hooks(r#"{
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "*",
+                        "hooks": [
+                            {"command": "echo 'pre-hook'", "timeout": 5, "blocking": true}
+                        ]
+                    }
+                ],
+                "PostToolUse": [
+                    {
+                        "matcher": "*",
+                        "hooks": [
+                            {"command": "echo 'post-hook'", "timeout": 5, "blocking": true}
+                        ]
+                    }
+                ]
+            }
+        }"#).await;
+
+        let session_id = Uuid::new_v4();
+        let result = service
+            .run_tool_use(session_id, "Echo", serde_json::json!({"message": "test"}))
+            .await
+            .unwrap();
+
+        // Tool should have executed successfully
+        assert_eq!(result.output.content, "test");
+        assert!(!result.is_error);
     }
 }

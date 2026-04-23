@@ -264,14 +264,41 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         KeyCode::BackTab => {
             // Cycle approval mode (Shift+Tab — universal pattern in Claude Code/Codex/Gemini CLI)
             if let Some(ref query_engine) = repl.query_engine {
-                let mut perms = query_engine.permissions().write().expect("permissions rwlock poisoned");
-                let next = perms.approval_mode().cycle_next();
-                perms.set_approval_mode(next);
-                let label = next.short_label();
-                drop(perms);
-                repl.state.approval_mode_label = label.to_string();
-                repl.state.status = format!("Mode: {label}");
-                repl.state.toast = Some((format!("  Mode: {label}  "), std::time::Instant::now()));
+                let current = {
+                    let perms = query_engine.permissions().read().expect("permissions rwlock poisoned");
+                    perms.approval_mode()
+                };
+
+                // Extended cycle: Suggest → AutoEdit → Plan → FullAuto → Readonly → BypassPermissions
+                // BypassPermissions requires confirmation; everything else applies immediately.
+                let next = match current {
+                    shannon_core::permissions::ApprovalMode::Suggest => shannon_core::permissions::ApprovalMode::AutoEdit,
+                    shannon_core::permissions::ApprovalMode::AutoEdit => shannon_core::permissions::ApprovalMode::Plan,
+                    shannon_core::permissions::ApprovalMode::Plan => shannon_core::permissions::ApprovalMode::FullAuto,
+                    shannon_core::permissions::ApprovalMode::FullAuto => shannon_core::permissions::ApprovalMode::Readonly,
+                    shannon_core::permissions::ApprovalMode::Readonly => shannon_core::permissions::ApprovalMode::BypassPermissions,
+                    shannon_core::permissions::ApprovalMode::BypassPermissions | shannon_core::permissions::ApprovalMode::DontAsk => {
+                        shannon_core::permissions::ApprovalMode::Suggest
+                    }
+                };
+
+                if next == shannon_core::permissions::ApprovalMode::BypassPermissions {
+                    // Show confirmation dialog — only apply on confirm
+                    let _ = current;
+                    repl.show_confirm_dialog(
+                        "Bypass Permissions",
+                        "This will skip ALL permission checks. Only use in trusted environments.\n\nAre you sure?",
+                        "set_bypass_mode",
+                    );
+                } else {
+                    let mut perms = query_engine.permissions().write().expect("permissions rwlock poisoned");
+                    perms.set_approval_mode(next);
+                    let label = next.short_label();
+                    drop(perms);
+                    repl.state.approval_mode_label = label.to_string();
+                    repl.state.status = format!("Mode: {label}");
+                    repl.state.toast = Some((format!("  Mode: {label}  "), std::time::Instant::now()));
+                }
             }
             Ok(())
         }

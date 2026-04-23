@@ -258,9 +258,14 @@ impl StatusBarWidget {
         if let Some(mode_label) = approval_mode {
             span_vec.push(sep());
             let mode_style = match mode_label {
-                label if label == "SUGGEST" || label == "PLAN" || label == "RO" => Style::default().fg(theme.warning),
+                label if label == "SUGGEST" || label == "PLAN" || label == "RO" => {
+                    Style::default().fg(theme.warning)
+                }
                 label if label == "AUTO" => Style::default().fg(theme.success),
                 label if label == "FULL" => Style::default().fg(theme.primary),
+                label if label == "BYPASS" || label == "YOLO" => {
+                    Style::default().fg(ratatui::style::Color::Red)
+                }
                 _ => Style::default().fg(theme.text_dim),
             };
             span_vec.push(Span::styled(mode_label.to_string(), mode_style.add_modifier(Modifier::BOLD)));

@@ -3,12 +3,16 @@
 use crate::error::AgentError;
 use crate::executor::{AgentExecutor, ChatTurn};
 use crate::message::{AgentMessage, MessageContent, MessageType, ProtocolMessage};
+use crate::persistence::FilePersistence;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock, Mutex};
 use uuid::Uuid;
+
+/// Default idle poll interval in seconds for the self-claim work loop.
+const DEFAULT_IDLE_INTERVAL_SECS: u64 = 3;
 
 /// Configuration for a teammate agent
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -147,6 +151,10 @@ pub struct Teammate {
     executor: Option<Arc<dyn AgentExecutor>>,
     /// Multi-turn conversation history for context-aware responses
     conversation_history: Arc<RwLock<Vec<ChatTurn>>>,
+    /// Idle poll interval in seconds for the self-claim work loop (default: 3)
+    idle_interval_secs: Arc<std::sync::Mutex<u64>>,
+    /// Team name this agent belongs to (set when added to a team)
+    team_name: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl fmt::Debug for Teammate {
@@ -171,6 +179,8 @@ impl Teammate {
             created_at: chrono::Utc::now(),
             executor: None,
             conversation_history: Arc::new(RwLock::new(Vec::new())),
+            idle_interval_secs: Arc::new(std::sync::Mutex::new(DEFAULT_IDLE_INTERVAL_SECS)),
+            team_name: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -186,6 +196,8 @@ impl Teammate {
             created_at: chrono::Utc::now(),
             executor: Some(executor),
             conversation_history: Arc::new(RwLock::new(Vec::new())),
+            idle_interval_secs: Arc::new(std::sync::Mutex::new(DEFAULT_IDLE_INTERVAL_SECS)),
+            team_name: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -638,5 +650,264 @@ impl Teammate {
     /// Get the agent's configuration
     pub fn config(&self) -> &TeammateConfig {
         &self.config
+    }
+
+    // ── Team association ──────────────────────────────────────────────
+
+    /// Set the team name this agent belongs to.
+    pub fn set_team_name(&self, team: String) {
+        if let Ok(mut guard) = self.team_name.lock() {
+            *guard = Some(team);
+        }
+    }
+
+    /// Get the team name this agent belongs to.
+    pub fn team_name(&self) -> Option<String> {
+        self.team_name.lock().ok().and_then(|g| g.clone())
+    }
+
+    // ── Idle interval configuration ───────────────────────────────────
+
+    /// Set the idle poll interval in seconds for the self-claim work loop.
+    pub fn set_idle_interval(&self, secs: u64) {
+        if let Ok(mut guard) = self.idle_interval_secs.lock() {
+            *guard = secs;
+        }
+    }
+
+    /// Get the current idle poll interval in seconds.
+    pub fn idle_interval(&self) -> u64 {
+        self.idle_interval_secs.lock()
+            .map(|g| *g)
+            .unwrap_or(DEFAULT_IDLE_INTERVAL_SECS)
+    }
+
+    // ── Auto idle notification ────────────────────────────────────────
+
+    /// Automatically send an idle notification after execution completes.
+    ///
+    /// This transitions the agent to Idle status and constructs a message
+    /// that can be sent to the coordinator. The coordinator can then
+    /// surface the idle state for visibility or auto-assign work.
+    ///
+    /// Returns a structured message to deliver to the coordinator, or None
+    /// if the agent is not idle (still has tasks).
+    pub async fn notify_idle(&self) -> Option<AgentMessage> {
+        let active_tasks = self.assigned_tasks.read().await.len();
+        if active_tasks > 0 {
+            return None;
+        }
+
+        // Transition to Idle
+        *self.status.write().await = TeammateStatus::Idle;
+
+        tracing::info!(
+            agent = %self.name,
+            "Agent is now idle, sending idle notification"
+        );
+
+        let team = self.team_name();
+        let metadata = serde_json::json!({
+            "agent": self.name,
+            "status": "Idle",
+            "team": team,
+            "active_tasks": 0,
+            "is_lead": self.config.is_lead,
+        });
+
+        Some(AgentMessage {
+            id: Uuid::new_v4(),
+            from: self.name.clone(),
+            to: "coordinator".to_string(),
+            message_type: MessageType::Status,
+            priority: crate::message::MessagePriority::Normal,
+            content: MessageContent::Structured(serde_json::json!({
+                "type": "idle_notification",
+                "data": metadata,
+            })),
+            timestamp: chrono::Utc::now(),
+        })
+    }
+
+    // ── Self-claim work loop ──────────────────────────────────────────
+
+    /// Attempt to self-claim the next available task from the file-based
+    /// task list.
+    ///
+    /// This implements the core self-claim loop:
+    /// ```text
+    /// idle -> TaskList -> find (unblocked, no owner) -> TaskUpdate (set owner=self) -> execute -> mark complete -> idle
+    /// ```
+    ///
+    /// Uses `FilePersistence::claim_task()` for file-based locking to
+    /// prevent two agents from claiming the same task.
+    ///
+    /// Returns the claimed task ID if successful, or None if no tasks available.
+    pub async fn try_claim_task(
+        &self,
+        persistence: &FilePersistence,
+    ) -> Result<Option<uuid::Uuid>, AgentError> {
+        let team_name = self.team_name()
+            .ok_or_else(|| AgentError::Communication(
+                format!("Agent '{}' has no team assignment", self.name)
+            ))?;
+
+        // Find the next claimable task (lowest-ID, unblocked, unowned)
+        let Some(task_file) = persistence.find_claimable_task(&team_name)? else {
+            return Ok(None);
+        };
+
+        // Attempt to claim with file-based locking
+        match persistence.claim_task(&team_name, &task_file.id, &self.name) {
+            Ok(claimed) => {
+                let task_id = Uuid::parse_str(&claimed.id)
+                    .map_err(|_| AgentError::Configuration(
+                        format!("Invalid task UUID: {}", claimed.id)
+                    ))?;
+
+                // Update in-memory state
+                {
+                    let mut tasks = self.assigned_tasks.write().await;
+                    tasks.push(task_id);
+                }
+                *self.status.write().await = TeammateStatus::Busy;
+
+                tracing::info!(
+                    agent = %self.name,
+                    task_id = %task_id,
+                    subject = %claimed.subject,
+                    "Agent self-claimed task via file-based claim"
+                );
+
+                Ok(Some(task_id))
+            }
+            Err(e) => {
+                // Claim conflict — another agent got there first
+                tracing::debug!(
+                    agent = %self.name,
+                    error = %e,
+                    "Claim conflict, another agent claimed the task first"
+                );
+                Ok(None)
+            }
+        }
+    }
+
+    /// Run one iteration of the self-claim work loop.
+    ///
+    /// 1. Check if agent is idle and available
+    /// 2. Find and claim the next available task
+    /// 3. Execute the task (if executor is configured)
+    /// 4. Mark complete
+    /// 5. Notify idle
+    ///
+    /// Returns the idle notification message if the agent completed work
+    /// and went idle, or None if no work was available.
+    pub async fn run_work_cycle(
+        &self,
+        persistence: &FilePersistence,
+    ) -> Option<AgentMessage> {
+        // Step 1: Check availability
+        if !self.is_available().await {
+            return None;
+        }
+
+        // Step 2: Try to claim a task
+        let task_id = match self.try_claim_task(persistence).await {
+            Ok(Some(id)) => id,
+            Ok(None) => return None, // No tasks available
+            Err(e) => {
+                tracing::debug!(
+                    agent = %self.name,
+                    error = %e,
+                    "Failed to claim task in work cycle"
+                );
+                return None;
+            }
+        };
+
+        // Step 3: Execute the task if executor is available
+        if let Some(ref executor) = self.executor {
+            let team_name = self.team_name().unwrap_or_default();
+            let task_file = persistence.load_task(&team_name, &task_id.to_string()).ok();
+            let task_description = task_file
+                .as_ref()
+                .map(|t| format!("{}\n{}", t.subject, t.description))
+                .unwrap_or_else(|| task_id.to_string());
+
+            let system_prompt = self.config.system_prompt.as_deref().unwrap_or(
+                "You are a helpful AI agent. Execute the assigned task."
+            );
+            let model = self.config.model.as_deref();
+            let tools = if self.config.capabilities.is_empty() {
+                None
+            } else {
+                Some(self.config.capabilities.as_slice())
+            };
+
+            match executor.execute(system_prompt, &task_description, model, tools).await {
+                Ok(_output) => {
+                    tracing::info!(
+                        agent = %self.name,
+                        task_id = %task_id,
+                        "Task execution completed"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        agent = %self.name,
+                        task_id = %task_id,
+                        error = %e,
+                        "Task execution failed"
+                    );
+                }
+            }
+        }
+
+        // Step 4: Mark complete
+        self.complete_task(task_id).await;
+
+        // Step 5: Notify idle
+        self.notify_idle().await
+    }
+
+    /// Spawn a background self-claim work loop that runs continuously.
+    ///
+    /// The loop polls for available tasks at the configured idle interval
+    /// and executes them as they become available. It stops when the agent
+    /// transitions to ShuttingDown or Stopped status.
+    ///
+    /// Returns a JoinHandle that can be used to cancel the work loop.
+    pub fn spawn_work_loop(
+        self: &Arc<Self>,
+        persistence: FilePersistence,
+    ) -> tokio::task::JoinHandle<()> {
+        let agent = Arc::clone(self);
+        let interval_secs = self.idle_interval();
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(
+                std::time::Duration::from_secs(interval_secs)
+            );
+            // Consume first immediate tick
+            interval.tick().await;
+
+            loop {
+                interval.tick().await;
+
+                // Check if we should stop
+                let status = agent.status().await;
+                if matches!(status, TeammateStatus::ShuttingDown | TeammateStatus::Stopped) {
+                    tracing::info!(
+                        agent = %agent.name,
+                        "Work loop stopping due to agent status: {:?}", status
+                    );
+                    return;
+                }
+
+                // Run one work cycle
+                let _ = agent.run_work_cycle(&persistence).await;
+            }
+        })
     }
 }

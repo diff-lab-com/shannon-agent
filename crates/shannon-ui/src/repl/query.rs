@@ -268,6 +268,9 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                 Ok(QueryEvent::Failed { error, .. }) => {
                     return Err(format!("Query failed: {error}"));
                 }
+                Ok(QueryEvent::Info { message, .. }) => {
+                    tracing::info!("Query info: {message}");
+                }
                 Err(e) => {
                     return Err(format!("Stream error: {e}"));
                 }

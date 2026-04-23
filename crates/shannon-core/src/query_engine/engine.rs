@@ -46,6 +46,7 @@ use crate::api::{
 use crate::memory::AutoDreamService;
 use crate::memory::MemoryStore;
 use crate::permissions::PermissionManager;
+use crate::query_engine::context_injector::ContextInjector;
 use crate::query_engine::streaming::ConversationState;
 use crate::query_engine::types::{
     ConversationStats, CostTracker, QueryContext, QueryEngineConfig, QueryError, QueryEvent,
@@ -73,6 +74,8 @@ pub struct QueryEngine {
     pub(crate) session_id: Uuid,
     /// Hook manager for lifecycle events (pre/post tool use, session start/end)
     pub(crate) hook_manager: Arc<tokio::sync::RwLock<crate::hooks::HookManager>>,
+    /// Context injector for project instructions and preference memory.
+    pub(crate) context_injector: Option<Arc<ContextInjector>>,
 }
 
 /// Helper to create a loaded HookManager
@@ -154,6 +157,7 @@ impl QueryEngine {
             memory: None,
             session_id,
             hook_manager: Arc::new(tokio::sync::RwLock::new(hook_mgr())),
+            context_injector: None,
         }
     }
 
@@ -190,6 +194,7 @@ impl QueryEngine {
             memory: None,
             session_id,
             hook_manager: Arc::new(tokio::sync::RwLock::new(hook_mgr())),
+            context_injector: None,
         }
     }
 
@@ -217,6 +222,7 @@ impl QueryEngine {
             memory: None,
             session_id,
             hook_manager: Arc::new(tokio::sync::RwLock::new(hook_mgr())),
+            context_injector: None,
         }
     }
 
@@ -250,6 +256,20 @@ impl QueryEngine {
     /// Access the memory store, if configured.
     pub fn memory(&self) -> Option<&Arc<std::sync::RwLock<MemoryStore>>> {
         self.memory.as_ref()
+    }
+
+    /// Attach a context injector for project instructions and preference memory.
+    ///
+    /// When set, the injector provides project instructions and user preferences
+    /// that are injected into the system prompt and re-injected after compaction.
+    pub fn with_context_injector(mut self, injector: ContextInjector) -> Self {
+        self.context_injector = Some(Arc::new(injector));
+        self
+    }
+
+    /// Access the context injector, if configured.
+    pub fn context_injector(&self) -> Option<&Arc<ContextInjector>> {
+        self.context_injector.as_ref()
     }
 
     /// Get the current session ID
@@ -408,6 +428,7 @@ impl QueryEngine {
         let session_id_for_save = self.session_id;
         let cost_tracker = self.cost_tracker.clone();
         let hook_manager = self.hook_manager.clone();
+        let context_injector = self.context_injector.clone();
 
         // Search for relevant memories to augment the system prompt
         let memory_entries = if let Some(ref mem_store) = self.memory {
@@ -474,6 +495,12 @@ impl QueryEngine {
                 };
                 system_blocks.push(block);
             }
+        }
+
+        // Inject context from ContextInjector (preference memory + hot-reloaded instructions)
+        if let Some(ref injector) = self.context_injector {
+            let extra_blocks = injector.build_system_blocks(use_cache);
+            system_blocks.extend(extra_blocks);
         }
 
         // Decide whether to use structured blocks or fallback to plain string.
@@ -635,15 +662,20 @@ impl QueryEngine {
                         } else {
                             match crate::compact::CompactEngine::with_ai_summarizer(client.clone()) {
                                 Ok(mut compact_engine) => {
-                                    // Build re-injection context from system prompt
-                                    let reinjection = system_prompt.as_deref().map(|sp| {
-                                        // Truncate to avoid bloating the compacted context
-                                        if sp.len() > 2000 {
-                                            format!("{}\n[...truncated]", &sp[..2000])
-                                        } else {
-                                            sp.to_string()
-                                        }
-                                    });
+                                    // Build re-injection context from ContextInjector if available,
+                                    // otherwise fall back to the system prompt (truncated).
+                                    let reinjection = if let Some(ref injector) = context_injector {
+                                        let ctx = injector.reinjection_context();
+                                        if ctx.is_empty() { None } else { Some(ctx) }
+                                    } else {
+                                        system_prompt.as_deref().map(|sp| {
+                                            if sp.len() > 2000 {
+                                                format!("{}\n[...truncated]", &sp[..2000])
+                                            } else {
+                                                sp.to_string()
+                                            }
+                                        })
+                                    };
                                     match compact_engine.compact_tiered(&mut messages, reinjection.as_deref()) {
                                         Ok(result) => {
                                             compaction_failures = 0; // reset on success
@@ -655,6 +687,18 @@ impl QueryEngine {
                                                     result.compacted_tokens,
                                                     result.reduction_ratio * 100.0,
                                                     result.messages_compacted,
+                                                ),
+                                            }));
+                                            let _ = tx.send(Ok(QueryEvent::Info {
+                                                query_id,
+                                                message: format!(
+                                                    "compaction: {} -> {} tokens ({:.0}% reduction, {} removed, {} compacted, {:?})",
+                                                    result.original_tokens,
+                                                    result.compacted_tokens,
+                                                    result.reduction_ratio * 100.0,
+                                                    result.messages_removed,
+                                                    result.messages_compacted,
+                                                    result.strategy,
                                                 ),
                                             }));
                                         }
@@ -1788,5 +1832,120 @@ mod tests {
         let state = StateManager::new();
         let config = QueryEngineConfig::default();
         QueryEngine::new(client, tools, permissions, state, config)
+    }
+
+    // ── ContextInjector Integration Tests ──────────────────────────────
+
+    fn temp_dir_for_test(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir()
+            .join("shannon-engine-test")
+            .join(name)
+            .join(Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn test_engine_with_context_injector() {
+        let project_dir = temp_dir_for_test("injector_project");
+        let storage_dir = temp_dir_for_test("injector_storage");
+
+        std::fs::write(
+            project_dir.join("CLAUDE.md"),
+            "# Test Project\nAlways write tests.",
+        )
+        .unwrap();
+
+        let injector =
+            crate::query_engine::ContextInjector::new(project_dir.clone(), storage_dir.clone());
+        let engine = create_test_engine().with_context_injector(injector);
+
+        // Should have a context injector
+        assert!(engine.context_injector().is_some());
+
+        // The injector should find project instructions
+        let injector = engine.context_injector().unwrap();
+        let instructions = injector.project_instructions_text();
+        assert!(instructions.is_some());
+        assert!(instructions.unwrap().contains("Test Project"));
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(project_dir);
+        let _ = std::fs::remove_dir_all(storage_dir);
+    }
+
+    #[test]
+    fn test_engine_without_context_injector() {
+        let engine = create_test_engine();
+        assert!(engine.context_injector().is_none());
+    }
+
+    #[test]
+    fn test_engine_context_injector_preference_memory() {
+        let project_dir = temp_dir_for_test("pref_project");
+        let storage_dir = temp_dir_for_test("pref_storage");
+
+        let injector =
+            crate::query_engine::ContextInjector::new(project_dir.clone(), storage_dir.clone());
+        let engine = create_test_engine().with_context_injector(injector);
+
+        let injector = engine.context_injector().unwrap();
+        // No preferences → empty string
+        assert!(injector.preference_memory_text().is_empty());
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(project_dir);
+        let _ = std::fs::remove_dir_all(storage_dir);
+    }
+
+    #[test]
+    fn test_engine_context_injector_reinjection_context() {
+        let project_dir = temp_dir_for_test("reinject_project");
+        let storage_dir = temp_dir_for_test("reinject_storage");
+
+        std::fs::write(
+            project_dir.join("CLAUDE.md"),
+            "# Reinjection Test\nUse Rust.",
+        )
+        .unwrap();
+
+        let injector =
+            crate::query_engine::ContextInjector::new(project_dir.clone(), storage_dir.clone());
+        let engine = create_test_engine().with_context_injector(injector);
+
+        let injector = engine.context_injector().unwrap();
+        let reinjection = injector.reinjection_context();
+        assert!(reinjection.contains("Reinjection Test"));
+        assert!(reinjection.contains("Use Rust"));
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(project_dir);
+        let _ = std::fs::remove_dir_all(storage_dir);
+    }
+
+    #[test]
+    fn test_engine_context_injector_system_blocks() {
+        let project_dir = temp_dir_for_test("blocks_project");
+        let storage_dir = temp_dir_for_test("blocks_storage");
+
+        std::fs::write(
+            project_dir.join("CLAUDE.md"),
+            "# Blocks Test\nBe concise.",
+        )
+        .unwrap();
+
+        let injector =
+            crate::query_engine::ContextInjector::new(project_dir.clone(), storage_dir.clone());
+        let engine = create_test_engine().with_context_injector(injector);
+
+        let injector = engine.context_injector().unwrap();
+        let blocks = injector.build_system_blocks(true);
+        assert!(!blocks.is_empty());
+        // Should have cache_control set
+        assert!(blocks[0].cache_control.is_some());
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(project_dir);
+        let _ = std::fs::remove_dir_all(storage_dir);
     }
 }

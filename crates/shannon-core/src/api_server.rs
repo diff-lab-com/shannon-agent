@@ -376,6 +376,7 @@ async fn query_stream_handler(
                     QueryEvent::Started { .. } => "started",
                     QueryEvent::ToolProgress { .. } => "tool_progress",
                     QueryEvent::Thinking { .. } => "thinking",
+                    QueryEvent::Info { .. } => "info",
                 };
                 let data = serde_json::to_string(&event).unwrap_or_default();
                 Some(Ok(Event::default().event(event_type).data(data)))

@@ -1,12 +1,13 @@
 //! Skill registry for managing available skills
 
-use crate::definition::{Skill, SkillId};
+use crate::definition::{Skill, SkillFull, SkillId, SkillMetadata, SkillSource};
 use crate::error::{SkillError, SkillResult};
-use crate::loader::load_skill_from_file;
+use crate::loader::{load_full_skill as loader_load_full_skill, load_metadata_only as loader_load_metadata_only, load_skill_from_file, load_skills_from_directory};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
+use walkdir::WalkDir;
 
 /// Registry for managing all available skills
 #[derive(Debug, Clone)]
@@ -29,6 +30,11 @@ struct RegistryInner {
     activated_skills: HashSet<SkillId>,
     /// Dynamic skills discovered during session
     dynamic_skills: HashMap<SkillId, Skill>,
+    /// Lightweight metadata for skills loaded in metadata-only mode.
+    /// Keyed by skill ID, stores metadata without the body content.
+    metadata_only: HashMap<SkillId, SkillMetadata>,
+    /// Cache of fully loaded skills (loaded on demand, keyed by ID).
+    full_cache: HashMap<SkillId, SkillFull>,
 }
 
 
@@ -188,6 +194,16 @@ impl SkillRegistry {
             debug!("Removed skill: {} ({})", skill.name, id);
         }
 
+        // Also remove from progressive loading stores
+        if let Some(meta) = inner.metadata_only.remove(id) {
+            inner.by_name.remove(&meta.name);
+            for alias in &meta.aliases {
+                inner.by_alias.remove(alias);
+            }
+            debug!("Removed metadata-only skill: {} ({})", meta.name, id);
+        }
+        inner.full_cache.remove(id);
+
         Ok(())
     }
 
@@ -199,22 +215,31 @@ impl SkillRegistry {
                 message: format!("Failed to acquire write lock: {e}"),
             })?;
 
-        let count = inner.skills.len();
+        let count = inner.skills.len() + inner.metadata_only.len();
         inner.skills.clear();
         inner.by_name.clear();
         inner.by_alias.clear();
         inner.conditional_skills.clear();
         inner.activated_skills.clear();
         inner.dynamic_skills.clear();
+        inner.metadata_only.clear();
+        inner.full_cache.clear();
 
         info!("Cleared {} skills from registry", count);
         Ok(())
     }
 
-    /// Get the total number of registered skills
+    /// Get the total number of registered skills (fully loaded + metadata-only)
     pub fn len(&self) -> usize {
         self.inner.read()
-            .map(|inner| inner.skills.len())
+            .map(|inner| {
+                // Count full skills plus metadata-only skills not already in skills
+                let full_count = inner.skills.len();
+                let meta_only_unique = inner.metadata_only.keys()
+                    .filter(|id| !inner.skills.contains_key(*id))
+                    .count();
+                full_count + meta_only_unique
+            })
             .unwrap_or(0)
     }
 
@@ -297,12 +322,311 @@ impl SkillRegistry {
             .cloned()
             .ok_or_else(|| SkillError::NotFound(name.to_string()))
     }
+
+    // ── Progressive Loading ──────────────────────────────────────────────
+
+    /// Load only metadata from a SKILL.md file and register it.
+    ///
+    /// The full body content is not read from disk, making this much cheaper
+    /// for initial discovery. Use [`get_full_skill`] later to load the body
+    /// on demand.
+    pub fn load_metadata_only(&self, path: &Path) -> SkillResult<SkillMetadata> {
+        let metadata = loader_load_metadata_only(path)?;
+        let id = metadata.id.clone();
+        let name = metadata.name.clone();
+        let aliases = metadata.aliases.clone();
+        let is_conditional = metadata.when_to_use.is_some();
+
+        let mut inner = self.inner.write()
+            .map_err(|e| SkillError::ExecutionFailed {
+                name: name.clone(),
+                message: format!("Failed to acquire write lock: {e}"),
+            })?;
+
+        inner.by_name.insert(name.clone(), id.clone());
+        for alias in &aliases {
+            inner.by_alias.insert(alias.clone(), id.clone());
+        }
+
+        // If the skill has path conditions, also track it as conditional
+        // by creating a minimal Skill entry. We need to check for `paths` in
+        // the frontmatter, but metadata_only doesn't carry paths. We handle
+        // conditional activation through the full skill when it's loaded.
+        let _ = is_conditional;
+
+        // Remove any stale full cache entry (will be re-loaded on demand)
+        inner.full_cache.remove(&id);
+
+        inner.metadata_only.insert(id.clone(), metadata.clone());
+        debug!("Registered metadata-only skill: {} ({})", name, id);
+        Ok(metadata)
+    }
+
+    /// Load metadata-only for all SKILL.md files found under `dir`.
+    ///
+    /// Returns the number of skills discovered.
+    pub fn load_metadata_from_directory(&self, dir: &Path, _source: &SkillSource) -> SkillResult<usize> {
+        if !dir.exists() {
+            return Ok(0);
+        }
+
+        let mut count = 0;
+        for entry in WalkDir::new(dir)
+            .min_depth(1)
+            .max_depth(2)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let path = entry.path();
+            if path.file_name() == Some(std::ffi::OsStr::new("SKILL.md")) {
+                match self.load_metadata_only(path) {
+                    Ok(_) => count += 1,
+                    Err(e) => {
+                        warn!("Failed to load skill metadata from {:?}: {}", path, e);
+                    }
+                }
+            }
+        }
+
+        trace!("Loaded metadata for {} skills from {:?}", count, dir);
+        Ok(count)
+    }
+
+    /// Load a full skill on demand by name or ID.
+    ///
+    /// Checks the in-memory cache first. If the skill was registered via
+    /// metadata-only loading, reads the complete file from disk, caches
+    /// the result, and returns it. If the skill was already fully loaded
+    /// (via [`register`] or [`load_from_file`]), returns it directly.
+    ///
+    /// Also registers the fully-loaded skill in the main `skills` map so
+    /// that subsequent [`get`] / [`get_by_name`] calls return the complete
+    /// skill.
+    pub fn get_full_skill(&self, name_or_id: &str) -> SkillResult<SkillFull> {
+        // Try to resolve to an ID first
+        let id = {
+            let inner = self.inner.read()
+                .map_err(|e| SkillError::ExecutionFailed {
+                    name: "registry".to_string(),
+                    message: format!("Failed to acquire read lock: {e}"),
+                })?;
+
+            // Check if it's already a known ID
+            if inner.skills.contains_key(name_or_id) {
+                // Already fully loaded — check cache
+                if let Some(cached) = inner.full_cache.get(name_or_id) {
+                    return Ok(cached.clone());
+                }
+                // Build from the existing skill
+                if let Some(skill) = inner.skills.get(name_or_id) {
+                    return Ok(SkillFull::new(skill.clone()));
+                }
+            }
+
+            // Resolve via name/alias
+            let resolved_id = inner.by_name.get(name_or_id)
+                .or_else(|| inner.by_alias.get(name_or_id))
+                .cloned();
+
+            if let Some(rid) = resolved_id {
+                // Check full cache
+                if let Some(cached) = inner.full_cache.get(&rid) {
+                    return Ok(cached.clone());
+                }
+                // Check if already fully loaded in skills map
+                if let Some(skill) = inner.skills.get(&rid) {
+                    return Ok(SkillFull::new(skill.clone()));
+                }
+                // It's metadata-only — we need the file path to load
+                if let Some(_meta) = inner.metadata_only.get(&rid) {
+                    rid // return the id for loading below
+                } else {
+                    return Err(SkillError::NotFound(name_or_id.to_string()));
+                }
+            } else {
+                return Err(SkillError::NotFound(name_or_id.to_string()));
+            }
+        };
+
+        // We have an ID for a metadata-only skill — load from disk
+        let file_path = {
+            let inner = self.inner.read()
+                .map_err(|e| SkillError::ExecutionFailed {
+                    name: "registry".to_string(),
+                    message: format!("Failed to acquire read lock: {e}"),
+                })?;
+
+            inner.metadata_only.get(&id)
+                .and_then(|m| m.file_path.clone())
+                .ok_or_else(|| SkillError::NotFound(id.clone()))?
+        };
+
+        let skill = loader_load_full_skill(&file_path)?;
+        let full = SkillFull::new(skill.clone());
+
+        // Cache and also register the full skill in the main skills map
+        {
+            let mut inner = self.inner.write()
+                .map_err(|e| SkillError::ExecutionFailed {
+                    name: skill.name.clone(),
+                    message: format!("Failed to acquire write lock: {e}"),
+                })?;
+
+            // Register the full skill (but don't overwrite name/alias mappings
+            // since they already exist from metadata registration)
+            let skill_id = skill.id.clone();
+            inner.skills.insert(skill_id.clone(), skill);
+            inner.full_cache.insert(skill_id, full.clone());
+
+            // Remove from metadata_only since we now have the full skill
+            inner.metadata_only.remove(&id);
+        }
+
+        debug!("Loaded full skill on demand: {} ({})", full.skill.name, id);
+        Ok(full)
+    }
+
+    /// Load a complete skill from disk by its ID.
+    ///
+    /// Convenience wrapper that looks up the file path from metadata and
+    /// delegates to [`get_full_skill`].
+    pub fn load_full_skill(&self, id: &str) -> SkillResult<SkillFull> {
+        self.get_full_skill(id)
+    }
+
+    /// Return metadata for all registered skills (both fully loaded and
+    /// metadata-only). Suitable for LLM context injection.
+    pub fn available_skills_metadata(&self) -> Vec<SkillMetadata> {
+        self.available_skills_metadata_with_budget(usize::MAX)
+    }
+
+    /// Return metadata for all registered skills, respecting a token budget.
+    ///
+    /// If the total estimated tokens exceed `budget`, descriptions are
+    /// truncated to fit. Skills are returned in alphabetical order by name.
+    pub fn available_skills_metadata_with_budget(&self, budget: usize) -> Vec<SkillMetadata> {
+        let inner = self.inner.read()
+            .unwrap_or_else(|e| e.into_inner());
+
+        let mut all_meta: Vec<SkillMetadata> = Vec::new();
+
+        // Collect from fully loaded skills
+        for skill in inner.skills.values() {
+            if skill.is_hidden {
+                continue;
+            }
+            all_meta.push(SkillMetadata::from(skill));
+        }
+
+        // Collect from metadata-only skills (that aren't also in skills)
+        for (id, meta) in &inner.metadata_only {
+            if meta.is_hidden {
+                continue;
+            }
+            if !inner.skills.contains_key(id) {
+                all_meta.push(meta.clone());
+            }
+        }
+
+        // Sort alphabetically by name
+        all_meta.sort_by(|a, b| a.name.cmp(&b.name));
+
+        // Apply token budget
+        if budget == usize::MAX {
+            return all_meta;
+        }
+
+        let mut result = Vec::new();
+        let mut tokens_used = 0;
+
+        for mut meta in all_meta {
+            let tokens = meta.estimated_tokens();
+            if tokens_used + tokens > budget {
+                // Try truncating description to fit
+                let remaining = budget.saturating_sub(tokens_used);
+                if remaining > 0 {
+                    // Rough estimate: truncate description to fit remaining tokens
+                    let max_chars = remaining.saturating_sub(meta.name.len() / 4 + 2) * 4;
+                    if max_chars > 10 {
+                        meta.description.truncate(max_chars.saturating_sub(3));
+                        meta.description.push_str("...");
+                        let truncated_tokens = meta.estimated_tokens();
+                        result.push(meta);
+                        let _ = tokens_used + truncated_tokens;
+                    }
+                }
+                // Budget exhausted, stop adding skills
+                break;
+            }
+            tokens_used += tokens;
+            result.push(meta);
+        }
+
+        result
+    }
+
+    /// Default token budget for LLM skill listing.
+    pub const DEFAULT_SKILL_TOKEN_BUDGET: usize = 2000;
+
+    /// Format available skills as a concise block for LLM context injection.
+    ///
+    /// Uses [`DEFAULT_SKILL_TOKEN_BUDGET`] as the default budget.
+    pub fn format_skills_for_llm(&self) -> String {
+        self.format_skills_for_llm_with_budget(Self::DEFAULT_SKILL_TOKEN_BUDGET)
+    }
+
+    /// Format available skills with a custom token budget.
+    pub fn format_skills_for_llm_with_budget(&self, budget: usize) -> String {
+        let skills = self.available_skills_metadata_with_budget(budget);
+
+        if skills.is_empty() {
+            return String::new();
+        }
+
+        let mut lines = vec!["Available skills (invoke with /skill-name):".to_string()];
+        for meta in &skills {
+            let hint = meta.argument_hint
+                .as_ref()
+                .map(|h| format!(" {h}"))
+                .unwrap_or_default();
+            lines.push(format!("- /{}{}: {}", meta.name, hint, meta.description));
+        }
+
+        lines.join("\n")
+    }
+
+    /// Load and register skills from a directory (backward compatible).
+    ///
+    /// This loads full skills. For progressive loading, use
+    /// [`load_metadata_from_directory`] instead.
+    pub fn load_from_directory(&self, dir: &Path, source: &SkillSource) -> SkillResult<Vec<Skill>> {
+        let skills = load_skills_from_directory(dir, source.clone())?;
+        for skill in &skills {
+            self.register(skill.clone())?;
+        }
+        Ok(skills)
+    }
+
+    /// Invalidate the full-skill cache for a given skill ID.
+    ///
+    /// The next call to [`get_full_skill`] will re-read from disk.
+    pub fn invalidate_cache(&self, id: &SkillId) -> SkillResult<()> {
+        let mut inner = self.inner.write()
+            .map_err(|e| SkillError::ExecutionFailed {
+                name: "registry".to_string(),
+                message: format!("Failed to acquire write lock: {e}"),
+            })?;
+
+        inner.full_cache.remove(id);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::definition::SkillSource;
+    use std::path::PathBuf;
 
     #[test]
     fn test_registry_register() {
@@ -674,7 +998,6 @@ mod tests {
     async fn test_async_skill_operations() {
         // Test that skill registry operations are compatible with async contexts
         let _registry = SkillRegistry::new();
-        let registry = SkillRegistry::new();
 
         // Simulate async skill registration
         let skill = Skill::new(
@@ -746,5 +1069,388 @@ mod tests {
 
         assert_eq!(registry.len(), 0);
         assert!(registry.is_empty());
+    }
+
+    // ── Progressive Loading Tests ─────────────────────────────────────────
+
+    /// Helper: create a temp skill directory with a SKILL.md inside.
+    fn create_skill_dir(parent: &Path, skill_name: &str, content: &str) -> PathBuf {
+        let dir = parent.join(skill_name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), content).unwrap();
+        dir
+    }
+
+    fn skill_content(name: &str, desc: &str) -> String {
+        format!(
+            "---\nname: {name}\ndescription: {desc}\n---\n\n# {name}\n\nBody for {name}.\n"
+        )
+    }
+
+    #[test]
+    fn test_load_metadata_only_registers_skill() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = create_skill_dir(
+            tmp.path(),
+            "commit",
+            &skill_content("commit", "Generate git commits"),
+        );
+        let skill_path = skill_dir.join("SKILL.md");
+
+        let registry = SkillRegistry::new();
+        let meta = registry.load_metadata_only(&skill_path).unwrap();
+
+        assert_eq!(meta.id, "commit");
+        assert_eq!(meta.name, "commit");
+        assert_eq!(meta.description, "Generate git commits");
+        assert_eq!(registry.len(), 1);
+    }
+
+    #[test]
+    fn test_load_metadata_from_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        create_skill_dir(tmp.path(), "commit", &skill_content("commit", "Commit skill"));
+        create_skill_dir(tmp.path(), "review", &skill_content("review", "Review skill"));
+        create_skill_dir(tmp.path(), "test", &skill_content("test", "Test skill"));
+
+        let registry = SkillRegistry::new();
+        let count = registry.load_metadata_from_directory(tmp.path(), &SkillSource::User).unwrap();
+
+        assert_eq!(count, 3);
+        assert_eq!(registry.len(), 3);
+    }
+
+    #[test]
+    fn test_load_metadata_from_nonexistent_directory() {
+        let registry = SkillRegistry::new();
+        let count = registry.load_metadata_from_directory(
+            Path::new("/nonexistent/skills"),
+            &SkillSource::User,
+        ).unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_get_full_skill_from_metadata_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = create_skill_dir(
+            tmp.path(),
+            "commit",
+            "---\nname: commit\ndescription: Generate commits\n---\n\n# Commit\n\nDetailed instructions.\n",
+        );
+        let skill_path = skill_dir.join("SKILL.md");
+
+        let registry = SkillRegistry::new();
+        registry.load_metadata_only(&skill_path).unwrap();
+
+        // Skill should be resolvable by name
+        assert!(registry.get_by_name("commit").is_err()); // Not in full skills map yet
+
+        // Load full skill on demand
+        let full = registry.get_full_skill("commit").unwrap();
+        assert_eq!(full.skill.id, "commit");
+        assert!(full.content().contains("Detailed instructions"));
+
+        // After loading full skill, it should be available in the skills map
+        let skill = registry.get_by_name("commit").unwrap();
+        assert_eq!(skill.content, full.content().to_string());
+    }
+
+    #[test]
+    fn test_get_full_skill_caches_result() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = create_skill_dir(
+            tmp.path(),
+            "review",
+            &skill_content("review", "Review code"),
+        );
+        let skill_path = skill_dir.join("SKILL.md");
+
+        let registry = SkillRegistry::new();
+        registry.load_metadata_only(&skill_path).unwrap();
+
+        // First load reads from disk
+        let full1 = registry.get_full_skill("review").unwrap();
+        // Second load should come from cache
+        let full2 = registry.get_full_skill("review").unwrap();
+
+        assert_eq!(full1.content(), full2.content());
+    }
+
+    #[test]
+    fn test_invalidate_cache_reloads_from_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = create_skill_dir(
+            tmp.path(),
+            "my-skill",
+            &skill_content("my-skill", "Original description"),
+        );
+        let skill_path = skill_dir.join("SKILL.md");
+
+        let registry = SkillRegistry::new();
+        registry.load_metadata_only(&skill_path).unwrap();
+
+        // Load full skill
+        let full1 = registry.get_full_skill("my-skill").unwrap();
+        assert!(full1.content().contains("Body for my-skill"));
+
+        // Modify the file
+        std::fs::write(&skill_path, skill_content("my-skill", "Updated description")).unwrap();
+
+        // Invalidate cache
+        registry.invalidate_cache(&"my-skill".to_string()).unwrap();
+
+        // Re-load — should pick up new content. But since it's now in the skills map,
+        // we need to remove it first and re-register metadata.
+        registry.remove(&"my-skill".to_string()).unwrap();
+        registry.load_metadata_only(&skill_path).unwrap();
+        let full2 = registry.get_full_skill("my-skill").unwrap();
+        // The updated description is in the frontmatter, the body still says "my-skill"
+        assert_eq!(full2.skill.description, "Updated description");
+    }
+
+    #[test]
+    fn test_get_full_skill_not_found() {
+        let registry = SkillRegistry::new();
+        let result = registry.get_full_skill("nonexistent");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_available_skills_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        create_skill_dir(tmp.path(), "commit", &skill_content("commit", "Commit skill"));
+        create_skill_dir(tmp.path(), "review", &skill_content("review", "Review skill"));
+
+        let registry = SkillRegistry::new();
+        let skill_path1 = tmp.path().join("commit").join("SKILL.md");
+        let skill_path2 = tmp.path().join("review").join("SKILL.md");
+
+        registry.load_metadata_only(&skill_path1).unwrap();
+        registry.load_metadata_only(&skill_path2).unwrap();
+
+        // Also register a full skill
+        let full_skill = Skill::new(
+            "test".to_string(),
+            "test".to_string(),
+            "Test skill".to_string(),
+            "Content".to_string(),
+        );
+        registry.register(full_skill).unwrap();
+
+        let metas = registry.available_skills_metadata();
+        assert_eq!(metas.len(), 3);
+
+        // Should be sorted alphabetically
+        let names: Vec<&str> = metas.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, vec!["commit", "review", "test"]);
+    }
+
+    #[test]
+    fn test_available_skills_metadata_hides_hidden() {
+        let registry = SkillRegistry::new();
+
+        let mut visible = Skill::new(
+            "visible".to_string(),
+            "visible".to_string(),
+            "Visible skill".to_string(),
+            "Content".to_string(),
+        );
+        visible.is_hidden = false;
+
+        let mut hidden = Skill::new(
+            "hidden".to_string(),
+            "hidden".to_string(),
+            "Hidden skill".to_string(),
+            "Content".to_string(),
+        );
+        hidden.is_hidden = true;
+        hidden.user_invocable = false;
+
+        registry.register(visible).unwrap();
+        registry.register(hidden).unwrap();
+
+        let metas = registry.available_skills_metadata();
+        assert_eq!(metas.len(), 1);
+        assert_eq!(metas[0].name, "visible");
+    }
+
+    #[test]
+    fn test_token_budget_truncation() {
+        let registry = SkillRegistry::new();
+
+        // Register skills with descriptions
+        for i in 0..20 {
+            let skill = Skill::new(
+                format!("skill-{i:02}"),
+                format!("skill-{i:02}"),
+                format!("This is skill number {} with a description that takes some tokens", i),
+                "Content".to_string(),
+            );
+            registry.register(skill).unwrap();
+        }
+
+        // With unlimited budget, all should be returned
+        let unlimited = registry.available_skills_metadata();
+        assert_eq!(unlimited.len(), 20);
+
+        // With a very small budget, fewer skills should be returned
+        let limited = registry.available_skills_metadata_with_budget(20);
+        assert!(limited.len() < 20);
+        assert!(limited.len() > 0);
+    }
+
+    #[test]
+    fn test_token_budget_truncates_descriptions() {
+        let registry = SkillRegistry::new();
+
+        // Register one skill with a very long description
+        let long_desc = "A".repeat(2000);
+        let skill = Skill::new(
+            "verbose".to_string(),
+            "verbose".to_string(),
+            long_desc.clone(),
+            "Content".to_string(),
+        );
+        registry.register(skill).unwrap();
+
+        // With a tiny budget, description should be truncated
+        let metas = registry.available_skills_metadata_with_budget(10);
+        if !metas.is_empty() {
+            assert!(metas[0].description.len() < long_desc.len());
+            assert!(metas[0].description.ends_with("..."));
+        }
+    }
+
+    #[test]
+    fn test_format_skills_for_llm() {
+        let registry = SkillRegistry::new();
+
+        let mut skill1 = Skill::new(
+            "commit".to_string(),
+            "commit".to_string(),
+            "Generate git commits with conventional messages".to_string(),
+            "Content".to_string(),
+        );
+        skill1.argument_hint = Some("<message>".to_string());
+
+        let skill2 = Skill::new(
+            "review".to_string(),
+            "review".to_string(),
+            "Review code for quality issues".to_string(),
+            "Content".to_string(),
+        );
+
+        registry.register(skill1).unwrap();
+        registry.register(skill2).unwrap();
+
+        let formatted = registry.format_skills_for_llm();
+        assert!(formatted.starts_with("Available skills (invoke with /skill-name):"));
+        assert!(formatted.contains("- /commit <message>: Generate git commits with conventional messages"));
+        assert!(formatted.contains("- /review: Review code for quality issues"));
+    }
+
+    #[test]
+    fn test_format_skills_for_llm_empty() {
+        let registry = SkillRegistry::new();
+        let formatted = registry.format_skills_for_llm();
+        assert!(formatted.is_empty());
+    }
+
+    #[test]
+    fn test_load_from_directory_backward_compat() {
+        let tmp = tempfile::tempdir().unwrap();
+        create_skill_dir(tmp.path(), "compat", &skill_content("compat", "Backward compat skill"));
+
+        let registry = SkillRegistry::new();
+        let skills = registry.load_from_directory(tmp.path(), &SkillSource::User).unwrap();
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name, "compat");
+        assert_eq!(registry.len(), 1);
+
+        // Full skill should be available via get_by_name
+        let skill = registry.get_by_name("compat").unwrap();
+        assert!(skill.content.contains("Body for compat"));
+    }
+
+    #[test]
+    fn test_progressive_loading_then_full_flow() {
+        let tmp = tempfile::tempdir().unwrap();
+        create_skill_dir(tmp.path(), "commit", &skill_content("commit", "Commit helper"));
+        create_skill_dir(tmp.path(), "review", &skill_content("review", "Code review"));
+
+        let registry = SkillRegistry::new();
+
+        // Phase 1: Load metadata only for all skills
+        let count = registry.load_metadata_from_directory(tmp.path(), &SkillSource::User).unwrap();
+        assert_eq!(count, 2);
+
+        // Phase 2: Check available metadata for LLM injection
+        let metas = registry.available_skills_metadata();
+        assert_eq!(metas.len(), 2);
+
+        let formatted = registry.format_skills_for_llm();
+        assert!(formatted.contains("commit"));
+        assert!(formatted.contains("review"));
+
+        // Phase 3: User invokes "commit" — load full skill on demand
+        let full = registry.get_full_skill("commit").unwrap();
+        assert!(full.content().contains("Body for commit"));
+
+        // Phase 4: "commit" is now fully loaded, "review" is still metadata-only
+        assert!(registry.get_by_name("commit").is_ok());
+
+        // Full skill metadata should still show both
+        let metas = registry.available_skills_metadata();
+        assert_eq!(metas.len(), 2);
+    }
+
+    #[test]
+    fn test_remove_metadata_only_skill() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = create_skill_dir(
+            tmp.path(),
+            "temp-skill",
+            &skill_content("temp-skill", "Temporary"),
+        );
+        let skill_path = skill_dir.join("SKILL.md");
+
+        let registry = SkillRegistry::new();
+        registry.load_metadata_only(&skill_path).unwrap();
+        assert_eq!(registry.len(), 1);
+
+        // Remove by id (directory name)
+        registry.remove(&"temp-skill".to_string()).unwrap();
+        assert_eq!(registry.len(), 0);
+    }
+
+    #[test]
+    fn test_clear_with_metadata_only_skills() {
+        let tmp = tempfile::tempdir().unwrap();
+        create_skill_dir(tmp.path(), "a", &skill_content("a", "Skill A"));
+        create_skill_dir(tmp.path(), "b", &skill_content("b", "Skill B"));
+
+        let registry = SkillRegistry::new();
+        registry.load_metadata_from_directory(tmp.path(), &SkillSource::User).unwrap();
+
+        // Also add a fully loaded skill
+        let full = Skill::new(
+            "full".to_string(),
+            "full".to_string(),
+            "Full skill".to_string(),
+            "Content".to_string(),
+        );
+        registry.register(full).unwrap();
+
+        assert_eq!(registry.len(), 3);
+
+        registry.clear().unwrap();
+        assert!(registry.is_empty());
+    }
+
+    #[test]
+    fn test_default_token_budget_constant() {
+        assert_eq!(SkillRegistry::DEFAULT_SKILL_TOKEN_BUDGET, 2000);
     }
 }

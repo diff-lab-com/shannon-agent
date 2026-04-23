@@ -834,6 +834,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "futures"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2523,6 +2533,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "dirs 6.0.0",
+ "fs2",
  "futures",
  "serde",
  "serde_json",
@@ -2750,6 +2761,7 @@ dependencies = [
  "shannon-tools",
  "shannon-types",
  "syntect",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

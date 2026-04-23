@@ -231,6 +231,59 @@ impl McpServerConfig {
             "Server config must have 'command' or 'url' field".to_string(),
         ))
     }
+
+    /// Validate that required fields are present.
+    ///
+    /// - Stdio: `command` must not be empty
+    /// - Http / Sse: `url` must not be empty
+    /// - WebSocket: `url` must not be empty
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        match self {
+            McpServerConfig::Stdio { command, .. } => {
+                if command.is_empty() {
+                    return Err(ConfigError::ValidationError(
+                        "stdio server missing required field 'command'".to_string(),
+                    ));
+                }
+            }
+            McpServerConfig::Http { url, .. } => {
+                if url.is_empty() {
+                    return Err(ConfigError::ValidationError(
+                        "http server missing required field 'url'".to_string(),
+                    ));
+                }
+            }
+            McpServerConfig::Sse { url, .. } => {
+                if url.is_empty() {
+                    return Err(ConfigError::ValidationError(
+                        "sse server missing required field 'url'".to_string(),
+                    ));
+                }
+            }
+            McpServerConfig::WebSocket { url, .. } => {
+                if url.is_empty() {
+                    return Err(ConfigError::ValidationError(
+                        "websocket server missing required field 'url'".to_string(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl McpConfig {
+    /// Validate all server configs, returning the first error encountered.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        for (name, server_conf) in &self.mcp_servers {
+            if let Err(e) = server_conf.validate() {
+                return Err(ConfigError::ValidationError(format!(
+                    "server '{name}': {e}"
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Helper structs for flexible JSON parsing.
@@ -260,6 +313,9 @@ pub enum ConfigError {
     #[error("parse error: {0}")]
     ParseError(String),
 
+    #[error("validation error: {0}")]
+    ValidationError(String),
+
     #[error("no config files found")]
     NoConfig,
 }
@@ -268,87 +324,113 @@ pub enum ConfigError {
 // Environment variable expansion (D2)
 // ---------------------------------------------------------------------------
 
-/// Expand `${VAR}` and `${VAR:-default}` patterns in a string.
+/// Expand `$VAR`, `${VAR}`, `${VAR:-default}`, and `${VAR:?error}` patterns in a string.
 ///
+/// - `$VAR` → value of env var `VAR`, or empty string if not set
 /// - `${VAR}` → value of env var `VAR`, or empty string if not set
 /// - `${VAR:-default}` → value of env var `VAR`, or `default` if not set
-/// - `${VAR:?error}` → value of env var `VAR`, or return error if not set
+/// - `${VAR:?error}` → value of env var `VAR`, or return error message if not set
 pub fn expand_env_vars(input: &str) -> String {
     let mut result = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
 
     while let Some(ch) = chars.next() {
-        if ch == '$' && chars.peek() == Some(&'{') {
-            chars.next(); // consume '{'
-            let mut var_name = String::new();
-            let mut modifier = String::new();
-            let mut in_modifier = false;
+        if ch == '$' {
+            if chars.peek() == Some(&'{') {
+                // ${VAR} / ${VAR:-default} / ${VAR:?error} form
+                chars.next(); // consume '{'
+                let mut var_name = String::new();
+                let mut modifier = String::new();
+                let mut in_modifier = false;
 
-            loop {
-                match chars.peek() {
-                    Some('}') => {
+                loop {
+                    match chars.peek() {
+                        Some('}') => {
+                            chars.next();
+                            break;
+                        }
+                        Some(':') if !in_modifier => {
+                            chars.next();
+                            in_modifier = true;
+                            // Check for modifier type
+                            if chars.peek() == Some(&'-') {
+                                chars.next();
+                            } else if chars.peek() == Some(&'?') {
+                                chars.next();
+                                modifier.push('?');
+                            }
+                            continue;
+                        }
+                        Some(c) => {
+                            if in_modifier {
+                                modifier.push(*c);
+                            } else {
+                                var_name.push(*c);
+                            }
+                            chars.next();
+                        }
+                        None => break,
+                    }
+                }
+
+                if var_name.is_empty() {
+                    result.push_str("${");
+                    if in_modifier {
+                        result.push(':');
+                    }
+                    result.push_str(&modifier);
+                    result.push('}');
+                    continue;
+                }
+
+                let value = match std::env::var(&var_name) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        if modifier.starts_with('?') {
+                            let err_msg = if modifier.len() > 1 {
+                                &modifier[1..]
+                            } else {
+                                "required env var not set"
+                            };
+                            warn!(
+                                var = %var_name,
+                                error = err_msg,
+                                "Required environment variable not set"
+                            );
+                            // Return the original pattern so it's visible in logs
+                            format!("${{{var_name}:{modifier}}}")
+                        } else if !modifier.is_empty() {
+                            // Default value (after :-)
+                            modifier.clone()
+                        } else {
+                            String::new()
+                        }
+                    }
+                };
+                result.push_str(&value);
+            } else {
+                // Bare $VAR form: consume identifier characters [A-Za-z_][A-Za-z0-9_]*
+                let mut var_name = String::new();
+                while let Some(&next) = chars.peek() {
+                    if next.is_ascii_alphabetic() || next == '_' {
+                        var_name.push(next);
                         chars.next();
+                    } else if !var_name.is_empty() && next.is_ascii_digit() {
+                        var_name.push(next);
+                        chars.next();
+                    } else {
                         break;
                     }
-                    Some(':') if !in_modifier => {
-                        chars.next();
-                        in_modifier = true;
-                        // Check for modifier type
-                        if chars.peek() == Some(&'-') {
-                            chars.next();
-                        } else if chars.peek() == Some(&'?') {
-                            chars.next();
-                            modifier.push('?');
-                        }
-                        continue;
-                    }
-                    Some(c) => {
-                        if in_modifier {
-                            modifier.push(*c);
-                        } else {
-                            var_name.push(*c);
-                        }
-                        chars.next();
-                    }
-                    None => break,
+                }
+
+                if var_name.is_empty() {
+                    // Lone '$' not followed by a valid identifier — keep as-is
+                    result.push('$');
+                } else {
+                    let value = std::env::var(&var_name).unwrap_or_default();
+                    result.push_str(&value);
                 }
             }
-
-            if var_name.is_empty() {
-                result.push_str("${");
-                if in_modifier {
-                    result.push(':');
-                }
-                result.push_str(&modifier);
-                result.push('}');
-                continue;
-            }
-
-            let value = match std::env::var(&var_name) {
-                Ok(v) => v,
-                Err(_) => {
-                    if modifier.starts_with('?') {
-                        let err_msg = if modifier.len() > 1 {
-                            &modifier[1..]
-                        } else {
-                            "required env var not set"
-                        };
-                        warn!(
-                            var = %var_name,
-                            error = err_msg,
-                            "Required environment variable not set"
-                        );
-                        // Return the original pattern so it's visible in logs
-                        format!("${{{var_name}:{modifier}}}")
-                    } else if !modifier.is_empty() {
-                        // Default value (after :-)
-                        modifier.clone()
-                    } else {
-                        String::new()
-                    }
-                }
-            };
-            result.push_str(&value);
         } else {
             result.push(ch);
         }
@@ -412,27 +494,33 @@ pub fn expand_server_config(config: &mut McpServerConfig) {
 // ---------------------------------------------------------------------------
 
 /// Search paths for MCP config files, in priority order.
+///
+/// Order: user-level configs first, then project-level configs.
+/// Later entries override earlier ones when merged (last-wins).
 pub fn config_search_paths(project_dir: &Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
 
-    // 1. Project-level: .mcp.json in the project root
-    paths.push(project_dir.join(".mcp.json"));
-
-    // 2. Project-level: .claude/settings.json (Claude Code compatibility)
-    paths.push(project_dir.join(".claude").join("settings.json"));
-
-    // 3. Project-level: .shannon/settings.json
-    paths.push(project_dir.join(".shannon").join("settings.json"));
-
-    // 4. User-level: ~/.claude/settings.json (Claude Code compatibility)
+    // 1. User-level: ~/.claude/settings.json (Claude Code compatibility)
     if let Some(home) = dirs_home() {
         paths.push(home.join(".claude").join("settings.json"));
     }
 
-    // 5. User-level: ~/.shannon/settings.json
+    // 2. User-level: ~/.shannon/settings.json
     if let Some(home) = dirs_home() {
         paths.push(home.join(".shannon").join("settings.json"));
     }
+
+    // 3. Project-level: .mcp.json in the project root (shared via git)
+    paths.push(project_dir.join(".mcp.json"));
+
+    // 4. Project-level: .claude/settings.json (Claude Code compatibility)
+    paths.push(project_dir.join(".claude").join("settings.json"));
+
+    // 5. Project-level: .claude/settings.local.json (local overrides, not committed)
+    paths.push(project_dir.join(".claude").join("settings.local.json"));
+
+    // 6. Project-level: .shannon/settings.json
+    paths.push(project_dir.join(".shannon").join("settings.json"));
 
     paths
 }
@@ -447,8 +535,9 @@ fn dirs_home() -> Option<PathBuf> {
 
 /// Discover and load MCP config from all config file locations.
 ///
-/// Merges configs from all found files, with earlier (project-level) entries
-/// taking precedence over later (user-level) entries for the same server name.
+/// Config files are loaded in the order returned by [`config_search_paths`]
+/// (user-level first, project-level later). Later entries override earlier
+/// ones for the same server name (last-wins semantics).
 pub fn discover_config(project_dir: &Path) -> Result<McpConfig, ConfigError> {
     let search_paths = config_search_paths(project_dir);
     let mut merged = McpConfig::default();
@@ -462,9 +551,13 @@ pub fn discover_config(project_dir: &Path) -> Result<McpConfig, ConfigError> {
                     servers = config.mcp_servers.len(),
                     "Loaded MCP config"
                 );
-                // Earlier configs take precedence — only insert if not already present
+                // Later configs override earlier — always insert (last-wins)
                 for (name, server_conf) in config.mcp_servers {
-                    merged.mcp_servers.entry(name).or_insert(server_conf);
+                    merged.mcp_servers.insert(name, server_conf);
+                }
+                // Merge allowed tools: later config's list replaces earlier
+                if !config.allowed_tools.is_empty() {
+                    merged.allowed_tools = config.allowed_tools;
                 }
                 found_any = true;
             }
@@ -484,6 +577,13 @@ pub fn discover_config(project_dir: &Path) -> Result<McpConfig, ConfigError> {
     // Apply env var expansion to all server configs
     for server_conf in merged.mcp_servers.values_mut() {
         expand_server_config(server_conf);
+    }
+
+    // Validate all server configs
+    for (name, server_conf) in &merged.mcp_servers {
+        if let Err(e) = server_conf.validate() {
+            warn!(server = %name, error = %e, "Invalid server config");
+        }
     }
 
     Ok(merged)
@@ -811,10 +911,34 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let paths = config_search_paths(temp.path());
 
-        // Project .mcp.json should be first
-        assert!(paths[0].ends_with(".mcp.json"));
-        // Should have at least 3 paths (project .mcp.json, .claude/settings.json, .shannon/settings.json)
-        assert!(paths.len() >= 3);
+        // Order: user-level first, project-level later (later overrides earlier)
+        // 1. ~/.claude/settings.json (or home if available)
+        // 2. ~/.shannon/settings.json (or home if available)
+        // 3. .mcp.json
+        // 4. .claude/settings.json
+        // 5. .claude/settings.local.json
+        // 6. .shannon/settings.json
+
+        // Project .mcp.json should be at index 2 (or lower if home dir exists)
+        let mcp_idx = paths.iter().position(|p| p.ends_with(".mcp.json")).unwrap();
+        let claude_project_idx = paths
+            .iter()
+            .position(|p| {
+                p.ends_with(".claude/settings.json")
+                    && !p.starts_with(dirs_home().unwrap_or_default())
+            })
+            .unwrap();
+        let claude_local_idx = paths
+            .iter()
+            .position(|p| p.ends_with("settings.local.json"))
+            .unwrap();
+
+        // .mcp.json should come before .claude/settings.json (project)
+        assert!(mcp_idx < claude_project_idx);
+        // .claude/settings.json should come before settings.local.json
+        assert!(claude_project_idx < claude_local_idx);
+        // Should have exactly 6 paths (or fewer if no home dir)
+        assert!(paths.len() <= 6);
     }
 
     // ── Expand server config tests ──────────────────────────────────────
@@ -1017,5 +1141,300 @@ mod tests {
         }
 
         unsafe { std::env::remove_var("TEST_MCP_SVC_HOST"); }
+    }
+
+    // ── Bare $VAR expansion tests ──────────────────────────────────────
+
+    #[test]
+    fn test_expand_bare_var() {
+        unsafe { std::env::set_var("TEST_MCP_BARE", "bare-value"); }
+        assert_eq!(expand_env_vars("$TEST_MCP_BARE"), "bare-value");
+        unsafe { std::env::remove_var("TEST_MCP_BARE"); }
+    }
+
+    #[test]
+    fn test_expand_bare_var_missing() {
+        unsafe { std::env::remove_var("TEST_MCP_BARE_MISSING"); }
+        assert_eq!(expand_env_vars("$TEST_MCP_BARE_MISSING"), "");
+    }
+
+    #[test]
+    fn test_expand_bare_var_in_url() {
+        unsafe { std::env::set_var("TEST_MCP_BARE_HOST", "api.example.com"); }
+        assert_eq!(
+            expand_env_vars("https://$TEST_MCP_BARE_HOST/v1/mcp"),
+            "https://api.example.com/v1/mcp"
+        );
+        unsafe { std::env::remove_var("TEST_MCP_BARE_HOST"); }
+    }
+
+    #[test]
+    fn test_expand_bare_var_adjacent_to_text() {
+        unsafe { std::env::set_var("TEST_MCP_PREFIX", "hello"); }
+        assert_eq!(
+            expand_env_vars("${TEST_MCP_PREFIX}_world"),
+            "hello_world"
+        );
+        unsafe { std::env::remove_var("TEST_MCP_PREFIX"); }
+    }
+
+    #[test]
+    fn test_expand_dollar_sign_alone() {
+        assert_eq!(expand_env_vars("price is $5"), "price is $5");
+    }
+
+    #[test]
+    fn test_expand_dollar_digit() {
+        // $5 should not be treated as a variable (starts with digit)
+        assert_eq!(expand_env_vars("$5"), "$5");
+    }
+
+    #[test]
+    fn test_expand_bare_var_in_bearer_header() {
+        unsafe { std::env::set_var("TEST_MCP_TOKEN_VAR", "tok123"); }
+        assert_eq!(
+            expand_env_vars("Bearer $TEST_MCP_TOKEN_VAR"),
+            "Bearer tok123"
+        );
+        unsafe { std::env::remove_var("TEST_MCP_TOKEN_VAR"); }
+    }
+
+    // ── Multi-file merging (last-wins) tests ──────────────────────────
+
+    #[test]
+    fn test_discover_config_last_wins_override() {
+        let temp = tempfile::tempdir().unwrap();
+
+        // .mcp.json defines "my-server" with command "node"
+        let mcp_json = serde_json::json!({
+            "mcpServers": {
+                "my-server": {
+                    "command": "node",
+                    "args": ["first.js"]
+                }
+            }
+        });
+        std::fs::write(
+            temp.path().join(".mcp.json"),
+            serde_json::to_string(&mcp_json).unwrap(),
+        )
+        .unwrap();
+
+        // .claude/settings.local.json overrides "my-server" with command "python"
+        let claude_dir = temp.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let local_json = serde_json::json!({
+            "mcpServers": {
+                "my-server": {
+                    "command": "python",
+                    "args": ["second.py"]
+                }
+            }
+        });
+        std::fs::write(
+            claude_dir.join("settings.local.json"),
+            serde_json::to_string(&local_json).unwrap(),
+        )
+        .unwrap();
+
+        let config = discover_config(temp.path()).unwrap();
+
+        // The later file (settings.local.json) should override .mcp.json
+        let server = config.mcp_servers.get("my-server").unwrap();
+        match server {
+            McpServerConfig::Stdio { command, args, .. } => {
+                assert_eq!(command, "python");
+                assert_eq!(args[0], "second.py");
+            }
+            _ => panic!("Expected Stdio"),
+        }
+    }
+
+    #[test]
+    fn test_discover_config_merges_from_multiple_files() {
+        let temp = tempfile::tempdir().unwrap();
+
+        // .mcp.json has "server-a"
+        let mcp_json = serde_json::json!({
+            "mcpServers": {
+                "server-a": {
+                    "command": "node",
+                    "args": ["a.js"]
+                }
+            }
+        });
+        std::fs::write(
+            temp.path().join(".mcp.json"),
+            serde_json::to_string(&mcp_json).unwrap(),
+        )
+        .unwrap();
+
+        // .claude/settings.json has "server-b"
+        let claude_dir = temp.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let claude_json = serde_json::json!({
+            "mcpServers": {
+                "server-b": {
+                    "url": "http://localhost:4000"
+                }
+            }
+        });
+        std::fs::write(
+            claude_dir.join("settings.json"),
+            serde_json::to_string(&claude_json).unwrap(),
+        )
+        .unwrap();
+
+        // .shannon/settings.json has "server-c"
+        let shannon_dir = temp.path().join(".shannon");
+        std::fs::create_dir_all(&shannon_dir).unwrap();
+        let shannon_json = serde_json::json!({
+            "mcpServers": {
+                "server-c": {
+                    "type": "http",
+                    "url": "http://localhost:5000"
+                }
+            }
+        });
+        std::fs::write(
+            shannon_dir.join("settings.json"),
+            serde_json::to_string(&shannon_json).unwrap(),
+        )
+        .unwrap();
+
+        let config = discover_config(temp.path()).unwrap();
+
+        // All three servers should be present
+        assert_eq!(config.mcp_servers.len(), 3);
+        assert!(config.mcp_servers.contains_key("server-a"));
+        assert!(config.mcp_servers.contains_key("server-b"));
+        assert!(config.mcp_servers.contains_key("server-c"));
+    }
+
+    // ── Validation tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_validate_stdio_ok() {
+        let config = McpServerConfig::Stdio {
+            command: "npx".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_stdio_empty_command() {
+        let config = McpServerConfig::Stdio {
+            command: "".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            matches!(err, ConfigError::ValidationError(ref msg) if msg.contains("command")),
+            "Expected ValidationError mentioning 'command', got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_validate_http_ok() {
+        let config = McpServerConfig::Http {
+            url: "http://localhost:3000".to_string(),
+            headers: HashMap::new(),
+            auth: None,
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_http_empty_url() {
+        let config = McpServerConfig::Http {
+            url: "".to_string(),
+            headers: HashMap::new(),
+            auth: None,
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            matches!(err, ConfigError::ValidationError(ref msg) if msg.contains("url")),
+            "Expected ValidationError mentioning 'url', got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_validate_sse_empty_url() {
+        let config = McpServerConfig::Sse {
+            url: "".to_string(),
+            headers: HashMap::new(),
+            auth: None,
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            matches!(err, ConfigError::ValidationError(ref msg) if msg.contains("url")),
+            "Expected ValidationError mentioning 'url', got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_validate_websocket_empty_url() {
+        let config = McpServerConfig::WebSocket {
+            url: "".to_string(),
+            auth: None,
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            matches!(err, ConfigError::ValidationError(ref msg) if msg.contains("url")),
+            "Expected ValidationError mentioning 'url', got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_validate_mcp_config_all_ok() {
+        let mut servers = HashMap::new();
+        servers.insert(
+            "my-server".to_string(),
+            McpServerConfig::Stdio {
+                command: "node".to_string(),
+                args: vec![],
+                env: HashMap::new(),
+            },
+        );
+        let config = McpConfig {
+            mcp_servers: servers,
+            allowed_tools: vec![],
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_mcp_config_invalid_server() {
+        let mut servers = HashMap::new();
+        servers.insert(
+            "bad-server".to_string(),
+            McpServerConfig::Stdio {
+                command: "".to_string(),
+                args: vec![],
+                env: HashMap::new(),
+            },
+        );
+        let config = McpConfig {
+            mcp_servers: servers,
+            allowed_tools: vec![],
+        };
+        let err = config.validate().unwrap_err();
+        assert!(
+            matches!(err, ConfigError::ValidationError(ref msg) if msg.contains("bad-server")),
+            "Expected ValidationError mentioning 'bad-server', got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_validate_no_command_field_at_all() {
+        // JSON with neither command nor url should fail
+        let json = serde_json::json!({
+            "args": ["just-args"]
+        });
+        let result = McpServerConfig::from_json_value(json);
+        assert!(result.is_err(), "Expected error when neither command nor url present");
     }
 }

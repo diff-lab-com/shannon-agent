@@ -477,6 +477,7 @@ impl AgentCoordinator {
         };
 
         let teammate = Teammate::new(agent_name.clone(), config);
+        teammate.set_team_name(team_name.to_string());
         team.members.insert(agent_name.clone(), teammate);
 
         // Create isolated worktree for this agent if worktree isolation is enabled
@@ -820,7 +821,7 @@ impl AgentCoordinator {
         let task = AgentTask::new(subject.clone(), description, priority);
         let task_id = task.id;
 
-        self.task_board.add_task(task).await?;
+        self.task_board.add_task(task.clone()).await?;
 
         let mut teams = self.teams.write().await;
         if let Some(team) = teams.get_mut(team_name) {
@@ -840,6 +841,10 @@ impl AgentCoordinator {
                 updated_at: chrono::Utc::now(),
             });
         }
+        drop(teams);
+
+        // Persist task file to disk
+        self.persist_task(team_name, &task);
 
         // Fire TeamTaskCreated hook
         self.fire_hook(HookEvent::TeamTaskCreated {
@@ -913,6 +918,11 @@ impl AgentCoordinator {
             team = %team_name,
             "Task added with dependencies"
         );
+
+        // Persist task file to disk
+        if let Ok(tb_task) = self.task_board.get_task(task_id).await {
+            self.persist_task(team_name, &tb_task);
+        }
 
         // Fire TeamTaskCreated hook
         self.fire_hook(HookEvent::TeamTaskCreated {
@@ -1132,6 +1142,9 @@ impl AgentCoordinator {
     /// The agent becomes the task owner and the task transitions to InProgress.
     /// This is the Claude Code model: idle agents claim tasks themselves rather
     /// than waiting for central assignment.
+    ///
+    /// When file persistence is configured, this also acquires an exclusive
+    /// file lock on the task to prevent race conditions between agents.
     pub async fn self_claim_task(
         &self,
         team_name: &str,
@@ -1152,7 +1165,52 @@ impl AgentCoordinator {
             }
         }
 
-        // Verify task is claimable: Pending + no owner + no blockers
+        // Use file-based locking for claim conflict resolution if persistence is available
+        if let Some(ref persist) = self.persistence {
+            let claimed = persist.claim_task(team_name, &task_id.to_string(), agent_name)?;
+            // Sync the in-memory task board with the persisted state
+            self.task_board.assign_task(task_id, agent_name.to_string()).await?;
+            self.task_board.update_task_status(task_id, TaskStatus::InProgress).await?;
+            let updated_task = self.task_board.get_task(task_id).await?;
+
+            // Update the agent's assigned tasks
+            {
+                let teams = self.teams.read().await;
+                if let Some(team) = teams.get(team_name) {
+                    if let Some(agent) = team.members.get(agent_name) {
+                        let _ = agent.assign_task(task_id).await;
+                    }
+                }
+            }
+
+            if let Err(e) = self.event_sender.send(CoordinatorEvent::TaskAssigned {
+                task_id,
+                agent: agent_name.to_string(),
+            }) {
+                tracing::warn!(
+                    task_id = %task_id,
+                    agent = %agent_name,
+                    error = %e,
+                    "Failed to send TaskAssigned event - no active receivers"
+                );
+            }
+
+            tracing::info!(
+                task_id = %task_id,
+                agent = %agent_name,
+                team = %team_name,
+                "Agent self-claimed task (file-locked)"
+            );
+
+            self.persist_team(team_name).await;
+
+            // The returned claimed TaskFile may have slightly different timestamps
+            // than the in-memory version, so use the task board's version.
+            let _ = claimed; // Used for the file lock claim above
+            return Ok(updated_task);
+        }
+
+        // Fallback: in-memory only claim (no persistence)
         let task = self.task_board.get_task(task_id).await?;
         if task.status != TaskStatus::Pending {
             return Err(AgentError::Task(
@@ -1344,7 +1402,8 @@ impl AgentCoordinator {
     /// Complete a task on the task board and fire the TeamTaskCompleted hook.
     ///
     /// This is the preferred way to mark a task as completed because it
-    /// triggers the hook system for quality gates.
+    /// triggers the hook system for quality gates and persists the updated
+    /// state to disk.
     pub async fn complete_task(
         &self,
         task_id: Uuid,
@@ -1357,6 +1416,11 @@ impl AgentCoordinator {
             .unwrap_or_else(|_| task_id.to_string());
 
         self.task_board.complete_task(task_id).await?;
+
+        // Persist the completed task to disk
+        if let Ok(updated_task) = self.task_board.get_task(task_id).await {
+            self.persist_task(team_name, &updated_task);
+        }
 
         // Fire TeamTaskCompleted hook
         self.fire_hook(HookEvent::TeamTaskCompleted {
@@ -1609,31 +1673,28 @@ impl AgentCoordinator {
 
     /// Load persisted teams and tasks from disk into memory.
     /// Call this once after coordinator creation, before use.
+    ///
+    /// Uses the dual-path persistence layer to discover teams stored under
+    /// `~/.claude/` (preferred) or `~/.shannon/`.
     pub async fn load_from_disk(&self) -> Result<usize, AgentError> {
         let Some(ref persist) = self.persistence else {
             return Ok(0);
         };
 
-        let team_names = persist.list_teams()?;
+        let all_teams = persist.load_all_teams()?;
         let mut loaded = 0;
 
-        for team_name in &team_names {
-            let config_file = match persist.load_team(team_name) {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::warn!(team = %team_name, error = %e, "Failed to load team, skipping");
-                    continue;
-                }
-            };
-
+        for (team_name, config_file) in all_teams {
             // Reconstruct teammates from config
             let mut members = HashMap::new();
             for (agent_name, teammate_config) in &config_file.members {
-                members.insert(agent_name.clone(), Teammate::new(agent_name.clone(), teammate_config.clone()));
+                let teammate = Teammate::new(agent_name.clone(), teammate_config.clone());
+                teammate.set_team_name(team_name.clone());
+                members.insert(agent_name.clone(), teammate);
             }
 
             // Load persisted tasks
-            let task_files = persist.load_tasks(team_name)?;
+            let task_files = persist.load_tasks(&team_name)?;
             let mut task_list = Vec::new();
             for tf in &task_files {
                 if let Ok(task) = tf.to_agent_task() {
@@ -1642,6 +1703,9 @@ impl AgentCoordinator {
                     task_list.push(task);
                 }
             }
+
+            let member_count = members.len();
+            let task_count = task_list.len();
 
             let team = AgentTeam {
                 name: config_file.name.clone(),
@@ -1656,7 +1720,12 @@ impl AgentCoordinator {
             self.teams.write().await.insert(team_name.clone(), team);
             loaded += 1;
 
-            tracing::info!(team = %team_name, "Loaded team from disk");
+            tracing::info!(
+                team = %team_name,
+                members = member_count,
+                tasks = task_count,
+                "Loaded team from disk"
+            );
         }
 
         Ok(loaded)
@@ -1696,6 +1765,23 @@ impl AgentCoordinator {
 
         if let Err(e) = persist.save_team(&config_file) {
             tracing::warn!(team = %team_name, error = %e, "Failed to persist team config");
+        }
+    }
+
+    /// Persist a single task file to disk.
+    fn persist_task(&self, team_name: &str, task: &AgentTask) {
+        let Some(ref persist) = self.persistence else {
+            return;
+        };
+
+        let task_file = crate::persistence::TaskFile::from_agent_task(task);
+        if let Err(e) = persist.save_task(team_name, &task_file) {
+            tracing::warn!(
+                team = %team_name,
+                task_id = %task.id,
+                error = %e,
+                "Failed to persist task file"
+            );
         }
     }
 

@@ -2,11 +2,13 @@
 //!
 //! Main orchestrator for streaming query processing with tool orchestration.
 
+mod context_injector;
 mod engine;
 mod streaming;
 mod types;
 
 // Re-export all public types to maintain the same public API as the original flat file.
+pub use context_injector::ContextInjector;
 pub use engine::QueryEngine;
 pub use types::{
     CompressionStrategy, ConversationStats, CostEstimate, CostTracker, PermissionRequest, QueryContext, QueryEngineConfig, QueryError,
@@ -596,6 +598,22 @@ mod tests {
                 assert_eq!(output_tokens, 25000);
             }
             _ => panic!("Expected Cost variant"),
+        }
+    }
+
+    #[test]
+    fn test_query_event_info() {
+        let id = Uuid::new_v4();
+        let event = QueryEvent::Info {
+            query_id: id,
+            message: "compaction: 50000 -> 10000 tokens (80% reduction)".to_string(),
+        };
+        match event {
+            QueryEvent::Info { message, .. } => {
+                assert!(message.contains("compaction"));
+                assert!(message.contains("80%"));
+            }
+            _ => panic!("Expected Info variant"),
         }
     }
 

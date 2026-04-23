@@ -1,6 +1,6 @@
 //! Skill loading from disk
 
-use crate::definition::{Skill, SkillSource};
+use crate::definition::{Skill, SkillMetadata, SkillSource};
 use crate::error::{SkillError, SkillResult};
 use crate::frontmatter::parse_skill_frontmatter;
 use std::path::{Path, PathBuf};
@@ -75,6 +75,64 @@ pub fn load_skill_from_file(path: &Path) -> SkillResult<Skill> {
         created_at: chrono::Utc::now(),
         updated_at: None,
     })
+}
+
+/// Load only metadata from a SKILL.md file (frontmatter only, skips body).
+///
+/// This is significantly cheaper than [`load_skill_from_file`] when only the
+/// name, description, and trigger patterns are needed (e.g. for LLM context
+/// injection). The body content is discarded.
+pub fn load_metadata_only(path: &Path) -> SkillResult<SkillMetadata> {
+    if !path.exists() {
+        return Err(SkillError::NotFound(path.display().to_string()));
+    }
+
+    let content = std::fs::read_to_string(path)
+        .map_err(SkillError::Io)?;
+
+    let parsed = parse_skill_frontmatter(&content, &path.display().to_string())?;
+
+    let parent_dir = path.parent().unwrap_or_else(|| Path::new(""));
+    let skill_dir_name = parent_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown");
+
+    let name = parsed.frontmatter.name
+        .clone()
+        .unwrap_or_else(|| skill_dir_name.to_string());
+
+    let id = skill_dir_name.to_string();
+
+    let description = parsed.frontmatter.description
+        .clone()
+        .unwrap_or_else(|| extract_description_from_body(&parsed.body));
+
+    let user_invocable = parsed.frontmatter.user_invocable.unwrap_or(true);
+
+    Ok(SkillMetadata {
+        id,
+        name,
+        description,
+        aliases: parsed.frontmatter.aliases.unwrap_or_default(),
+        when_to_use: parsed.frontmatter.when_to_use,
+        argument_hint: parsed.frontmatter.argument_hint,
+        allowed_tools: parsed.frontmatter.allowed_tools.unwrap_or_default(),
+        user_invocable,
+        is_hidden: !user_invocable,
+        source: SkillSource::User,
+        file_path: Some(path.to_path_buf()),
+    })
+}
+
+/// Load a complete skill from disk given a known file path.
+///
+/// Used for on-demand loading when a skill is invoked. Wraps
+/// [`load_skill_from_file`] but sets the source to [`SkillSource::User`].
+pub fn load_full_skill(path: &Path) -> SkillResult<Skill> {
+    let mut skill = load_skill_from_file(path)?;
+    skill.source = SkillSource::User;
+    Ok(skill)
 }
 
 /// Extract a description from markdown body (first line or heading)
@@ -259,5 +317,108 @@ This is a description."#;
 
         // Cleanup
         let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_load_metadata_only_from_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("my-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        let skill_file = skill_dir.join("SKILL.md");
+        std::fs::write(&skill_file, r#"---
+name: my-skill
+description: A helpful skill
+alias:
+  - ms
+allowed-tools:
+  - bash
+  - read
+argument-hint: "<files>"
+---
+# My Skill
+
+This is a very long body that should not be loaded
+when we only need metadata. It contains detailed instructions
+and examples that would consume many tokens if included in
+the LLM context window.
+"#).unwrap();
+
+        let meta = load_metadata_only(&skill_file).unwrap();
+        assert_eq!(meta.id, "my-skill");
+        assert_eq!(meta.name, "my-skill");
+        assert_eq!(meta.description, "A helpful skill");
+        assert_eq!(meta.aliases, vec!["ms".to_string()]);
+        assert_eq!(meta.allowed_tools, vec!["bash".to_string(), "read".to_string()]);
+        assert_eq!(meta.argument_hint, Some("<files>".to_string()));
+        assert!(meta.user_invocable);
+        assert!(!meta.is_hidden);
+        assert_eq!(meta.file_path, Some(skill_file));
+    }
+
+    #[test]
+    fn test_load_metadata_only_missing_file() {
+        let result = load_metadata_only(Path::new("/nonexistent/SKILL.md"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_metadata_only_no_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("plain-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        let skill_file = skill_dir.join("SKILL.md");
+        std::fs::write(&skill_file, "# Plain Skill\n\nJust a body with no frontmatter.\n").unwrap();
+
+        let meta = load_metadata_only(&skill_file).unwrap();
+        // Should fall back to directory name for id and name
+        assert_eq!(meta.id, "plain-skill");
+        assert_eq!(meta.name, "plain-skill");
+        // Description extracted from body
+        assert_eq!(meta.description, "Plain Skill");
+        assert!(meta.aliases.is_empty());
+        assert!(meta.allowed_tools.is_empty());
+    }
+
+    #[test]
+    fn test_load_full_skill_from_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("full-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        let skill_file = skill_dir.join("SKILL.md");
+        std::fs::write(&skill_file, r#"---
+name: full-skill
+description: A full skill
+---
+# Full Skill Body
+
+Detailed instructions go here.
+"#).unwrap();
+
+        let skill = load_full_skill(&skill_file).unwrap();
+        assert_eq!(skill.id, "full-skill");
+        assert_eq!(skill.name, "full-skill");
+        assert_eq!(skill.description, "A full skill");
+        assert!(skill.content.contains("Detailed instructions go here"));
+        assert_eq!(skill.source, SkillSource::User);
+    }
+
+    #[test]
+    fn test_load_metadata_vs_full_content_difference() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("compare-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        let skill_file = skill_dir.join("SKILL.md");
+
+        let body = "X".repeat(10_000);
+        let content = format!("---\nname: compare-skill\ndescription: Short desc\n---\n{body}");
+        std::fs::write(&skill_file, &content).unwrap();
+
+        let meta = load_metadata_only(&skill_file).unwrap();
+        let full = load_full_skill(&skill_file).unwrap();
+
+        // Metadata should not contain the body
+        assert_eq!(meta.description, "Short desc");
+        // Full skill should contain the body
+        assert_eq!(full.content.len(), 10_000);
     }
 }
