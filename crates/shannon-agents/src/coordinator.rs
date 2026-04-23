@@ -1,6 +1,7 @@
 //! Agent coordinator for managing multi-agent teams
 
 use crate::{
+    custom_agent::{CustomAgentDef, CustomAgentLoader, CustomAgentError},
     error::{AgentError, CoordinationError},
     message::{AgentMessage, MessageContent, MessageType, ProtocolMessage},
     persistence::{FilePersistence, InboxMessage, TeamConfigFile},
@@ -173,6 +174,8 @@ pub struct AgentCoordinator {
     process_manager: Option<AgentProcessManager>,
     /// Channel for RPC requests from process agents that need coordinator state.
     rpc_request_rx: Option<mpsc::Receiver<(String, i64, String, serde_json::Value)>>,
+    /// Custom agent definitions loaded from `.claude/agents/*.md`.
+    custom_agents: std::collections::HashMap<String, CustomAgentDef>,
 }
 
 /// A team of agents working together
@@ -287,6 +290,7 @@ impl AgentCoordinator {
             hook_manager: None,
             process_manager: None,
             rpc_request_rx: None,
+            custom_agents: HashMap::new(),
         };
 
         // Start the background inbox delivery loop
@@ -1607,6 +1611,39 @@ impl AgentCoordinator {
     /// Set the hook manager for firing team-related hooks.
     pub fn set_hook_manager(&mut self, manager: Arc<HookManager>) {
         self.hook_manager = Some(manager);
+    }
+
+    /// Load custom agent definitions from `.claude/agents/*.md` files.
+    ///
+    /// Scans both user-global (`~/.claude/agents/`) and project-local
+    /// (`.claude/agents/`) directories. Project-local definitions override
+    /// user-global ones with the same name.
+    ///
+    /// Returns the loaded definitions and stores them internally for use
+    /// when spawning teammates with custom agent types.
+    pub fn load_custom_agents(&mut self) -> Result<Vec<CustomAgentDef>, CustomAgentError> {
+        let loader = CustomAgentLoader::new();
+        let agents = loader.discover()?;
+
+        let loaded: Vec<CustomAgentDef> = agents.values().cloned().collect();
+        self.custom_agents = agents;
+
+        tracing::info!(
+            count = self.custom_agents.len(),
+            "Loaded custom agent definitions"
+        );
+
+        Ok(loaded)
+    }
+
+    /// Get a loaded custom agent definition by name.
+    pub fn get_custom_agent(&self, name: &str) -> Option<&CustomAgentDef> {
+        self.custom_agents.get(name)
+    }
+
+    /// List all loaded custom agent names.
+    pub fn list_custom_agents(&self) -> Vec<String> {
+        self.custom_agents.keys().cloned().collect()
     }
 
     /// Fire a hook event asynchronously (non-blocking).

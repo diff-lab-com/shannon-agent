@@ -5,6 +5,7 @@
 //! and git worktree isolation for parallel development workflows.
 
 mod coordinator;
+mod custom_agent;
 mod teammate;
 mod task_board;
 mod worktree;
@@ -60,6 +61,9 @@ pub use persistence::{
 };
 pub use agent_defs::{
     AgentDefinition, AgentDefinitionRegistry, AgentDefError,
+};
+pub use custom_agent::{
+    CustomAgentDef, CustomAgentLoader, CustomAgentError,
 };
 pub use executor::{
     AgentExecutor, LlmAgentExecutor, MockAgentExecutor, shared_executor,
