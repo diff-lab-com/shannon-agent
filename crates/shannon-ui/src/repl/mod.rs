@@ -3,6 +3,7 @@
 /// Number of lines above which a paste is shown as "[Pasted Text #N X lines]"
 const PASTE_THRESHOLD_LINES: usize = 5;
 
+mod at_reference;
 mod commands;
 mod input;
 pub(crate) mod preferences;

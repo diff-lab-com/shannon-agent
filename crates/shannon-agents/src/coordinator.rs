@@ -143,6 +143,13 @@ pub enum CoordinatorEvent {
     AgentCompleted { team: String, agent: String, success: bool, output: String },
     /// An idle agent was auto-assigned a task
     TaskAutoClaimed { task_id: Uuid, team: String, agent: String },
+    /// A peer-to-peer direct message was sent between agents
+    PeerDirectMessage {
+        team: String,
+        from: String,
+        to: String,
+        summary: Option<String>,
+    },
 }
 
 /// Main coordinator for managing multi-agent teams
@@ -1388,6 +1395,17 @@ impl AgentCoordinator {
             );
         }
 
+        // Collect summaries of recent peer DMs for this idle agent
+        let peer_dm_summaries = self.collect_peer_dm_summaries(team_name, agent_name);
+        if !peer_dm_summaries.is_empty() {
+            tracing::info!(
+                agent = %agent_name,
+                team = %team_name,
+                peer_dms = ?peer_dm_summaries,
+                "Idle agent has recent peer direct messages"
+            );
+        }
+
         // Fire TeammateIdle hook
         self.fire_hook(HookEvent::TeammateIdle {
             team_name: team_name.to_string(),
@@ -1396,6 +1414,41 @@ impl AgentCoordinator {
         });
 
         Ok(claimable)
+    }
+
+    /// Collect summaries of recent peer-to-peer direct messages for a given agent.
+    ///
+    /// Scans the recent CoordinatorEvent stream for PeerDirectMessage events
+    /// involving this agent (as sender or recipient) and returns their summaries.
+    fn collect_peer_dm_summaries(
+        &self,
+        team_name: &str,
+        agent_name: &str,
+    ) -> Vec<String> {
+        // Try to receive recent events without blocking the subscriber
+        let mut rx = self.event_sender.subscribe();
+        let mut summaries = Vec::new();
+
+        // Drain buffered events that match our criteria
+        while let Ok(event) = rx.try_recv() {
+            if let CoordinatorEvent::PeerDirectMessage {
+                team,
+                from,
+                to,
+                summary,
+            } = event
+            {
+                if team == team_name && (from == agent_name || to == agent_name) {
+                    if let Some(s) = summary {
+                        summaries.push(format!("{from}->{to}: {s}"));
+                    } else {
+                        summaries.push(format!("{from}->{to}: (no summary)"));
+                    }
+                }
+            }
+        }
+
+        summaries
     }
 
     /// Get the task board

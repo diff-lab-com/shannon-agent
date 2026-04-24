@@ -176,6 +176,34 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                     repl.state.file_selector_for_at = true;
                 }
             }
+            // Check if user is typing a URL after @ while the file selector is open.
+            // If the filter text becomes a URL, close the selector and process the URL.
+            if repl.state.file_selector_for_at && repl.state.file_selector.is_some() {
+                if let Some(ref sel) = repl.state.file_selector {
+                    let filter = sel.get_filter().unwrap_or("").to_string();
+                    if let Some(url) = super::at_reference::detect_url_in_input(&filter) {
+                        // Close the file selector
+                        repl.state.file_selector = None;
+                        repl.state.file_selector_for_at = false;
+                        // Remove the trailing '@' from prompt
+                        let input = repl.prompt.input().to_string();
+                        if let Some(pos) = input.rfind('@') {
+                            let mut new_input = String::with_capacity(input.len());
+                            new_input.push_str(&input[..pos]);
+                            new_input.push_str(&input[pos + 1..]);
+                            repl.prompt.set_input(new_input);
+                        }
+                        // Fetch and inject URL content
+                        let result = super::at_reference::fetch_url_content(&url);
+                        if let Some(msg) = &result.status_message {
+                            repl.chat.add_message(ChatRole::System, msg.clone());
+                        }
+                        if !result.injected_text.is_empty() {
+                            repl.prompt.insert_text(&result.injected_text);
+                        }
+                    }
+                }
+            }
             update_inline_completions(repl);
             Ok(())
         }
@@ -951,6 +979,12 @@ fn handle_file_selector_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                                 ChatRole::System,
                                 format!("Failed to navigate into {dir_name}: {e}"),
                             );
+                        } else if repl.state.file_selector_for_at {
+                            // In @ mode, show hint that Tab selects directory
+                            repl.state.toast = Some((
+                                "  Tab = select directory | Enter = navigate | Esc = cancel  ".to_string(),
+                                std::time::Instant::now(),
+                            ));
                         }
                         return Ok(());
                     }
@@ -971,39 +1005,116 @@ fn handle_file_selector_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
 
             if let Some(path) = selected_path {
                 if was_at_mode {
-                    // Check if the selected file is an image — auto-attach instead of inserting path
-                    let is_image = path.rsplit('.').next()
-                        .map(|ext| matches!(ext.to_lowercase().as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg"))
-                        .unwrap_or(false);
+                    // Determine what kind of reference was selected
+                    let ref_kind = super::at_reference::detect_reference_kind(&path);
 
-                    if is_image {
-                        // Remove the trailing '@' from prompt
-                        let input = repl.prompt.input().to_string();
-                        if let Some(pos) = input.rfind('@') {
-                            let mut new_input = String::with_capacity(input.len());
-                            new_input.push_str(&input[..pos]);
-                            new_input.push_str(&input[pos + 1..]);
-                            repl.prompt.set_input(new_input);
+                    // Remove the trailing '@' from prompt for all @ modes
+                    let input = repl.prompt.input().to_string();
+                    if let Some(pos) = input.rfind('@') {
+                        let mut new_input = String::with_capacity(input.len() + path.len() * 2);
+                        new_input.push_str(&input[..pos]);
+                        new_input.push_str(&input[pos + 1..]);
+                        repl.prompt.set_input(new_input);
+                    }
+
+                    match ref_kind {
+                        super::at_reference::AtReferenceKind::Pdf => {
+                            let result = super::at_reference::extract_pdf_text(&path);
+                            if let Some(msg) = &result.status_message {
+                                repl.chat.add_message(ChatRole::System, msg.clone());
+                            }
+                            if !result.injected_text.is_empty() {
+                                repl.prompt.insert_text(&result.injected_text);
+                            }
                         }
-                        // Attach image automatically
-                        let _ = super::commands::handle_image(repl, &path);
-                    } else {
-                        // Insert path at cursor, replacing the trailing '@'
-                        let input = repl.prompt.input().to_string();
-                        if let Some(pos) = input.rfind('@') {
-                            let mut new_input = String::with_capacity(input.len() + path.len());
-                            new_input.push_str(&input[..pos]);
-                            new_input.push_str(&path);
-                            new_input.push_str(&input[pos + 1..]);
-                            repl.prompt.set_input(new_input);
+                        super::at_reference::AtReferenceKind::Directory => {
+                            let result = super::at_reference::generate_directory_tree(&path, None);
+                            if let Some(msg) = &result.status_message {
+                                repl.chat.add_message(ChatRole::System, msg.clone());
+                            }
+                            if !result.injected_text.is_empty() {
+                                repl.prompt.insert_text(&result.injected_text);
+                            }
+                        }
+                        super::at_reference::AtReferenceKind::Url(_url) => {
+                            let result = super::at_reference::fetch_url_content(&path);
+                            if let Some(msg) = &result.status_message {
+                                repl.chat.add_message(ChatRole::System, msg.clone());
+                            }
+                            if !result.injected_text.is_empty() {
+                                repl.prompt.insert_text(&result.injected_text);
+                            }
+                        }
+                        super::at_reference::AtReferenceKind::File => {
+                            let is_image = path.rsplit('.').next()
+                                .map(|ext| matches!(
+                                    ext.to_lowercase().as_str(),
+                                    "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg"
+                                ))
+                                .unwrap_or(false);
+                            if is_image {
+                                let _ = super::commands::handle_image(repl, &path);
+                            } else {
+                                // Insert path at cursor (the '@' was already removed above)
+                                repl.prompt.insert_text(&path);
+                            }
                         }
                     }
                 } else {
                     repl.prompt.set_input(path);
                     repl.chat.add_message(
                         ChatRole::System,
-                        "File selected — press Enter to send as query, or edit the path.".to_string(),
+                        "File selected — press Enter to send as query, or edit the path."
+                            .to_string(),
                     );
+                }
+            }
+        }
+        KeyCode::Tab => {
+            // In @ mode, Tab selects the current (or highlighted) directory
+            // and generates a tree reference instead of navigating into it.
+            if repl.state.file_selector_for_at {
+                let selected_dir = repl.state
+                    .file_selector
+                    .as_ref()
+                    .and_then(|s| {
+                        s.current_selection().filter(|name| {
+                            let base = s.current_path().to_string();
+                            std::path::Path::new(&base).join(name).is_dir()
+                        })
+                    })
+                    .map(|name| {
+                        let base = repl.state.file_selector.as_ref()
+                            .map(|s| s.current_path().to_string())
+                            .unwrap_or_else(|| ".".to_string());
+                        format!("{base}/{name}")
+                    })
+                    .or_else(|| {
+                        // No directory highlighted — select the current directory
+                        repl.state.file_selector.as_ref()
+                            .map(|s| s.current_path().to_string())
+                    });
+
+                if let Some(dir_path) = selected_dir {
+                    // Remove the trailing '@' from prompt
+                    let input = repl.prompt.input().to_string();
+                    if let Some(pos) = input.rfind('@') {
+                        let mut new_input = String::with_capacity(input.len());
+                        new_input.push_str(&input[..pos]);
+                        new_input.push_str(&input[pos + 1..]);
+                        repl.prompt.set_input(new_input);
+                    }
+
+                    let result = super::at_reference::generate_directory_tree(&dir_path, None);
+                    if let Some(msg) = &result.status_message {
+                        repl.chat.add_message(ChatRole::System, msg.clone());
+                    }
+                    if !result.injected_text.is_empty() {
+                        repl.prompt.insert_text(&result.injected_text);
+                    }
+
+                    repl.state.file_selector = None;
+                    repl.state.file_selector_for_at = false;
                 }
             }
         }

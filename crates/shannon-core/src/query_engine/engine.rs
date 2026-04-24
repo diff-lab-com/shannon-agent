@@ -272,6 +272,11 @@ impl QueryEngine {
         self.context_injector.as_ref()
     }
 
+    /// Set the maximum number of turns for a conversation
+    pub fn set_max_turns(&mut self, turns: usize) {
+        self.config.max_turns = turns;
+    }
+
     /// Get the current session ID
     pub fn session_id(&self) -> Uuid {
         self.session_id

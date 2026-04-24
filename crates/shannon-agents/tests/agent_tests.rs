@@ -774,6 +774,7 @@ mod teammate_extended_tests {
             temperature: Some(0.7),
             is_lead: false,
             allowed_tools: vec![],
+            permission_mode: None,
         };
 
         let teammate = Teammate::new("expert".to_string(), config);

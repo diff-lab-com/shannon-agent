@@ -542,6 +542,7 @@ mod settings_tests {
             permissions_mode: "auto".to_string(),
             auto_memory: false,
             theme: "light".to_string(),
+            ..Default::default()
         };
         assert!(settings.validate().is_ok());
     }
@@ -642,6 +643,7 @@ mod settings_tests {
             permissions_mode: "auto".to_string(),
             auto_memory: false,
             theme: "light".to_string(),
+            ..Default::default()
         };
         let json = serde_json::to_string(&original).unwrap();
         let parsed: Settings = serde_json::from_str(&json).unwrap();
@@ -704,6 +706,7 @@ mod settings_tests {
             permissions_mode: "ask".to_string(),
             auto_memory: true,
             theme: "dark".to_string(),
+            ..Default::default()
         };
         let json = serde_json::to_string(&settings).unwrap();
         assert!(!json.contains("model"));
@@ -724,6 +727,7 @@ mod settings_tests {
             permissions_mode: "auto".to_string(),
             auto_memory: false,
             theme: "light".to_string(),
+            ..Default::default()
         };
 
         assert_eq!(settings.get_value("version"), Some(json!("1.0")));
@@ -785,6 +789,7 @@ mod settings_tests {
             permissions_mode: "ask".to_string(),
             auto_memory: true,
             theme: "dark".to_string(),
+            ..Default::default()
         };
 
         let override_settings = Settings {
@@ -796,6 +801,7 @@ mod settings_tests {
             permissions_mode: "auto".to_string(),
             auto_memory: false,
             theme: "light".to_string(),
+            ..Default::default()
         };
 
         base.merge(override_settings);

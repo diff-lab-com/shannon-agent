@@ -1069,6 +1069,7 @@ mod teammate_tests {
             temperature: Some(0.7),
             is_lead: false,
             allowed_tools: vec![],
+            permission_mode: None,
         };
 
         let json = serde_json::to_string(&config).expect("serialize TeammateConfig");
@@ -1476,6 +1477,7 @@ mod teammate_metadata_tests {
             temperature: None,
             is_lead: false,
             allowed_tools: vec![],
+            permission_mode: None,
         };
         Teammate::new("test-agent".to_string(), config)
     }
@@ -1535,6 +1537,7 @@ mod conversation_history_tests {
             temperature: None,
             is_lead: false,
             allowed_tools: vec![],
+            permission_mode: None,
         };
         let executor = Arc::new(MockAgentExecutor::new("response text"));
         Teammate::with_executor("test-agent".to_string(), config, executor)
@@ -1551,6 +1554,7 @@ mod conversation_history_tests {
             temperature: None,
             is_lead: false,
             allowed_tools: vec![],
+            permission_mode: None,
         };
         Teammate::new("test-agent".to_string(), config)
     }

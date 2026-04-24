@@ -37,6 +37,11 @@ pub struct TeammateConfig {
     /// If set, only these tool names are accessible to this agent (empty = all tools)
     #[serde(default)]
     pub allowed_tools: Vec<String>,
+    /// Permission mode inherited from the lead agent.
+    /// Examples: "default", "plan", "auto", "bypassPermissions".
+    /// When None, the agent uses whatever default the session provides.
+    #[serde(default)]
+    pub permission_mode: Option<String>,
 }
 
 impl Default for TeammateConfig {
@@ -51,6 +56,7 @@ impl Default for TeammateConfig {
             temperature: None,
             is_lead: false,
             allowed_tools: Vec::new(),
+            permission_mode: None,
         }
     }
 }

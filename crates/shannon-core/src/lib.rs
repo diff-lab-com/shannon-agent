@@ -94,6 +94,8 @@ pub mod ui_adapter;
 pub mod sandbox;
 pub mod api_server;
 pub mod preference_memory;
+pub mod feature_flags;
+pub mod session_persist;
 
 pub mod i18n;
 

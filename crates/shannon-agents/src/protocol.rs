@@ -210,6 +210,9 @@ pub struct SendMessageParams {
     pub to: String,
     pub content: String,
     pub team_name: String,
+    /// Optional short preview of the message for UI display (5-10 words)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 /// Parameters for the `list_tasks` request.

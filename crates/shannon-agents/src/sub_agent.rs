@@ -230,6 +230,7 @@ impl SubAgentRegistry {
             temperature: None,
             is_lead: false,
             allowed_tools: vec![],
+            permission_mode: None,
         };
 
         self.coordinator
@@ -507,6 +508,9 @@ pub struct SendMessageInput {
     pub to: String,
     /// Message content (string or JSON)
     pub message: Value,
+    /// Optional short preview of the message for UI display (5-10 words)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 /// Tool that sends messages between agents.

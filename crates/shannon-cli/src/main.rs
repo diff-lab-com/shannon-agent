@@ -14,8 +14,79 @@ use shannon_tools::register_default_tools;
 use shannon_ui::Repl;
 use std::collections::HashMap;
 use std::io::Write;
+use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use uuid::Uuid;
+
+// ── CI/CD Headless Mode Types ──────────────────────────────────────────
+
+/// Output format for non-interactive headless mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, serde::Serialize)]
+enum OutputFormat {
+    /// Plain text response to stdout.
+    Text,
+    /// Full structured JSON output with tool calls and metadata.
+    Json,
+}
+
+impl std::fmt::Display for OutputFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OutputFormat::Text => write!(f, "text"),
+            OutputFormat::Json => write!(f, "json"),
+        }
+    }
+}
+
+/// Exit codes for headless CI/CD mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum HeadlessExitCode {
+    /// 0 - assistant completed the task successfully.
+    Success = 0,
+    /// 1 - query engine error or API error.
+    Error = 1,
+    /// 2 - tried to use a tool not in the allowed list.
+    ToolDenied = 2,
+    /// 3 - maximum turns reached before completion.
+    MaxTurnsReached = 3,
+}
+
+impl From<HeadlessExitCode> for i32 {
+    fn from(code: HeadlessExitCode) -> i32 {
+        code as i32
+    }
+}
+
+/// Summary of a single tool call during headless execution.
+#[derive(Debug, Clone, serde::Serialize)]
+struct ToolCallSummary {
+    /// Name of the tool invoked.
+    tool: String,
+    /// Truncated summary of the tool input.
+    input_summary: String,
+    /// Truncated summary of the tool output.
+    output_summary: String,
+    /// Whether the tool execution succeeded.
+    success: bool,
+}
+
+/// Structured JSON output for headless mode.
+#[derive(Debug, Clone, serde::Serialize)]
+struct HeadlessOutput {
+    /// The original prompt sent to the assistant.
+    prompt: String,
+    /// The assistant's text response.
+    response: String,
+    /// Summaries of all tool calls made during execution.
+    tool_calls: Vec<ToolCallSummary>,
+    /// Total tokens consumed.
+    total_tokens: u64,
+    /// Wall-clock duration in milliseconds.
+    duration_ms: u64,
+    /// Whether execution succeeded and why.
+    exit_code: HeadlessExitCode,
+}
 
 /// CLI configuration passed explicitly instead of via environment variables.
 ///
@@ -216,8 +287,8 @@ struct Cli {
 
     /// Comma-separated list of allowed tool names for the agent (used with --team-agent).
     /// If not set, all tools are available.
-    #[arg(long, hide = true)]
-    allowed_tools: Option<String>,
+    #[arg(long = "allowed-tools", hide = true)]
+    team_allowed_tools: Option<String>,
 
     /// Resume the most recent session, loading its conversation history.
     /// With a prompt argument, continues the session in non-interactive mode.
@@ -231,6 +302,24 @@ struct Cli {
     /// Resume a specific session by its UUID (requires --resume or --continue).
     #[arg(long)]
     session: Option<String>,
+
+    /// CI/CD headless mode: non-interactive prompt (pipe-friendly).
+    /// Skips TUI entirely. Use with --output-format, --allowed-tools, --max-turns.
+    /// Example: shannon --prompt "fix the bug" --allowed-tools Read,Edit,Bash --output-format json
+    #[arg(long = "prompt")]
+    headless_prompt: Option<String>,
+
+    // NOTE: `--allowed-tools` is defined above as `team_allowed_tools` (shared
+    // by both --team-agent and --prompt headless modes).  Do not add a second
+    // field with the same long option name — clap rejects duplicate longs.
+
+    /// Output format for headless mode (text or json).
+    #[arg(long = "output-format", default_value = "text")]
+    output_format: OutputFormat,
+
+    /// Maximum turns in headless mode before exiting with code 3.
+    #[arg(long = "max-turns")]
+    max_turns: Option<u32>,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -690,6 +779,297 @@ fn run_noninteractive_query(
 
         Ok(())
     })
+}
+
+/// Run a CI/CD headless query.
+///
+/// When `--prompt` is provided (the `--prompt` long flag, not the positional arg),
+/// this path is taken instead of TUI or the simpler non-interactive query.
+///
+/// Features:
+/// - Skips TUI entirely
+/// - Restricts tools to `--allowed-tools` list (exit code 2 on violation)
+/// - Limits turns via `--max-turns` (exit code 3 when exceeded)
+/// - Outputs structured JSON with `--output-format json`
+///
+/// Exit codes: 0 success, 1 error, 2 tool denied, 3 max turns reached.
+fn run_headless_query(
+    prompt: &str,
+    config: &CliConfig,
+    allowed_tools: Option<&[String]>,
+    output_format: OutputFormat,
+    max_turns: Option<u32>,
+    resume_session: Option<shannon_core::state::SessionData>,
+) -> Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    let exit_code: HeadlessExitCode = rt.block_on(async {
+        let start = Instant::now();
+
+        // Build tool registry with all standard tools
+        let mut tools = ToolRegistry::new();
+        let agent_context_handle = register_default_tools(&mut tools)
+            .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
+
+        // Load and register skills
+        shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
+
+        // Discover plugins
+        let mut plugin_manager = shannon_core::PluginManager::new();
+        match plugin_manager.discover_and_load_all().await {
+            Ok(loaded) if !loaded.is_empty() => {
+                eprintln!("Loaded {} plugin(s)", loaded.len());
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("Warning: plugin discovery failed: {e}"),
+        }
+        shannon_core::register_plugin_tools(&plugin_manager, &mut tools);
+
+        // Discover MCP servers
+        {
+            let mut mcp_registry = shannon_core::mcp_advanced::McpServerRegistry::new();
+            let mcp_count = mcp_registry.load_from_default_paths();
+            if mcp_count > 0 {
+                eprintln!("Discovered {mcp_count} MCP server(s)");
+                for mcp_config in mcp_registry.enabled_servers() {
+                    let command = match &mcp_config.command {
+                        Some(cmd) => cmd.clone(),
+                        None => continue,
+                    };
+                    match shannon_core::discover_tools(
+                        &mcp_config.name,
+                        &command,
+                        &mcp_config.args,
+                        &mcp_config.env,
+                        None,
+                    )
+                    .await
+                    {
+                        Ok(result) => {
+                            let tool_count = result.tools.len();
+                            let boxed: Vec<Box<dyn shannon_core::tools::Tool>> = result
+                                .tools
+                                .into_iter()
+                                .map(|t| Box::new(t) as Box<dyn shannon_core::tools::Tool>)
+                                .collect();
+                            tools.register_batch(boxed).ok();
+                            eprintln!(
+                                "  Registered {} tool(s) from '{}'",
+                                tool_count, result.server_name
+                            );
+                        }
+                        Err(e) => {
+                            eprintln!("  Warning: MCP server '{}' discovery failed: {e}", mcp_config.name);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Apply tool access restrictions from --allowed-tools
+        if let Some(allowed) = allowed_tools {
+            tools.set_allowed_tools(Some(allowed.to_vec()));
+        }
+
+        // Build LLM client
+        let client_config = build_llm_config_from_builder(config);
+        match shannon_tools::AgentToolContext::new(client_config.clone()).await {
+            Ok(ctx) => {
+                if let Err(e) = shannon_tools::register_team_tools(&mut tools, ctx.coordinator.clone()) {
+                    eprintln!("Warning: Team tool registration failed: {e}");
+                }
+                if let Ok(mut guard) = agent_context_handle.lock() {
+                    *guard = Some(ctx);
+                }
+            }
+            Err(e) => eprintln!("Warning: Team context init failed (team features disabled): {e}"),
+        }
+
+        if let Err(e) = client_config.validate() {
+            eprintln!("Warning: {e}");
+        }
+
+        let client = if client_config.provider.requires_auth() {
+            shannon_core::api::LlmClient::new(client_config)
+        } else {
+            shannon_core::api::LlmClient::new_unauthenticated(client_config)
+        };
+
+        // Permissions: bypass all in headless mode
+        let mut permissions = shannon_core::permissions::PermissionManager::new();
+        permissions.set_approval_mode(shannon_core::permissions::ApprovalMode::BypassPermissions);
+        let state = StateManager::new();
+
+        let mut engine = QueryEngine::with_defaults(client, tools, permissions, state);
+
+        // Apply max_turns if specified
+        if let Some(turns) = max_turns {
+            engine.set_max_turns(turns as usize);
+        }
+
+        // Memory store
+        {
+            let memory_path = dirs::home_dir()
+                .map(|h| h.join(".shannon").join("memories"))
+                .unwrap_or_else(|| std::path::PathBuf::from(".shannon/memories"));
+            let mut mem_store = shannon_core::MemoryStore::new(memory_path);
+            let _ = mem_store.load();
+            engine = engine.with_memory(mem_store);
+        }
+
+        // Auto-load project instructions
+        if let Some(instructions) = shannon_core::project_instructions::load_from_cwd() {
+            engine.append_system_prompt(&instructions.content);
+        }
+
+        // Restore prior conversation history if --resume was specified
+        if let Some(session_data) = resume_session {
+            let count = session_data.messages.len();
+            engine.replace_conversation(session_data.messages);
+            eprintln!("Resumed session ({count} messages loaded)");
+        }
+
+        let context = QueryContext {
+            query_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            user_message: prompt.to_string(),
+            metadata: QueryMetadata {
+                timestamp: chrono::Utc::now(),
+                tools_allowed: true,
+                max_tokens: config.max_tokens().map(|v| v as u32),
+                model: config.model().unwrap_or_else(|| "default".to_string()),
+                temperature: config.temperature(),
+                top_p: None,
+            },
+        };
+
+        let mut event_stream = engine.process_query(context, None).await;
+
+        // Collect execution data
+        let mut response_text = String::new();
+        let mut tool_calls: Vec<ToolCallSummary> = Vec::new();
+        let mut total_tokens: u64 = 0;
+        let mut pending_tool_name: Option<String> = None;
+        let mut exit_code = HeadlessExitCode::Success;
+        let mut turn_count: usize = 0;
+        let allowed_set: Option<std::collections::HashSet<String>> =
+            allowed_tools.map(|v| v.iter().cloned().collect());
+
+        while let Some(event_result) = event_stream.next().await {
+            match event_result {
+                Ok(QueryEvent::Text { content, .. }) => {
+                    if output_format == OutputFormat::Text {
+                        print!("{content}");
+                        std::io::stdout().flush().ok();
+                    }
+                    response_text.push_str(&content);
+                }
+                Ok(QueryEvent::ToolUseRequest { tool_name, tool_input, .. }) => {
+                    // Check tool permission against allowed list
+                    if let Some(ref allowed) = allowed_set {
+                        if !allowed.contains(&tool_name) {
+                            eprintln!(
+                                "Error: tool '{}' not in allowed list: {}",
+                                tool_name,
+                                allowed.iter().cloned().collect::<Vec<_>>().join(",")
+                            );
+                            exit_code = HeadlessExitCode::ToolDenied;
+                            break;
+                        }
+                    }
+                    let input_summary = match serde_json::to_string(&tool_input) {
+                        Ok(s) if s.len() > 500 => format!("{}...", &s[..500]),
+                        Ok(s) => s,
+                        Err(_) => "(invalid json)".to_string(),
+                    };
+                    pending_tool_name = Some(tool_name.clone());
+                    eprintln!("[headless: invoking {tool_name}]");
+                    // Store a placeholder; will be updated on ToolUseResult
+                    tool_calls.push(ToolCallSummary {
+                        tool: tool_name,
+                        input_summary,
+                        output_summary: String::new(),
+                        success: false,
+                    });
+                }
+                Ok(QueryEvent::ToolUseResult { tool_name, result, is_error, .. }) => {
+                    let output_summary = if result.len() > 500 {
+                        format!("{}...", &result[..500])
+                    } else {
+                        result.clone()
+                    };
+                    // Update the last matching tool call
+                    if let Some(tc) = tool_calls.iter_mut().rev().find(|tc| tc.tool == tool_name && !tc.success && tc.output_summary.is_empty()) {
+                        tc.output_summary = output_summary;
+                        tc.success = !is_error;
+                    }
+                    pending_tool_name = None;
+                    if is_error {
+                        eprintln!("[headless: tool-error {tool_name}]");
+                    } else {
+                        eprintln!("[headless: tool-done {tool_name}]");
+                    }
+                }
+                Ok(QueryEvent::TurnCompleted { turn_number, tokens_used, .. }) => {
+                    turn_count = turn_number;
+                    total_tokens += tokens_used;
+                    eprintln!("[headless: turn {turn_number}, {tokens_used} tokens]");
+                    // Check max turns
+                    if let Some(max) = max_turns {
+                        if turn_number >= max as usize {
+                            eprintln!("Max turns ({max}) reached");
+                            exit_code = HeadlessExitCode::MaxTurnsReached;
+                            break;
+                        }
+                    }
+                }
+                Ok(QueryEvent::Usage { input_tokens, output_tokens, .. }) => {
+                    total_tokens = total_tokens.max(input_tokens + output_tokens);
+                }
+                Ok(QueryEvent::Completed { .. }) => {
+                    if output_format == OutputFormat::Text && !response_text.is_empty() {
+                        // Text was already streamed; just ensure newline
+                        println!();
+                    }
+                }
+                Ok(QueryEvent::Failed { error, .. }) => {
+                    eprintln!("Error: {error}");
+                    exit_code = HeadlessExitCode::Error;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("Stream error: {e}");
+                    exit_code = HeadlessExitCode::Error;
+                }
+            }
+        }
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        // Output results based on format
+        match output_format {
+            OutputFormat::Text => {
+                // Response was already streamed to stdout above
+            }
+            OutputFormat::Json => {
+                let output = HeadlessOutput {
+                    prompt: prompt.to_string(),
+                    response: response_text,
+                    tool_calls,
+                    total_tokens,
+                    duration_ms,
+                    exit_code,
+                };
+                println!("{}", serde_json::to_string_pretty(&output).unwrap_or_else(|e| {
+                    format!(r#"{{"error": "serialization failed: {e}"}}"#)
+                }));
+            }
+        }
+
+        Ok::<HeadlessExitCode, anyhow::Error>(exit_code)
+    })?;
+
+    // Exit with the appropriate code
+    std::process::exit(i32::from(exit_code));
 }
 
 /// Read all of stdin into a String. Returns empty string if stdin is a terminal
@@ -1196,12 +1576,46 @@ fn main() -> Result<()> {
             cli.system_prompt.as_deref(),
             cli.workdir.as_deref(),
             cli.permission_mode.as_deref(),
-            cli.allowed_tools.as_deref(),
+            cli.team_allowed_tools.as_deref(),
         );
     }
 
     // Determine if session resume is requested (used by multiple code paths below)
     let should_resume = cli.resume || cli.r#continue;
+
+    // ── CI/CD Headless mode: --prompt flag ──
+    // Takes priority over bare prompt and pipe mode.
+    // When --prompt is specified, run in structured headless mode with
+    // exit codes, tool restrictions, and JSON output support.
+    if let Some(ref headless_prompt) = cli.headless_prompt {
+        let config = build_cli_config(
+            cli.model.as_deref(),
+            cli.provider.as_deref(),
+            None,
+            None,
+            None,
+            false,
+            HashMap::new(),
+        );
+        let resume_data = if should_resume {
+            load_resume_session(cli.session.as_deref()).ok()
+        } else {
+            None
+        };
+        // Convert comma-separated team_allowed_tools into Vec<String>
+        let allowed_vec: Option<Vec<String>> = cli
+            .team_allowed_tools
+            .as_deref()
+            .map(|s| s.split(',').map(|t| t.trim().to_string()).collect());
+        return run_headless_query(
+            headless_prompt,
+            &config,
+            allowed_vec.as_deref(),
+            cli.output_format,
+            cli.max_turns,
+            resume_data,
+        );
+    }
 
     // Pipe mode: read prompt from stdin
     if cli.pipe {

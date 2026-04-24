@@ -723,6 +723,7 @@ mod tests {
             permissions_mode: "auto".to_string(),
             auto_memory: false,
             theme: "light".to_string(),
+            ..Default::default()
         };
 
         assert_eq!(
@@ -801,6 +802,7 @@ mod tests {
             permissions_mode: "ask".to_string(),
             auto_memory: true,
             theme: "dark".to_string(),
+            ..Default::default()
         };
 
         let override_settings = Settings {
@@ -812,6 +814,7 @@ mod tests {
             permissions_mode: "auto".to_string(),
             auto_memory: false,
             theme: "light".to_string(),
+            ..Default::default()
         };
 
         base.merge(override_settings);
@@ -915,6 +918,7 @@ mod tests {
             permissions_mode: "readonly".to_string(),
             auto_memory: false,
             theme: "light".to_string(),
+            ..Default::default()
         };
 
         manager.merge(project_settings);
@@ -998,6 +1002,7 @@ mod tests {
             permissions_mode: "ask".to_string(),
             auto_memory: true,
             theme: "dark".to_string(),
+            ..Default::default()
         };
 
         // Clear optional fields with null

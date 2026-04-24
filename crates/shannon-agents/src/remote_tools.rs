@@ -280,7 +280,8 @@ impl Tool for RemoteSendMessageTool {
 
     fn description(&self) -> &str {
         "Send a message to a teammate or broadcast to all teammates. \
-         Use 'to' for a specific agent or omit for broadcast."
+         Use 'to' for a specific agent name, '*' for broadcast to all, \
+         or omit 'to' for broadcast. Add 'summary' for a 5-10 word preview."
     }
 
     fn input_schema(&self) -> Value {
@@ -289,11 +290,15 @@ impl Tool for RemoteSendMessageTool {
             "properties": {
                 "to": {
                     "type": "string",
-                    "description": "Recipient agent name (omit for broadcast)"
+                    "description": "Recipient agent name, '*' for broadcast, or omit for broadcast to all"
                 },
                 "message": {
                     "type": "string",
                     "description": "Message content"
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "Short preview of the message (5-10 words) for UI display"
                 },
                 "priority": {
                     "type": "string",
@@ -311,20 +316,32 @@ impl Tool for RemoteSendMessageTool {
             return Err(ToolError::InvalidInput("message is required".into()));
         }
 
-        let params = json!({
+        let to = input.get("to").and_then(|v| v.as_str()).unwrap_or("*").to_string();
+        let summary = input.get("summary").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+        let mut params = json!({
             "from": self.agent_name,
-            "to": input.get("to").and_then(|v| v.as_str()).unwrap_or("*"),
+            "to": to,
             "message": message,
             "priority": input.get("priority").and_then(|v| v.as_str()).unwrap_or("normal"),
         });
 
+        if let Some(ref s) = summary {
+            params["summary"] = json!(s);
+        }
+
         self.channel.notify(methods::SEND_MESSAGE, params)
             .await.map_err(ToolError::ExecutionFailed)?;
 
-        Ok(success_output(json!({
+        let mut result = json!({
             "status": "sent",
             "from": self.agent_name,
-        })))
+        });
+        if let Some(s) = summary {
+            result["summary"] = json!(s);
+        }
+
+        Ok(success_output(result))
     }
 }
 

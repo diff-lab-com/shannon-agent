@@ -823,6 +823,124 @@ fn shell_escape(s: &str) -> String {
 }
 
 // ============================================================================
+// Protected Path Checks
+// ============================================================================
+
+/// Check if a path points into a protected directory (.git, .shannon, etc.).
+pub fn is_protected_path(path: &Path) -> bool {
+    let protected = build_protected_paths(&[]);
+    let path_str = path.to_string_lossy();
+    let path_str = path_str.trim_start_matches("./");
+
+    for p in &protected {
+        let trimmed = p.trim_end_matches('/');
+        // Exact match (e.g. ".git" or ".shannon")
+        if path_str == trimmed {
+            return true;
+        }
+        // Direct child (e.g. ".git/HEAD", ".shannon/config.toml")
+        if path_str.starts_with(&format!("{trimmed}/")) {
+            return true;
+        }
+        // Absolute path that contains the protected dir as a component
+        // (e.g. "/home/user/project/.git/HEAD" contains "/.git/")
+        if path_str.contains(&format!("/{trimmed}/")) || path_str.ends_with(&format!("/{trimmed}")) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Check whether writing to the given path is allowed.
+///
+/// Returns `Err` if the path is inside a protected directory, with a message
+/// mentioning the `--dangerously-skip-protected` escape hatch.
+pub fn check_write_allowed(path: &Path) -> Result<(), SandboxError> {
+    if is_protected_path(path) {
+        return Err(SandboxError::InvalidConfig(format!(
+            "Write to protected path {:?} is denied. Use --dangerously-skip-protected to override.",
+            path
+        )));
+    }
+    Ok(())
+}
+
+/// Check whether writing to the given path is allowed, with additional
+/// user-specified protected directories.
+pub fn check_write_allowed_with_extras(path: &Path, extras: &[String]) -> Result<(), SandboxError> {
+    let protected = build_protected_paths(extras);
+    let path_str = path.to_string_lossy();
+    let path_str = path_str.trim_start_matches("./");
+
+    for p in &protected {
+        let trimmed = p.trim_end_matches('/');
+        if path_str == trimmed || path_str.starts_with(&format!("{trimmed}/")) {
+            return Err(SandboxError::InvalidConfig(format!(
+                "Write to protected path {:?} is denied.",
+                path
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Build the full list of protected paths, combining defaults with
+/// user-specified extras.  Deduplicates entries so that `.git` only
+/// appears once even if the user also lists it.
+pub fn build_protected_paths(user_extras: &[String]) -> Vec<String> {
+    let mut paths: Vec<String> = vec![
+        ".git".to_string(),
+        ".shannon".to_string(),
+    ];
+
+    for extra in user_extras {
+        let normalized = extra.trim_end_matches('/').to_string();
+        if !paths.iter().any(|p| p.trim_end_matches('/') == normalized) {
+            paths.push(format!("{}/", extra.trim_end_matches('/')));
+        }
+    }
+
+    paths
+}
+
+/// Check a shell command string for operations that touch protected paths.
+///
+/// Returns a list of warning messages for each suspicious operation found.
+pub fn check_command_protected_paths(command: &str, extras: &[String]) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let protected = build_protected_paths(extras);
+
+    // Detect destructive git operations.
+    if command.contains("git push")
+        && (command.contains("--force") || command.contains("-f "))
+    {
+        warnings.push("git push --force detected: this rewrites remote history".to_string());
+    }
+
+    // Detect rm -rf targeting protected directories.
+    if command.contains("rm") && command.contains("-rf") {
+        for p in &protected {
+            let trimmed = p.trim_end_matches('/');
+            if command.contains(trimmed) {
+                warnings.push(format!("rm -rf targets protected directory: {trimmed}"));
+            }
+        }
+    }
+
+    // Detect shell redirects into protected directories.
+    if command.contains('>') {
+        for p in &protected {
+            let trimmed = p.trim_end_matches('/');
+            if command.contains(trimmed) {
+                warnings.push(format!("Shell redirect targets protected directory: {trimmed}"));
+            }
+        }
+    }
+
+    warnings
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -1156,5 +1274,142 @@ mod tests {
             !args_joined.contains("--unshare-net"),
             "--unshare-net should not be present when network is allowed: {args_joined}"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // Protected path tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_is_protected_path_git_head() {
+        assert!(is_protected_path(Path::new(".git/HEAD")));
+    }
+
+    #[test]
+    fn test_is_protected_path_git_config() {
+        assert!(is_protected_path(Path::new(".git/config")));
+    }
+
+    #[test]
+    fn test_is_protected_path_git_refs() {
+        assert!(is_protected_path(Path::new(".git/refs/heads/main")));
+    }
+
+    #[test]
+    fn test_is_protected_path_git_dir_only() {
+        assert!(is_protected_path(Path::new(".git")));
+    }
+
+    #[test]
+    fn test_is_protected_path_shannon_dir() {
+        assert!(is_protected_path(Path::new(".shannon/config.toml")));
+    }
+
+    #[test]
+    fn test_is_protected_path_absolute_git() {
+        assert!(is_protected_path(Path::new("/home/user/project/.git/HEAD")));
+    }
+
+    #[test]
+    fn test_is_protected_path_dot_slash_prefix() {
+        assert!(is_protected_path(Path::new("./.git/config")));
+    }
+
+    #[test]
+    fn test_is_not_protected_path_src() {
+        assert!(!is_protected_path(Path::new("src/main.rs")));
+    }
+
+    #[test]
+    fn test_is_not_protected_path_readme() {
+        assert!(!is_protected_path(Path::new("README.md")));
+    }
+
+    #[test]
+    fn test_is_not_protected_path_gitignore() {
+        assert!(!is_protected_path(Path::new(".gitignore")));
+    }
+
+    #[test]
+    fn test_is_not_protected_path_cargo_toml() {
+        assert!(!is_protected_path(Path::new("Cargo.toml")));
+    }
+
+    #[test]
+    fn test_check_write_allowed_normal_path() {
+        assert!(check_write_allowed(Path::new("src/main.rs")).is_ok());
+    }
+
+    #[test]
+    fn test_check_write_allowed_git_path_rejected() {
+        let result = check_write_allowed(Path::new(".git/config"));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("protected"));
+        assert!(err.contains("--dangerously-skip-protected"));
+    }
+
+    #[test]
+    fn test_check_write_allowed_with_extras() {
+        let extras = vec!["custom_dir/".to_string()];
+        assert!(
+            check_write_allowed_with_extras(Path::new("custom_dir/file.txt"), &extras).is_err()
+        );
+        assert!(
+            check_write_allowed_with_extras(Path::new("src/main.rs"), &extras).is_ok()
+        );
+    }
+
+    #[test]
+    fn test_build_protected_paths_includes_defaults() {
+        let paths = build_protected_paths(&[]);
+        assert!(paths.iter().any(|p| p.contains(".git")));
+        assert!(paths.iter().any(|p| p.contains(".shannon")));
+    }
+
+    #[test]
+    fn test_build_protected_paths_adds_user_paths() {
+        let user = vec!["my_custom_dir/".to_string()];
+        let paths = build_protected_paths(&user);
+        assert!(paths.iter().any(|p| p.contains("my_custom_dir")));
+        assert!(paths.iter().any(|p| p.trim_end_matches('/') == ".git"));
+    }
+
+    #[test]
+    fn test_build_protected_paths_git_cannot_be_removed() {
+        let paths = build_protected_paths(&[]);
+        assert!(paths.iter().any(|p| p.trim_end_matches('/') == ".git"));
+    }
+
+    #[test]
+    fn test_build_protected_paths_no_duplicates() {
+        let user = vec![".git/".to_string(), ".shannon/".to_string()];
+        let paths = build_protected_paths(&user);
+        let git_count = paths.iter().filter(|p| p.trim_end_matches('/') == ".git").count();
+        assert_eq!(git_count, 1, "Should not duplicate .git entries");
+    }
+
+    #[test]
+    fn test_check_command_protected_paths_git_push_force() {
+        let warnings = check_command_protected_paths("git push --force origin main", &[]);
+        assert!(!warnings.is_empty(), "Should warn about git push --force");
+    }
+
+    #[test]
+    fn test_check_command_protected_paths_rm_git() {
+        let warnings = check_command_protected_paths("rm -rf .git", &[]);
+        assert!(!warnings.is_empty(), "Should warn about rm -rf .git");
+    }
+
+    #[test]
+    fn test_check_command_protected_paths_normal_command() {
+        let warnings = check_command_protected_paths("cargo build", &[]);
+        assert!(warnings.is_empty(), "Normal commands should have no warnings");
+    }
+
+    #[test]
+    fn test_check_command_protected_paths_redirect_to_git() {
+        let warnings = check_command_protected_paths("echo foo > .git/config", &[]);
+        assert!(!warnings.is_empty(), "Should warn about redirect to .git/");
     }
 }
