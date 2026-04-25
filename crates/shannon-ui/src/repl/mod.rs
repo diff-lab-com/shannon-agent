@@ -294,6 +294,10 @@ pub(super) struct CustomCommandEntry {
     pub name: String,
     pub template: String,
     pub path: std::path::PathBuf,
+    /// Optional description from frontmatter `description:` field.
+    pub description: Option<String>,
+    /// Argument names from frontmatter `arguments:` field.
+    pub arguments: Vec<String>,
     /// Optional model override from frontmatter `model:` field.
     pub model: Option<String>,
     /// Optional allowed tools from frontmatter `allowed-tools:` field.
@@ -333,10 +337,16 @@ pub(super) fn collect_custom_commands(
                 Err(_) => continue,
             };
             // Parse YAML frontmatter (---\n...\n---)
-            let (template, model, allowed_tools, agent) = if content.starts_with("---") {
+            let (template, description, arguments, model, allowed_tools, agent) = if content.starts_with("---") {
                 let parts: Vec<&str> = content.splitn(3, "---").collect();
                 let frontmatter = parts.get(1).unwrap_or(&"");
                 let body = parts.get(2).map(|s| s.trim_start()).unwrap_or("");
+                let desc = parse_frontmatter_field(frontmatter, "description");
+                let args_str = parse_frontmatter_field(frontmatter, "arguments")
+                    .or_else(|| parse_frontmatter_field(frontmatter, "args"));
+                let args = args_str
+                    .map(|s| s.split(',').map(|a| a.trim().to_string()).filter(|a| !a.is_empty()).collect())
+                    .unwrap_or_default();
                 let m = parse_frontmatter_field(frontmatter, "model");
                 let tools_str = parse_frontmatter_field(frontmatter, "allowed-tools")
                     .or_else(|| parse_frontmatter_field(frontmatter, "allowed_tools"));
@@ -344,13 +354,23 @@ pub(super) fn collect_custom_commands(
                     .map(|s| s.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect())
                     .unwrap_or_default();
                 let a = parse_frontmatter_field(frontmatter, "agent");
-                (body.to_string(), m, tools, a)
+                (body.to_string(), desc, args, m, tools, a)
             } else {
-                (content, None, Vec::new(), None)
+                (content, None, Vec::new(), None, Vec::new(), None)
             };
-            results.push(CustomCommandEntry { name: command_name, template, path, model, allowed_tools, agent });
+            results.push(CustomCommandEntry { name: command_name, template, path, description, arguments, model, allowed_tools, agent });
         }
     }
+}
+
+/// Deduplicate custom commands by name, keeping the last occurrence.
+/// Since project-level dirs are scanned after user-level dirs, project commands
+/// override user-level commands with the same name.
+pub(super) fn dedup_custom_commands(commands: &mut Vec<CustomCommandEntry>) {
+    let mut seen = std::collections::HashSet::new();
+    commands.reverse();
+    commands.retain(|c| seen.insert(c.name.clone()));
+    commands.reverse();
 }
 
 /// Watches custom command directories for changes and triggers re-registration.
@@ -385,6 +405,7 @@ impl CustomCommandWatcher {
         for dir in &self.dirs {
             collect_custom_commands(dir, "", &mut results);
         }
+        dedup_custom_commands(&mut results);
         for entry in &results {
             if let Ok(meta) = std::fs::metadata(&entry.path) {
                 if let Ok(mtime) = meta.modified() {
@@ -400,6 +421,7 @@ impl CustomCommandWatcher {
         for dir in &self.dirs {
             collect_custom_commands(dir, "", &mut current_files);
         }
+        dedup_custom_commands(&mut current_files);
 
         // Compare mtimes
         let mut new_mtimes = std::collections::HashMap::new();
@@ -417,18 +439,29 @@ impl CustomCommandWatcher {
 
         // Re-register all custom commands
         for entry in &current_files {
-            let description = format!("Custom command (from {})", entry.path.display());
+            let description = entry.description.clone()
+                .unwrap_or_else(|| format!("Custom command (from {})", entry.path.display()));
+            let arg_names = if entry.arguments.is_empty() {
+                vec!["$ARGUMENTS".to_string()]
+            } else {
+                entry.arguments.clone()
+            };
+            let argument_hint = if entry.arguments.is_empty() {
+                Some("$ARGUMENTS".to_string())
+            } else {
+                Some(entry.arguments.join(" "))
+            };
             let command = Command::Prompt(Box::new(PromptCommand {
                 base: CommandBase {
                     name: entry.name.clone(),
                     aliases: Vec::new(),
                     description,
-                    has_user_specified_description: false,
+                    has_user_specified_description: entry.description.is_some(),
                     availability: vec![shannon_commands::CommandAvailability::All],
                     source: shannon_commands::CommandSource::Builtin,
                     is_enabled: true,
                     is_hidden: false,
-                    argument_hint: Some("$ARGUMENTS".to_string()),
+                    argument_hint,
                     when_to_use: None,
                     version: None,
                     disable_model_invocation: false,
@@ -440,7 +473,7 @@ impl CustomCommandWatcher {
                 },
                 progress_message: format!("Running /{}...", entry.name),
                 content_length: entry.template.len(),
-                arg_names: vec!["$ARGUMENTS".to_string()],
+                arg_names,
                 allowed_tools: entry.allowed_tools.clone(),
                 model: entry.model.clone(),
                 hooks: std::collections::HashMap::new(),
@@ -1137,20 +1170,32 @@ impl Repl {
                 for dir in &custom_command_dirs {
                     collect_custom_commands(dir, "", &mut custom_commands);
                 }
+                dedup_custom_commands(&mut custom_commands);
 
                 for entry in &custom_commands {
-                    let description = format!("Custom command (from {})", entry.path.display());
+                    let description = entry.description.clone()
+                        .unwrap_or_else(|| format!("Custom command (from {})", entry.path.display()));
+                    let arg_names = if entry.arguments.is_empty() {
+                        vec!["$ARGUMENTS".to_string()]
+                    } else {
+                        entry.arguments.clone()
+                    };
+                    let argument_hint = if entry.arguments.is_empty() {
+                        Some("$ARGUMENTS".to_string())
+                    } else {
+                        Some(entry.arguments.join(" "))
+                    };
                     let command = Command::Prompt(Box::new(PromptCommand {
                         base: CommandBase {
                             name: entry.name.clone(),
                             aliases: Vec::new(),
                             description,
-                            has_user_specified_description: false,
+                            has_user_specified_description: entry.description.is_some(),
                             availability: vec![shannon_commands::CommandAvailability::All],
                             source: shannon_commands::CommandSource::Builtin,
                             is_enabled: true,
                             is_hidden: false,
-                            argument_hint: Some("$ARGUMENTS".to_string()),
+                            argument_hint,
                             when_to_use: None,
                             version: None,
                             disable_model_invocation: false,
@@ -1162,7 +1207,7 @@ impl Repl {
                         },
                         progress_message: format!("Running /{}...", entry.name),
                         content_length: entry.template.len(),
-                        arg_names: vec!["$ARGUMENTS".to_string()],
+                        arg_names,
                         allowed_tools: entry.allowed_tools.clone(),
                         model: entry.model.clone(),
                         hooks: HashMap::new(),

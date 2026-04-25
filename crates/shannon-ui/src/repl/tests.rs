@@ -3218,3 +3218,150 @@ fn test_collect_custom_commands_no_directory() {
     super::collect_custom_commands(std::path::Path::new("/nonexistent/path"), "", &mut results);
     assert!(results.is_empty());
 }
+
+#[test]
+fn test_collect_custom_commands_description_from_frontmatter() {
+    let dir = tempfile::tempdir().unwrap();
+    let content = "---\ndescription: Reviews code for bugs\nmodel: claude-sonnet-4-6\n---\nReview this code: $ARGUMENTS\n";
+    std::fs::write(dir.path().join("review.md"), content).unwrap();
+
+    let mut results: Vec<super::CustomCommandEntry> = Vec::new();
+    super::collect_custom_commands(dir.path(), "", &mut results);
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].description.as_deref(), Some("Reviews code for bugs"));
+}
+
+#[test]
+fn test_collect_custom_commands_arguments_from_frontmatter() {
+    let dir = tempfile::tempdir().unwrap();
+    let content = "---\narguments: file, pattern\n---\nSearch for $ARGUMENTS[1] in $ARGUMENTS[0]\n";
+    std::fs::write(dir.path().join("search.md"), content).unwrap();
+
+    let mut results: Vec<super::CustomCommandEntry> = Vec::new();
+    super::collect_custom_commands(dir.path(), "", &mut results);
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].arguments, vec!["file", "pattern"]);
+}
+
+#[test]
+fn test_collect_custom_commands_arguments_alias() {
+    let dir = tempfile::tempdir().unwrap();
+    let content = "---\nargs: input, output\n---\nProcess $ARGUMENTS[0] to $ARGUMENTS[1]\n";
+    std::fs::write(dir.path().join("process.md"), content).unwrap();
+
+    let mut results: Vec<super::CustomCommandEntry> = Vec::new();
+    super::collect_custom_commands(dir.path(), "", &mut results);
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].arguments, vec!["input", "output"]);
+}
+
+#[test]
+fn test_dedup_custom_commands_keeps_last() {
+    let mut commands = vec![
+        super::CustomCommandEntry {
+            name: "review".to_string(),
+            template: "user-level".to_string(),
+            path: std::path::PathBuf::from("/home/user/.claude/commands/review.md"),
+            description: None,
+            arguments: Vec::new(),
+            model: None,
+            allowed_tools: Vec::new(),
+            agent: None,
+        },
+        super::CustomCommandEntry {
+            name: "review".to_string(),
+            template: "project-level".to_string(),
+            path: std::path::PathBuf::from("/project/.claude/commands/review.md"),
+            description: Some("Project review".to_string()),
+            arguments: vec!["file".to_string()],
+            model: None,
+            allowed_tools: Vec::new(),
+            agent: None,
+        },
+    ];
+    super::dedup_custom_commands(&mut commands);
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0].template, "project-level");
+    assert_eq!(commands[0].description.as_deref(), Some("Project review"));
+}
+
+#[test]
+fn test_dedup_custom_commands_preserves_unique() {
+    let mut commands = vec![
+        super::CustomCommandEntry {
+            name: "review".to_string(),
+            template: "review template".to_string(),
+            path: std::path::PathBuf::from("/a/review.md"),
+            description: None,
+            arguments: Vec::new(),
+            model: None,
+            allowed_tools: Vec::new(),
+            agent: None,
+        },
+        super::CustomCommandEntry {
+            name: "commit".to_string(),
+            template: "commit template".to_string(),
+            path: std::path::PathBuf::from("/b/commit.md"),
+            description: None,
+            arguments: Vec::new(),
+            model: None,
+            allowed_tools: Vec::new(),
+            agent: None,
+        },
+    ];
+    super::dedup_custom_commands(&mut commands);
+    assert_eq!(commands.len(), 2);
+}
+
+#[test]
+fn test_commands_reload_full_pipeline() {
+    // Simulate the full reload pipeline: collect from multiple dirs, dedup, verify entries
+    let project_dir = tempfile::tempdir().unwrap();
+    let user_dir = tempfile::tempdir().unwrap();
+
+    // Create project-level command
+    let proj_cmds = project_dir.path().join(".claude").join("commands");
+    std::fs::create_dir_all(&proj_cmds).unwrap();
+    std::fs::write(
+        proj_cmds.join("review.md"),
+        "---\ndescription: Project review\narguments: file\nmodel: claude-sonnet-4-6\n---\nReview $ARGUMENTS[0]\n",
+    ).unwrap();
+
+    // Create user-level command with same name (should be overridden)
+    let user_cmds = user_dir.path().join(".claude").join("commands");
+    std::fs::create_dir_all(&user_cmds).unwrap();
+    std::fs::write(
+        user_cmds.join("review.md"),
+        "---\ndescription: User review\n---\nReview: $ARGUMENTS\n",
+    ).unwrap();
+
+    // Create another unique user-level command
+    std::fs::write(
+        user_cmds.join("commit.md"),
+        "---\ndescription: Commit changes\nallowed-tools: Bash, Read\n---\nCommit: $ARGUMENTS\n",
+    ).unwrap();
+
+    // Collect from both directories (project after user, like real code)
+    let mut commands: Vec<super::CustomCommandEntry> = Vec::new();
+    super::collect_custom_commands(&user_cmds, "", &mut commands);
+    super::collect_custom_commands(&proj_cmds, "", &mut commands);
+    super::dedup_custom_commands(&mut commands);
+
+    // Should have 2 commands (project "review" overrides user "review")
+    assert_eq!(commands.len(), 2);
+
+    // Find review command — should be project-level
+    let review = commands.iter().find(|c| c.name == "review").unwrap();
+    assert_eq!(review.description.as_deref(), Some("Project review"));
+    assert_eq!(review.arguments, vec!["file"]);
+    assert_eq!(review.model.as_deref(), Some("claude-sonnet-4-6"));
+    assert!(review.template.contains("$ARGUMENTS[0]"));
+
+    // Find commit command
+    let commit = commands.iter().find(|c| c.name == "commit").unwrap();
+    assert_eq!(commit.description.as_deref(), Some("Commit changes"));
+    assert_eq!(commit.allowed_tools, vec!["Bash", "Read"]);
+}

@@ -1108,7 +1108,11 @@ fn handle_commands(repl: &mut Repl, args: &str) -> Result<()> {
         for dir in &search_dirs {
             super::collect_custom_commands(dir, "", &mut all_cmds);
         }
-        let entry = all_cmds.iter().find(|e| e.name == name);
+        // Support subdirectory-prefixed names like "project:foo"
+        let entry = all_cmds.iter().find(|e| e.name == name).or_else(|| {
+            // Also try matching just the stem (without prefix)
+            all_cmds.iter().find(|e| e.name.ends_with(&format!(":{name}")) || e.name == name)
+        });
         match entry {
             Some(e) => {
                 let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
@@ -1142,6 +1146,54 @@ fn handle_commands(repl: &mut Repl, args: &str) -> Result<()> {
         return Ok(());
     }
 
+    // /commands create <name> — create a new command file
+    if let Some(cmd_name) = trimmed.strip_prefix("create ") {
+        let name = cmd_name.trim();
+        if name.is_empty() {
+            repl.chat.add_message(ChatRole::System, "Usage: /commands create <name>".to_string());
+            return Ok(());
+        }
+        // Sanitize name: only allow alphanumeric, dash, underscore, colon (for subdirs)
+        if !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == ':') {
+            repl.chat.add_message(ChatRole::System, "Command name can only contain letters, numbers, '-', '_', and ':' (for subdirectories).".to_string());
+            return Ok(());
+        }
+        let cwd = std::env::current_dir().unwrap();
+        let dir = cwd.join(".claude").join("commands");
+        // Handle subdirectory prefix: "project:foo" → .claude/commands/project/foo.md
+        let (sub_dir, file_name) = if let Some((prefix, stem)) = name.split_once(':') {
+            (Some(prefix), stem)
+        } else {
+            (None, name)
+        };
+        let cmd_dir = if let Some(sd) = sub_dir {
+            dir.join(sd)
+        } else {
+            dir.clone()
+        };
+        let file_path = cmd_dir.join(format!("{file_name}.md"));
+
+        if file_path.exists() {
+            repl.chat.add_message(ChatRole::System, format!("Command '{name}' already exists at {}. Use /commands edit {name} to edit it.", file_path.display()));
+            return Ok(());
+        }
+
+        // Create directory and default template
+        if let Err(e) = std::fs::create_dir_all(&cmd_dir) {
+            repl.chat.add_message(ChatRole::System, format!("Failed to create directory {}: {e}", cmd_dir.display()));
+            return Ok(());
+        }
+
+        let template = format!("---\ndescription: {name} command\n---\n\n$ARGUMENTS\n");
+        if let Err(e) = std::fs::write(&file_path, &template) {
+            repl.chat.add_message(ChatRole::System, format!("Failed to write {}: {e}", file_path.display()));
+            return Ok(());
+        }
+
+        repl.chat.add_message(ChatRole::System, format!("Created command '{name}' at {}. Use /commands reload to register it, or /commands edit {name} to customize.", file_path.display()));
+        return Ok(());
+    }
+
     if trimmed == "reload" {
         // Re-scan custom command directories and re-register
         let cwd = std::env::current_dir().unwrap_or_default();
@@ -1157,10 +1209,22 @@ fn handle_commands(repl: &mut Repl, args: &str) -> Result<()> {
         for dir in &dirs {
             super::collect_custom_commands(dir, "", &mut custom_commands);
         }
+        super::dedup_custom_commands(&mut custom_commands);
 
         let count = custom_commands.len();
         for entry in &custom_commands {
-            let description = format!("Custom command (from {})", entry.path.display());
+            let description = entry.description.clone()
+                .unwrap_or_else(|| format!("Custom command (from {})", entry.path.display()));
+            let arg_names = if entry.arguments.is_empty() {
+                vec!["$ARGUMENTS".to_string()]
+            } else {
+                entry.arguments.clone()
+            };
+            let argument_hint = if entry.arguments.is_empty() {
+                Some("$ARGUMENTS".to_string())
+            } else {
+                Some(entry.arguments.join(" "))
+            };
             use shannon_commands::{Command, CommandBase, ExecutionContext, PromptCommand};
             use std::collections::HashMap;
             let command = Command::Prompt(Box::new(PromptCommand {
@@ -1168,12 +1232,12 @@ fn handle_commands(repl: &mut Repl, args: &str) -> Result<()> {
                     name: entry.name.clone(),
                     aliases: Vec::new(),
                     description,
-                    has_user_specified_description: false,
+                    has_user_specified_description: entry.description.is_some(),
                     availability: vec![shannon_commands::CommandAvailability::All],
                     source: shannon_commands::CommandSource::Builtin,
                     is_enabled: true,
                     is_hidden: false,
-                    argument_hint: Some("$ARGUMENTS".to_string()),
+                    argument_hint,
                     when_to_use: None,
                     version: None,
                     disable_model_invocation: false,
@@ -1185,7 +1249,7 @@ fn handle_commands(repl: &mut Repl, args: &str) -> Result<()> {
                 },
                 progress_message: format!("Running /{}...", entry.name),
                 content_length: entry.template.len(),
-                arg_names: vec!["$ARGUMENTS".to_string()],
+                arg_names,
                 allowed_tools: entry.allowed_tools.clone(),
                 model: entry.model.clone(),
                 hooks: HashMap::new(),
@@ -1224,24 +1288,22 @@ fn handle_commands(repl: &mut Repl, args: &str) -> Result<()> {
         dirs.push(home.join(".shannon").join("commands"));
     }
 
-    let mut found: Vec<(String, String)> = Vec::new();
+    let mut found: Vec<super::CustomCommandEntry> = Vec::new();
     for dir in &dirs {
-        let mut cmds: Vec<super::CustomCommandEntry> = Vec::new();
-        super::collect_custom_commands(dir, "", &mut cmds);
-        for entry in &cmds {
-            if !found.iter().any(|(n, _)| n == &entry.name) {
-                found.push((entry.name.clone(), format!("{}", entry.path.display())));
-            }
-        }
+        super::collect_custom_commands(dir, "", &mut found);
     }
+    super::dedup_custom_commands(&mut found);
 
     if found.is_empty() {
         msg.push_str("  No custom commands found.\n\n");
         msg.push_str("  Create .md files in .claude/commands/ or .shannon/commands/\n");
+        msg.push_str("  or use /commands create <name> to create one.\n");
     } else {
         msg.push_str(&format!("  Custom commands ({}):\n", found.len()));
-        for (name, path) in &found {
-            msg.push_str(&format!("    /{name}  (from {path})\n"));
+        for entry in &found {
+            let desc = entry.description.as_deref().unwrap_or("");
+            let desc_suffix = if desc.is_empty() { String::new() } else { format!(" — {desc}") };
+            msg.push_str(&format!("    /{}{}\n", entry.name, desc_suffix));
         }
     }
 
