@@ -27,6 +27,7 @@ async-trait = "0.1"
 thiserror = "2.0"
 tracing = "0.1"
 dirs = "5.0"
+notify = { version = "7", features = ["macos_kqueue"] }
 rust-i18n = { workspace = true }
 base64 = "0.22"
 image = { workspace = true }

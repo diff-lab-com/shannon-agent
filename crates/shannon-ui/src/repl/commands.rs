@@ -1085,6 +1085,79 @@ fn handle_context(repl: &mut Repl, args: &str) -> Result<()> {
     Ok(())
 }
 
+/// Re-scan custom command directories, deduplicate, and register all commands.
+fn reload_custom_commands(repl: &mut Repl) {
+    use shannon_commands::{Command, CommandBase, ExecutionContext, PromptCommand};
+    use std::collections::HashMap;
+
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    dirs.push(cwd.join(".claude").join("commands"));
+    dirs.push(cwd.join(".shannon").join("commands"));
+    if let Some(home) = dirs::home_dir() {
+        dirs.push(home.join(".claude").join("commands"));
+        dirs.push(home.join(".shannon").join("commands"));
+    }
+
+    let mut custom_commands: Vec<super::CustomCommandEntry> = Vec::new();
+    for dir in &dirs {
+        super::collect_custom_commands(dir, "", &mut custom_commands);
+    }
+    super::dedup_custom_commands(&mut custom_commands);
+
+    let count = custom_commands.len();
+    for entry in &custom_commands {
+        let description = entry.description.clone()
+            .unwrap_or_else(|| format!("Custom command (from {})", entry.path.display()));
+        let arg_names = if entry.arguments.is_empty() {
+            vec!["$ARGUMENTS".to_string()]
+        } else {
+            entry.arguments.clone()
+        };
+        let argument_hint = if entry.arguments.is_empty() {
+            Some("$ARGUMENTS".to_string())
+        } else {
+            Some(entry.arguments.join(" "))
+        };
+        let command = Command::Prompt(Box::new(PromptCommand {
+            base: CommandBase {
+                name: entry.name.clone(),
+                aliases: Vec::new(),
+                description,
+                has_user_specified_description: entry.description.is_some(),
+                availability: vec![shannon_commands::CommandAvailability::All],
+                source: shannon_commands::CommandSource::Builtin,
+                is_enabled: true,
+                is_hidden: false,
+                argument_hint,
+                when_to_use: None,
+                version: None,
+                disable_model_invocation: false,
+                user_invocable: true,
+                is_workflow: false,
+                immediate: false,
+                is_sensitive: false,
+                user_facing_name: None,
+            },
+            progress_message: format!("Running /{}...", entry.name),
+            content_length: entry.template.len(),
+            arg_names,
+            allowed_tools: entry.allowed_tools.clone(),
+            model: entry.model.clone(),
+            hooks: HashMap::new(),
+            context: ExecutionContext::Inline,
+            agent: entry.agent.clone(),
+            paths: Vec::new(),
+            prompt_template: Some(entry.template.clone()),
+        }));
+        repl.command_registry.register_sync(command);
+    }
+    repl.chat.add_message(
+        ChatRole::System,
+        format!("Reloaded {count} custom command(s)."),
+    );
+}
+
 fn handle_commands(repl: &mut Repl, args: &str) -> Result<()> {
     let trimmed = args.trim();
 
@@ -1190,80 +1263,52 @@ fn handle_commands(repl: &mut Repl, args: &str) -> Result<()> {
             return Ok(());
         }
 
-        repl.chat.add_message(ChatRole::System, format!("Created command '{name}' at {}. Use /commands reload to register it, or /commands edit {name} to customize.", file_path.display()));
+        repl.chat.add_message(ChatRole::System, format!("Created command '{name}' at {}. Use /commands edit {name} to customize.", file_path.display()));
+        // Auto-reload to register the new command
+        reload_custom_commands(repl);
+        return Ok(());
+    }
+
+    // /commands delete <name> — delete a command file
+    if let Some(cmd_name) = trimmed.strip_prefix("delete ") {
+        let name = cmd_name.trim();
+        if name.is_empty() {
+            repl.chat.add_message(ChatRole::System, "Usage: /commands delete <name>".to_string());
+            return Ok(());
+        }
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let mut search_dirs: Vec<std::path::PathBuf> = Vec::new();
+        search_dirs.push(cwd.join(".claude").join("commands"));
+        search_dirs.push(cwd.join(".shannon").join("commands"));
+        if let Some(home) = dirs::home_dir() {
+            search_dirs.push(home.join(".claude").join("commands"));
+            search_dirs.push(home.join(".shannon").join("commands"));
+        }
+        let mut all_cmds: Vec<super::CustomCommandEntry> = Vec::new();
+        for dir in &search_dirs {
+            super::collect_custom_commands(dir, "", &mut all_cmds);
+        }
+        let entry = all_cmds.iter().find(|e| e.name == name);
+        match entry {
+            Some(e) => {
+                let path = e.path.clone();
+                if let Err(err) = std::fs::remove_file(&path) {
+                    repl.chat.add_message(ChatRole::System, format!("Failed to delete {}: {err}", path.display()));
+                } else {
+                    repl.chat.add_message(ChatRole::System, format!("Deleted command '{name}' ({}).", path.display()));
+                    // Auto-reload to update registry
+                    reload_custom_commands(repl);
+                }
+            }
+            None => {
+                repl.chat.add_message(ChatRole::System, format!("Command '{name}' not found. Use /commands to list available commands."));
+            }
+        }
         return Ok(());
     }
 
     if trimmed == "reload" {
-        // Re-scan custom command directories and re-register
-        let cwd = std::env::current_dir().unwrap_or_default();
-        let mut dirs: Vec<std::path::PathBuf> = Vec::new();
-        dirs.push(cwd.join(".claude").join("commands"));
-        dirs.push(cwd.join(".shannon").join("commands"));
-        if let Some(home) = dirs::home_dir() {
-            dirs.push(home.join(".claude").join("commands"));
-            dirs.push(home.join(".shannon").join("commands"));
-        }
-
-        let mut custom_commands: Vec<super::CustomCommandEntry> = Vec::new();
-        for dir in &dirs {
-            super::collect_custom_commands(dir, "", &mut custom_commands);
-        }
-        super::dedup_custom_commands(&mut custom_commands);
-
-        let count = custom_commands.len();
-        for entry in &custom_commands {
-            let description = entry.description.clone()
-                .unwrap_or_else(|| format!("Custom command (from {})", entry.path.display()));
-            let arg_names = if entry.arguments.is_empty() {
-                vec!["$ARGUMENTS".to_string()]
-            } else {
-                entry.arguments.clone()
-            };
-            let argument_hint = if entry.arguments.is_empty() {
-                Some("$ARGUMENTS".to_string())
-            } else {
-                Some(entry.arguments.join(" "))
-            };
-            use shannon_commands::{Command, CommandBase, ExecutionContext, PromptCommand};
-            use std::collections::HashMap;
-            let command = Command::Prompt(Box::new(PromptCommand {
-                base: CommandBase {
-                    name: entry.name.clone(),
-                    aliases: Vec::new(),
-                    description,
-                    has_user_specified_description: entry.description.is_some(),
-                    availability: vec![shannon_commands::CommandAvailability::All],
-                    source: shannon_commands::CommandSource::Builtin,
-                    is_enabled: true,
-                    is_hidden: false,
-                    argument_hint,
-                    when_to_use: None,
-                    version: None,
-                    disable_model_invocation: false,
-                    user_invocable: true,
-                    is_workflow: false,
-                    immediate: false,
-                    is_sensitive: false,
-                    user_facing_name: None,
-                },
-                progress_message: format!("Running /{}...", entry.name),
-                content_length: entry.template.len(),
-                arg_names,
-                allowed_tools: entry.allowed_tools.clone(),
-                model: entry.model.clone(),
-                hooks: HashMap::new(),
-                context: ExecutionContext::Inline,
-                agent: entry.agent.clone(),
-                paths: Vec::new(),
-                prompt_template: Some(entry.template.clone()),
-            }));
-            repl.command_registry.register_sync(command);
-        }
-        repl.chat.add_message(
-            ChatRole::System,
-            format!("Reloaded {count} custom command(s)."),
-        );
+        reload_custom_commands(repl);
         return Ok(());
     }
 
@@ -4893,6 +4938,10 @@ fn handle_other_command(repl: &mut Repl, cmd_name: &str, args: &str) -> Result<(
                     }
                     // Replace full placeholders last (so indexed ones take priority)
                     prompt = prompt.replace("$ARGUMENTS", args_val).replace("{args}", args_val);
+                    // Expand built-in template variables
+                    prompt = prompt.replace("$DIR", &std::env::current_dir().unwrap_or_default().display().to_string());
+                    prompt = prompt.replace("$DATE", &chrono::Local::now().format("%Y-%m-%d").to_string());
+                    prompt = prompt.replace("$TIME", &chrono::Local::now().format("%H:%M:%S").to_string());
                     repl.chat.add_message(ChatRole::System, format!("Running /{cmd_name}..."));
                     super::query::handle_query(repl, &prompt)?;
                 } else {

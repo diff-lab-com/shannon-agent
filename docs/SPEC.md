@@ -736,15 +736,51 @@ Subdirectories use `:` as separator. Directories starting with `.` are skipped.
 ```markdown
 ---
 description: Review code for bugs
+arguments: file
+model: claude-sonnet-4-6
+allowed-tools: Bash, Read
+agent: reviewer
 ---
 Review the following code for potential bugs and suggest fixes:
 
 $ARGUMENTS
 ```
 
+**Frontmatter Fields**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `description` | string | Command description shown in `/commands` list |
+| `arguments` | string | Comma-separated argument names (e.g. `file, pattern`). Maps to `$ARGUMENTS[0]`, `$ARGUMENTS[1]`, etc. Alias: `args` |
+| `model` | string | Model override for this command |
+| `allowed-tools` | string | Comma-separated list of permitted tools. Alias: `allowed_tools` |
+| `agent` | string | Agent type when executed as sub-agent |
+
+**Template Placeholders**:
+
+| Placeholder | Replaced With |
+|-------------|---------------|
+| `$ARGUMENTS` | Full user-provided text |
+| `$ARGUMENTS[N]` | Nth word of user input (0-indexed) |
+| `{args}` | Same as `$ARGUMENTS` |
+| `{args[N]}` | Same as `$ARGUMENTS[N]` |
+| `$DIR` | Current working directory |
+| `$DATE` | Current date (YYYY-MM-DD) |
+| `$TIME` | Current time (HH:MM:SS) |
+
+**Management Commands** (`/commands`):
+
+| Subcommand | Description |
+|------------|-------------|
+| `/commands` | List all custom commands with descriptions |
+| `/commands create <name>` | Create a new command file (supports `project:foo` for subdirs) |
+| `/commands edit <name>` | Open command file in `$EDITOR` |
+| `/commands delete <name>` | Delete a command file and unregister it |
+| `/commands reload` | Re-scan directories and re-register all commands |
+
 - YAML frontmatter (`---` blocks) is stripped before use
 - `$ARGUMENTS` or `{args}` placeholders are replaced with user-provided text
-- Without a placeholder, arguments are appended to the end
+- Project-level commands override user-level commands with the same name
 
 #### 3.6.4 MCP Prompt Commands
 

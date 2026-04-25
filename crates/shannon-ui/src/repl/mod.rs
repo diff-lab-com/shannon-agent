@@ -373,14 +373,16 @@ pub(super) fn dedup_custom_commands(commands: &mut Vec<CustomCommandEntry>) {
     commands.reverse();
 }
 
-/// Watches custom command directories for changes and triggers re-registration.
+/// Watches custom command directories for changes using filesystem events.
 ///
-/// Polls `.claude/commands/` and `.shannon/commands/` (project and user level)
-/// by comparing file modification times. When changes are detected, commands are
-/// re-scanned and re-registered in the [`CommandRegistry`].
+/// Uses the `notify` crate to watch `.claude/commands/` and `.shannon/commands/`
+/// (project and user level). When changes are detected, commands are re-scanned
+/// and re-registered in the [`CommandRegistry`].
 pub(crate) struct CustomCommandWatcher {
     dirs: Vec<std::path::PathBuf>,
-    mtimes: std::collections::HashMap<std::path::PathBuf, std::time::SystemTime>,
+    #[allow(dead_code)]
+    watcher: Option<notify::RecommendedWatcher>,
+    dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl CustomCommandWatcher {
@@ -393,51 +395,55 @@ impl CustomCommandWatcher {
             dirs.push(home.join(".claude").join("commands"));
             dirs.push(home.join(".shannon").join("commands"));
         }
-        let mut watcher = Self { dirs, mtimes: std::collections::HashMap::new() };
-        watcher.snapshot();
-        watcher
-    }
 
-    /// Take initial snapshot of file mtimes.
-    fn snapshot(&mut self) {
-        self.mtimes.clear();
-        let mut results: Vec<CustomCommandEntry> = Vec::new();
-        for dir in &self.dirs {
-            collect_custom_commands(dir, "", &mut results);
-        }
-        dedup_custom_commands(&mut results);
-        for entry in &results {
-            if let Ok(meta) = std::fs::metadata(&entry.path) {
-                if let Ok(mtime) = meta.modified() {
-                    self.mtimes.insert(entry.path.clone(), mtime);
+        let dirty = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let dirty_flag = dirty.clone();
+
+        let handler = move |event: notify::Result<notify::Event>| {
+            if let Ok(event) = event {
+                use notify::EventKind;
+                if matches!(event.kind,
+                    EventKind::Create(_) |
+                    EventKind::Modify(_) |
+                    EventKind::Remove(_)
+                ) {
+                    dirty_flag.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
             }
-        }
+        };
+
+        let watcher_result = notify::recommended_watcher(handler);
+
+        let watcher = match watcher_result {
+            Ok(mut w) => {
+                use notify::Watcher;
+                for dir in &dirs {
+                    if dir.exists() {
+                        let _ = w.watch(dir, notify::RecursiveMode::Recursive);
+                    }
+                }
+                Some(w)
+            }
+            Err(_) => None,
+        };
+
+        Self { dirs, watcher, dirty }
     }
 
-    /// Check if any command files changed. Returns count of re-registered commands.
+    /// Check if filesystem events were received and reload if needed.
+    /// Returns count of re-registered commands.
     fn check_and_reload(&mut self, registry: &CommandRegistry) -> usize {
+        if !self.dirty.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            return 0;
+        }
+
+        // Re-scan and re-register all custom commands
         let mut current_files: Vec<CustomCommandEntry> = Vec::new();
         for dir in &self.dirs {
             collect_custom_commands(dir, "", &mut current_files);
         }
         dedup_custom_commands(&mut current_files);
 
-        // Compare mtimes
-        let mut new_mtimes = std::collections::HashMap::new();
-        for entry in &current_files {
-            if let Ok(meta) = std::fs::metadata(&entry.path) {
-                if let Ok(mtime) = meta.modified() {
-                    new_mtimes.insert(entry.path.clone(), mtime);
-                }
-            }
-        }
-
-        if new_mtimes.len() == self.mtimes.len() && new_mtimes == self.mtimes {
-            return 0;
-        }
-
-        // Re-register all custom commands
         for entry in &current_files {
             let description = entry.description.clone()
                 .unwrap_or_else(|| format!("Custom command (from {})", entry.path.display()));
@@ -485,7 +491,6 @@ impl CustomCommandWatcher {
             registry.register_sync(command);
         }
 
-        self.mtimes = new_mtimes;
         let count = current_files.len();
         tracing::info!("Custom commands hot-reloaded ({} commands)", count);
         count
@@ -1476,12 +1481,8 @@ impl Repl {
                 self.refresh_agents();
             }
 
-            // Periodically check custom command files for changes (every ~100 ticks)
-            static TICK_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-            let tick = TICK_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            if tick % 100 == 0 {
-                self.check_reload_commands();
-            }
+            // Check custom command files for filesystem changes (notify-based)
+            self.check_reload_commands();
 
             // Draw UI
             render::draw_frame(&mut terminal, self)?;

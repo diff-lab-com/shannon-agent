@@ -924,9 +924,9 @@ fn run_headless_query(
         let mut response_text = String::new();
         let mut tool_calls: Vec<ToolCallSummary> = Vec::new();
         let mut total_tokens: u64 = 0;
-        let mut pending_tool_name: Option<String> = None;
+        let mut _pending_tool_name: Option<String> = None;
         let mut exit_code = HeadlessExitCode::Success;
-        let mut turn_count: usize = 0;
+        let mut _turn_count: usize = 0;
         let allowed_set: Option<std::collections::HashSet<String>> =
             allowed_tools.map(|v| v.iter().cloned().collect());
 
@@ -957,7 +957,7 @@ fn run_headless_query(
                         Ok(s) => s,
                         Err(_) => "(invalid json)".to_string(),
                     };
-                    pending_tool_name = Some(tool_name.clone());
+                    _pending_tool_name = Some(tool_name.clone());
                     eprintln!("[headless: invoking {tool_name}]");
                     // Store a placeholder; will be updated on ToolUseResult
                     tool_calls.push(ToolCallSummary {
@@ -978,7 +978,7 @@ fn run_headless_query(
                         tc.output_summary = output_summary;
                         tc.success = !is_error;
                     }
-                    pending_tool_name = None;
+                    _pending_tool_name = None;
                     if is_error {
                         eprintln!("[headless: tool-error {tool_name}]");
                     } else {
@@ -986,7 +986,7 @@ fn run_headless_query(
                     }
                 }
                 Ok(QueryEvent::TurnCompleted { turn_number, tokens_used, .. }) => {
-                    turn_count = turn_number;
+                    _turn_count = turn_number;
                     total_tokens += tokens_used;
                     eprintln!("[headless: turn {turn_number}, {tokens_used} tokens]");
                     // Check max turns
