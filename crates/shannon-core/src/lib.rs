@@ -75,7 +75,7 @@ pub mod model_registry;
 pub mod project_instructions;
 pub mod streaming_tool_executor;
 pub mod tool_execution;
-pub mod tool_hooks;
+
 pub mod doctor;
 pub mod permission_classifier;
 pub mod team_memory_sync;
@@ -197,10 +197,7 @@ pub use compact::{CompactEngine, CompactConfig, CompactResult, CompactStrategy, 
 pub use context_pressure::{
     ContextPressureMonitor, PressureLevel, PressureMetrics, PressureRecommendation,
 };
-pub use tool_hooks::{
-    ToolHookChain, ToolHook, ToolHookResult, ToolHookDecision, ToolHookContext,
-    ToolHookError, PermissionToolHook, LoggingToolHook, StopOnDenyHook,
-};
+
 pub use permission_classifier::{
     PermissionClassifier, PermissionClassifierError, PermissionRule, PermissionRuleParser,
     ClassificationResult, ClassificationResultBuilder, DangerousPattern,
@@ -290,7 +287,6 @@ pub mod error {
     pub use crate::compact::CompactError;
     pub use crate::doctor::DoctorError;
     pub use crate::doctor::{HomeGuard, ApiKeyGuard};
-    pub use crate::tool_hooks::ToolHookError;
     pub use crate::team_memory_sync::TeamMemorySyncError;
     pub use crate::permission_classifier::PermissionClassifierError;
     pub use crate::auto_dream_consolidation::ConsolidationError;

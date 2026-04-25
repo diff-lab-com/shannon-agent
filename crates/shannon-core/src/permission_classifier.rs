@@ -1279,6 +1279,7 @@ fn decision_to_risk(decision: RuleDecision) -> RiskLevel {
 /// # Examples
 ///
 /// ```
+/// use shannon_core::permission_classifier::match_glob;
 /// assert!(match_glob("npm run *", "npm run build"));
 /// assert!(match_glob("/src/**/*.rs", "/src/foo/bar.rs"));
 /// assert!(match_glob("rm *", "rm -rf /"));
@@ -1645,6 +1646,8 @@ pub fn parse_tool_rule(
 /// # Example
 ///
 /// ```
+/// use shannon_core::permission_classifier::{PermissionPolicy, RuleDecision};
+///
 /// let policy = PermissionPolicy::from_config(
 ///     &[
 ///         "Bash(npm run *)".into(),

@@ -2761,15 +2761,84 @@ fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
                     let changes = repl.runtime.block_on(pool.reload_from_config(&config));
                     match changes {
                         Ok(changes) => {
-                            if changes.is_empty() {
-                                repl.chat.add_message(ChatRole::System, "MCP config reloaded — no changes detected.".to_string());
-                            } else {
-                                let mut msg = format!("MCP config reloaded ({} change(s)):\n", changes.len());
-                                for change in &changes {
-                                    msg.push_str(&format!("  • {change}\n"));
+                            // Discover tools from newly started servers and register them
+                            let mut new_tool_count = 0;
+                            let new_servers: Vec<String> = changes.iter()
+                                .filter(|c| c.starts_with("Started "))
+                                .map(|c| {
+                                    // Extract server name from "Started stdio server 'name'" etc.
+                                    let s = c.trim_start_matches("Started ");
+                                    s.split('\'').nth(1).unwrap_or("").to_string()
+                                })
+                                .filter(|s| !s.is_empty())
+                                .collect();
+
+                            if !new_servers.is_empty() {
+                                let registry = repl.tool_registry.clone();
+                                for server_name in &new_servers {
+                                    let result = repl.runtime.block_on(
+                                        pool.send_batch_server_request(
+                                            server_name,
+                                            vec![("tools/list", serde_json::json!({}))],
+                                        )
+                                    );
+                                    if let Ok(responses) = result {
+                                        if let Some((_, Ok(response))) = responses.first() {
+                                            if let Some(tools_array) = response.get("tools").and_then(|t| t.as_array()) {
+                                                for tool_value in tools_array {
+                                                    let tool_name = tool_value.get("name")
+                                                        .and_then(|n| n.as_str())
+                                                        .unwrap_or("unknown")
+                                                        .to_string();
+                                                    let description = tool_value.get("description")
+                                                        .and_then(|d| d.as_str())
+                                                        .unwrap_or("")
+                                                        .to_string();
+                                                    let input_schema = tool_value.get("inputSchema")
+                                                        .cloned()
+                                                        .unwrap_or(serde_json::json!({"type": "object"}));
+                                                    let annotations: Option<shannon_mcp::ToolAnnotations> =
+                                                        tool_value.get("annotations")
+                                                        .and_then(|a| serde_json::from_value(a.clone()).ok());
+
+                                                    let adapter = shannon_mcp::PooledMcpToolAdapter::new(
+                                                        pool.clone(),
+                                                        server_name.clone(),
+                                                        tool_name,
+                                                        description,
+                                                        input_schema,
+                                                        annotations,
+                                                    );
+                                                    if let Err(e) = registry.register(Box::new(adapter)) {
+                                                        tracing::warn!("Failed to register MCP tool: {e}");
+                                                    } else {
+                                                        new_tool_count += 1;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
-                                repl.chat.add_message(ChatRole::System, msg);
                             }
+
+                            // Report prompts from all connected servers
+                            let all_prompts = repl.runtime.block_on(pool.list_all_prompts());
+                            let prompt_count: usize = all_prompts.iter().map(|(_, p)| p.len()).sum();
+
+                            let mut msg = if changes.is_empty() {
+                                "MCP config reloaded — no changes detected.".to_string()
+                            } else {
+                                let mut m = format!("MCP config reloaded ({} change(s)):\n", changes.len());
+                                for change in &changes {
+                                    m.push_str(&format!("  • {change}\n"));
+                                }
+                                m
+                            };
+                            if new_tool_count > 0 {
+                                msg.push_str(&format!("  • Registered {new_tool_count} new tool(s)\n"));
+                            }
+                            msg.push_str(&format!("  • {prompt_count} prompt(s) available from {} server(s)\n", all_prompts.len()));
+                            repl.chat.add_message(ChatRole::System, msg);
                         }
                         Err(e) => {
                             repl.chat.add_message(ChatRole::System, format!("MCP reload failed: {e}"));

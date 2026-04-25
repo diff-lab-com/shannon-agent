@@ -328,6 +328,8 @@ pub struct Repl {
     pub(crate) agent_registry: Option<std::sync::Arc<shannon_agents::SubAgentRegistry>>,
     /// MCP process pool for hot-reload support
     pub(crate) mcp_pool: std::sync::Arc<McpProcessPool>,
+    /// Tool registry for MCP hot-reload tool registration
+    pub(crate) tool_registry: std::sync::Arc<shannon_core::tools::ToolRegistry>,
     /// MCP progress update receiver (from McpProcessPool to REPL UI)
     pub(crate) mcp_progress_rx: Option<tokio::sync::mpsc::UnboundedReceiver<(String, f64, Option<f64>)>>,
     /// Model routing rules: (pattern, model_name) pairs
@@ -922,6 +924,96 @@ impl Repl {
                 registry.register_sync(command);
             }
 
+            // Discover custom commands from .claude/commands/ and .shannon/commands/
+            // Claude Code compatible: .claude/commands/*.md → /command-name
+            {
+                let mut custom_command_dirs: Vec<std::path::PathBuf> = Vec::new();
+
+                // Project-level commands
+                let cwd = std::env::current_dir().unwrap_or_default();
+                custom_command_dirs.push(cwd.join(".claude").join("commands"));
+                custom_command_dirs.push(cwd.join(".shannon").join("commands"));
+
+                // User-level commands
+                if let Some(home) = dirs::home_dir() {
+                    custom_command_dirs.push(home.join(".claude").join("commands"));
+                    custom_command_dirs.push(home.join(".shannon").join("commands"));
+                }
+
+                let mut custom_count = 0;
+                for dir in &custom_command_dirs {
+                    if !dir.is_dir() {
+                        continue;
+                    }
+                    if let Ok(entries) = std::fs::read_dir(dir) {
+                        for entry in entries.flatten() {
+                            let path = entry.path();
+                            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                                continue;
+                            }
+                            let name = path.file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+
+                            let content = match std::fs::read_to_string(&path) {
+                                Ok(c) => c,
+                                Err(_) => continue,
+                            };
+
+                            // Strip optional YAML frontmatter (--- ... ---)
+                            let template = if content.starts_with("---") {
+                                if let Some(end) = content[3..].find("---") {
+                                    content[3 + end + 3..].trim().to_string()
+                                } else {
+                                    content.trim().to_string()
+                                }
+                            } else {
+                                content.trim().to_string()
+                            };
+
+                            let description = format!("Custom command (from {})", path.display());
+                            let command = Command::Prompt(Box::new(PromptCommand {
+                                base: CommandBase {
+                                    name: name.clone(),
+                                    aliases: Vec::new(),
+                                    description: description,
+                                    has_user_specified_description: false,
+                                    availability: vec![shannon_commands::CommandAvailability::All],
+                                    source: shannon_commands::CommandSource::Builtin,
+                                    is_enabled: true,
+                                    is_hidden: false,
+                                    argument_hint: Some("$ARGUMENTS".to_string()),
+                                    when_to_use: None,
+                                    version: None,
+                                    disable_model_invocation: false,
+                                    user_invocable: true,
+                                    is_workflow: false,
+                                    immediate: false,
+                                    is_sensitive: false,
+                                    user_facing_name: None,
+                                },
+                                progress_message: format!("Running /{name}..."),
+                                content_length: template.len(),
+                                arg_names: vec!["$ARGUMENTS".to_string()],
+                                allowed_tools: Vec::new(),
+                                model: None,
+                                hooks: HashMap::new(),
+                                context: ExecutionContext::Inline,
+                                agent: None,
+                                paths: Vec::new(),
+                                prompt_template: Some(template),
+                            }));
+                            registry.register_sync(command);
+                            custom_count += 1;
+                        }
+                    }
+                }
+                if custom_count > 0 {
+                    tracing::info!("Registered {custom_count} custom command(s) from .claude/commands/ and .shannon/commands/");
+                }
+            }
+
             registry
         });
 
@@ -975,6 +1067,7 @@ impl Repl {
             team_coordinator: shared_coordinator,
             agent_registry: None,
             mcp_pool,
+            tool_registry,
             mcp_progress_rx,
             model_routes: Vec::new(),
             checkpoint_manager: shannon_core::CheckpointManager::new(),
