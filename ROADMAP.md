@@ -171,7 +171,7 @@ Shannon already has significant foundational code. The work is primarily **integ
 - [ ] Graceful shutdown of MCP server processes on session end
 - [ ] **Compatibility**: Read from BOTH `.claude/` and `.shannon/` paths
 
-**Effort**: Large | **Files**: New `shannon-mcp/src/config.rs`, `shannon-core/src/plugins.rs`, `shannon-cli/src/main.rs`
+**Effort**: Large | **Files**: `shannon-mcp/src/config.rs`, `shannon-cli/src/main.rs`
 
 ---
 
@@ -462,7 +462,7 @@ These items are deferred from the current sprint for future evaluation.
 
 - **`run` 子命令**: `shannon run "task"` 一次性执行，不进入交互 REPL。参考 OpenCode `opencode run`。
 - **Feature Flags 系统**: 轻量 runtime feature toggle，配置文件 + CLI 切换，灰度发布新功能。参考 Codex CLI `codex features enable/disable`。
-- **Plugin 系统兼容层**: 当前 plugin.json 与 Claude Code 格式结构相似但字段不同。增加 Claude Code plugin.json 兼容解析器，允许直接使用 Claude Code 生态插件。
+- **Plugin 系统兼容层**: ~~已完成~~ 已移除自定义 plugin 系统，统一使用 MCP 协议（Claude Code 兼容）。
 
 ##### 低优先级（长期路线图）
 

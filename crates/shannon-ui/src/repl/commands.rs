@@ -108,17 +108,15 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
     let cmd_name = parsed.name.as_str();
     let args = parsed.args.as_str();
 
-    // Check if command exists in the registry or as a plugin command
+    // Check if command exists in the registry
     let command_exists = repl.runtime.block_on(async {
         repl.shared_executor.registry().await.contains(cmd_name).await
     });
-    let is_plugin_command = repl.plugin_manager.get_plugin_commands()
-        .iter().any(|c| c.name == cmd_name);
     // Commands handled in the match block but not in the global registry
     let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "route", "mcp", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "rewind", "notify", "create-pr", "patch", "sandbox", "find", "grep", "conv-search", "copy", "paste", "add", "watch", "bind", "project", "terminal-setup", "theme", "diff"];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
-    if command_exists || is_plugin_command || is_repl_command {
+    if command_exists || is_repl_command {
         match cmd_name {
             "help" => handle_help(repl, args)?,
             "clear" => handle_clear(repl)?,
@@ -2589,6 +2587,7 @@ fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
 /mcp approve <name>              — Approve a server for next startup
 /mcp deny <name>                 — Deny a server
 /mcp reset-approvals             — Clear all approval decisions
+/mcp reload                      — Reload MCP config and restart servers
 /mcp path                        — Show config file path".to_string());
         }
         "list" => {
@@ -2752,6 +2751,34 @@ fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
             match shannon_core::McpApprovalManager::reset_persisted(&approval_path) {
                 Ok(()) => { repl.chat.add_message(ChatRole::System, "All approval decisions cleared. Servers will be re-evaluated on next startup.".to_string()); }
                 Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to reset approvals: {e}")); }
+            }
+        }
+        "reload" => {
+            let cwd = std::env::current_dir().unwrap_or_default();
+            match shannon_mcp::config::discover_config(&cwd) {
+                Ok(config) => {
+                    let pool = repl.mcp_pool.clone();
+                    let changes = repl.runtime.block_on(pool.reload_from_config(&config));
+                    match changes {
+                        Ok(changes) => {
+                            if changes.is_empty() {
+                                repl.chat.add_message(ChatRole::System, "MCP config reloaded — no changes detected.".to_string());
+                            } else {
+                                let mut msg = format!("MCP config reloaded ({} change(s)):\n", changes.len());
+                                for change in &changes {
+                                    msg.push_str(&format!("  • {change}\n"));
+                                }
+                                repl.chat.add_message(ChatRole::System, msg);
+                            }
+                        }
+                        Err(e) => {
+                            repl.chat.add_message(ChatRole::System, format!("MCP reload failed: {e}"));
+                        }
+                    }
+                }
+                Err(e) => {
+                    repl.chat.add_message(ChatRole::System, format!("Failed to discover MCP config: {e}"));
+                }
             }
         }
         _ => {
@@ -4487,17 +4514,6 @@ Requires GitHub CLI (gh) to be installed.".to_string());
 }
 
 fn handle_other_command(repl: &mut Repl, cmd_name: &str, args: &str) -> Result<()> {
-    // Check plugin commands first
-    let plugin_cmd = repl.plugin_manager.get_plugin_commands()
-        .iter().find(|c| c.name == cmd_name).cloned();
-
-    if let Some(plugin) = plugin_cmd {
-        let prompt = plugin.prompt_template.replace("{args}", if args.is_empty() { "" } else { args });
-        repl.chat.add_message(ChatRole::System, format!("Running /{cmd_name} (plugin)..."));
-        super::query::handle_query(repl, &prompt)?;
-        return Ok(());
-    }
-
     let registry = repl.runtime.block_on(repl.shared_executor.registry());
     if let Ok(command) = repl.runtime.block_on(registry.get(cmd_name)) {
         match &*command {
@@ -5125,11 +5141,6 @@ fn handle_project(repl: &mut Repl, args: &str) -> Result<()> {
 
         if let Some(ref engine) = repl.query_engine {
             msg.push_str(&format!("\n  Tools loaded: {}", engine.tools().list().len()));
-        }
-
-        let plugin_count = repl.plugin_manager.get_plugin_commands().len();
-        if plugin_count > 0 {
-            msg.push_str(&format!("\n  Plugins: {plugin_count} loaded"));
         }
 
         repl.chat.add_message(ChatRole::System, msg);

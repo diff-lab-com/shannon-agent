@@ -41,8 +41,6 @@ use tokio::runtime::Runtime;
 use shannon_core::{
     api::LlmClientConfig,
     permissions::PermissionManager,
-    plugin_tool::register_plugin_tools,
-    plugins::PluginManager,
     PromptInfo,
     query_engine::QueryEngine,
     state::StateManager,
@@ -322,14 +320,14 @@ pub struct Repl {
     pub(crate) tools_invoked: usize,
     /// Tab completion state for cycling through matches
     pub(crate) tab_completion_state: TabCompletionState,
-    /// Plugin manager for discovering, loading, and managing plugins
-    pub(crate) plugin_manager: PluginManager,
     /// Vim key handler for vim mode support (yy/yw/p yank/paste)
     pub(crate) vim_handler: VimHandler,
     /// Multi-agent team coordinator (lazy-initialized on /team create)
     pub(crate) team_coordinator: Option<std::sync::Arc<shannon_agents::AgentCoordinator>>,
     /// Sub-agent registry for background agent management
     pub(crate) agent_registry: Option<std::sync::Arc<shannon_agents::SubAgentRegistry>>,
+    /// MCP process pool for hot-reload support
+    pub(crate) mcp_pool: std::sync::Arc<McpProcessPool>,
     /// MCP progress update receiver (from McpProcessPool to REPL UI)
     pub(crate) mcp_progress_rx: Option<tokio::sync::mpsc::UnboundedReceiver<(String, f64, Option<f64>)>>,
     /// Model routing rules: (pattern, model_name) pairs
@@ -441,22 +439,6 @@ impl Repl {
 
         // Load and register skills from shannon-skills as tools
         register_skills_as_tools(&mut tool_registry);
-
-        // Discover and load plugins, register their tools
-        let mut plugin_manager = PluginManager::new();
-        let plugin_results = runtime.block_on(plugin_manager.discover_and_load_all());
-        match &plugin_results {
-            Ok(loaded) if !loaded.is_empty() => {
-                tracing::info!("Loaded {} plugin(s): {:?}", loaded.len(), loaded);
-            }
-            Ok(_) => {
-                tracing::debug!("No plugins found");
-            }
-            Err(e) => {
-                tracing::warn!("Plugin discovery failed: {}", e);
-            }
-        }
-        register_plugin_tools(&plugin_manager, &mut tool_registry);
 
         // Discover MCP server configurations and register their tools dynamically.
         // Servers are batched to avoid file descriptor exhaustion:
@@ -989,10 +971,10 @@ impl Repl {
             commands_run: 0,
             tools_invoked: 0,
             tab_completion_state: TabCompletionState::default(),
-            plugin_manager,
             vim_handler: VimHandler::new(),
             team_coordinator: shared_coordinator,
             agent_registry: None,
+            mcp_pool,
             mcp_progress_rx,
             model_routes: Vec::new(),
             checkpoint_manager: shannon_core::CheckpointManager::new(),

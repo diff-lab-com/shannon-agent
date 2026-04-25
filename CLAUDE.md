@@ -1,6 +1,6 @@
 # Shannon Code
 
-Rust-based AI code assistant (like Claude Code) with multi-provider LLM support, plugin system, and terminal UI.
+Rust-based AI code assistant (like Claude Code) with multi-provider LLM support, MCP-based extensions, and terminal UI.
 
 ## Build & Test
 
@@ -17,7 +17,7 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 
 | Crate | Responsibility |
 |-------|---------------|
-| `shannon-core` | API client, query engine, permissions, plugins, tools, state management |
+| `shannon-core` | API client, query engine, permissions, tools, state management |
 | `shannon-ui` | Terminal UI (ratatui), REPL, vim mode, widgets, rendering |
 | `shannon-cli` | CLI entry point (clap), config loading, non-interactive mode |
 | `shannon-commands` | Built-in commands (/help, /config, /pdf, /commit, etc.) |
@@ -34,7 +34,7 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **Multi-provider**: `LlmClient` normalizes Anthropic/OpenAI/Ollama via adapter pattern (`crates/shannon-core/src/api/adapter.rs`).
 - **Streaming**: SSE byte stream → `SseStream` → `MessageStream` with chunk boundary buffering.
 - **Config priority**: CLI args > env vars (`SHANNON_*`) > `.shannon.toml` > `~/.shannon/config.toml`.
-- **Plugin tools**: `PluginManager` discovers `.so`/`.dylib` plugins, registers via `register_plugin_tools()`.
+- **Extensions**: MCP (Model Context Protocol) — Claude Code compatible. Servers configured in `.mcp.json`, `~/.claude/settings.json`, `~/.shannon/settings.json` via `mcpServers` key. Tools auto-discovered via `tools/list`.
 - **Tests with HTTP mocking**: Use `mockito` crate for API integration tests (see `crates/shannon-core/tests/api_integration.rs`).
 
 ## Gotchas

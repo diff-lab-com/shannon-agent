@@ -562,19 +562,6 @@ fn run_noninteractive_query(
         // Load and register skills from shannon-skills as tools
         shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
 
-        // Discover and load plugins, register their tools
-        let mut plugin_manager = shannon_core::PluginManager::new();
-        match plugin_manager.discover_and_load_all().await {
-            Ok(loaded) if !loaded.is_empty() => {
-                eprintln!("Loaded {} plugin(s)", loaded.len());
-            }
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("Warning: plugin discovery failed: {e}");
-            }
-        }
-        shannon_core::register_plugin_tools(&plugin_manager, &mut tools);
-
         // Discover MCP server configurations and register their tools dynamically
         {
             let mut mcp_registry = shannon_core::mcp_advanced::McpServerRegistry::new();
@@ -812,17 +799,6 @@ fn run_headless_query(
 
         // Load and register skills
         shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
-
-        // Discover plugins
-        let mut plugin_manager = shannon_core::PluginManager::new();
-        match plugin_manager.discover_and_load_all().await {
-            Ok(loaded) if !loaded.is_empty() => {
-                eprintln!("Loaded {} plugin(s)", loaded.len());
-            }
-            Ok(_) => {}
-            Err(e) => eprintln!("Warning: plugin discovery failed: {e}"),
-        }
-        shannon_core::register_plugin_tools(&plugin_manager, &mut tools);
 
         // Discover MCP servers
         {
@@ -1205,17 +1181,6 @@ fn run_team_agent_mode(
             .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
 
         shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
-
-        // Discover plugins
-        let mut plugin_manager = shannon_core::PluginManager::new();
-        match plugin_manager.discover_and_load_all().await {
-            Ok(loaded) if !loaded.is_empty() => {
-                tracing::info!("Loaded {} plugin(s)", loaded.len());
-            }
-            Ok(_) => {}
-            Err(e) => tracing::warn!("Plugin discovery failed: {e}"),
-        }
-        shannon_core::register_plugin_tools(&plugin_manager, &mut tools);
 
         // Discover MCP servers and register their tools dynamically
         {

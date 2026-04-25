@@ -11,7 +11,6 @@
 //! - [`LlmClient`]: Async LLM API client with multi-provider and streaming support
 //! - [`SettingsManager`]: Configuration management for user and project settings
 //! - [`AutoUpdater`]: Automatic update checking via GitHub Releases
-//! - [`PluginManager`]: Plugin discovery, loading, and lifecycle management
 //! - [`MemoryStore`]: Persistent memory storage with search and cleanup
 //! - [`AutoDreamService`]: Automatic memory extraction from conversations
 //! - [`DiagnosticTracker`]: Error tracking, pattern analysis, and diagnostic event management
@@ -31,7 +30,6 @@ rust_i18n::i18n!("../../locales", fallback = "en");
 
 pub mod query_engine;
 pub mod tools;
-pub mod plugin_tool;
 pub mod mcp_tool_adapter;
 pub mod checkpoint;
 pub mod smart_context;
@@ -41,7 +39,6 @@ pub mod api;
 pub mod project_memory;
 pub mod settings;
 pub mod hooks;
-pub mod plugins;
 pub mod updater;
 pub mod suggestions;
 pub mod memory;
@@ -117,8 +114,6 @@ pub use api::{
 };
 pub use settings::{Settings, SettingsManager, SettingsError};
 pub use hooks::{HookManager, HookEvent, HookResult, HookDecision, HookEventType, HookError};
-pub use plugins::{PluginManager, PluginManifest, PluginState, PluginError, Plugin, PluginStateFile};
-pub use plugin_tool::{PluginTool, register_plugin_tools};
 pub use mcp_tool_adapter::{
     McpToolAdapter, PromptInfo, discover_tools, discover_tools_http,
     DeferredSchemaStore, DeferredSchemaSearchTool,
@@ -273,7 +268,6 @@ pub mod error {
     pub use crate::state::StateError;
     pub use crate::settings::SettingsError;
     pub use crate::hooks::HookError;
-    pub use crate::plugins::PluginError;
     pub use crate::updater::UpdateError;
     pub use crate::memory::MemoryError;
     pub use crate::extract_memories::ExtractionError;

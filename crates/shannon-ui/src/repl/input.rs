@@ -497,14 +497,9 @@ fn update_inline_completions(repl: &mut Repl) {
         return;
     }
 
-    let mut command_names = repl.runtime.block_on(async {
+    let command_names = repl.runtime.block_on(async {
         repl.shared_executor.registry().await.list_names().await
     });
-    for cmd in repl.plugin_manager.get_plugin_commands() {
-        if !command_names.iter().any(|n| n == &cmd.name) {
-            command_names.push(cmd.name.clone());
-        }
-    }
 
     let candidates = compute_candidates(&input, &prefix, &command_names);
 

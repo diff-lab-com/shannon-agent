@@ -33,7 +33,7 @@
 
 ### 1.1 Project Overview
 
-Shannon Code is a high-performance, type-safe AI-assisted coding tool written entirely in Rust. It provides a terminal-based REPL (Read-Eval-Print Loop) interface for interacting with large language models while offering advanced capabilities including tool orchestration, multi-agent coordination, session management, plugin extensibility, and MCP (Model Context Protocol) support.
+Shannon Code is a high-performance, type-safe AI-assisted coding tool written entirely in Rust. It provides a terminal-based REPL (Read-Eval-Print Loop) interface for interacting with large language models while offering advanced capabilities including tool orchestration, multi-agent coordination, session management, MCP (Model Context Protocol) extensibility, and skill framework support.
 
 The project is built from the ground up as an independent implementation, using only publicly available documentation, open specifications, and general software engineering principles.
 
@@ -45,7 +45,7 @@ The project is built from the ground up as an independent implementation, using 
 | **High Performance** | Zero-cost abstractions, near-C speed with async I/O |
 | **Type Safety** | Strong type system catches bugs before runtime |
 | **Native Concurrency** | `tokio` async runtime for parallel operations |
-| **Extensibility** | Plugin system, skill framework, MCP protocol, and hook system |
+| **Extensibility** | MCP protocol, skill framework, and hook system |
 | **Composability** | 9 modular crates with clean separation of concerns |
 
 ### 1.3 Technology Stack
@@ -103,7 +103,7 @@ Dual-licensed under **MIT** or **Apache-2.0** at the user's choice.
 │  └───────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │  ┌──────────────────────────────────────────────────────────────────┐   │
-│  │  State │ Settings │ Hooks │ Plugins │ Memory │ Analytics │ ...  │   │
+│  │  State │ Settings │ Hooks │ MCP │ Memory │ Analytics │ ...  │   │
 │  └──────────────────────────────────────────────────────────────────┘   │
 └──────┬──────────────┬──────────────┬──────────────┬──────────────────────┘
        │              │              │              │
@@ -379,13 +379,13 @@ PermissionClassifier.classify()
 4. CLI flags (-e KEY=VALUE)
 ```
 
-#### 3.1.7 Hooks & Plugins
+#### 3.1.7 Hooks
 
 | Module | Key Types | Description |
 |--------|-----------|-------------|
 | `hooks` | `HookManager`, `HookEvent`, `HookResult`, `HookDecision`, `HookEventType` | Event-driven hook system. Events: `PreToolUse`, `PostToolUse`, `PreQuery`, `PostQuery`, `SessionStart`, `SessionEnd`. |
 | `tool_hooks` | `ToolHookChain`, `ToolHook`, `ToolHookResult`, `ToolHookDecision`, `ToolHookContext` | Tool-specific hook chain. Built-in hooks: `PermissionToolHook`, `LoggingToolHook`, `StopOnDenyHook`. |
-| `plugins` | `PluginManager`, `PluginManifest`, `PluginState`, `PluginError`, `Plugin`, `PluginStateFile` | Plugin discovery, loading, lifecycle management. Manifest-based (JSON). |
+| `mcp_tool_adapter` | `McpToolAdapter`, `discover_tools`, `discover_tools_http` | MCP server tool discovery and registration. |
 
 **Hook Execution Order**:
 ```
@@ -1010,8 +1010,7 @@ Both `SHANNON.md` and `CLAUDE.md` are supported for cross-tool compatibility.
 ├── transcripts/      # Conversation transcripts (JSONL)
 │   ├── {session-id}.jsonl
 │   └── ...
-├── plugins/           # Plugin storage
-│   └── {plugin-name}/
+├── mcp-state/        # MCP server state persistence
 ├── credentials/       # Encrypted credentials
 │   └── *.enc
 ├── cache/             # Cached data
@@ -1199,7 +1198,7 @@ let client = ClaudeClient::with_vcr(vcr);
 
 | Crate | Lines | Key Modules |
 |-------|-------|-------------|
-| shannon-core | ~49,000 | 52 modules (query, tools, api, permissions, state, plugins, etc.) |
+| shannon-core | ~49,000 | 50 modules (query, tools, api, permissions, state, mcp, etc.) |
 | shannon-tools | 25,338 | 28 tool modules |
 | shannon-agents | 6,580 | coordinator, teammate, task_board |
 | shannon-ui | 5,981 | repl, vim, render, widgets |
@@ -1313,7 +1312,7 @@ Complete list of all tools available to the AI assistant:
 | `PostToolUse` | After tool execution | Result capture, analytics, memory extraction |
 | `PreQuery` | Before API call | Context compression, rate limit check |
 | `PostQuery` | After API response | Usage tracking, cost recording |
-| `SessionStart` | Session initialization | Load config, register tools, discover plugins |
+| `SessionStart` | Session initialization | Load config, register tools, discover MCP servers |
 | `SessionEnd` | Session termination | Persist state, flush analytics |
 | `PermissionDenied` | Permission rejection | Audit logging, alternative suggestions |
 | `ToolError` | Execution failure | Error pattern detection, retry scheduling |
