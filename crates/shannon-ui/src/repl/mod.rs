@@ -270,6 +270,168 @@ impl Default for ReplState {
     }
 }
 
+/// Recursively collect custom commands from a directory.
+///
+/// - `dir`: root directory to scan
+/// - `prefix`: path prefix for nested dirs (e.g. "project:" for `.claude/commands/project/`)
+/// - `results`: accumulated (command_name, template_text, file_path) triples
+pub(super) fn collect_custom_commands(
+    dir: &std::path::Path,
+    prefix: &str,
+    results: &mut Vec<(String, String, std::path::PathBuf)>,
+) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            // Skip hidden directories
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with('.') {
+                    continue;
+                }
+                let subdir_prefix = format!("{prefix}{name}:");
+                collect_custom_commands(&path, &subdir_prefix, results);
+            }
+        } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+            if stem.is_empty() {
+                continue;
+            }
+            let command_name = format!("{prefix}{stem}");
+            let content = match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            // Strip YAML frontmatter (---\n...\n---)
+            let template = if content.starts_with("---") {
+                content
+                    .splitn(3, "---")
+                    .nth(2)
+                    .map(|s| s.trim_start().to_string())
+                    .unwrap_or(content.clone())
+            } else {
+                content
+            };
+            results.push((command_name, template, path));
+        }
+    }
+}
+
+/// Watches custom command directories for changes and triggers re-registration.
+///
+/// Polls `.claude/commands/` and `.shannon/commands/` (project and user level)
+/// by comparing file modification times. When changes are detected, commands are
+/// re-scanned and re-registered in the [`CommandRegistry`].
+pub(crate) struct CustomCommandWatcher {
+    dirs: Vec<std::path::PathBuf>,
+    mtimes: std::collections::HashMap<std::path::PathBuf, std::time::SystemTime>,
+}
+
+impl CustomCommandWatcher {
+    fn new() -> Self {
+        let mut dirs = Vec::new();
+        let cwd = std::env::current_dir().unwrap_or_default();
+        dirs.push(cwd.join(".claude").join("commands"));
+        dirs.push(cwd.join(".shannon").join("commands"));
+        if let Some(home) = dirs::home_dir() {
+            dirs.push(home.join(".claude").join("commands"));
+            dirs.push(home.join(".shannon").join("commands"));
+        }
+        let mut watcher = Self { dirs, mtimes: std::collections::HashMap::new() };
+        watcher.snapshot();
+        watcher
+    }
+
+    /// Take initial snapshot of file mtimes.
+    fn snapshot(&mut self) {
+        self.mtimes.clear();
+        let mut results: Vec<(String, String, std::path::PathBuf)> = Vec::new();
+        for dir in &self.dirs {
+            collect_custom_commands(dir, "", &mut results);
+        }
+ for (_, _, path) in &results {
+            if let Ok(meta) = std::fs::metadata(path) {
+                if let Ok(mtime) = meta.modified() {
+                    self.mtimes.insert(path.clone(), mtime);
+                }
+            }
+        }
+    }
+
+    /// Check if any command files changed. Returns true if re-registration happened.
+    fn check_and_reload(&mut self, registry: &CommandRegistry) -> bool {
+        let mut changed = false;
+
+        // Check existing files for mtime changes
+        let mut current_files: Vec<(String, String, std::path::PathBuf)> = Vec::new();
+        for dir in &self.dirs {
+            collect_custom_commands(dir, "", &mut current_files);
+        }
+
+        // Compare mtimes
+        let mut new_mtimes = std::collections::HashMap::new();
+        for (_, _, path) in &current_files {
+            if let Ok(meta) = std::fs::metadata(path) {
+                if let Ok(mtime) = meta.modified() {
+                    new_mtimes.insert(path.clone(), mtime);
+                }
+            }
+        }
+
+        if new_mtimes.len() != self.mtimes.len() || new_mtimes != self.mtimes {
+            changed = true;
+        }
+
+        if !changed {
+            return false;
+        }
+
+        // Re-register all custom commands
+        for (name, template, path) in &current_files {
+            let description = format!("Custom command (from {})", path.display());
+            let command = Command::Prompt(Box::new(PromptCommand {
+                base: CommandBase {
+                    name: name.clone(),
+                    aliases: Vec::new(),
+                    description,
+                    has_user_specified_description: false,
+                    availability: vec![shannon_commands::CommandAvailability::All],
+                    source: shannon_commands::CommandSource::Builtin,
+                    is_enabled: true,
+                    is_hidden: false,
+                    argument_hint: Some("$ARGUMENTS".to_string()),
+                    when_to_use: None,
+                    version: None,
+                    disable_model_invocation: false,
+                    user_invocable: true,
+                    is_workflow: false,
+                    immediate: false,
+                    is_sensitive: false,
+                    user_facing_name: None,
+                },
+                progress_message: format!("Running /{name}..."),
+                content_length: template.len(),
+                arg_names: vec!["$ARGUMENTS".to_string()],
+                allowed_tools: Vec::new(),
+                model: None,
+                hooks: std::collections::HashMap::new(),
+                context: ExecutionContext::Inline,
+                agent: None,
+                paths: Vec::new(),
+                prompt_template: Some(template.clone()),
+            }));
+            registry.register_sync(command);
+        }
+
+        self.mtimes = new_mtimes;
+        tracing::info!("Custom commands hot-reloaded ({} commands)", current_files.len());
+        true
+    }
+}
+
 /// Main REPL application struct
 pub struct Repl {
     /// Event handler for user input
@@ -342,6 +504,8 @@ pub struct Repl {
     pub(crate) notifications_enabled: bool,
     /// Instruction file watcher for hot-reloading CLAUDE.md / AGENTS.md / GEMINI.md
     pub(crate) instruction_watcher: Option<shannon_core::project_instructions::InstructionWatcher>,
+    /// Custom command file watcher for hot-reloading .claude/commands/ and .shannon/commands/
+    pub(crate) command_watcher: Option<CustomCommandWatcher>,
 }
 
 /// State for tab completion cycling
@@ -926,6 +1090,7 @@ impl Repl {
 
             // Discover custom commands from .claude/commands/ and .shannon/commands/
             // Claude Code compatible: .claude/commands/*.md → /command-name
+            // Subdirectories: .claude/commands/project/foo.md → /project:foo
             {
                 let mut custom_command_dirs: Vec<std::path::PathBuf> = Vec::new();
 
@@ -940,77 +1105,49 @@ impl Repl {
                     custom_command_dirs.push(home.join(".shannon").join("commands"));
                 }
 
-                let mut custom_count = 0;
+                // Collect (name, template, path) triples from all command directories
+                let mut custom_commands: Vec<(String, String, std::path::PathBuf)> = Vec::new();
                 for dir in &custom_command_dirs {
-                    if !dir.is_dir() {
-                        continue;
-                    }
-                    if let Ok(entries) = std::fs::read_dir(dir) {
-                        for entry in entries.flatten() {
-                            let path = entry.path();
-                            if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                                continue;
-                            }
-                            let name = path.file_stem()
-                                .and_then(|s| s.to_str())
-                                .unwrap_or("unknown")
-                                .to_string();
-
-                            let content = match std::fs::read_to_string(&path) {
-                                Ok(c) => c,
-                                Err(_) => continue,
-                            };
-
-                            // Strip optional YAML frontmatter (--- ... ---)
-                            let template = if content.starts_with("---") {
-                                if let Some(end) = content[3..].find("---") {
-                                    content[3 + end + 3..].trim().to_string()
-                                } else {
-                                    content.trim().to_string()
-                                }
-                            } else {
-                                content.trim().to_string()
-                            };
-
-                            let description = format!("Custom command (from {})", path.display());
-                            let command = Command::Prompt(Box::new(PromptCommand {
-                                base: CommandBase {
-                                    name: name.clone(),
-                                    aliases: Vec::new(),
-                                    description: description,
-                                    has_user_specified_description: false,
-                                    availability: vec![shannon_commands::CommandAvailability::All],
-                                    source: shannon_commands::CommandSource::Builtin,
-                                    is_enabled: true,
-                                    is_hidden: false,
-                                    argument_hint: Some("$ARGUMENTS".to_string()),
-                                    when_to_use: None,
-                                    version: None,
-                                    disable_model_invocation: false,
-                                    user_invocable: true,
-                                    is_workflow: false,
-                                    immediate: false,
-                                    is_sensitive: false,
-                                    user_facing_name: None,
-                                },
-                                progress_message: format!("Running /{name}..."),
-                                content_length: template.len(),
-                                arg_names: vec!["$ARGUMENTS".to_string()],
-                                allowed_tools: Vec::new(),
-                                model: None,
-                                hooks: HashMap::new(),
-                                context: ExecutionContext::Inline,
-                                agent: None,
-                                paths: Vec::new(),
-                                prompt_template: Some(template),
-                            }));
-                            registry.register_sync(command);
-                            custom_count += 1;
-                        }
-                    }
+                    collect_custom_commands(dir, "", &mut custom_commands);
                 }
-                if custom_count > 0 {
-                    tracing::info!("Registered {custom_count} custom command(s) from .claude/commands/ and .shannon/commands/");
+
+                for (name, template, path) in &custom_commands {
+                    let description = format!("Custom command (from {})", path.display());
+                    let command = Command::Prompt(Box::new(PromptCommand {
+                        base: CommandBase {
+                            name: name.clone(),
+                            aliases: Vec::new(),
+                            description,
+                            has_user_specified_description: false,
+                            availability: vec![shannon_commands::CommandAvailability::All],
+                            source: shannon_commands::CommandSource::Builtin,
+                            is_enabled: true,
+                            is_hidden: false,
+                            argument_hint: Some("$ARGUMENTS".to_string()),
+                            when_to_use: None,
+                            version: None,
+                            disable_model_invocation: false,
+                            user_invocable: true,
+                            is_workflow: false,
+                            immediate: false,
+                            is_sensitive: false,
+                            user_facing_name: None,
+                        },
+                        progress_message: format!("Running /{name}..."),
+                        content_length: template.len(),
+                        arg_names: vec!["$ARGUMENTS".to_string()],
+                        allowed_tools: Vec::new(),
+                        model: None,
+                        hooks: HashMap::new(),
+                        context: ExecutionContext::Inline,
+                        agent: None,
+                        paths: Vec::new(),
+                        prompt_template: Some(template.clone()),
+                    }));
+                    registry.register_sync(command);
+                }
+                if !custom_commands.is_empty() {
+                    tracing::info!("Registered {} custom command(s) from .claude/commands/ and .shannon/commands/", custom_commands.len());
                 }
             }
 
@@ -1088,6 +1225,7 @@ impl Repl {
                     None
                 }
             },
+            command_watcher: Some(CustomCommandWatcher::new()),
         })
     }
 
@@ -1165,6 +1303,13 @@ impl Repl {
                 true
             }
             None => false,
+        }
+    }
+
+    /// Check if custom command files have changed and hot-reload them.
+    pub fn check_reload_commands(&mut self) {
+        if let Some(ref mut watcher) = self.command_watcher {
+            watcher.check_and_reload(&self.command_registry);
         }
     }
 
@@ -1251,6 +1396,13 @@ impl Repl {
             // Refresh agent states for sidebar display
             if self.agent_registry.is_some() {
                 self.refresh_agents();
+            }
+
+            // Periodically check custom command files for changes (every ~100 ticks)
+            static TICK_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let tick = TICK_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if tick % 100 == 0 {
+                self.check_reload_commands();
             }
 
             // Draw UI

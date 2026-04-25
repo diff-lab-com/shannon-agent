@@ -113,7 +113,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
         repl.shared_executor.registry().await.contains(cmd_name).await
     });
     // Commands handled in the match block but not in the global registry
-    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "route", "mcp", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "rewind", "notify", "create-pr", "patch", "sandbox", "find", "grep", "conv-search", "copy", "paste", "add", "watch", "bind", "project", "terminal-setup", "theme", "diff"];
+    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "route", "mcp", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "rewind", "notify", "create-pr", "patch", "sandbox", "find", "grep", "conv-search", "copy", "paste", "add", "watch", "bind", "project", "terminal-setup", "theme", "diff", "commands"];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
     if command_exists || is_repl_command {
@@ -173,6 +173,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "bind" => handle_bind(repl, args)?,
             "project" => handle_project(repl, args)?,
             "theme" => handle_theme(repl, args)?,
+            "commands" => handle_commands(repl, args)?,
             _ => handle_other_command(repl, cmd_name, args)?,
         }
         Ok(())
@@ -1081,6 +1082,125 @@ fn handle_context(repl: &mut Repl, args: &str) -> Result<()> {
     {
         repl.chat.add_message(ChatRole::System, msg);
     }
+    Ok(())
+}
+
+fn handle_commands(repl: &mut Repl, args: &str) -> Result<()> {
+    let trimmed = args.trim();
+
+    if trimmed == "reload" {
+        // Re-scan custom command directories and re-register
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+        dirs.push(cwd.join(".claude").join("commands"));
+        dirs.push(cwd.join(".shannon").join("commands"));
+        if let Some(home) = dirs::home_dir() {
+            dirs.push(home.join(".claude").join("commands"));
+            dirs.push(home.join(".shannon").join("commands"));
+        }
+
+        let mut custom_commands: Vec<(String, String, std::path::PathBuf)> = Vec::new();
+        for dir in &dirs {
+            super::collect_custom_commands(dir, "", &mut custom_commands);
+        }
+
+        let count = custom_commands.len();
+        for (name, template, path) in &custom_commands {
+            let description = format!("Custom command (from {})", path.display());
+            use shannon_commands::{Command, CommandBase, ExecutionContext, PromptCommand};
+            use std::collections::HashMap;
+            let command = Command::Prompt(Box::new(PromptCommand {
+                base: CommandBase {
+                    name: name.clone(),
+                    aliases: Vec::new(),
+                    description,
+                    has_user_specified_description: false,
+                    availability: vec![shannon_commands::CommandAvailability::All],
+                    source: shannon_commands::CommandSource::Builtin,
+                    is_enabled: true,
+                    is_hidden: false,
+                    argument_hint: Some("$ARGUMENTS".to_string()),
+                    when_to_use: None,
+                    version: None,
+                    disable_model_invocation: false,
+                    user_invocable: true,
+                    is_workflow: false,
+                    immediate: false,
+                    is_sensitive: false,
+                    user_facing_name: None,
+                },
+                progress_message: format!("Running /{name}..."),
+                content_length: template.len(),
+                arg_names: vec!["$ARGUMENTS".to_string()],
+                allowed_tools: Vec::new(),
+                model: None,
+                hooks: HashMap::new(),
+                context: ExecutionContext::Inline,
+                agent: None,
+                paths: Vec::new(),
+                prompt_template: Some(template.clone()),
+            }));
+            repl.command_registry.register_sync(command);
+        }
+        repl.chat.add_message(
+            ChatRole::System,
+            format!("Reloaded {count} custom command(s)."),
+        );
+        return Ok(());
+    }
+
+    // Default: list all custom commands
+    let registry = &repl.command_registry;
+    let all = repl.runtime.block_on(registry.list_enabled());
+
+    // MCP prompt commands
+    let mcp_prompts: Vec<_> = all.iter()
+        .filter(|c| c.name().starts_with("mcp__") && c.name().contains("__"))
+        .collect();
+
+    let mut msg = String::from("Commands:\n\n");
+
+    // Custom file-based commands
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    dirs.push(cwd.join(".claude").join("commands"));
+    dirs.push(cwd.join(".shannon").join("commands"));
+    if let Some(home) = dirs::home_dir() {
+        dirs.push(home.join(".claude").join("commands"));
+        dirs.push(home.join(".shannon").join("commands"));
+    }
+
+    let mut found: Vec<(String, String)> = Vec::new();
+    for dir in &dirs {
+        let mut cmds: Vec<(String, String, std::path::PathBuf)> = Vec::new();
+        super::collect_custom_commands(dir, "", &mut cmds);
+        for (name, _, path) in &cmds {
+            if !found.iter().any(|(n, _)| n == name) {
+                found.push((name.clone(), format!("{}", path.display())));
+            }
+        }
+    }
+
+    if found.is_empty() {
+        msg.push_str("  No custom commands found.\n\n");
+        msg.push_str("  Create .md files in .claude/commands/ or .shannon/commands/\n");
+    } else {
+        msg.push_str(&format!("  Custom commands ({}):\n", found.len()));
+        for (name, path) in &found {
+            msg.push_str(&format!("    /{name}  (from {path})\n"));
+        }
+    }
+
+    // MCP prompt commands
+    if !mcp_prompts.is_empty() {
+        msg.push_str(&format!("\n  MCP prompt commands ({}):\n", mcp_prompts.len()));
+        for cmd in &mcp_prompts {
+            msg.push_str(&format!("    /{}  — {}\n", cmd.name(), cmd.base().description));
+        }
+    }
+
+    msg.push_str("\nUsage: /commands [reload]");
+    repl.chat.add_message(ChatRole::System, msg);
     Ok(())
 }
 
@@ -2821,8 +2941,61 @@ fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
                                 }
                             }
 
-                            // Report prompts from all connected servers
+                            // Report prompts from all connected servers and register them as slash commands
                             let all_prompts = repl.runtime.block_on(pool.list_all_prompts());
+
+                            // Register MCP prompts as slash commands: /mcp__{server}__{prompt}
+                            let mut new_prompt_count = 0;
+                            for (server_name, prompts) in &all_prompts {
+                                for prompt in prompts {
+                                    let cmd_name = format!("mcp__{}__{}", server_name, prompt.name);
+                                    let arg_names: Vec<String> = prompt.arguments
+                                        .as_ref()
+                                        .map(|args| args.iter().map(|a| a.name.clone()).collect())
+                                        .unwrap_or_default();
+                                    let arg_hint = if arg_names.is_empty() { None } else { Some(arg_names.join(", ")) };
+                                    let prompt_template = format!(
+                                        "Use the get_mcp_prompt tool to retrieve and execute the '{}' prompt from the '{}' MCP server with these arguments: {{args}}",
+                                        prompt.name, server_name
+                                    );
+                                    use shannon_commands::{Command, CommandBase, ExecutionContext, PromptCommand};
+                                    use std::collections::HashMap;
+                                    let command = Command::Prompt(Box::new(PromptCommand {
+                                        base: CommandBase {
+                                            name: cmd_name,
+                                            aliases: Vec::new(),
+                                            description: prompt.description.clone(),
+                                            has_user_specified_description: false,
+                                            availability: vec![shannon_commands::CommandAvailability::All],
+                                            source: shannon_commands::CommandSource::Builtin,
+                                            is_enabled: true,
+                                            is_hidden: false,
+                                            argument_hint: arg_hint,
+                                            when_to_use: None,
+                                            version: None,
+                                            disable_model_invocation: false,
+                                            user_invocable: true,
+                                            is_workflow: false,
+                                            immediate: false,
+                                            is_sensitive: false,
+                                            user_facing_name: None,
+                                        },
+                                        progress_message: format!("Loading MCP prompt '{}' from '{}'", prompt.name, server_name),
+                                        content_length: 0,
+                                        arg_names,
+                                        allowed_tools: vec!["get_mcp_prompt".to_string()],
+                                        model: None,
+                                        hooks: HashMap::new(),
+                                        context: ExecutionContext::Inline,
+                                        agent: None,
+                                        paths: Vec::new(),
+                                        prompt_template: Some(prompt_template),
+                                    }));
+                                    repl.command_registry.register_sync(command);
+                                    new_prompt_count += 1;
+                                }
+                            }
+
                             let prompt_count: usize = all_prompts.iter().map(|(_, p)| p.len()).sum();
 
                             let mut msg = if changes.is_empty() {
@@ -2836,6 +3009,9 @@ fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
                             };
                             if new_tool_count > 0 {
                                 msg.push_str(&format!("  • Registered {new_tool_count} new tool(s)\n"));
+                            }
+                            if new_prompt_count > 0 {
+                                msg.push_str(&format!("  • Registered {new_prompt_count} prompt command(s)\n"));
                             }
                             msg.push_str(&format!("  • {prompt_count} prompt(s) available from {} server(s)\n", all_prompts.len()));
                             repl.chat.add_message(ChatRole::System, msg);
@@ -4588,7 +4764,10 @@ fn handle_other_command(repl: &mut Repl, cmd_name: &str, args: &str) -> Result<(
         match &*command {
             shannon_commands::Command::Prompt(prompt_cmd) => {
                 if let Some(ref template) = prompt_cmd.prompt_template {
-                    let prompt = template.replace("{args}", if args.is_empty() { "" } else { args });
+                    let args_val = if args.is_empty() { "" } else { args };
+                    let prompt = template
+                        .replace("$ARGUMENTS", args_val)
+                        .replace("{args}", args_val);
                     repl.chat.add_message(ChatRole::System, format!("Running /{cmd_name}..."));
                     super::query::handle_query(repl, &prompt)?;
                 } else {

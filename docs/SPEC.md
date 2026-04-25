@@ -708,6 +708,55 @@ Slash command system for extending Shannon with custom commands.
 | `/review-pr` | Review a pull request with AI analysis. |
 | `/status` | Show current session and system status. |
 
+#### 3.6.3 Custom Commands (File-Based)
+
+Custom slash commands are loaded from `.md` files in well-known directories. This is compatible with Claude Code's custom command format.
+
+**Discovery Paths** (later entries override earlier):
+
+| Path | Scope |
+|------|-------|
+| `~/.claude/commands/*.md` | User-level (Claude Code compatible) |
+| `~/.shannon/commands/*.md` | User-level (Shannon-specific) |
+| `.claude/commands/*.md` | Project-level (Claude Code compatible) |
+| `.shannon/commands/*.md` | Project-level (Shannon-specific) |
+
+**Name Resolution**:
+
+| File | Command Name |
+|------|-------------|
+| `.claude/commands/review.md` | `/review` |
+| `.claude/commands/project/foo.md` | `/project:foo` |
+| `.claude/commands/a/b/c.md` | `/a:b:c` |
+
+Subdirectories use `:` as separator. Directories starting with `.` are skipped.
+
+**File Format** (Markdown with optional YAML frontmatter):
+
+```markdown
+---
+description: Review code for bugs
+---
+Review the following code for potential bugs and suggest fixes:
+
+$ARGUMENTS
+```
+
+- YAML frontmatter (`---` blocks) is stripped before use
+- `$ARGUMENTS` or `{args}` placeholders are replaced with user-provided text
+- Without a placeholder, arguments are appended to the end
+
+#### 3.6.4 MCP Prompt Commands
+
+MCP server prompts are automatically registered as slash commands using the naming convention `/mcp__{server}__{prompt}`. These are discovered during startup and re-discovered on `/mcp reload`.
+
+| Feature | Behavior |
+|---------|----------|
+| Discovery | `prompts/list` MCP protocol method |
+| Registration | Automatic on startup and `/mcp reload` |
+| Arguments | Mapped from MCP prompt `arguments` schema |
+| Execution | Uses `get_mcp_prompt` tool to fetch and render prompt content |
+
 ---
 
 ### 3.7 shannon-skills
