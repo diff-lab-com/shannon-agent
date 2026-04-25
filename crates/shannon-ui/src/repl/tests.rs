@@ -3079,3 +3079,142 @@ fn test_permission_mode_bypass_not_in_cycle() {
             "cycle_next from {:?} should not produce BypassPermissions", mode);
     }
 }
+
+// ─── Custom Command Tests ────────────────────────────────────────────────────
+
+#[test]
+fn test_collect_custom_commands_basic() {
+    let dir = tempfile::tempdir().unwrap();
+    let cmd_file = dir.path().join("review.md");
+    std::fs::write(&cmd_file, "Review this code:\n$ARGUMENTS").unwrap();
+
+    let mut results: Vec<super::CustomCommandEntry> = Vec::new();
+    super::collect_custom_commands(dir.path(), "", &mut results);
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].name, "review");
+    assert_eq!(results[0].template, "Review this code:\n$ARGUMENTS");
+    assert_eq!(results[0].model, None);
+    assert!(results[0].allowed_tools.is_empty());
+    assert_eq!(results[0].agent, None);
+}
+
+#[test]
+fn test_collect_custom_commands_subdirectory() {
+    let dir = tempfile::tempdir().unwrap();
+    let sub = dir.path().join("project");
+    std::fs::create_dir_all(&sub).unwrap();
+    std::fs::write(sub.join("foo.md"), "Do foo").unwrap();
+    std::fs::write(dir.path().join("bar.md"), "Do bar").unwrap();
+
+    let mut results: Vec<super::CustomCommandEntry> = Vec::new();
+    super::collect_custom_commands(dir.path(), "", &mut results);
+
+    assert_eq!(results.len(), 2);
+    let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
+    assert!(names.contains(&"project:foo"));
+    assert!(names.contains(&"bar"));
+}
+
+#[test]
+fn test_collect_custom_commands_nested_subdirectory() {
+    let dir = tempfile::tempdir().unwrap();
+    let deep = dir.path().join("a").join("b");
+    std::fs::create_dir_all(&deep).unwrap();
+    std::fs::write(deep.join("c.md"), "Deep command").unwrap();
+
+    let mut results: Vec<super::CustomCommandEntry> = Vec::new();
+    super::collect_custom_commands(dir.path(), "", &mut results);
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].name, "a:b:c");
+}
+
+#[test]
+fn test_collect_custom_commands_skips_hidden_dirs() {
+    let dir = tempfile::tempdir().unwrap();
+    let hidden = dir.path().join(".hidden");
+    std::fs::create_dir_all(&hidden).unwrap();
+    std::fs::write(hidden.join("secret.md"), "Should be skipped").unwrap();
+    std::fs::write(dir.path().join("visible.md"), "Visible command").unwrap();
+
+    let mut results: Vec<super::CustomCommandEntry> = Vec::new();
+    super::collect_custom_commands(dir.path(), "", &mut results);
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].name, "visible");
+}
+
+#[test]
+fn test_collect_custom_commands_skips_non_md() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("cmd.md"), "Markdown").unwrap();
+    std::fs::write(dir.path().join("readme.txt"), "Text file").unwrap();
+    std::fs::write(dir.path().join("script.sh"), "#!/bin/bash").unwrap();
+
+    let mut results: Vec<super::CustomCommandEntry> = Vec::new();
+    super::collect_custom_commands(dir.path(), "", &mut results);
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].name, "cmd");
+}
+
+#[test]
+fn test_collect_custom_commands_frontmatter_stripped() {
+    let dir = tempfile::tempdir().unwrap();
+    let content = "---\ndescription: Review code\n---\nReview this:\n$ARGUMENTS\n";
+    std::fs::write(dir.path().join("review.md"), content).unwrap();
+
+    let mut results: Vec<super::CustomCommandEntry> = Vec::new();
+    super::collect_custom_commands(dir.path(), "", &mut results);
+
+    assert_eq!(results.len(), 1);
+    assert!(!results[0].template.contains("description:"));
+    assert!(results[0].template.contains("Review this:"));
+    assert!(results[0].template.contains("$ARGUMENTS"));
+}
+
+#[test]
+fn test_collect_custom_commands_frontmatter_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let content = "---\nmodel: claude-sonnet-4-6\nallowed-tools: Bash,Read\nagent: reviewer\n---\nDo review\n";
+    std::fs::write(dir.path().join("review.md"), content).unwrap();
+
+    let mut results: Vec<super::CustomCommandEntry> = Vec::new();
+    super::collect_custom_commands(dir.path(), "", &mut results);
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].model.as_deref(), Some("claude-sonnet-4-6"));
+    assert_eq!(results[0].allowed_tools, vec!["Bash", "Read"]);
+    assert_eq!(results[0].agent.as_deref(), Some("reviewer"));
+}
+
+#[test]
+fn test_parse_frontmatter_field() {
+    let yaml = "model: claude-opus-4-6\nallowed-tools: Bash, Read, Write\nagent: coder\n";
+    assert_eq!(super::parse_frontmatter_field(yaml, "model"), Some("claude-opus-4-6".to_string()));
+    assert_eq!(super::parse_frontmatter_field(yaml, "allowed-tools"), Some("Bash, Read, Write".to_string()));
+    assert_eq!(super::parse_frontmatter_field(yaml, "agent"), Some("coder".to_string()));
+    assert_eq!(super::parse_frontmatter_field(yaml, "nonexistent"), None);
+}
+
+#[test]
+fn test_parse_frontmatter_field_quoted() {
+    let yaml = "model: \"claude-sonnet-4-6\"\ndescription: 'A test'\n";
+    assert_eq!(super::parse_frontmatter_field(yaml, "model"), Some("claude-sonnet-4-6".to_string()));
+    assert_eq!(super::parse_frontmatter_field(yaml, "description"), Some("A test".to_string()));
+}
+
+#[test]
+fn test_parse_frontmatter_field_empty_value() {
+    let yaml = "model: \nagent:\n";
+    assert_eq!(super::parse_frontmatter_field(yaml, "model"), None);
+    assert_eq!(super::parse_frontmatter_field(yaml, "agent"), None);
+}
+
+#[test]
+fn test_collect_custom_commands_no_directory() {
+    let mut results: Vec<super::CustomCommandEntry> = Vec::new();
+    super::collect_custom_commands(std::path::Path::new("/nonexistent/path"), "", &mut results);
+    assert!(results.is_empty());
+}

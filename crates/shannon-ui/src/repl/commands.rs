@@ -1088,6 +1088,60 @@ fn handle_context(repl: &mut Repl, args: &str) -> Result<()> {
 fn handle_commands(repl: &mut Repl, args: &str) -> Result<()> {
     let trimmed = args.trim();
 
+    // /commands edit <name> — open command file in $EDITOR
+    if let Some(cmd_name) = trimmed.strip_prefix("edit ") {
+        let name = cmd_name.trim();
+        if name.is_empty() {
+            repl.chat.add_message(ChatRole::System, "Usage: /commands edit <name>".to_string());
+            return Ok(());
+        }
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let mut search_dirs: Vec<std::path::PathBuf> = Vec::new();
+        search_dirs.push(cwd.join(".claude").join("commands"));
+        search_dirs.push(cwd.join(".shannon").join("commands"));
+        if let Some(home) = dirs::home_dir() {
+            search_dirs.push(home.join(".claude").join("commands"));
+            search_dirs.push(home.join(".shannon").join("commands"));
+        }
+        // Search for matching command file
+        let mut all_cmds: Vec<super::CustomCommandEntry> = Vec::new();
+        for dir in &search_dirs {
+            super::collect_custom_commands(dir, "", &mut all_cmds);
+        }
+        let entry = all_cmds.iter().find(|e| e.name == name);
+        match entry {
+            Some(e) => {
+                let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+                let path = e.path.clone();
+                repl.chat.add_message(ChatRole::System, format!("Opening {} in {editor}...", path.display()));
+                // Drop terminal raw mode before spawning editor
+                crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen)?;
+                crossterm::terminal::disable_raw_mode()?;
+                let status = std::process::Command::new(&editor)
+                    .arg(&path)
+                    .status();
+                // Restore terminal
+                crossterm::terminal::enable_raw_mode()?;
+                crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
+                match status {
+                    Ok(s) if s.success() => {
+                        repl.chat.add_message(ChatRole::System, "Editor closed. Use /commands reload to apply changes.".to_string());
+                    }
+                    Ok(s) => {
+                        repl.chat.add_message(ChatRole::System, format!("Editor exited with status: {}", s));
+                    }
+                    Err(e) => {
+                        repl.chat.add_message(ChatRole::System, format!("Failed to launch editor: {e}"));
+                    }
+                }
+            }
+            None => {
+                repl.chat.add_message(ChatRole::System, format!("Command '{name}' not found. Use /commands to list available commands."));
+            }
+        }
+        return Ok(());
+    }
+
     if trimmed == "reload" {
         // Re-scan custom command directories and re-register
         let cwd = std::env::current_dir().unwrap_or_default();
@@ -1099,19 +1153,19 @@ fn handle_commands(repl: &mut Repl, args: &str) -> Result<()> {
             dirs.push(home.join(".shannon").join("commands"));
         }
 
-        let mut custom_commands: Vec<(String, String, std::path::PathBuf)> = Vec::new();
+        let mut custom_commands: Vec<super::CustomCommandEntry> = Vec::new();
         for dir in &dirs {
             super::collect_custom_commands(dir, "", &mut custom_commands);
         }
 
         let count = custom_commands.len();
-        for (name, template, path) in &custom_commands {
-            let description = format!("Custom command (from {})", path.display());
+        for entry in &custom_commands {
+            let description = format!("Custom command (from {})", entry.path.display());
             use shannon_commands::{Command, CommandBase, ExecutionContext, PromptCommand};
             use std::collections::HashMap;
             let command = Command::Prompt(Box::new(PromptCommand {
                 base: CommandBase {
-                    name: name.clone(),
+                    name: entry.name.clone(),
                     aliases: Vec::new(),
                     description,
                     has_user_specified_description: false,
@@ -1129,16 +1183,16 @@ fn handle_commands(repl: &mut Repl, args: &str) -> Result<()> {
                     is_sensitive: false,
                     user_facing_name: None,
                 },
-                progress_message: format!("Running /{name}..."),
-                content_length: template.len(),
+                progress_message: format!("Running /{}...", entry.name),
+                content_length: entry.template.len(),
                 arg_names: vec!["$ARGUMENTS".to_string()],
-                allowed_tools: Vec::new(),
-                model: None,
+                allowed_tools: entry.allowed_tools.clone(),
+                model: entry.model.clone(),
                 hooks: HashMap::new(),
                 context: ExecutionContext::Inline,
-                agent: None,
+                agent: entry.agent.clone(),
                 paths: Vec::new(),
-                prompt_template: Some(template.clone()),
+                prompt_template: Some(entry.template.clone()),
             }));
             repl.command_registry.register_sync(command);
         }
@@ -1172,11 +1226,11 @@ fn handle_commands(repl: &mut Repl, args: &str) -> Result<()> {
 
     let mut found: Vec<(String, String)> = Vec::new();
     for dir in &dirs {
-        let mut cmds: Vec<(String, String, std::path::PathBuf)> = Vec::new();
+        let mut cmds: Vec<super::CustomCommandEntry> = Vec::new();
         super::collect_custom_commands(dir, "", &mut cmds);
-        for (name, _, path) in &cmds {
-            if !found.iter().any(|(n, _)| n == name) {
-                found.push((name.clone(), format!("{}", path.display())));
+        for entry in &cmds {
+            if !found.iter().any(|(n, _)| n == &entry.name) {
+                found.push((entry.name.clone(), format!("{}", entry.path.display())));
             }
         }
     }
@@ -4765,9 +4819,18 @@ fn handle_other_command(repl: &mut Repl, cmd_name: &str, args: &str) -> Result<(
             shannon_commands::Command::Prompt(prompt_cmd) => {
                 if let Some(ref template) = prompt_cmd.prompt_template {
                     let args_val = if args.is_empty() { "" } else { args };
-                    let prompt = template
-                        .replace("$ARGUMENTS", args_val)
-                        .replace("{args}", args_val);
+                    let arg_parts: Vec<&str> = args_val.split_whitespace().collect();
+                    let mut prompt = template.clone();
+                    // Replace indexed placeholders: $ARGUMENTS[0], $ARGUMENTS[1], ...
+                    for (i, part) in arg_parts.iter().enumerate() {
+                        prompt = prompt.replace(&format!("$ARGUMENTS[{i}]"), part);
+                    }
+                    // Also replace {args[0]}, {args[1]}, ...
+                    for (i, part) in arg_parts.iter().enumerate() {
+                        prompt = prompt.replace(&format!("{{args[{i}]}}"), part);
+                    }
+                    // Replace full placeholders last (so indexed ones take priority)
+                    prompt = prompt.replace("$ARGUMENTS", args_val).replace("{args}", args_val);
                     repl.chat.add_message(ChatRole::System, format!("Running /{cmd_name}..."));
                     super::query::handle_query(repl, &prompt)?;
                 } else {

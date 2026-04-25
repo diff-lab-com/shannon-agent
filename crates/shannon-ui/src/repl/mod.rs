@@ -275,10 +275,37 @@ impl Default for ReplState {
 /// - `dir`: root directory to scan
 /// - `prefix`: path prefix for nested dirs (e.g. "project:" for `.claude/commands/project/`)
 /// - `results`: accumulated (command_name, template_text, file_path) triples
+/// Extract a field value from simple YAML-like frontmatter text.
+fn parse_frontmatter_field(frontmatter: &str, field: &str) -> Option<String> {
+    for line in frontmatter.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix(field).and_then(|s| s.strip_prefix(':')) {
+            let val = rest.trim().trim_matches('"').trim_matches('\'').to_string();
+            if !val.is_empty() {
+                return Some(val);
+            }
+        }
+    }
+    None
+}
+
+/// Parsed custom command entry with optional frontmatter metadata.
+pub(super) struct CustomCommandEntry {
+    pub name: String,
+    pub template: String,
+    pub path: std::path::PathBuf,
+    /// Optional model override from frontmatter `model:` field.
+    pub model: Option<String>,
+    /// Optional allowed tools from frontmatter `allowed-tools:` field.
+    pub allowed_tools: Vec<String>,
+    /// Optional agent from frontmatter `agent:` field.
+    pub agent: Option<String>,
+}
+
 pub(super) fn collect_custom_commands(
     dir: &std::path::Path,
     prefix: &str,
-    results: &mut Vec<(String, String, std::path::PathBuf)>,
+    results: &mut Vec<CustomCommandEntry>,
 ) {
     let entries = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
@@ -305,17 +332,23 @@ pub(super) fn collect_custom_commands(
                 Ok(c) => c,
                 Err(_) => continue,
             };
-            // Strip YAML frontmatter (---\n...\n---)
-            let template = if content.starts_with("---") {
-                content
-                    .splitn(3, "---")
-                    .nth(2)
-                    .map(|s| s.trim_start().to_string())
-                    .unwrap_or(content.clone())
+            // Parse YAML frontmatter (---\n...\n---)
+            let (template, model, allowed_tools, agent) = if content.starts_with("---") {
+                let parts: Vec<&str> = content.splitn(3, "---").collect();
+                let frontmatter = parts.get(1).unwrap_or(&"");
+                let body = parts.get(2).map(|s| s.trim_start()).unwrap_or("");
+                let m = parse_frontmatter_field(frontmatter, "model");
+                let tools_str = parse_frontmatter_field(frontmatter, "allowed-tools")
+                    .or_else(|| parse_frontmatter_field(frontmatter, "allowed_tools"));
+                let tools = tools_str
+                    .map(|s| s.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect())
+                    .unwrap_or_default();
+                let a = parse_frontmatter_field(frontmatter, "agent");
+                (body.to_string(), m, tools, a)
             } else {
-                content
+                (content, None, Vec::new(), None)
             };
-            results.push((command_name, template, path));
+            results.push(CustomCommandEntry { name: command_name, template, path, model, allowed_tools, agent });
         }
     }
 }
@@ -348,53 +381,46 @@ impl CustomCommandWatcher {
     /// Take initial snapshot of file mtimes.
     fn snapshot(&mut self) {
         self.mtimes.clear();
-        let mut results: Vec<(String, String, std::path::PathBuf)> = Vec::new();
+        let mut results: Vec<CustomCommandEntry> = Vec::new();
         for dir in &self.dirs {
             collect_custom_commands(dir, "", &mut results);
         }
- for (_, _, path) in &results {
-            if let Ok(meta) = std::fs::metadata(path) {
+        for entry in &results {
+            if let Ok(meta) = std::fs::metadata(&entry.path) {
                 if let Ok(mtime) = meta.modified() {
-                    self.mtimes.insert(path.clone(), mtime);
+                    self.mtimes.insert(entry.path.clone(), mtime);
                 }
             }
         }
     }
 
-    /// Check if any command files changed. Returns true if re-registration happened.
-    fn check_and_reload(&mut self, registry: &CommandRegistry) -> bool {
-        let mut changed = false;
-
-        // Check existing files for mtime changes
-        let mut current_files: Vec<(String, String, std::path::PathBuf)> = Vec::new();
+    /// Check if any command files changed. Returns count of re-registered commands.
+    fn check_and_reload(&mut self, registry: &CommandRegistry) -> usize {
+        let mut current_files: Vec<CustomCommandEntry> = Vec::new();
         for dir in &self.dirs {
             collect_custom_commands(dir, "", &mut current_files);
         }
 
         // Compare mtimes
         let mut new_mtimes = std::collections::HashMap::new();
-        for (_, _, path) in &current_files {
-            if let Ok(meta) = std::fs::metadata(path) {
+        for entry in &current_files {
+            if let Ok(meta) = std::fs::metadata(&entry.path) {
                 if let Ok(mtime) = meta.modified() {
-                    new_mtimes.insert(path.clone(), mtime);
+                    new_mtimes.insert(entry.path.clone(), mtime);
                 }
             }
         }
 
-        if new_mtimes.len() != self.mtimes.len() || new_mtimes != self.mtimes {
-            changed = true;
-        }
-
-        if !changed {
-            return false;
+        if new_mtimes.len() == self.mtimes.len() && new_mtimes == self.mtimes {
+            return 0;
         }
 
         // Re-register all custom commands
-        for (name, template, path) in &current_files {
-            let description = format!("Custom command (from {})", path.display());
+        for entry in &current_files {
+            let description = format!("Custom command (from {})", entry.path.display());
             let command = Command::Prompt(Box::new(PromptCommand {
                 base: CommandBase {
-                    name: name.clone(),
+                    name: entry.name.clone(),
                     aliases: Vec::new(),
                     description,
                     has_user_specified_description: false,
@@ -412,23 +438,24 @@ impl CustomCommandWatcher {
                     is_sensitive: false,
                     user_facing_name: None,
                 },
-                progress_message: format!("Running /{name}..."),
-                content_length: template.len(),
+                progress_message: format!("Running /{}...", entry.name),
+                content_length: entry.template.len(),
                 arg_names: vec!["$ARGUMENTS".to_string()],
-                allowed_tools: Vec::new(),
-                model: None,
+                allowed_tools: entry.allowed_tools.clone(),
+                model: entry.model.clone(),
                 hooks: std::collections::HashMap::new(),
                 context: ExecutionContext::Inline,
-                agent: None,
+                agent: entry.agent.clone(),
                 paths: Vec::new(),
-                prompt_template: Some(template.clone()),
+                prompt_template: Some(entry.template.clone()),
             }));
             registry.register_sync(command);
         }
 
         self.mtimes = new_mtimes;
-        tracing::info!("Custom commands hot-reloaded ({} commands)", current_files.len());
-        true
+        let count = current_files.len();
+        tracing::info!("Custom commands hot-reloaded ({} commands)", count);
+        count
     }
 }
 
@@ -1105,17 +1132,17 @@ impl Repl {
                     custom_command_dirs.push(home.join(".shannon").join("commands"));
                 }
 
-                // Collect (name, template, path) triples from all command directories
-                let mut custom_commands: Vec<(String, String, std::path::PathBuf)> = Vec::new();
+                // Collect custom commands from all command directories
+                let mut custom_commands: Vec<CustomCommandEntry> = Vec::new();
                 for dir in &custom_command_dirs {
                     collect_custom_commands(dir, "", &mut custom_commands);
                 }
 
-                for (name, template, path) in &custom_commands {
-                    let description = format!("Custom command (from {})", path.display());
+                for entry in &custom_commands {
+                    let description = format!("Custom command (from {})", entry.path.display());
                     let command = Command::Prompt(Box::new(PromptCommand {
                         base: CommandBase {
-                            name: name.clone(),
+                            name: entry.name.clone(),
                             aliases: Vec::new(),
                             description,
                             has_user_specified_description: false,
@@ -1133,16 +1160,16 @@ impl Repl {
                             is_sensitive: false,
                             user_facing_name: None,
                         },
-                        progress_message: format!("Running /{name}..."),
-                        content_length: template.len(),
+                        progress_message: format!("Running /{}...", entry.name),
+                        content_length: entry.template.len(),
                         arg_names: vec!["$ARGUMENTS".to_string()],
-                        allowed_tools: Vec::new(),
-                        model: None,
+                        allowed_tools: entry.allowed_tools.clone(),
+                        model: entry.model.clone(),
                         hooks: HashMap::new(),
                         context: ExecutionContext::Inline,
-                        agent: None,
+                        agent: entry.agent.clone(),
                         paths: Vec::new(),
-                        prompt_template: Some(template.clone()),
+                        prompt_template: Some(entry.template.clone()),
                     }));
                     registry.register_sync(command);
                 }
@@ -1309,7 +1336,13 @@ impl Repl {
     /// Check if custom command files have changed and hot-reload them.
     pub fn check_reload_commands(&mut self) {
         if let Some(ref mut watcher) = self.command_watcher {
-            watcher.check_and_reload(&self.command_registry);
+            let count = watcher.check_and_reload(&self.command_registry);
+            if count > 0 {
+                self.chat.add_message(
+                    crate::widgets::ChatRole::System,
+                    format!("[Custom commands hot-reloaded: {count} command(s)]"),
+                );
+            }
         }
     }
 
