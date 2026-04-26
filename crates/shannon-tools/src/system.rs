@@ -8,6 +8,7 @@ use crate::{Tool, ToolError, ToolResult, ToolOutput};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shannon_core::sandbox::{SandboxConfig, SandboxExecutor, SandboxType};
 use std::collections::HashMap;
 use std::process::Stdio;
 use tokio::process::Command;
@@ -568,6 +569,8 @@ pub struct CommandOutput {
 pub struct BashTool {
     description: String,
     sandbox: Option<DockerSandbox>,
+    /// Platform sandbox (bwrap on Linux, Seatbelt on macOS)
+    process_sandbox: Option<SandboxExecutor>,
 }
 
 impl Default for BashTool {
@@ -581,6 +584,7 @@ impl BashTool {
         Self {
             description: "Executes bash commands and returns output".to_string(),
             sandbox: None,
+            process_sandbox: None,
         }
     }
 
@@ -589,6 +593,27 @@ impl BashTool {
         Self {
             description: "Executes bash commands in Docker sandbox".to_string(),
             sandbox: Some(DockerSandbox::new(config)),
+            process_sandbox: None,
+        }
+    }
+
+    /// Create a BashTool with a platform process sandbox (bwrap/Seatbelt).
+    ///
+    /// The `SandboxExecutor` is auto-detected from the current platform.
+    /// If no sandbox backend is available, commands run unsandboxed.
+    pub fn with_process_sandbox(project_dir: impl Into<std::path::PathBuf>) -> Self {
+        let config = SandboxConfig::new(project_dir);
+        let executor = SandboxExecutor::new(config);
+        let sandbox_type = executor.sandbox_type();
+        let has_sandbox = !matches!(sandbox_type, SandboxType::None);
+        Self {
+            description: if has_sandbox {
+                format!("Executes bash commands (sandboxed via {sandbox_type})")
+            } else {
+                "Executes bash commands and returns output".to_string()
+            },
+            sandbox: None,
+            process_sandbox: if has_sandbox { Some(executor) } else { None },
         }
     }
 
@@ -606,6 +631,71 @@ impl BashTool {
             None => SandboxMode::Direct,
             Some(s) => SandboxMode::Docker(s.config.clone()),
         }
+    }
+
+    /// Execute a command through the platform process sandbox (bwrap/Seatbelt).
+    ///
+    /// Creates a `std::process::Command`, wraps it via `SandboxExecutor`,
+    /// then converts to `tokio::process::Command` for async execution.
+    async fn execute_command_sandboxed(
+        command: &str,
+        cwd: Option<&str>,
+        env: Option<&std::collections::HashMap<String, String>>,
+        timeout_ms: Option<u64>,
+        executor: &SandboxExecutor,
+    ) -> Result<CommandOutput, std::io::Error> {
+        let mut cmd = std::process::Command::new("bash");
+        cmd.arg("-c")
+            .arg(command)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
+
+        if let Some(env_vars) = env {
+            for (key, value) in env_vars {
+                cmd.env(key, value);
+            }
+        }
+
+        // Wrap the command with the platform sandbox (bwrap/Seatbelt).
+        executor
+            .wrap_command(&mut cmd)
+            .map_err(|e| std::io::Error::other(format!("Sandbox wrap failed: {e}")))?;
+
+        // Convert std::process::Command → tokio::process::Command
+        let mut cmd = Command::from(cmd);
+
+        let output = if let Some(timeout) = timeout_ms {
+            let duration = std::time::Duration::from_millis(timeout);
+            tokio::time::timeout(duration, cmd.output())
+                .await
+                .map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        format!("Command timed out after {timeout}ms"),
+                    )
+                })?
+                .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
+        } else {
+            cmd.output()
+                .await
+                .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
+        };
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let exit_code = output.status.code().unwrap_or(-1);
+        let success = output.status.success();
+
+        Ok(CommandOutput {
+            stdout,
+            stderr,
+            exit_code,
+            success,
+        })
     }
 
     async fn execute_command(
@@ -738,13 +828,22 @@ impl Tool for BashTool {
             String::new()
         };
 
-        // Execute the command (through Docker sandbox if configured)
+        // Execute the command (Docker sandbox > process sandbox > direct)
         let output_result = if let Some(ref sandbox) = self.sandbox {
             sandbox.execute(
                 &bash_input.command,
                 bash_input.cwd.as_deref(),
                 bash_input.env.as_ref(),
                 bash_input.timeout,
+            )
+            .await
+        } else if let Some(ref ps) = self.process_sandbox {
+            Self::execute_command_sandboxed(
+                &bash_input.command,
+                bash_input.cwd.as_deref(),
+                bash_input.env.as_ref(),
+                bash_input.timeout,
+                ps,
             )
             .await
         } else {

@@ -10,7 +10,7 @@ use shannon_core::{
     tools::ToolRegistry,
     unified_config::{ConfigBuilder, ShannonConfig},
 };
-use shannon_tools::register_default_tools;
+use shannon_tools::register_default_tools_with_project_dir;
 use shannon_ui::Repl;
 use std::collections::HashMap;
 use std::io::Write;
@@ -554,9 +554,10 @@ fn run_noninteractive_query(
     let rt = tokio::runtime::Runtime::new()?;
 
     rt.block_on(async {
-        // Build tool registry with all standard tools
+        // Build tool registry with all standard tools (sandboxed to project dir)
+        let project_dir = std::env::current_dir().unwrap_or_default();
         let mut tools = ToolRegistry::new();
-        let agent_context_handle = register_default_tools(&mut tools)
+        let agent_context_handle = register_default_tools_with_project_dir(&mut tools, &project_dir)
             .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
 
         // Load and register skills from shannon-skills as tools
@@ -792,9 +793,10 @@ fn run_headless_query(
     let exit_code: HeadlessExitCode = rt.block_on(async {
         let start = Instant::now();
 
-        // Build tool registry with all standard tools
+        // Build tool registry with all standard tools (sandboxed to project dir)
+        let project_dir = std::env::current_dir().unwrap_or_default();
         let mut tools = ToolRegistry::new();
-        let agent_context_handle = register_default_tools(&mut tools)
+        let agent_context_handle = register_default_tools_with_project_dir(&mut tools, &project_dir)
             .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
 
         // Load and register skills
@@ -1066,9 +1068,10 @@ fn read_stdin() -> String {
 fn run_serve_command(port: u16, host: Option<String>, config: &CliConfig) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
-        // Build tool registry with default tools.
+        // Build tool registry with default tools (sandboxed to project dir).
+        let project_dir = std::env::current_dir().unwrap_or_default();
         let mut tools = shannon_core::ToolRegistry::new();
-        let agent_context_handle = register_default_tools(&mut tools)
+        let agent_context_handle = register_default_tools_with_project_dir(&mut tools, &project_dir)
             .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
 
         // Load and register skills.
@@ -1175,9 +1178,10 @@ fn run_team_agent_mode(
     rt.block_on(async {
         let config = build_cli_config(model, provider, None, None, None, false, HashMap::new());
 
-        // ── Build full tool registry (same as non-interactive query) ──
+        // ── Build full tool registry (sandboxed to project dir) ──
+        let project_dir = std::env::current_dir().unwrap_or_default();
         let mut tools = ToolRegistry::new();
-        let agent_context_handle = register_default_tools(&mut tools)
+        let agent_context_handle = register_default_tools_with_project_dir(&mut tools, &project_dir)
             .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
 
         shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);

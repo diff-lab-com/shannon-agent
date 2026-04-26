@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use shannon_core::{Tool, ToolOutput, ToolResult};
 use shannon_core::tools::ToolError;
+use crate::file::sandbox::PathSandbox;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -89,11 +90,26 @@ pub struct GrepFileMatch {
 }
 
 /// GrepTool - search file contents using regex patterns
-pub struct GrepTool;
+pub struct GrepTool {
+    sandbox: PathSandbox,
+}
 
 impl GrepTool {
     pub fn new() -> Self {
-        Self
+        Self {
+            // Default sandbox: blocks system paths but allows any project dir.
+            // with_sandbox() is used when a specific project dir is known.
+            sandbox: PathSandbox::with_config(crate::file::sandbox::SandboxConfig {
+                allowed_roots: vec![],
+                denied_patterns: crate::file::sandbox::SandboxConfig::default_denied_patterns(),
+                strict_mode: false,
+            }),
+        }
+    }
+
+    /// Create a GrepTool with a custom sandbox configuration.
+    pub fn with_sandbox(sandbox: PathSandbox) -> Self {
+        Self { sandbox }
     }
 
     /// Check if a file appears to be binary by looking for null bytes
@@ -324,6 +340,12 @@ impl Tool for GrepTool {
             .as_deref()
             .unwrap_or(".");
         let search_root = PathBuf::from(search_path);
+
+        // Validate search path through sandbox
+        self.sandbox
+            .validate(&search_root)
+            .await
+            .map_err(|e| ToolError::InvalidInput(format!("Path sandbox: {e}")))?;
 
         if !search_root.exists() {
             return Err(ToolError::ExecutionFailed(format!(
@@ -847,7 +869,15 @@ mod tests {
 
         let result = tool.execute(input).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Path does not exist"));
+        let err_msg = result.unwrap_err().to_string();
+        // Sandbox validation fails first (cannot canonicalize nonexistent path),
+        // or the explicit exists-check fires if sandbox is permissive.
+        assert!(
+            err_msg.contains("Path does not exist")
+                || err_msg.contains("Cannot resolve path")
+                || err_msg.contains("Path sandbox"),
+            "Unexpected error: {err_msg}"
+        );
     }
 
     // === Line number toggle ===
@@ -916,7 +946,7 @@ mod tests {
 
     #[test]
     fn test_grep_tool_default() {
-        let tool = GrepTool;
+        let tool = GrepTool::new();
         assert_eq!(tool.name(), "Grep");
     }
 

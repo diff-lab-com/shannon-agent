@@ -50,7 +50,7 @@ use shannon_core::{
 use shannon_commands::{Command, CommandBase, CommandRegistry, CommandParser, ExecutionContext, PromptCommand, builtin_commands, SharedExecutor};
 
 // Tool registration
-use shannon_tools::register_default_tools;
+use shannon_tools::register_default_tools_with_project_dir;
 use crate::skill_bridge::register_skills_as_tools;
 use shannon_mcp::{McpProcessPool, discover_pooled_tools, discover_pooled_remote_tools, HeaderSource};
 
@@ -664,9 +664,10 @@ impl Repl {
         let runtime = Runtime::new()?;
         let _rt_guard = runtime.enter();
 
-        // Create tool registry and register all tools
+        // Create tool registry and register all tools (sandboxed to project dir)
+        let project_dir = std::env::current_dir().unwrap_or_default();
         let mut tool_registry = ToolRegistry::new();
-        let agent_context_handle = register_default_tools(&mut tool_registry).map_err(|e| anyhow::anyhow!("Failed to register tools: {e}"))?;
+        let agent_context_handle = register_default_tools_with_project_dir(&mut tool_registry, &project_dir).map_err(|e| anyhow::anyhow!("Failed to register tools: {e}"))?;
 
         // Load and register skills from shannon-skills as tools
         register_skills_as_tools(&mut tool_registry);
