@@ -2,6 +2,7 @@
 
 use crate::tool_format::strip_ansi;
 use crate::theme::Theme;
+use crate::render::Renderer;
 
 pub mod select;
 pub mod progress;
@@ -27,6 +28,11 @@ static DIFF_SYNTAX: LazyLock<(SyntaxSet, syntect::highlighting::Theme)> = LazyLo
     let ts = ThemeSet::load_defaults();
     let theme = ts.themes["base16-eighties.dark"].clone();
     (ss, theme)
+});
+
+/// Lazy-initialized renderer for code syntax highlighting.
+static CODE_RENDERER: LazyLock<Renderer> = LazyLock::new(|| {
+    Renderer::new()
 });
 
 /// Convert a syntect Color to a ratatui Color.
@@ -599,14 +605,14 @@ impl ChatWidget {
                             Span::styled(truncate_to(&header, available), Style::default().fg(theme.accent)),
                         ])));
 
-                        // Code lines with syntax highlighting
-                        for code_line in code.lines() {
-                            let spans = highlight_code_line(code_line, lang.as_deref(), theme);
+                        // Code lines with syntax highlighting using Renderer
+                        let highlighted_lines = CODE_RENDERER.highlight_code(&code, lang.as_deref().unwrap_or(""));
+                        for line in highlighted_lines {
                             let mut line_spans = vec![
                                 Span::styled(indent.clone(), Style::default().fg(theme.muted)),
                                 Span::styled("│ ", Style::default().fg(theme.accent)),
                             ];
-                            line_spans.extend(spans);
+                            line_spans.extend(line.spans);
                             list_items.push(ListItem::new(Line::from(line_spans)));
                         }
 
@@ -1428,103 +1434,6 @@ fn truncate_line(s: &str, max_chars: usize) -> String {
     truncate_to(s, max_chars)
 }
 
-/// Common keywords for basic syntax highlighting.
-const KEYWORDS: &[&str] = &[
-    "fn", "let", "mut", "pub", "struct", "enum", "impl", "trait", "mod", "use",
-    "if", "else", "match", "for", "while", "loop", "return", "break", "continue",
-    "async", "await", "move", "ref", "self", "super", "crate", "where", "type",
-    "const", "static", "true", "false", "Some", "None", "Ok", "Err",
-    "def", "class", "import", "from", "with", "as", "try", "except", "raise",
-    "function", "var", "const", "let", "new", "this", "typeof", "instanceof",
-    "NULL", "True", "False",
-];
-
-/// Highlight a single code line into colored spans.
-fn highlight_code_line(line: &str, _lang: Option<&str>, theme: &Theme) -> Vec<Span<'static>> {
-    let mut spans = Vec::new();
-    let mut current = String::new();
-    let chars: Vec<char> = line.chars().collect();
-    let mut i = 0;
-
-    while i < chars.len() {
-        // Check for line comments
-        if chars[i] == '/' && i + 1 < chars.len() && chars[i + 1] == '/' {
-            if !current.is_empty() {
-                spans.push(Span::styled(std::mem::take(&mut current), Style::default().fg(theme.text)));
-            }
-            let comment: String = chars[i..].iter().collect();
-            spans.push(Span::styled(truncate_to(&comment, 200), Style::default().fg(theme.muted)));
-            return spans;
-        }
-        if chars[i] == '#' && (_lang == Some("python") || _lang == Some("py") || _lang == Some("bash") || _lang == Some("sh") || _lang == None) {
-            if !current.is_empty() {
-                spans.push(Span::styled(std::mem::take(&mut current), Style::default().fg(theme.text)));
-            }
-            let comment: String = chars[i..].iter().collect();
-            spans.push(Span::styled(truncate_to(&comment, 200), Style::default().fg(theme.muted)));
-            return spans;
-        }
-        // Check for strings (double quote)
-        if chars[i] == '"' || chars[i] == '\'' {
-            if !current.is_empty() {
-                spans.push(Span::styled(std::mem::take(&mut current), Style::default().fg(theme.text)));
-            }
-            let quote = chars[i];
-            current.push(quote);
-            i += 1;
-            while i < chars.len() && chars[i] != quote {
-                current.push(chars[i]);
-                if chars[i] == '\\' && i + 1 < chars.len() {
-                    i += 1;
-                    current.push(chars[i]);
-                }
-                i += 1;
-            }
-            if i < chars.len() {
-                current.push(chars[i]);
-                i += 1;
-            }
-            spans.push(Span::styled(std::mem::take(&mut current), Style::default().fg(theme.success)));
-            continue;
-        }
-        // Check for word boundaries (keywords)
-        if chars[i].is_alphanumeric() || chars[i] == '_' {
-            current.push(chars[i]);
-            i += 1;
-            // Continue reading word
-            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
-                current.push(chars[i]);
-                i += 1;
-            }
-            // Check if it's a keyword
-            if KEYWORDS.contains(&current.as_str()) {
-                spans.push(Span::styled(std::mem::take(&mut current), Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)));
-            }
-            continue;
-        }
-        // Numbers
-        if chars[i].is_ascii_digit() {
-            if !current.is_empty() {
-                spans.push(Span::styled(std::mem::take(&mut current), Style::default().fg(theme.text)));
-            }
-            while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.' || chars[i] == '_') {
-                current.push(chars[i]);
-                i += 1;
-            }
-            spans.push(Span::styled(std::mem::take(&mut current), Style::default().fg(theme.warning)));
-            continue;
-        }
-        // Punctuation/operators
-        current.push(chars[i]);
-        i += 1;
-    }
-
-    if !current.is_empty() {
-        spans.push(Span::styled(current, Style::default().fg(theme.text)));
-    }
-    spans
-}
-
 /// Truncate a string to fit within `max_chars` characters, appending "…" if truncated.
 fn truncate_to(s: &str, max_chars: usize) -> String {
     if s.chars().count() <= max_chars {
@@ -2337,24 +2246,23 @@ mod tests {
     }
 
     #[test]
-    fn test_highlight_code_keywords() {
-        let theme = Theme::default_dark();
-        let spans = highlight_code_line("fn main() { let x = 1; }", None, &theme);
-        assert!(!spans.is_empty());
+    fn test_highlight_code_with_renderer() {
+        let code = "fn main() {\n    println!(\"hello\");\n}";
+        let lines = CODE_RENDERER.highlight_code(code, "rust");
+        assert!(!lines.is_empty());
+        assert_eq!(lines.len(), 3); // One line per source line
     }
 
     #[test]
-    fn test_highlight_code_string() {
-        let theme = Theme::default_dark();
-        let spans = highlight_code_line(r#"let s = "hello";"#, Some("rust"), &theme);
-        assert!(!spans.is_empty());
+    fn test_highlight_code_empty_with_renderer() {
+        let lines = CODE_RENDERER.highlight_code("", "rust");
+        assert!(lines.is_empty());
     }
 
     #[test]
-    fn test_highlight_code_comment() {
-        let theme = Theme::default_dark();
-        let spans = highlight_code_line("// this is a comment", Some("rust"), &theme);
-        assert_eq!(spans.len(), 1); // entire line is one comment span
+    fn test_highlight_code_unknown_language_with_renderer() {
+        let lines = CODE_RENDERER.highlight_code("fn main() {}", "no_such_lang");
+        assert!(!lines.is_empty()); // Should still render, just plain
     }
 
     // ── Tool Message Tests ──────────────────────────────────────────────

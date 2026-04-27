@@ -145,6 +145,8 @@ pub struct ReplState {
     pub streaming_active: bool,
     /// When the current streaming operation started
     pub streaming_start: Option<std::time::Instant>,
+    /// When this session started (for duration display)
+    pub session_start: Option<std::time::Instant>,
     /// Current vim mode label for display ("INSERT" or "NORMAL")
     pub vim_mode: String,
     /// Whether leader key mode is active (waiting for second key after Ctrl+X)
@@ -273,6 +275,7 @@ impl Default for ReplState {
             thinking_phase: false,
             streaming_active: false,
             streaming_start: None,
+            session_start: Some(std::time::Instant::now()),
             vim_mode: "INSERT".to_string(),
             leader_active: false,
             sidebar_tab: SidebarTab::default(),

@@ -9,7 +9,9 @@ use rust_i18n::t;
 use ratatui::backend::CrosstermBackend;
 use futures::StreamExt;
 use ratatui::Terminal;
+use std::collections::HashMap;
 use std::io;
+use std::time::Instant;
 use uuid::Uuid;
 
 use crate::repl_enhancement::TurnDiff;
@@ -134,6 +136,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
         let mut response_text = String::new();
         let mut tokens_in_turn = 0u64;
         let mut tool_calls: Vec<String> = Vec::new();
+        let mut tool_start_times: HashMap<String, Instant> = HashMap::new();
         let mut _tools_in_session: usize = 0;
         let mut progress_status = "Processing...".to_string();
         let mut steps_done = 0usize;
@@ -175,8 +178,9 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                     }
 
                     progress_status = format!("Running: {tool_name} (step {steps_done})");
-                    let tool_display = format!("\n🔧 Using: {} with input: {}", tool_name,
+                    let tool_display = format!("\n> Using: {} with input: {}", tool_name,
                         serde_json::to_string_pretty(&tool_input).unwrap_or_else(|_| "invalid".to_string()));
+                    tool_start_times.insert(tool_name.clone(), Instant::now());
                     response_text.push_str(&tool_display);
                     tool_calls.push(tool_name.clone());
                     _tools_in_session += 1;
@@ -188,8 +192,21 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                     }
                 }
                 Ok(QueryEvent::ToolUseResult { tool_name, result, is_error, .. }) => {
+                    let duration_str = tool_start_times.remove(&tool_name).map(|start| {
+                        let elapsed = start.elapsed();
+                        if elapsed.as_secs() >= 60 {
+                            format!("{}m{:.0}s", elapsed.as_secs() / 60, elapsed.as_secs_f64() % 60.0)
+                        } else {
+                            format!("{:.1}s", elapsed.as_secs_f64())
+                        }
+                    }).unwrap_or_default();
+                    let status_icon = if is_error { "x" } else { "ok" };
                     let formatted = crate::tool_format::format_tool_result(&tool_name, &result, is_error);
-                    response_text.push_str(&format!("\n{formatted}"));
+                    if duration_str.is_empty() {
+                        response_text.push_str(&format!("\n{formatted}"));
+                    } else {
+                        response_text.push_str(&format!("\n{formatted}\n  [{status_icon}] {duration_str}"));
+                    }
                     if let Ok(mut s) = ss.lock() {
                         s.buffer = response_text.clone();
                         if let Some(bar) = s.multi_progress.iter_mut().find(|(l, _, _)| l == &tool_name) {
@@ -446,6 +463,10 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
         repl.chat.streaming_active = false;
         repl.state.toast = None;
         repl.notify("Response complete");
+        // Send terminal bell for long-running tasks (>30s)
+        if stream_start.elapsed().as_secs() >= 30 {
+            let _ = std::io::Write::write_all(&mut std::io::stderr(), b"\x07");
+        }
     }
 
     shannon_core::prevent_sleep::stop_prevent_sleep();

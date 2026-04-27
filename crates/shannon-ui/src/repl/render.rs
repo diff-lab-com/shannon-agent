@@ -39,18 +39,51 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         };
         let sidebar_ref = sidebar_info.as_ref();
 
-        // Build status with turn count and notification badge
+        // Build status with model, tokens, turn count, session duration, and notification badge
         let notif_count = state.pending_notifications.iter()
             .filter(|(_, t)| t.elapsed().as_secs() < 30)
             .count();
-        let mut display_status = if state.turn_count > 0 && state.status == "Ready" {
-            format!("Ready │ Turn: {}", state.turn_count)
-        } else {
-            state.status.clone()
-        };
-        if notif_count > 0 {
-            display_status.push_str(&format!(" │ {} notif", notif_count));
+        let mut status_parts = Vec::new();
+
+        // Model name
+        if let Some(ref model) = state.model {
+            let short = model.split('/').last().unwrap_or(model);
+            status_parts.push(short.to_string());
         }
+
+        // Status or Ready with turn count
+        if state.turn_count > 0 && state.status == "Ready" {
+            status_parts.push(format!("Turn: {}", state.turn_count));
+        } else if state.status != "Ready" {
+            status_parts.push(state.status.clone());
+        }
+
+        // Token usage
+        if state.tokens_used > 0 {
+            let k = state.tokens_used as f64 / 1000.0;
+            status_parts.push(format!("{:.1}k tokens", k));
+        }
+
+        // Session duration
+        if let Some(start) = state.session_start {
+            let dur = start.elapsed();
+            if dur.as_secs() >= 60 {
+                let mins = dur.as_secs() / 60;
+                let secs = dur.as_secs() % 60;
+                status_parts.push(format!("{}m{}s", mins, secs));
+            }
+        }
+
+        // Notification badge
+        if notif_count > 0 {
+            status_parts.push(format!("{} notif", notif_count));
+        }
+
+        let display_status = if status_parts.is_empty() {
+            "Ready".to_string()
+        } else {
+            status_parts.join(" │ ")
+        };
 
         // Determine which overlay to render
         if let Some(ref dialog) = state.permission_dialog {

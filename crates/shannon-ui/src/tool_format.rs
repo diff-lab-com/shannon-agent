@@ -98,6 +98,69 @@ const JSON_MAX_LINES: usize = 50;
 /// Maximum number of characters to show for a single tool result before truncation
 const MAX_RESULT_CHARS: usize = 2000;
 
+/// Classify a tool as read-only or write.
+pub fn tool_category(tool_name: &str) -> ToolCategory {
+    match tool_name {
+        "read" | "grep" | "search" | "glob" | "list" | "ls" | "find" | "cat" | "head" | "tail" => ToolCategory::Read,
+        "write" | "edit" | "bash" | "sh" | "shell" | "run" | "execute" | "create" | "delete" | "mkdir" | "mv" | "cp" => ToolCategory::Write,
+        _ => ToolCategory::Read,
+    }
+}
+
+/// Tool operation category for display purposes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolCategory {
+    Read,
+    Write,
+}
+
+/// Maximum lines to show in a read-mode summary.
+const READ_SUMMARY_MAX_LINES: usize = 3;
+
+/// Format a read tool result as a compact summary.
+pub fn format_read_summary(tool_name: &str, result: &str) -> String {
+    let lines: Vec<&str> = result.lines().filter(|l| !l.trim().is_empty()).collect();
+    let count = lines.len();
+    let summary = match tool_name {
+        "read" | "cat" | "head" | "tail" => format!("Read {} lines", count),
+        "grep" | "search" => {
+            if count == 0 { "No matches found".to_string() }
+            else { format!("Found {} results", count) }
+        }
+        "glob" | "find" | "list" | "ls" => {
+            if count == 0 { "No files found".to_string() }
+            else { format!("Found {} files", count) }
+        }
+        _ => format!("{} results", count),
+    };
+    let mut output = format!("{} {} {}", colors::DIM, summary, colors::RESET);
+    if count > 0 {
+        output.push('\n');
+        let preview_lines: Vec<&str> = lines.iter().take(READ_SUMMARY_MAX_LINES).copied().collect();
+        for line in &preview_lines {
+            output.push_str(&format!("  {}{}{}\n", colors::DIM, &line[..line.len().min(120)], colors::RESET));
+        }
+        if count > READ_SUMMARY_MAX_LINES {
+            output.push_str(&format!("  {}... {} more lines{}\n", colors::DIM, count - READ_SUMMARY_MAX_LINES, colors::RESET));
+        }
+    }
+    output.trim_end().to_string()
+}
+
+/// Format a write tool result as a command+output block.
+pub fn format_write_result(tool_name: &str, result: &str, is_error: bool) -> String {
+    if is_error {
+        return format_error(tool_name, result);
+    }
+    let mut output = String::new();
+    output.push_str(&format!("{}--- {} ---{}\n", colors::CYAN, tool_name, colors::RESET));
+    let truncated = truncate_result(result);
+    if !truncated.is_empty() {
+        output.push_str(&truncated);
+    }
+    output
+}
+
 /// Format a tool result for display in the REPL.
 ///
 /// Detects the content type of the result string and formats it accordingly:
@@ -108,6 +171,17 @@ const MAX_RESULT_CHARS: usize = 2000;
 /// - Tables get aligned columns
 /// - Everything else passes through as-is
 pub fn format_tool_result(tool_name: &str, result: &str, is_error: bool) -> String {
+    if is_error {
+        return format_error(tool_name, &truncate_result(result));
+    }
+    match tool_category(tool_name) {
+        ToolCategory::Read => format_read_summary(tool_name, result),
+        ToolCategory::Write => format_write_result(tool_name, result, false),
+    }
+}
+
+/// Format a tool result with full content (no dual-mode summarization).
+pub fn format_tool_result_full(tool_name: &str, result: &str, is_error: bool) -> String {
     let truncated = truncate_result(result);
 
     if is_error {
