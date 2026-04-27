@@ -98,6 +98,7 @@ fn render_scene(scene: &SceneData) -> String {
                 &state.theme,
                 state.sidebar_tab,
                 Some(&state.approval_mode_label),
+                false,
             );
 
             // Overlays (mutually exclusive in normal rendering order)

@@ -39,6 +39,19 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         };
         let sidebar_ref = sidebar_info.as_ref();
 
+        // Build status with turn count and notification badge
+        let notif_count = state.pending_notifications.iter()
+            .filter(|(_, t)| t.elapsed().as_secs() < 30)
+            .count();
+        let mut display_status = if state.turn_count > 0 && state.status == "Ready" {
+            format!("Ready │ Turn: {}", state.turn_count)
+        } else {
+            state.status.clone()
+        };
+        if notif_count > 0 {
+            display_status.push_str(&format!(" │ {} notif", notif_count));
+        }
+
         // Determine which overlay to render
         if let Some(ref dialog) = state.permission_dialog {
             render_permission_dialog(f, f.area(), dialog, &theme);
@@ -51,10 +64,11 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         {
             // Render base layout first
             crate::widgets::MainLayoutWidget::render_complete_with_spinner(
-                f, chat, prompt, &state.status,
+                f, chat, prompt, &display_status,
                 state.model.as_deref(), Some(state.tokens_used),
                 &state.working_directory, Some(spinner), pb, sidebar_ref, &theme, state.sidebar_tab,
                 Some(&state.approval_mode_label),
+                state.focus_mode,
             );
             // Then render the active overlay
             if let Some(ref dialog) = state.active_dialog {
@@ -72,10 +86,11 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             }
         } else {
             crate::widgets::MainLayoutWidget::render_complete_with_spinner(
-                f, chat, prompt, &state.status,
+                f, chat, prompt, &display_status,
                 state.model.as_deref(), Some(state.tokens_used),
                 &state.working_directory, Some(spinner), pb, sidebar_ref, &theme, state.sidebar_tab,
                 Some(&state.approval_mode_label),
+                state.focus_mode,
             );
         }
 
@@ -127,6 +142,16 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         // Overlay completion suggestions popup above the prompt
         if !state.completion_suggestions.is_empty() {
             render_completion_suggestions(f, f.area(), &state.completion_suggestions, state.completion_suggestion_index);
+        }
+
+        // Overlay pager when active
+        if state.pager_active {
+            render_pager_overlay(f, f.area(), chat, &theme);
+        }
+
+        // Overlay onboarding dialog on first run
+        if state.onboarding_active {
+            render_onboarding_overlay(f, f.area(), &theme);
         }
     })?;
 
@@ -381,6 +406,47 @@ fn render_history_search_overlay(
     frame.render_widget(paragraph, bar_area);
 }
 
+/// Render transcript pager overlay — full-screen conversation viewer.
+fn render_pager_overlay(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    chat: &crate::widgets::ChatWidget,
+    theme: &Theme,
+) {
+    // Clear the entire area
+    frame.render_widget(Clear, area);
+
+    // Render chat content filling the full area minus the pager header/footer
+    let pager_header = 1u16;
+    let pager_footer = 1u16;
+    let content_area = Rect {
+        x: area.x,
+        y: area.y + pager_header,
+        width: area.width,
+        height: area.height.saturating_sub(pager_header + pager_footer),
+    };
+
+    // Header bar
+    let header = Paragraph::new(Line::from(vec![
+        Span::styled(" TRANSCRIPT ", Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
+        Span::styled("─ j/k: scroll  g/G: top/bottom  q/Esc: close ", Style::default().fg(theme.text_dim)),
+    ]))
+    .style(Style::default().bg(theme.context_bar_bg));
+    frame.render_widget(header, Rect { x: area.x, y: area.y, width: area.width, height: 1 });
+
+    // Render chat widget content in the pager area
+    chat.render(frame, content_area, theme);
+
+    // Footer bar
+    let footer = Paragraph::new(Line::from(Span::styled(
+        " q: quit pager ",
+        Style::default().fg(theme.text_dim),
+    )))
+    .style(Style::default().bg(theme.context_bar_bg));
+    let footer_y = area.y + area.height.saturating_sub(1);
+    frame.render_widget(footer, Rect { x: area.x, y: footer_y, width: area.width, height: 1 });
+}
+
 /// Truncate a string to fit within a visual width, appending "…" if truncated.
 fn truncate_visual(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
@@ -482,6 +548,73 @@ fn render_plan_overlay(
                     " Plan Awaiting Review ",
                     Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
                 )),
+        )
+        .wrap(Wrap { trim: true });
+
+    frame.render_widget(paragraph, dialog_area);
+}
+
+/// Render first-run onboarding overlay showing essential keybindings and tips.
+fn render_onboarding_overlay(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    theme: &Theme,
+) {
+    let dialog_width = 60.min(area.width.saturating_sub(4));
+    let dialog_height = 28.min(area.height.saturating_sub(4));
+    let x = (area.width.saturating_sub(dialog_width)) / 2;
+    let y = (area.height.saturating_sub(dialog_height)) / 2;
+    let dialog_area = Rect {
+        x: area.x + x,
+        y: area.y + y,
+        width: dialog_width,
+        height: dialog_height,
+    };
+
+    frame.render_widget(Clear, dialog_area);
+
+    let accent_style = Style::default().fg(theme.accent).add_modifier(Modifier::BOLD);
+    let text_style = Style::default().fg(theme.text);
+
+    let sep_width = dialog_width as usize - 4;
+    let content_lines = vec![
+        Line::from(Span::styled(
+            " Welcome to Shannon Code",
+            Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(" Essential Keybindings", Style::default().fg(theme.text_dim))),
+        Line::from("─".repeat(sep_width)),
+        Line::from(vec![Span::styled("  Enter           ", accent_style), Span::styled("Send message", text_style)]),
+        Line::from(vec![Span::styled("  Ctrl+E          ", accent_style), Span::styled("Open external editor", text_style)]),
+        Line::from(vec![Span::styled("  Ctrl+F          ", accent_style), Span::styled("Toggle focus mode", text_style)]),
+        Line::from(vec![Span::styled("  Ctrl+G          ", accent_style), Span::styled("Transcript pager (j/k scroll)", text_style)]),
+        Line::from(vec![Span::styled("  Ctrl+R          ", accent_style), Span::styled("Search command history", text_style)]),
+        Line::from(vec![Span::styled("  Ctrl+X          ", accent_style), Span::styled("Leader key prefix", text_style)]),
+        Line::from(vec![Span::styled("  Tab             ", accent_style), Span::styled("Autocomplete suggestions", text_style)]),
+        Line::from(vec![Span::styled("  Esc             ", accent_style), Span::styled("Cancel / close dialog", text_style)]),
+        Line::from(""),
+        Line::from(Span::styled(" Commands (type in prompt)", Style::default().fg(theme.text_dim))),
+        Line::from("─".repeat(sep_width)),
+        Line::from(vec![Span::styled("  /help           ", accent_style), Span::styled("Show all commands", text_style)]),
+        Line::from(vec![Span::styled("  /model          ", accent_style), Span::styled("Switch AI model", text_style)]),
+        Line::from(vec![Span::styled("  /config         ", accent_style), Span::styled("Edit configuration", text_style)]),
+        Line::from(vec![Span::styled("  /vim            ", accent_style), Span::styled("Toggle vim mode", text_style)]),
+        Line::from(vec![Span::styled("  /sessions       ", accent_style), Span::styled("List saved sessions", text_style)]),
+        Line::from(""),
+        Line::from("─".repeat(sep_width)),
+        Line::from(vec![
+            Span::styled(" [Enter] ", Style::default().fg(theme.success)),
+            Span::styled("Get started", Style::default().fg(theme.text)),
+        ]),
+    ];
+
+    let paragraph = Paragraph::new(content_lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.primary))
+                .border_type(ratatui::widgets::BorderType::Rounded),
         )
         .wrap(Wrap { trim: true });
 

@@ -1,6 +1,6 @@
 //! Event handling for terminal UI
 
-use crossterm::event::{self, Event as CrosstermEvent, KeyEvent};
+use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, MouseEvent, MouseEventKind};
 use std::io;
 use std::time::Duration;
 
@@ -10,6 +10,8 @@ pub enum Event {
     Input(KeyEvent),
     /// Bracketed paste event (multi-line text pasted from terminal)
     Paste(String),
+    /// Mouse event (scroll or click)
+    Mouse(MouseEvent),
     /// Tick event for periodic updates
     Tick,
 }
@@ -32,18 +34,13 @@ impl EventHandler {
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> io::Result<Option<Event>> {
         // Drain ALL pending events to prevent queue buildup and escape sequence leakage
-        // This is critical because mouse events can accumulate rapidly
         loop {
             if event::poll(self.tick_rate)? {
                 match event::read()? {
                     CrosstermEvent::Key(key) => return Ok(Some(Event::Input(key))),
                     CrosstermEvent::Paste(content) => return Ok(Some(Event::Paste(content))),
-                    // Consume ALL mouse events, not just one per tick
-                    CrosstermEvent::Mouse(_) => {
-                        // Continue draining without returning
-                        continue;
-                    }
-                    // Ignore other event types (resize, focus, paste)
+                    CrosstermEvent::Mouse(mouse) => return Ok(Some(Event::Mouse(mouse))),
+                    // Ignore other event types (resize, focus)
                     _ => {
                         // Continue draining to prevent buildup
                         continue;

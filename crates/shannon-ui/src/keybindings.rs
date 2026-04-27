@@ -28,6 +28,12 @@ pub struct KeyBindings {
     pub model_picker: KeyBinding,
     /// Activate leader key mode (Ctrl+X then second key)
     pub leader: KeyBinding,
+    /// Open input in external editor ($EDITOR / $VISUAL)
+    pub external_editor: KeyBinding,
+    /// Toggle focus mode (hide header/statusbar)
+    pub focus_mode: KeyBinding,
+    /// Open transcript pager
+    pub transcript: KeyBinding,
 }
 
 impl Default for KeyBindings {
@@ -40,6 +46,9 @@ impl Default for KeyBindings {
             reverse_search: KeyBinding::ctrl('r'),
             model_picker: KeyBinding::ctrl('m'),
             leader: KeyBinding::ctrl('x'),
+            external_editor: KeyBinding::ctrl('e'),
+            focus_mode: KeyBinding::ctrl('f'),
+            transcript: KeyBinding::ctrl('g'),
         }
     }
 }
@@ -69,6 +78,9 @@ struct KeyBindingsFile {
     reverse_search: Option<String>,
     model_picker: Option<String>,
     leader: Option<String>,
+    external_editor: Option<String>,
+    focus_mode: Option<String>,
+    transcript: Option<String>,
 }
 
 /// Parse a key string like "ctrl+q", "ctrl+s", "escape", "f1" into a KeyBinding.
@@ -126,6 +138,9 @@ pub fn load_keybindings() -> KeyBindings {
         reverse_search: file.reverse_search.as_deref().and_then(parse_key).unwrap_or(defaults.reverse_search),
         model_picker: file.model_picker.as_deref().and_then(parse_key).unwrap_or(defaults.model_picker),
         leader: file.leader.as_deref().and_then(parse_key).unwrap_or(defaults.leader),
+        external_editor: file.external_editor.as_deref().and_then(parse_key).unwrap_or(defaults.external_editor),
+        focus_mode: file.focus_mode.as_deref().and_then(parse_key).unwrap_or(defaults.focus_mode),
+        transcript: file.transcript.as_deref().and_then(parse_key).unwrap_or(defaults.transcript),
     }
 }
 

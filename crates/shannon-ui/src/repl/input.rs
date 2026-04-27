@@ -45,6 +45,33 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         }
     }
 
+    // If transcript pager is active, handle pager navigation keys
+    // Onboarding overlay: any key dismisses
+    if repl.state.onboarding_active {
+        match key.code {
+            KeyCode::Enter | KeyCode::Esc => {
+                repl.state.onboarding_active = false;
+            }
+            _ => {
+                repl.state.onboarding_active = false;
+            }
+        }
+        return Ok(());
+    }
+
+    if repl.state.pager_active {
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => { repl.pager_scroll(1); Ok(()) }
+            KeyCode::Char('k') | KeyCode::Up => { repl.pager_scroll(-1); Ok(()) }
+            KeyCode::Char('J') | KeyCode::PageDown => { repl.pager_scroll(20); Ok(()) }
+            KeyCode::Char('K') | KeyCode::PageUp => { repl.pager_scroll(-20); Ok(()) }
+            KeyCode::Char('g') | KeyCode::Home => { repl.pager_scroll_top(); Ok(()) }
+            KeyCode::Char('G') | KeyCode::End => { repl.pager_scroll_bottom(); Ok(()) }
+            KeyCode::Char('q') | KeyCode::Esc => { repl.toggle_pager(); Ok(()) }
+            _ => Ok(()) // Consume other keys while pager is active
+        }
+    } else {
+
     // If permission dialog is active, handle dialog-specific keys
     if repl.state.permission_dialog.is_some() {
         return handle_permission_dialog_input(repl, key);
@@ -290,47 +317,23 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             Ok(())
         }
         KeyCode::BackTab => {
-            // Cycle approval mode (Shift+Tab — universal pattern in Claude Code/Codex/Gemini CLI)
-            if let Some(ref query_engine) = repl.query_engine {
-                let current = {
-                    let perms = query_engine.permissions().read().expect("permissions rwlock poisoned");
-                    perms.approval_mode()
-                };
-
-                // Extended cycle: Suggest → AutoEdit → Plan → FullAuto → Readonly → BypassPermissions
-                // BypassPermissions requires confirmation; everything else applies immediately.
-                let next = match current {
-                    shannon_core::permissions::ApprovalMode::Suggest => shannon_core::permissions::ApprovalMode::AutoEdit,
-                    shannon_core::permissions::ApprovalMode::AutoEdit => shannon_core::permissions::ApprovalMode::Plan,
-                    shannon_core::permissions::ApprovalMode::Plan => shannon_core::permissions::ApprovalMode::FullAuto,
-                    shannon_core::permissions::ApprovalMode::FullAuto => shannon_core::permissions::ApprovalMode::Readonly,
-                    shannon_core::permissions::ApprovalMode::Readonly => shannon_core::permissions::ApprovalMode::BypassPermissions,
-                    shannon_core::permissions::ApprovalMode::BypassPermissions | shannon_core::permissions::ApprovalMode::DontAsk => {
-                        shannon_core::permissions::ApprovalMode::Suggest
-                    }
-                };
-
-                if next == shannon_core::permissions::ApprovalMode::BypassPermissions {
-                    // Show confirmation dialog — only apply on confirm
-                    let _ = current;
-                    repl.show_confirm_dialog(
-                        "Bypass Permissions",
-                        "This will skip ALL permission checks. Only use in trusted environments.\n\nAre you sure?",
-                        "set_bypass_mode",
-                    );
-                } else {
-                    let mut perms = query_engine.permissions().write().expect("permissions rwlock poisoned");
-                    perms.set_approval_mode(next);
-                    let label = next.short_label();
-                    drop(perms);
-                    repl.state.approval_mode_label = label.to_string();
-                    repl.state.status = format!("Mode: {label}");
-                    repl.state.toast = Some((format!("  Mode: {label}  "), std::time::Instant::now()));
-                }
-            }
+            repl.cycle_approval_mode();
+            Ok(())
+        }
+        _ if kb.external_editor.matches(&key) => {
+            repl.open_external_editor();
+            Ok(())
+        }
+        _ if kb.focus_mode.matches(&key) => {
+            repl.toggle_focus_mode();
+            Ok(())
+        }
+        _ if kb.transcript.matches(&key) => {
+            repl.toggle_pager();
             Ok(())
         }
         _ => Ok(()),
+    }
     }
 }
 
@@ -454,6 +457,51 @@ fn handle_vim_action(repl: &mut Repl, action: VimAction) {
         }
         VimAction::ClearInput => {
             repl.prompt.clear();
+        }
+        VimAction::SearchForward { pattern } | VimAction::SearchBackward { pattern } => {
+            if !pattern.is_empty() {
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("Search: /{pattern}"),
+                );
+            }
+        }
+        VimAction::DeleteWord { .. } => {
+            let word = repl.prompt.current_word();
+            if !word.is_empty() {
+                repl.vim_handler.set_yank_buffer(word.clone());
+                // Delete word by reconstructing the line without it
+                let line = repl.prompt.current_line();
+                let col = repl.prompt.cursor_position();
+                let before = &line[..col.min(line.len())];
+                let after_start = col + word.len().min(line.len().saturating_sub(col));
+                let after = if after_start <= line.len() { &line[after_start..] } else { "" };
+                repl.prompt.set_input(format!("{before}{after}"));
+            }
+        }
+        VimAction::YankWord { .. } => {
+            let word = repl.prompt.current_word();
+            if !word.is_empty() {
+                repl.vim_handler.set_yank_buffer(word);
+            }
+        }
+        VimAction::SetMark { mark } => {
+            let pos = repl.prompt.cursor_position();
+            repl.vim_handler.set_mark(mark, pos);
+        }
+        VimAction::JumpToMark { mark } => {
+            if let Some(&target) = repl.vim_handler.get_mark(mark) {
+                let current = repl.prompt.cursor_position();
+                if target > current {
+                    for _ in 0..target - current {
+                        repl.prompt.cursor_right();
+                    }
+                } else if target < current {
+                    for _ in 0..current - target {
+                        repl.prompt.cursor_left();
+                    }
+                }
+            }
         }
         _ => {}
     }

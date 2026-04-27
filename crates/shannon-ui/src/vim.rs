@@ -3,6 +3,8 @@
 //! Implements Normal, Insert, Visual, and Command modes with
 //! common vim keybindings for navigation, editing, and command execution.
 
+use std::collections::HashMap;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde::{Deserialize, Serialize};
 
@@ -107,6 +109,16 @@ pub enum VimAction {
     ClearInput,
     /// Search forward (enter search mode -- uses command buffer for pattern)
     SearchForward { pattern: String },
+    /// Search backward
+    SearchBackward { pattern: String },
+    /// Delete word(s) forward
+    DeleteWord { count: usize },
+    /// Yank (copy) word(s) into buffer
+    YankWord { count: usize },
+    /// Set a mark at current position
+    SetMark { mark: char },
+    /// Jump to a mark position
+    JumpToMark { mark: char },
 }
 
 /// Vim key handler state machine
@@ -125,8 +137,14 @@ pub struct VimHandler {
     yank_buffer: String,
     /// Command buffer (for `:` commands and `/` search)
     command_buffer: String,
-    /// Whether the handler is building a search pattern (`/` prefix)
+    /// Whether the handler is building a search pattern (`/` or `?` prefix)
     search_mode: bool,
+    /// True = forward search (`/`), false = backward search (`?`)
+    search_forward: bool,
+    /// Named marks: lowercase letter → byte offset in prompt
+    marks: HashMap<char, usize>,
+    /// Waiting for mark destination key (after `m` or `'`)
+    mark_pending: Option<char>,
 }
 
 impl VimHandler {
@@ -139,6 +157,9 @@ impl VimHandler {
             yank_buffer: String::new(),
             command_buffer: String::new(),
             search_mode: false,
+            search_forward: true,
+            marks: HashMap::new(),
+            mark_pending: None,
         }
     }
 
@@ -178,6 +199,18 @@ impl VimHandler {
         }
     }
 
+    /// Set a named mark at the given position
+    pub fn set_mark(&mut self, mark: char, pos: usize) {
+        if mark.is_ascii_lowercase() {
+            self.marks.insert(mark, pos);
+        }
+    }
+
+    /// Get the position of a named mark
+    pub fn get_mark(&self, mark: char) -> Option<&usize> {
+        self.marks.get(&mark)
+    }
+
     /// Reset all transient state (count, pending keys) but keep mode
     fn reset_transient(&mut self) {
         self.pending_keys.clear();
@@ -189,6 +222,7 @@ impl VimHandler {
         self.mode = mode;
         self.pending_keys.clear();
         self.count_buffer.clear();
+        self.mark_pending = None;
         if mode != VimMode::Command {
             self.command_buffer.clear();
             self.search_mode = false;
@@ -275,6 +309,20 @@ impl VimHandler {
                     return VimAction::None;
                 }
 
+                // Handle mark pending state (after 'm' or '\'')
+                if let Some(prefix) = self.mark_pending.take() {
+                    if c.is_ascii_lowercase() {
+                        self.reset_transient();
+                        return match prefix {
+                            'm' => VimAction::SetMark { mark: c },
+                            '\'' => VimAction::JumpToMark { mark: c },
+                            _ => VimAction::None,
+                        };
+                    }
+                    // Invalid mark key, cancel and fall through
+                    self.reset_transient();
+                }
+
                 // Push to pending sequence
                 self.pending_keys.push(c);
 
@@ -303,7 +351,21 @@ impl VimHandler {
                             self.reset_transient();
                             return action;
                         }
-                        _ => {}
+                        "dw" => {
+                            let action = VimAction::DeleteWord { count };
+                            self.reset_transient();
+                            return action;
+                        }
+                        "yw" => {
+                            let action = VimAction::YankWord { count };
+                            self.reset_transient();
+                            return action;
+                        }
+                        _ => {
+                            // Unknown 2-char sequence, reset
+                            self.reset_transient();
+                            return VimAction::None;
+                        }
                     }
                 }
 
@@ -425,7 +487,27 @@ impl VimHandler {
                             self.command_buffer.clear();
                             self.set_mode(VimMode::Command);
                             self.search_mode = true;
+                            self.search_forward = true;
                             return VimAction::Noop;
+                        }
+                        '?' => {
+                            self.command_buffer.clear();
+                            self.set_mode(VimMode::Command);
+                            self.search_mode = true;
+                            self.search_forward = false;
+                            return VimAction::Noop;
+                        }
+                        'm' => {
+                            // Set mark: waiting for next lowercase letter
+                            self.mark_pending = Some('m');
+                            self.pending_keys.clear();
+                            return VimAction::None;
+                        }
+                        '\'' => {
+                            // Jump to mark: waiting for next lowercase letter
+                            self.mark_pending = Some('\'');
+                            self.pending_keys.clear();
+                            return VimAction::None;
                         }
                         ':' => {
                             self.command_buffer.clear();
@@ -618,10 +700,15 @@ impl VimHandler {
             KeyCode::Enter => {
                 let cmd = self.command_buffer.clone();
                 let is_search = self.search_mode;
+                let forward = self.search_forward;
                 self.set_mode(VimMode::Normal);
 
                 if is_search {
-                    return VimAction::SearchForward { pattern: cmd };
+                    return if forward {
+                        VimAction::SearchForward { pattern: cmd }
+                    } else {
+                        VimAction::SearchBackward { pattern: cmd }
+                    };
                 }
 
                 // Parse built-in commands
@@ -1436,5 +1523,101 @@ mod tests {
                 count: 1,
             }
         );
+    }
+
+    // ── Reverse search ──────────────────────────────────────────
+
+    #[test]
+    fn test_question_mark_enters_backward_search() {
+        let mut handler = VimHandler::new();
+        handler.process_key(char_key('?'));
+        assert_eq!(handler.mode(), VimMode::Command);
+        assert!(handler.is_search_mode());
+        assert!(!handler.search_forward);
+    }
+
+    #[test]
+    fn test_backward_search_executes_on_enter() {
+        let mut handler = VimHandler::new();
+        handler.process_key(char_key('?'));
+        handler.process_key(char_key('f'));
+        handler.process_key(char_key('o'));
+        let action = handler.process_key(enter_key());
+        assert_eq!(handler.mode(), VimMode::Normal);
+        assert_eq!(action, VimAction::SearchBackward { pattern: "fo".to_string() });
+    }
+
+    #[test]
+    fn test_forward_search_preserves_direction() {
+        let mut handler = VimHandler::new();
+        handler.process_key(char_key('/'));
+        assert!(handler.search_forward);
+        handler.process_key(char_key('t'));
+        handler.process_key(char_key('e'));
+        let action = handler.process_key(enter_key());
+        assert_eq!(action, VimAction::SearchForward { pattern: "te".to_string() });
+    }
+
+    // ── dw / yw sequences ──────────────────────────────────────
+
+    #[test]
+    fn test_dw_deletes_word() {
+        let mut handler = VimHandler::new();
+        handler.process_key(char_key('d'));
+        let action = handler.process_key(char_key('w'));
+        assert_eq!(action, VimAction::DeleteWord { count: 1 });
+    }
+
+    #[test]
+    fn test_yw_yanks_word() {
+        let mut handler = VimHandler::new();
+        handler.process_key(char_key('y'));
+        let action = handler.process_key(char_key('w'));
+        assert_eq!(action, VimAction::YankWord { count: 1 });
+    }
+
+    #[test]
+    fn test_3dw_respects_count() {
+        let mut handler = VimHandler::new();
+        handler.process_key(char_key('3'));
+        handler.process_key(char_key('d'));
+        let action = handler.process_key(char_key('w'));
+        assert_eq!(action, VimAction::DeleteWord { count: 3 });
+    }
+
+    // ── Marks ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_set_and_jump_mark() {
+        let mut handler = VimHandler::new();
+        // Set mark 'a' — press 'm' then 'a'
+        let action = handler.process_key(char_key('m'));
+        assert_eq!(action, VimAction::None); // pending
+        let action = handler.process_key(char_key('a'));
+        assert_eq!(action, VimAction::SetMark { mark: 'a' });
+
+        // Jump to mark 'a' — press '\'' then 'a'
+        let action = handler.process_key(char_key('\''));
+        assert_eq!(action, VimAction::None); // pending
+        let action = handler.process_key(char_key('a'));
+        assert_eq!(action, VimAction::JumpToMark { mark: 'a' });
+    }
+
+    #[test]
+    fn test_mark_invalid_key_resets() {
+        let mut handler = VimHandler::new();
+        // Press 'm' then digit (not a valid mark)
+        handler.process_key(char_key('m'));
+        let action = handler.process_key(char_key('5'));
+        // Should fall through to count accumulation, not SetMark
+        assert_ne!(action, VimAction::SetMark { mark: '5' });
+    }
+
+    #[test]
+    fn test_set_mark_stores_position() {
+        let mut handler = VimHandler::new();
+        handler.set_mark('x', 42);
+        assert_eq!(handler.get_mark('x'), Some(&42));
+        assert_eq!(handler.get_mark('z'), None);
     }
 }

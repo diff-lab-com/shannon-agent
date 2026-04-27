@@ -12,6 +12,7 @@ mod widgets;
 mod events;
 mod render;
 pub mod adapter;
+pub mod stream_buffer;
 pub mod vim;
 pub mod repl_enhancement;
 pub mod skill_bridge;

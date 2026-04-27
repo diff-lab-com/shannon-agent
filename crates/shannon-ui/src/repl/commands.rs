@@ -70,6 +70,9 @@ pub fn submit_input(repl: &mut Repl) -> Result<()> {
     // Add user message to chat (show raw input with paste markers)
     repl.chat.add_message(ChatRole::User, raw_input);
 
+    // Increment turn counter for context visualization
+    repl.state.turn_count += 1;
+
     // Push expanded text to command history and clear input
     repl.command_history.push(&expanded);
     repl.saved_input.clear();

@@ -1771,7 +1771,7 @@ impl MainLayoutWidget {
         working_dir: &str,
         theme: &Theme,
     ) {
-        Self::render_complete_with_spinner(frame, chat, prompt, status, model, tokens_used, working_dir, None, None, None, theme, crate::repl::SidebarTab::default(), None);
+        Self::render_complete_with_spinner(frame, chat, prompt, status, model, tokens_used, working_dir, None, None, None, theme, crate::repl::SidebarTab::default(), None, false);
     }
 
     /// Render the complete UI with spinner animation support
@@ -1790,6 +1790,7 @@ impl MainLayoutWidget {
         theme: &Theme,
         sidebar_tab: crate::repl::SidebarTab,
         approval_mode: Option<&str>,
+        focus_mode: bool,
     ) {
         let area = frame.area();
 
@@ -1808,19 +1809,32 @@ impl MainLayoutWidget {
 
         let prompt_height = prompt.needed_height(area.width);
         let sidebar_visible = sidebar_info.is_some();
-        let (header_area, chat_area, prompt_area, status_area, sidebar_area, _) =
-            Self::layout_with_sidebar(area, prompt_height, sidebar_visible);
 
-        // Render each widget
-        HeaderWidget::render(frame, header_area, model, tokens_used, working_dir, theme);
-        chat.render(frame, chat_area, theme);
-        prompt.render(frame, prompt_area, theme);
-        StatusBarWidget::render_with_spinner(frame, status_area, status, model, tokens_used, spinner, progress_bar, theme, approval_mode);
+        if focus_mode {
+            // Focus mode: only chat + prompt, maximized
+            let chunks = ratatui::layout::Layout::default()
+                .direction(Direction::Vertical)
+                .margin(0)
+                .constraints([
+                    Constraint::Min(0),
+                    Constraint::Length(prompt_height),
+                ])
+                .split(area);
+            chat.render(frame, chunks[0], theme);
+            prompt.render(frame, chunks[1], theme);
+        } else {
+            let (header_area, chat_area, prompt_area, status_area, sidebar_area, _) =
+                Self::layout_with_sidebar(area, prompt_height, sidebar_visible);
 
-        // Render sidebar if visible and there's space
-        if let (Some(info), Some(sb_area)) = (sidebar_info, sidebar_area) {
-            if sb_area.width > 5 && sb_area.height > 3 {
-                SidebarWidget::render(frame, sb_area, info, theme, sidebar_tab);
+            HeaderWidget::render(frame, header_area, model, tokens_used, working_dir, theme);
+            chat.render(frame, chat_area, theme);
+            prompt.render(frame, prompt_area, theme);
+            StatusBarWidget::render_with_spinner(frame, status_area, status, model, tokens_used, spinner, progress_bar, theme, approval_mode);
+
+            if let (Some(info), Some(sb_area)) = (sidebar_info, sidebar_area) {
+                if sb_area.width > 5 && sb_area.height > 3 {
+                    SidebarWidget::render(frame, sb_area, info, theme, sidebar_tab);
+                }
             }
         }
     }

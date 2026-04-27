@@ -1,6 +1,7 @@
 //! REPL AI query handling and streaming display
 
 use crate::{
+    stream_buffer::StreamBuffer,
     widgets::ChatRole,
     Result,
 };
@@ -286,8 +287,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
     {
         let terminal_backend = CrosstermBackend::new(io::stdout());
         let mut polling_terminal = Terminal::new(terminal_backend)?;
-        let mut rendered_text = String::new();
-        let mut needs_render = false;
+        let mut buffer = StreamBuffer::new();
         let mut thinking_dots: usize = 0;
         let stream_start = std::time::Instant::now();
 
@@ -306,22 +306,19 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                 let s = streaming.lock().unwrap_or_else(|e| e.into_inner());
                 current_status = s.status.clone();
 
-                // Drain incremental delta
                 if !s.delta.is_empty() {
-                    rendered_text.push_str(&s.delta);
-                    needs_render = true;
+                    buffer.push_chunk(&s.delta);
                 }
             }
-            // Clear delta after draining
             {
                 let mut s = streaming.lock().unwrap_or_else(|e| e.into_inner());
                 s.delta.clear();
             }
 
-            if needs_render {
-                let rendered = repl.output_renderer.render_streaming(&rendered_text);
+            if buffer.needs_render() {
+                let _ = buffer.drain_for_render();
+                let rendered = repl.output_renderer.render_streaming(buffer.accumulated_text());
                 repl.chat.update_message(assistant_msg_index, rendered);
-                needs_render = false;
             }
 
             repl.state.status = current_status.clone();
@@ -360,7 +357,12 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
 
                 // Update tool count in real-time during streaming
                 if s.tools > 0 {
-                    repl.tools_invoked = pre_stream_tools + s.tools;
+                    let new_tools = pre_stream_tools + s.tools;
+                    if new_tools > repl.tools_invoked {
+                        let delta = new_tools - repl.tools_invoked;
+                        repl.notify(format!("Tool completed (×{delta})"));
+                    }
+                    repl.tools_invoked = new_tools;
                 }
 
                 if s.progress > 0.0 {
@@ -399,6 +401,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                     state.model.as_deref(), Some(state.tokens_used),
                     &state.working_directory, Some(spinner), pb, sidebar_info.as_ref(), &state.theme, state.sidebar_tab,
                     Some(&state.approval_mode_label),
+                    state.focus_mode,
                 );
                 if state.multi_progress_visible {
                     let mp_height = 3u16.min(f.area().height.saturating_sub(10));
@@ -442,6 +445,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
         repl.state.streaming_start = None;
         repl.chat.streaming_active = false;
         repl.state.toast = None;
+        repl.notify("Response complete");
     }
 
     shannon_core::prevent_sleep::stop_prevent_sleep();
