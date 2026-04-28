@@ -42,6 +42,7 @@ impl StatusBarWidget {
         progress_bar: Option<&crate::widgets::progress::ProgressBarWidget>,
         theme: &Theme,
         approval_mode: Option<&str>,
+        goal: Option<&str>,
     ) {
         // Build span with owned strings for proper lifetime
         let mut span_vec: Vec<Span<'static>> = Vec::new();
@@ -62,6 +63,19 @@ impl StatusBarWidget {
                 span_vec.push(Span::styled(frame_str, Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)));
                 span_vec.push(Span::raw(" "));
             }
+        }
+
+        // Show goal with target icon if provided
+        if let Some(goal_text) = goal {
+            span_vec.push(Span::styled("🎯 ", Style::default().fg(theme.primary)));
+            let truncated_goal = if goal_text.chars().count() > 40 {
+                let truncated: String = goal_text.chars().take(37).collect();
+                format!("{}...", truncated)
+            } else {
+                goal_text.to_string()
+            };
+            span_vec.push(Span::styled(truncated_goal, Style::default().fg(theme.text)));
+            span_vec.push(sep());
         }
 
         span_vec.push(Span::styled(status.to_string(), Style::default().fg(theme.text)));

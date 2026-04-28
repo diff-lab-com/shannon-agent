@@ -284,6 +284,190 @@ impl Default for DiffViewerWidget {
     }
 }
 
+/// Action state for a diff hunk in interactive mode
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum HunkAction {
+    Pending,
+    Accepted,
+    Rejected,
+}
+
+/// A diff hunk with interactive accept/reject state
+#[derive(Debug, Clone)]
+pub struct InteractiveHunk {
+    pub start_line: usize,
+    pub lines: Vec<String>,
+    pub action: HunkAction,
+    pub file_path: Option<String>,
+}
+
+impl InteractiveHunk {
+    /// Parse hunks from a unified diff string
+    pub fn parse_from_diff(diff: &str, file_path: Option<String>) -> Vec<Self> {
+        let mut hunks = Vec::new();
+        let mut current_lines: Vec<String> = Vec::new();
+        let mut current_start = 0;
+        let mut in_hunk = false;
+
+        for (i, line) in diff.lines().enumerate() {
+            if line.starts_with("@@") {
+                if in_hunk && !current_lines.is_empty() {
+                    hunks.push(Self {
+                        start_line: current_start,
+                        lines: current_lines.clone(),
+                        action: HunkAction::Pending,
+                        file_path: file_path.clone(),
+                    });
+                    current_lines.clear();
+                }
+                in_hunk = true;
+                current_start = i;
+                current_lines.push(line.to_string());
+            } else if in_hunk {
+                if line.starts_with('+') || line.starts_with('-') || line.starts_with(' ') {
+                    current_lines.push(line.to_string());
+                } else if !line.starts_with('\\') {
+                    // End of hunk (non-diff content)
+                    if !current_lines.is_empty() {
+                        hunks.push(Self {
+                            start_line: current_start,
+                            lines: current_lines.clone(),
+                            action: HunkAction::Pending,
+                            file_path: file_path.clone(),
+                        });
+                        current_lines.clear();
+                    }
+                    in_hunk = false;
+                }
+            }
+        }
+
+        if in_hunk && !current_lines.is_empty() {
+            hunks.push(Self {
+                start_line: current_start,
+                lines: current_lines,
+                action: HunkAction::Pending,
+                file_path,
+            });
+        }
+
+        hunks
+    }
+
+    /// Get only the accepted lines as the resulting content
+    pub fn accepted_content(&self) -> String {
+        if self.action == HunkAction::Rejected {
+            return String::new();
+        }
+        self.lines
+            .iter()
+            .filter(|l| !l.starts_with('-') && !l.starts_with("@@"))
+            .map(|l| l.strip_prefix('+').unwrap_or(l.strip_prefix(' ').unwrap_or(l)))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+impl DiffViewerWidget {
+    /// Render with interactive hunk accept/reject controls
+    pub fn render_interactive(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        diff_data: &DiffData,
+        theme: &Theme,
+        hunks: &[InteractiveHunk],
+        selected_hunk: usize,
+    ) {
+        frame.render_widget(Clear, area);
+
+        let title = " Diff Review — Interactive ";
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.border))
+            .title(Line::from(Span::styled(
+                title,
+                Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
+            )))
+            .title_bottom(Line::from(Span::styled(
+                " a: accept | r: reject | A: accept all | Esc: cancel | Enter: apply ",
+                Style::default().fg(theme.muted),
+            )));
+
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let mut items: Vec<ListItem> = Vec::new();
+        let inner_width = inner.width as usize;
+
+        for (i, hunk) in hunks.iter().enumerate() {
+            let is_selected = i == selected_hunk;
+            let action_label = match hunk.action {
+                HunkAction::Pending => "[a]ccept [r]eject",
+                HunkAction::Accepted => "ACCEPTED",
+                HunkAction::Rejected => "REJECTED",
+            };
+            let action_color = match hunk.action {
+                HunkAction::Pending => theme.text_dim,
+                HunkAction::Accepted => theme.success,
+                HunkAction::Rejected => theme.error,
+            };
+
+            // Hunk header
+            let header_style = if is_selected {
+                Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.muted)
+            };
+            items.push(ListItem::new(Line::from(vec![
+                Span::styled(if is_selected { ">" } else { " " }.to_string(), header_style),
+                Span::styled(
+                    format!(" Hunk {}  ", i + 1),
+                    header_style,
+                ),
+                Span::styled(format!(" {action_label}"), Style::default().fg(action_color)),
+            ])));
+
+            // Hunk content lines
+            for line in &hunk.lines {
+                let color = match hunk.action {
+                    HunkAction::Accepted if line.starts_with('+') => theme.success,
+                    HunkAction::Rejected if line.starts_with('-') => theme.error,
+                    _ => {
+                        if line.starts_with('-') { theme.diff_removed }
+                        else if line.starts_with('+') { theme.diff_added }
+                        else if line.starts_with('@') { theme.primary }
+                        else { theme.text_dim }
+                    }
+                };
+                let display = truncate_to(&format!("  {line}"), inner_width);
+                let style = if hunk.action == HunkAction::Rejected && !line.starts_with('-') && !line.starts_with("@@") {
+                    Style::default().fg(color).add_modifier(Modifier::CROSSED_OUT)
+                } else {
+                    Style::default().fg(color)
+                };
+                items.push(ListItem::new(Line::from(Span::styled(display, style))));
+            }
+        }
+
+        if hunks.is_empty() {
+            items.push(ListItem::new(Line::from(Span::styled(
+                "No diff hunks to review.",
+                Style::default().fg(theme.text_dim),
+            ))));
+        }
+
+        let visible_rows = inner.height as usize;
+        let start = if items.len() > visible_rows {
+            self.scroll_offset.min(items.len().saturating_sub(visible_rows))
+        } else {
+            0
+        };
+        let visible_items: Vec<ListItem> = items.into_iter().skip(start).take(visible_rows).collect();
+        frame.render_widget(List::new(visible_items), inner);
+    }
+}
+
 /// Entry types for the diff viewer
 enum Entry {
     Modified(FileChange),

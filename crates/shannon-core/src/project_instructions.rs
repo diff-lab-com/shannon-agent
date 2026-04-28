@@ -347,6 +347,12 @@ fn extract_import_path(chars: &[char]) -> Option<String> {
         return None;
     }
 
+    // Must contain a '.' to look like a file reference (e.g., "@RULES.md").
+    // This rejects inline @mentions like "@agent-[name]" or "@agent-security".
+    if !path.contains('.') {
+        return None;
+    }
+
     Some(path)
 }
 

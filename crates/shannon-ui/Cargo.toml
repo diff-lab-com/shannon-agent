@@ -11,7 +11,7 @@ shannon-tools = { path = "../shannon-tools" }
 shannon-mcp = { path = "../shannon-mcp" }
 shannon-skills = { path = "../shannon-skills" }
 shannon-types = { path = "../shannon-types" }
-ratatui = "0.29"
+ratatui = { version = "0.29", features = ["scrolling-regions", "unstable-rendered-line-info"] }
 crossterm = "0.28"
 tokio = { version = "1.42", features = ["full"] }
 unicode-width = "0.2"
@@ -33,6 +33,7 @@ rust-i18n = { workspace = true }
 base64 = "0.22"
 image = { workspace = true }
 reqwest = { workspace = true }
+textwrap = "0.16"
 
 [dev-dependencies]
 tempfile = "3"

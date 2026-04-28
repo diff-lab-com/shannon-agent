@@ -12,6 +12,7 @@ use ratatui::{
     text::{Line, Span},
     Frame,
 };
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Write;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
@@ -29,6 +30,53 @@ const CODE_FOLD_HEAD: usize = 10;
 /// Number of lines to show at the end of a folded code block.
 const CODE_FOLD_TAIL: usize = 5;
 
+/// Cache for parsed markdown segments to avoid re-parsing on every render.
+struct MarkdownCache {
+    entries: HashMap<u64, Vec<MarkdownSegment>>,
+    order: VecDeque<u64>,
+    max_size: usize,
+}
+
+/// A parsed markdown segment (simple representation for caching).
+#[derive(Clone)]
+enum MarkdownSegment {
+    Text(String),
+    CodeBlock { lang: String, content: String },
+}
+
+impl MarkdownCache {
+    fn new(max_size: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            order: VecDeque::new(),
+            max_size,
+        }
+    }
+
+    fn compute_hash(content: &str) -> u64 {
+        let mut h: u64 = content.len() as u64;
+        for (i, b) in content.bytes().enumerate() {
+            h = h.wrapping_mul(31).wrapping_add(b as u64);
+            if i > 1024 { break; }
+        }
+        h
+    }
+
+    fn get(&self, hash: u64) -> Option<&[MarkdownSegment]> {
+        self.entries.get(&hash).map(|v| v.as_slice())
+    }
+
+    fn insert(&mut self, hash: u64, segments: Vec<MarkdownSegment>) {
+        if self.entries.len() >= self.max_size {
+            if let Some(old_key) = self.order.pop_front() {
+                self.entries.remove(&old_key);
+            }
+        }
+        self.entries.insert(hash, segments);
+        self.order.push_back(hash);
+    }
+}
+
 /// Main renderer for the UI
 pub struct Renderer {
     /// Current status message
@@ -37,6 +85,8 @@ pub struct Renderer {
     syntax_set: SyntaxSet,
     /// Theme for syntax highlighting
     theme_set: ThemeSet,
+    /// Markdown parsing cache
+    markdown_cache: MarkdownCache,
 }
 
 impl Renderer {
@@ -48,6 +98,7 @@ impl Renderer {
             status_message: "Ready".to_string(),
             syntax_set,
             theme_set,
+            markdown_cache: MarkdownCache::new(128),
         }
     }
 

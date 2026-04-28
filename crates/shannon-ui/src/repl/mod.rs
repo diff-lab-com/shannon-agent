@@ -967,7 +967,8 @@ impl Repl {
                     shared_coordinator = Some(ctx.coordinator.clone());
                     *guard = Some(ctx);
                 }
-                Ok(Err(e)) => tracing::warn!("Team context init failed (team features disabled): {e}"),
+                Ok(Err(e)) if e.to_string().contains("Agent teams disabled") => {}
+                Ok(Err(e)) => tracing::warn!("Team context init failed: {e}"),
                 Err(_) => {} // No tokio runtime (test context) — team features disabled
             }
         }

@@ -27,29 +27,61 @@ pub enum ImageProtocol {
     HalfBlocks,
 }
 
+/// Check if terminal supports Kitty graphics protocol
+fn supports_kitty() -> bool {
+    std::env::var("TERM").is_ok_and(|t| t.contains("kitty"))
+}
+
+/// Check if terminal supports Sixel protocol
+fn supports_sixel() -> bool {
+    // Check TERM_PROGRAM for known Sixel-capable terminals
+    if std::env::var("TERM_PROGRAM").is_ok_and(|tp| {
+        matches!(
+            tp.as_str(),
+            "WezTerm" | "mlterm" | "mintty" | "xt"
+        )
+    }) {
+        return true;
+    }
+
+    // Check TERM variable
+    if std::env::var("TERM").is_ok_and(|t| {
+        t.contains("xterm") || t.contains("sixel") || t.contains("mlterm")
+    }) {
+        return true;
+    }
+
+    false
+}
+
+/// Check if terminal supports iTerm2 inline image protocol
+fn supports_iterm() -> bool {
+    std::env::var("TERM_PROGRAM").is_ok_and(|tp| tp.contains("iTerm"))
+}
+
 /// Detect the best available terminal image protocol.
 ///
 /// Checks environment variables and terminal capabilities to determine
 /// the optimal rendering method.
 pub fn detect_protocol() -> ImageProtocol {
-    // Check Kitty graphics protocol support
-    if std::env::var("TERM").is_ok_and(|t| t.contains("kitty")) {
+    if supports_kitty() {
         return ImageProtocol::Kitty;
     }
 
-    // Check for Sixel support via TERM_PROGRAM or terminal queries
-    if std::env::var("TERM_PROGRAM").is_ok_and(|tp| {
-        tp.contains("WezTerm") || tp.contains("mintty") || tp.contains("xt")
-    }) {
+    if supports_sixel() {
         return ImageProtocol::Sixel;
     }
 
-    // iTerm2
-    if std::env::var("TERM_PROGRAM").is_ok_and(|tp| tp.contains("iTerm")) {
+    if supports_iterm() {
         return ImageProtocol::Iterm2;
     }
 
     ImageProtocol::HalfBlocks
+}
+
+/// Detect best available image protocol (alias for detect_protocol)
+pub fn detect_image_protocol() -> ImageProtocol {
+    detect_protocol()
 }
 
 /// Configuration for image rendering.
@@ -241,6 +273,112 @@ pub fn image_placeholder(width: u32, height: u32, media_type: &str) -> Line<'sta
         Span::styled(" 🖼 ", Style::default().fg(Color::Cyan)),
         Span::styled(label, Style::default().fg(Color::DarkGray)),
     ])
+}
+
+/// Encode image data as Sixel string.
+///
+/// Sixel is a bitmap graphics format supported by various terminal emulators
+/// including xterm, mlterm, WezTerm, and mintty. This implementation provides
+/// a basic Sixel encoding. For production use, consider using a dedicated library.
+pub fn encode_sixel(img: &DynamicImage, max_width: u16, max_height: u16) -> Option<String> {
+    // Resize image to fit constraints
+    let resized = img.resize(
+        max_width as u32,
+        max_height as u32,
+        image::imageops::FilterType::Triangle,
+    );
+
+    let rgba = resized.to_rgba8();
+    let (width, height) = rgba.dimensions();
+
+    // Sixel requires even dimensions
+    let width = width - (width % 2);
+    let height = height - (height % 6);
+
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    // Build a simple color-reduced palette (16 colors for compatibility)
+    let palette = quantize_colors(&rgba, 16);
+
+    // Start Sixel sequence: DCS (Device Control String)
+    let mut output = String::from("\x1BPq");
+
+    // Set raster attributes: Pan, Pad, Ph, Pv
+    // Pan=1, Pad=1 (aspect ratio 1:1), Ph=width, Pv=height
+    output.push_str(&format!("\"1;1;{};{}\x1B\\", width, height));
+
+    // For each color in palette, encode pixels
+    for (color_idx, color) in palette.iter().enumerate() {
+        // Set color using RGB format
+        let r = (color[0] as f32 / 255.0 * 100.0) as u8;
+        let g = (color[1] as f32 / 255.0 * 100.0) as u8;
+        let b = (color[2] as f32 / 255.0 * 100.0) as u8;
+        output.push_str(&format!("#{};2;{};{};{}", color_idx, r, g, b));
+
+        // Encode pixels in sixel format (6 vertical pixels per character)
+        for y in (0..height).step_by(6) {
+            let mut sixel_row = String::new();
+            let mut has_pixels = false;
+
+            for x in 0..width {
+                let mut bits = 0u8;
+                for bit in 0..6 {
+                    let py = y + bit as u32;
+                    if py < height {
+                        let pixel = rgba.get_pixel(x, py);
+                        // Check if this pixel matches our palette color
+                        if pixel[0] == color[0] && pixel[1] == color[1] && pixel[2] == color[2] {
+                            bits |= 1 << bit;
+                            has_pixels = true;
+                        }
+                    }
+                }
+
+                if bits > 0 {
+                    sixel_row.push(char::from(b'?' + bits));
+                } else if x == 0 {
+                    sixel_row.push('?');
+                }
+            }
+
+            if has_pixels || !sixel_row.is_empty() {
+                output.push_str(&sixel_row);
+                output.push('$');
+            }
+        }
+
+        output.push('-');
+    }
+
+    // End Sixel sequence: ST (String Terminator)
+    output.push_str("\x1B\\");
+
+    Some(output)
+}
+
+/// Simple color quantization for Sixel encoding.
+fn quantize_colors(rgba: &image::RgbaImage, max_colors: usize) -> Vec<[u8; 3]> {
+    use std::collections::HashMap;
+
+    let mut color_counts: HashMap<[u8; 3], usize> = HashMap::new();
+
+    // Count color occurrences
+    for pixel in rgba.pixels() {
+        let rgb = [pixel[0], pixel[1], pixel[2]];
+        *color_counts.entry(rgb).or_insert(0) += 1;
+    }
+
+    // Sort by frequency and take top colors
+    let mut colors: Vec<([u8; 3], usize)> = color_counts.into_iter().collect();
+    colors.sort_by(|a, b| b.1.cmp(&a.1));
+
+    colors
+        .into_iter()
+        .take(max_colors)
+        .map(|(rgb, _)| rgb)
+        .collect()
 }
 
 #[cfg(test)]

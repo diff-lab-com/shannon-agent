@@ -10,6 +10,8 @@ pub mod status_bar;
 pub mod chat;
 pub mod prompt;
 pub mod sidebar;
+pub mod key_hint;
+pub mod session_tab;
 
 // Re-exports for convenient access
 pub use header::HeaderWidget;
@@ -18,6 +20,8 @@ pub use status_bar::StatusBarWidget;
 pub use chat::{ChatWidget, ChatMessage, ChatRole};
 pub use prompt::PromptWidget;
 pub use sidebar::{SidebarWidget, SidebarInfo};
+pub use key_hint::KeyHintWidget;
+pub use session_tab::{SessionTabWidget, SessionInfo};
 
 // Re-export shared utilities used by other crates
 pub use chat::{detect_diff_language, highlight_diff_line};
@@ -140,7 +144,7 @@ impl MainLayoutWidget {
         working_dir: &str,
         theme: &Theme,
     ) {
-        Self::render_complete_with_spinner(frame, chat, prompt, status, model, tokens_used, working_dir, None, None, None, theme, crate::repl::SidebarTab::default(), None, false, false, None, &[], None);
+        Self::render_complete_with_spinner(frame, chat, prompt, status, model, tokens_used, working_dir, None, None, None, theme, crate::repl::SidebarTab::default(), None, false, false, None, &[], None, None, None, None, None);
     }
 
     /// Render the complete UI with spinner animation support
@@ -164,6 +168,10 @@ impl MainLayoutWidget {
         search_query: Option<&str>,
         search_matches: &[(usize, usize, usize)],
         search_focused_idx: Option<usize>,
+        max_tokens: Option<u64>,
+        cost_usd: Option<f64>,
+        git_branch: Option<&str>,
+        goal: Option<&str>,
     ) {
         let area = frame.area();
 
@@ -223,7 +231,7 @@ impl MainLayoutWidget {
             HeaderWidget::render(frame, header_area, model, tokens_used, working_dir, theme);
             render_chat(frame, chat_area, theme);
             prompt.render(frame, prompt_area, theme);
-            StatusBarWidget::render_with_spinner(frame, status_area, status, model, tokens_used, None, None, None, spinner, progress_bar, theme, approval_mode);
+            StatusBarWidget::render_with_spinner(frame, status_area, status, model, tokens_used, max_tokens, cost_usd, git_branch, spinner, progress_bar, theme, approval_mode, goal);
 
             if let (Some(info), Some(sb_area)) = (sidebar_info, sidebar_area) {
                 if sb_area.width > 5 && sb_area.height > 3 {

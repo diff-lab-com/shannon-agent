@@ -632,7 +632,8 @@ fn run_noninteractive_query(
                     *guard = Some(ctx);
                 }
             }
-            Err(e) => eprintln!("Warning: Team context init failed (team features disabled): {e}"),
+            Err(e) if e.to_string().contains("Agent teams disabled") => {}
+            Err(e) => eprintln!("Warning: Team context init failed: {e}"),
         }
 
         // Validate and warn
@@ -859,7 +860,8 @@ fn run_headless_query(
                     *guard = Some(ctx);
                 }
             }
-            Err(e) => eprintln!("Warning: Team context init failed (team features disabled): {e}"),
+            Err(e) if e.to_string().contains("Agent teams disabled") => {}
+            Err(e) => eprintln!("Warning: Team context init failed: {e}"),
         }
 
         if let Err(e) = client_config.validate() {
@@ -1090,7 +1092,8 @@ fn run_serve_command(port: u16, host: Option<String>, config: &CliConfig) -> Res
                     *guard = Some(ctx);
                 }
             }
-            Err(e) => eprintln!("Warning: Team context init failed (team features disabled): {e}"),
+            Err(e) if e.to_string().contains("Agent teams disabled") => {}
+            Err(e) => eprintln!("Warning: Team context init failed: {e}"),
         }
 
         let mut server = shannon_core::api_server::ShannonApiServer::new(client_config)
@@ -1260,7 +1263,8 @@ fn run_team_agent_mode(
                     *guard = Some(ctx);
                 }
             }
-            Err(e) => tracing::warn!("Team context init failed (team features disabled): {e}"),
+            Err(e) if e.to_string().contains("Agent teams disabled") => {}
+            Err(e) => tracing::warn!("Team context init failed: {e}"),
         }
 
         // ── Remote team tools (JSON-RPC to coordinator via stdin/stdout) ──

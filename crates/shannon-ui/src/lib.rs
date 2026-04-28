@@ -19,6 +19,9 @@ pub mod skill_bridge;
 pub mod tool_format;
 pub mod terminal_image;
 pub mod screenshot;
+pub mod lsp_bridge;
+pub mod voice;
+pub mod stream_render;
 
 pub use repl::{Repl, ReplState};
 pub use events::{Event, EventHandler};

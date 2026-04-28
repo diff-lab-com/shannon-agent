@@ -80,7 +80,7 @@ impl SyntaxCache {
 
 /// Lazy-initialized syntax highlighting cache.
 static SYNTAX_CACHE: LazyLock<Mutex<SyntaxCache>> = LazyLock::new(|| {
-    Mutex::new(SyntaxCache::new(64))
+    Mutex::new(SyntaxCache::new(256))
 });
 
 /// Highlight code with caching. Returns cached result if available.
@@ -208,6 +208,8 @@ pub struct ChatWidget {
     pub streaming_active: bool,
     /// Cached message heights for virtual scrolling
     pub height_cache: MessageHeightCache,
+    /// Copy feedback: (message_index, timestamp) for showing "✓ Copied" on code blocks
+    pub copy_feedback: Option<(usize, std::time::Instant)>,
 }
 
 /// A single chat message
@@ -250,6 +252,7 @@ impl ChatWidget {
             collapsed_tools: true,
             streaming_active: false,
             height_cache: MessageHeightCache::new(),
+            copy_feedback: None,
         }
     }
 
@@ -772,15 +775,27 @@ impl ChatWidget {
                             (lang_str.to_string(), None)
                         };
 
-                        // Title bar: ╭─ rust ─ src/main.rs ─╮
+                        // Title bar: ╭─ rust ─ src/main.rs ─ [copy] ╮
                         let title_content = match &filename_hint {
                             Some(fname) => format!(" {} ─ {} ", display_lang, fname),
                             None => format!(" {} ", display_lang),
                         };
-                        let header = format!("╭─{}─╮", title_content);
+
+                        // Check if this message has active copy feedback (within 2 seconds)
+                        let copy_hint = if let Some((feedback_idx, timestamp)) = self.copy_feedback {
+                            if feedback_idx == msg_idx && timestamp.elapsed() < std::time::Duration::from_secs(2) {
+                                " ✓ Copied"
+                            } else {
+                                " [copy]"
+                            }
+                        } else {
+                            " [copy]"
+                        };
+
+                        let header_with_hint = format!("╭─{}─{}╮", title_content, copy_hint);
                         list_items.push(ListItem::new(Line::from(vec![
                             Span::styled(indent.clone(), Style::default().fg(theme.muted)),
-                            Span::styled(truncate_to(&header, available), border_style),
+                            Span::styled(truncate_to(&header_with_hint, available), border_style),
                         ])));
 
                         // Code lines with syntax highlighting (cached)
