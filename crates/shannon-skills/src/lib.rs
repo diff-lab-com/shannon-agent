@@ -41,6 +41,7 @@
 //!     arguments: vec!["arg1".to_string()],
 //!     cwd: std::path::PathBuf::from("."),
 //!     session_id: "session-123".to_string(),
+//!     effort_level: "medium".to_string(),
 //!     permissions: Default::default(),
 //! };
 //!

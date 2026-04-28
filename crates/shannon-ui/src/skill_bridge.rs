@@ -94,6 +94,7 @@ impl Tool for SkillToolAdapter {
             arguments,
             cwd,
             session_id: "repl-session".to_string(),
+            effort_level: "medium".to_string(),
             permissions: SkillPermissions::default(),
         };
 

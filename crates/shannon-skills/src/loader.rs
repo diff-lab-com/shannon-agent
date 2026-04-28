@@ -72,6 +72,8 @@ pub fn load_skill_from_file(path: &Path) -> SkillResult<Skill> {
         content: body,
         content_length,
         is_hidden: !user_invocable,
+        effort: parsed.frontmatter.effort,
+        arguments: parsed.frontmatter.arguments,
         created_at: chrono::Utc::now(),
         updated_at: None,
     })

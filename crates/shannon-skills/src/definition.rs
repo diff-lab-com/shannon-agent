@@ -1,6 +1,6 @@
 //! Core skill definition and types
 
-use crate::frontmatter::{ExecutionContext, HooksConfig};
+use crate::frontmatter::{ArgumentConfig, EffortLevel, ExecutionContext, HooksConfig};
 use shannon_types::Timestamp;
 use std::path::PathBuf;
 
@@ -168,6 +168,10 @@ pub struct Skill {
     pub content_length: usize,
     /// Is this skill hidden?
     pub is_hidden: bool,
+    /// Effort level override
+    pub effort: Option<EffortLevel>,
+    /// Named arguments schema
+    pub arguments: Option<ArgumentConfig>,
     /// Creation timestamp
     pub created_at: Timestamp,
     /// Last modified timestamp
@@ -206,6 +210,8 @@ impl Skill {
             content,
             content_length,
             is_hidden: false,
+            effort: None,
+            arguments: None,
             created_at: now,
             updated_at: None,
         }
@@ -253,6 +259,8 @@ pub struct SkillContext {
     pub cwd: std::path::PathBuf,
     /// Session ID
     pub session_id: String,
+    /// Current effort level
+    pub effort_level: String,
     /// Tool permission context
     pub permissions: SkillPermissions,
 }

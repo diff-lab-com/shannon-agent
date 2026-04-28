@@ -58,6 +58,12 @@ pub struct SkillFrontmatter {
 
     /// Arguments schema
     pub arguments: Option<ArgumentConfig>,
+
+    /// Effort level override
+    pub effort: Option<EffortLevel>,
+
+    /// Shell override for inline commands
+    pub shell: Option<String>,
 }
 
 /// Execution context for skills

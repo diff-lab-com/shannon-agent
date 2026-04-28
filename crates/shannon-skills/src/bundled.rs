@@ -600,6 +600,8 @@ impl BundledSkillBuilder {
             content: self.content,
             content_length,
             is_hidden: !self.user_invocable,
+            effort: None,
+            arguments: None,
             created_at: chrono::Utc::now(),
             updated_at: None,
         }

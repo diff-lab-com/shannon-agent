@@ -86,7 +86,13 @@ impl SkillExecutor {
     fn substitute_arguments(&self, content: &str, args: &[String]) -> SkillResult<String> {
         let mut result = content.to_string();
 
-        // ${0}, ${1}, etc. - indexed arguments
+        // $ARGUMENTS[N] syntax (must run before bare $N to avoid conflicts)
+        for (i, arg) in args.iter().enumerate() {
+            let placeholder = format!("$ARGUMENTS[{i}]");
+            result = result.replace(&placeholder, arg);
+        }
+
+        // ${0}, ${1}, etc. - indexed arguments (with braces)
         for (i, arg) in args.iter().enumerate() {
             let placeholder = format!("${{{i}}}");
             result = result.replace(&placeholder, arg);
@@ -95,6 +101,12 @@ impl SkillExecutor {
         // ${args} - all arguments joined by space
         let all_args = args.join(" ");
         result = result.replace("${args}", &all_args);
+
+        // $ARGUMENTS - all arguments (without braces)
+        result = result.replace("$ARGUMENTS", &all_args);
+
+        // $ARGUMENTS[N] and ${N} handled above; bare $N is intentionally NOT
+        // replaced to avoid ambiguity with shell variable syntax.
 
         // ${args:quote} - all arguments shell-quoted
         let quoted_args = args.iter()
@@ -112,6 +124,9 @@ impl SkillExecutor {
 
         // ${CLAUDE_SESSION_ID}
         result = result.replace("${CLAUDE_SESSION_ID}", &context.session_id);
+
+        // ${CLAUDE_EFFORT}
+        result = result.replace("${CLAUDE_EFFORT}", &context.effort_level);
 
         // ${CLAUDE_SKILL_DIR}
         if let Some(skill_root) = &context.cwd.parent() {
@@ -305,6 +320,7 @@ mod tests {
             arguments: vec!["World".to_string()],
             cwd: PathBuf::from("/tmp"),
             session_id: "test-session".to_string(),
+            effort_level: "medium".to_string(),
             permissions: SkillPermissions::default(),
         };
 
