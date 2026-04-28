@@ -3603,6 +3603,58 @@ fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
         }
     }
 
+    // /diff review branch [name] — compare current branch vs a base branch
+    if let Some(rest) = trimmed.strip_prefix("review branch") {
+        let base = if rest.trim().is_empty() { "main" } else { rest.trim() };
+        let output = std::process::Command::new("git")
+            .args(["diff", &format!("{base}...HEAD"), "--stat"])
+            .current_dir(&repl.state.working_directory)
+            .output();
+        match output {
+            Ok(o) if o.status.success() => {
+                let stat = String::from_utf8_lossy(&o.stdout);
+                let mut msg = format!("Diff: {base}...HEAD\n```\n{stat}```\n\n");
+                msg.push_str(&format!("Use /diff interactive for hunk-by-hunk review"));
+                repl.chat.add_message(ChatRole::System, msg);
+            }
+            Ok(o) => {
+                let err = String::from_utf8_lossy(&o.stderr);
+                repl.chat.add_message(ChatRole::System, format!("git diff failed: {err}"));
+            }
+            Err(e) => {
+                repl.chat.add_message(ChatRole::System, format!("Failed to run git diff: {e}"));
+            }
+        }
+        return Ok(());
+    }
+
+    // /diff review <ref> (e.g., HEAD~3, abc123) — compare working tree vs a ref
+    if let Some(gitref) = trimmed.strip_prefix("review ") {
+        let gitref = gitref.trim();
+        if !gitref.is_empty() && !gitref.chars().all(|c| c.is_ascii_digit()) {
+            let output = std::process::Command::new("git")
+                .args(["diff", gitref, "--stat"])
+                .current_dir(&repl.state.working_directory)
+                .output();
+            match output {
+                Ok(o) if o.status.success() => {
+                    let stat = String::from_utf8_lossy(&o.stdout);
+                    let mut msg = format!("Diff vs {gitref}\n```\n{stat}```\n\n");
+                    msg.push_str(&format!("Use /diff interactive for hunk-by-hunk review"));
+                    repl.chat.add_message(ChatRole::System, msg);
+                }
+                Ok(o) => {
+                    let err = String::from_utf8_lossy(&o.stderr);
+                    repl.chat.add_message(ChatRole::System, format!("git diff failed: {err}"));
+                }
+                Err(e) => {
+                    repl.chat.add_message(ChatRole::System, format!("Failed to run git diff: {e}"));
+                }
+            }
+            return Ok(());
+        }
+    }
+
     let options = diff_utils::DiffOptions::from_args(args);
     let show_overview = args.trim().is_empty() || args.contains("--overview");
 

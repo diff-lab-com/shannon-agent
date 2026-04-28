@@ -22,6 +22,8 @@ pub struct DiffViewerWidget {
     pub expanded: Vec<bool>,
     /// Cached diff output per file path
     pub diff_cache: HashMap<String, Vec<String>>,
+    /// When set, show this file's diff in full detail instead of the file list
+    pub detail_file: Option<String>,
 }
 
 impl DiffViewerWidget {
@@ -32,11 +34,12 @@ impl DiffViewerWidget {
             selected_index: 0,
             expanded: Vec::new(),
             diff_cache: HashMap::new(),
+            detail_file: None,
         }
     }
 
     /// Load git diff for a file, using cache if available.
-    fn load_diff(&mut self, path: &str) {
+    pub fn load_diff(&mut self, path: &str) {
         if self.diff_cache.contains_key(path) {
             return;
         }
@@ -122,7 +125,7 @@ impl DiffViewerWidget {
     }
 
     /// Get the file path for the currently selected entry.
-    fn get_selected_path(&self, diff_data: &DiffData) -> Option<String> {
+    pub fn get_selected_path(&self, diff_data: &DiffData) -> Option<String> {
         let files = Self::unique_files(diff_data);
         let mut all_entries: Vec<Entry> = files.into_iter().map(Entry::Modified).collect();
         for turn in diff_data.get_session_diffs() {
@@ -138,6 +141,15 @@ impl DiffViewerWidget {
 
     /// Render the diff viewer as a full-screen overlay
     pub fn render(&self, frame: &mut Frame, area: Rect, diff_data: &DiffData, theme: &Theme) {
+        if let Some(ref file) = self.detail_file {
+            self.render_file_detail(frame, area, file, theme);
+            return;
+        }
+        self.render_file_list(frame, area, diff_data, theme);
+    }
+
+    /// Render the file list view (default mode)
+    fn render_file_list(&self, frame: &mut Frame, area: Rect, diff_data: &DiffData, theme: &Theme) {
         // Clear the area first
         frame.render_widget(Clear, area);
 
@@ -154,7 +166,7 @@ impl DiffViewerWidget {
                 Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
             )))
             .title_bottom(Line::from(Span::styled(
-                " j/k: navigate | Enter: expand | Esc: close ",
+                " j/k: navigate | Enter: view diff | Esc: close ",
                 Style::default().fg(theme.muted),
             )));
 
@@ -275,6 +287,73 @@ impl DiffViewerWidget {
 
         let list = List::new(visible_items);
         frame.render_widget(list, inner);
+    }
+
+    /// Render a single file's diff in full detail
+    fn render_file_detail(&self, frame: &mut Frame, area: Rect, file_path: &str, theme: &Theme) {
+        frame.render_widget(Clear, area);
+
+        let title = format!(" Diff: {file_path} ");
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.border))
+            .title(Line::from(Span::styled(
+                title,
+                Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
+            )))
+            .title_bottom(Line::from(Span::styled(
+                " j/k: scroll | Backspace: back | Esc: close ",
+                Style::default().fg(theme.muted),
+            )));
+
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let mut items: Vec<ListItem> = Vec::new();
+        let inner_width = inner.width as usize;
+
+        if let Some(diff_lines) = self.diff_cache.get(file_path) {
+            if diff_lines.is_empty() {
+                items.push(ListItem::new(Line::from(Span::styled(
+                    "(no changes or diff not loaded)",
+                    Style::default().fg(theme.text_dim),
+                ))));
+            } else {
+                for line in diff_lines {
+                    let color = if line.starts_with('-') && !line.starts_with("---") {
+                        theme.diff_removed
+                    } else if line.starts_with('+') && !line.starts_with("+++") {
+                        theme.diff_added
+                    } else if line.starts_with('@') {
+                        theme.primary
+                    } else if line.starts_with("diff ") || line.starts_with("index ") {
+                        theme.muted
+                    } else {
+                        theme.text_dim
+                    };
+                    let display = truncate_to(line, inner_width);
+                    items.push(ListItem::new(Line::from(Span::styled(
+                        display,
+                        Style::default().fg(color),
+                    ))));
+                }
+            }
+        } else {
+            items.push(ListItem::new(Line::from(Span::styled(
+                "(diff not available — try reloading)",
+                Style::default().fg(theme.text_dim),
+            ))));
+        }
+
+        let visible_rows = inner.height as usize;
+        let total = items.len();
+        let start = if total > visible_rows {
+            self.scroll_offset.min(total.saturating_sub(visible_rows))
+        } else {
+            0
+        };
+        let visible_items: Vec<ListItem> = items.into_iter().skip(start).take(visible_rows).collect();
+        frame.render_widget(List::new(visible_items), inner);
     }
 }
 

@@ -868,8 +868,22 @@ fn handle_diff_viewer_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                     if repl.state.interactive_selected + 1 < repl.state.interactive_hunks.len() {
                         repl.state.interactive_selected += 1;
                     }
-                } else {
+                } else if viewer.detail_file.is_some() {
                     viewer.scroll_offset = viewer.scroll_offset.saturating_add(1);
+                } else {
+                    // In file list mode: move selection down
+                    let file_count = {
+                        let mut count = 0usize;
+                        let mut seen = std::collections::HashSet::new();
+                        for turn in repl.diff_data.get_session_diffs() {
+                            for fc in &turn.files_modified {
+                                if seen.insert(fc.path.clone()) { count += 1; }
+                            }
+                            count += turn.files_created.len() + turn.files_deleted.len();
+                        }
+                        count.max(1)
+                    };
+                    viewer.move_down(file_count);
                 }
             }
         }
@@ -877,8 +891,36 @@ fn handle_diff_viewer_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             if let Some(ref mut viewer) = repl.state.diff_viewer {
                 if repl.state.diff_interactive {
                     repl.state.interactive_selected = repl.state.interactive_selected.saturating_sub(1);
-                } else {
+                } else if viewer.detail_file.is_some() {
                     viewer.scroll_offset = viewer.scroll_offset.saturating_sub(1);
+                } else {
+                    // In file list mode: move selection up
+                    viewer.move_up();
+                    viewer.scroll_offset = viewer.scroll_offset.saturating_sub(1);
+                }
+            }
+        }
+
+        // Enter: drill into file detail (non-interactive, file list mode)
+        KeyCode::Enter if !repl.state.diff_interactive => {
+            if let Some(ref mut viewer) = repl.state.diff_viewer {
+                if viewer.detail_file.is_none() {
+                    // Enter file detail mode
+                    if let Some(path) = viewer.get_selected_path(&repl.diff_data) {
+                        viewer.load_diff(&path);
+                        viewer.detail_file = Some(path);
+                        viewer.scroll_offset = 0;
+                    }
+                }
+            }
+        }
+
+        // Backspace: return to file list from detail view
+        KeyCode::Backspace => {
+            if let Some(ref mut viewer) = repl.state.diff_viewer {
+                if viewer.detail_file.is_some() {
+                    viewer.detail_file = None;
+                    viewer.scroll_offset = 0;
                 }
             }
         }
