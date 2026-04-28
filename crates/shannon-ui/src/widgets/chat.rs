@@ -915,7 +915,7 @@ impl ChatWidget {
         // Streaming cursor: append a blinking cursor block at the end
         if self.streaming_active {
             list_items.push(ListItem::new(Line::from(
-                Span::styled("▌", Style::default().fg(theme.primary).add_modifier(Modifier::SLOW_BLINK)),
+                Span::styled(crate::a11y::cursor().to_string(), Style::default().fg(theme.primary).add_modifier(Modifier::SLOW_BLINK)),
             )));
         }
 

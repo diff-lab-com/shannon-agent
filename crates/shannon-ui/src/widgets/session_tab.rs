@@ -84,7 +84,7 @@ impl SessionTabWidget {
             spans.push(Span::styled(title, style));
 
             if i < visible_sessions.len() - 1 {
-                spans.push(Span::styled("│", Style::default().fg(theme.muted)));
+                spans.push(Span::styled(crate::a11y::separator().to_string(), Style::default().fg(theme.muted)));
             }
         }
 

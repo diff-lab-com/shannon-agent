@@ -36,7 +36,8 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         let model_short = state.model.as_deref()
             .map(|m| m.split('/').last().unwrap_or(m))
             .unwrap_or("shannon");
-        let icon = if state.streaming_active { "✦" } else { "◇" };
+        crate::a11y::set_enabled(state.accessibility_mode);
+        let icon = crate::a11y::title_icon(state.streaming_active);
         let title = format!("{icon} Shannon — {model_short} — {}", state.status);
         let _ = crossterm::execute!(io::stdout(), crossterm::terminal::SetTitle(&title));
     }

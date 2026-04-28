@@ -142,7 +142,7 @@ impl SidebarWidget {
                 } else {
                     theme.secondary
                 };
-                let bar_str = format!(" {}{}", "█".repeat(filled), "░".repeat(bar_width.saturating_sub(filled)));
+                let bar_str = format!(" {}{}", crate::a11y::bar_filled().repeat(filled), crate::a11y::bar_empty().repeat(bar_width.saturating_sub(filled)));
                 lines.push(Line::from(Span::styled(truncate_to(&bar_str, w), Style::default().fg(bar_color))));
                 lines.push(Line::from(""));
 
@@ -228,12 +228,12 @@ impl SidebarWidget {
 
                     for agent in info.active_agents.iter().take(15) {
                         let status_icon = match agent.status.as_str() {
-                            "running" => "●",
-                            "spawning" => "◐",
-                            "idle" => "○",
-                            "completed" => "✓",
-                            s if s.starts_with("failed") => "✗",
-                            _ => "·",
+                            "running" => crate::a11y::status_dot(true),
+                            "spawning" => if crate::a11y::is_enabled() { "~" } else { "◐" },
+                            "idle" => crate::a11y::status_dot(false),
+                            "completed" => crate::a11y::check(true),
+                            s if s.starts_with("failed") => crate::a11y::check(false),
+                            _ => if crate::a11y::is_enabled() { "." } else { "·" },
                         };
                         let status_color = match agent.status.as_str() {
                             "running" => theme.success,

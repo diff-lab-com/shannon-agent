@@ -198,7 +198,7 @@ impl DiffViewerWidget {
                 let is_selected = i == self.selected_index;
                 let is_expanded = self.expanded.get(i).copied().unwrap_or(false);
                 let cursor = if is_selected { ">" } else { " " };
-                let expand_icon = if is_expanded { "▼" } else { "▶" };
+                let expand_icon = crate::a11y::expand_icon(is_expanded);
 
                 let line = match entry {
                     Entry::Modified(fc) => {

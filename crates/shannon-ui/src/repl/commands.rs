@@ -177,6 +177,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "project" => handle_project(repl, args)?,
             "theme" => handle_theme(repl, args)?,
             "session" => handle_session(repl, args)?,
+            "accessibility" | "a11y" => handle_accessibility(repl, args)?,
             "commands" => handle_commands(repl, args)?,
             _ => handle_other_command(repl, cmd_name, args)?,
         }
@@ -4634,6 +4635,36 @@ fn handle_session(repl: &mut Repl, args: &str) -> Result<()> {
 
     Ok(())
 }
+
+/// /accessibility — toggle or check accessibility mode.
+fn handle_accessibility(repl: &mut Repl, args: &str) -> Result<()> {
+    let arg = args.trim();
+    match arg {
+        "on" | "enable" | "true" | "1" => {
+            repl.state.accessibility_mode = true;
+            crate::a11y::set_enabled(true);
+            repl.chat.add_message(ChatRole::System,
+                "Accessibility mode enabled. Decorative characters replaced with plain text.".to_string());
+        }
+        "off" | "disable" | "false" | "0" => {
+            repl.state.accessibility_mode = false;
+            crate::a11y::set_enabled(false);
+            repl.chat.add_message(ChatRole::System,
+                "Accessibility mode disabled.".to_string());
+        }
+        "" | "status" => {
+            let state = if repl.state.accessibility_mode { "enabled" } else { "disabled" };
+            repl.chat.add_message(ChatRole::System,
+                format!("Accessibility mode: {state}\n\nUsage: /accessibility on|off\nAlso auto-enabled via NO_GRAPHICS or ACCESSIBILITY env vars."));
+        }
+        _ => {
+            repl.chat.add_message(ChatRole::System,
+                "Usage: /accessibility on|off|status".to_string());
+        }
+    }
+    Ok(())
+}
+
 fn handle_terminal_setup(repl: &mut Repl) -> Result<()> {
     let mut report = String::from("Terminal Setup Check\n\n");
 

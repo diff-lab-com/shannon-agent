@@ -20,6 +20,7 @@ pub mod tool_format;
 pub mod terminal_image;
 pub mod screenshot;
 pub mod lsp_bridge;
+pub mod a11y;
 pub mod voice;
 pub mod stream_render;
 pub mod autocomplete;
