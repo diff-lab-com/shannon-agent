@@ -130,6 +130,16 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             repl.prompt.insert_newline();
             Ok(())
         }
+        // Ctrl+F: toggle fold/collapse of last tool message
+        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            repl.chat.toggle_last_tool_fold();
+            Ok(())
+        }
+        // Alt+F: toggle all tool messages collapsed/expanded
+        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::ALT) => {
+            repl.chat.collapsed_tools = !repl.chat.collapsed_tools;
+            Ok(())
+        }
         KeyCode::Char(c) => {
             repl.prompt.add_char(c);
             repl.state.completion_suggestions.clear();

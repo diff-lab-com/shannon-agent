@@ -2069,15 +2069,16 @@ impl Repl {
 
         let usage_ratio = self.state.tokens_used as f64 / context_window as f64;
 
-        if usage_ratio > 0.90 {
-            // Auto-compact: context pressure critical (>90%)
+        if usage_ratio > 0.85 {
+            // Auto-compact: context pressure critical (>85%)
             self.do_auto_compact();
             return true;
-        } else if usage_ratio > 0.75 {
-            // Warning: context pressure high (>75%)
+        } else if usage_ratio > 0.70 {
+            // Warning: context pressure high (>70%)
             let pct = (usage_ratio * 100.0) as u32;
+            let remaining = context_window.saturating_sub(self.state.tokens_used);
             self.state.toast = Some((
-                format!("  Context: {pct}% — /compact to reduce  "),
+                format!("  Context: {pct}% used ({remaining} tokens remaining) — /compact to reduce  "),
                 std::time::Instant::now(),
             ));
         }
