@@ -751,6 +751,7 @@ pub(crate) fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
 }
 
 /// Handle `/image paste` — read image from system clipboard.
+#[allow(dead_code)]
 pub fn handle_image_paste_from_input(repl: &mut Repl) -> Result<()> {
     handle_image_paste(repl, "Describe this image.")
 }

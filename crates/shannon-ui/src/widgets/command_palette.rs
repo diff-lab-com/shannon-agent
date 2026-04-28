@@ -43,6 +43,7 @@ impl CommandCategory {
     }
 
     /// Return a display label for the category
+    #[allow(dead_code)]
     fn label(&self) -> &'static str {
         match self {
             CommandCategory::Navigation => "Nav",

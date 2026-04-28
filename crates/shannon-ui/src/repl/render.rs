@@ -255,6 +255,30 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         if state.chat_search_active {
             render_chat_search_overlay(f, f.area(), &state, &theme);
         }
+
+        // Render session tab bar at the very top when visible
+        state.session_tab.render(f, f.area(), &theme);
+
+        // Render key hints at the very bottom line when no overlay is active
+        if state.permission_dialog.is_none()
+            && state.active_dialog.is_none()
+            && state.command_palette.is_none()
+            && !state.pager_active
+            && !state.chat_search_active
+        {
+            let hint_area = ratatui::layout::Rect {
+                x: f.area().x,
+                y: f.area().bottom().saturating_sub(1),
+                width: f.area().width,
+                height: 1,
+            };
+            let ctx = if state.streaming_active || state.thinking_phase {
+                crate::widgets::key_hint::HintContext::Normal
+            } else {
+                crate::widgets::key_hint::HintContext::Input
+            };
+            crate::widgets::KeyHintWidget::render(f, hint_area, &theme, &ctx);
+        }
     })?;
 
     Ok(())

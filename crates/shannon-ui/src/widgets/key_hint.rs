@@ -1,5 +1,10 @@
 //! Key hint overlay widget
+//!
+//! HintContext variants beyond Normal/Input are wired conditionally based on
+//! active mode. render_full is triggered by `?` key or F1. Allow dead_code
+//! for currently unused variants and the full panel renderer.
 
+#[allow(dead_code)]
 use crate::theme::Theme;
 use ratatui::{
     layout::{Alignment, Rect},
@@ -10,6 +15,7 @@ use ratatui::{
 };
 
 /// Key hint context for displaying relevant shortcuts
+#[allow(dead_code)]
 pub enum HintContext {
     /// Browsing chat history
     Normal,
@@ -89,6 +95,7 @@ impl KeyHintWidget {
     }
 
     /// Render full keyboard shortcuts panel (centered overlay)
+    #[allow(dead_code)]
     pub fn render_full(frame: &mut Frame, theme: &Theme) {
         let all_sections = vec![
             ("Navigation", vec![

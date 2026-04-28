@@ -210,6 +210,8 @@ pub struct ChatWidget {
     pub height_cache: MessageHeightCache,
     /// Copy feedback: (message_index, timestamp) for showing "✓ Copied" on code blocks
     pub copy_feedback: Option<(usize, std::time::Instant)>,
+    /// Per-message render cache (Mutex for thread-safe interior mutability)
+    pub render_cache: Mutex<super::MessageRenderCache>,
 }
 
 /// A single chat message
@@ -253,6 +255,7 @@ impl ChatWidget {
             streaming_active: false,
             height_cache: MessageHeightCache::new(),
             copy_feedback: None,
+            render_cache: Mutex::new(super::MessageRenderCache::new(128)),
         }
     }
 
@@ -702,6 +705,23 @@ impl ChatWidget {
                 continue;
             }
 
+            // Try render cache for non-search messages
+            let should_cache = search_query.is_none();
+            if should_cache {
+                let hash = super::content_hash(&msg.content);
+                if let Some(cached) = self.render_cache.lock().unwrap().get(msg_idx, hash, area.width) {
+                    list_items.extend(cached.iter().cloned().map(ListItem::new));
+                    if let Some(ref img_lines) = msg.image_lines {
+                        for img_line in img_lines {
+                            list_items.push(ListItem::new(img_line.clone()));
+                        }
+                    }
+                    continue;
+                }
+            }
+
+            let mut msg_lines: Vec<Line<'static>> = Vec::new();
+
             // Parse into segments: normal text and code blocks
             let segments = parse_markdown_segments(&clean_content);
             let mut first_line = true;
@@ -733,7 +753,7 @@ impl ChatWidget {
                                 } else {
                                     spans.extend(parse_inline_formatting(&text, theme.text));
                                 }
-                                list_items.push(ListItem::new(Line::from(spans)));
+                                msg_lines.push(Line::from(spans));
                                 first_line = false;
                             } else {
                                 let indent = " ".repeat(prefix_len);
@@ -756,7 +776,7 @@ impl ChatWidget {
                                 } else {
                                     spans.extend(parse_inline_formatting(&text, theme.text));
                                 }
-                                list_items.push(ListItem::new(Line::from(spans)));
+                                msg_lines.push(Line::from(spans));
                             }
                         }
                     }
@@ -793,10 +813,10 @@ impl ChatWidget {
                         };
 
                         let header_with_hint = format!("╭─{}─{}╮", title_content, copy_hint);
-                        list_items.push(ListItem::new(Line::from(vec![
+                        msg_lines.push(Line::from(vec![
                             Span::styled(indent.clone(), Style::default().fg(theme.muted)),
                             Span::styled(truncate_to(&header_with_hint, available), border_style),
-                        ])));
+                        ]));
 
                         // Code lines with syntax highlighting (cached)
                         let highlighted_lines = highlight_code_cached(&code, &display_lang);
@@ -814,16 +834,16 @@ impl ChatWidget {
                                     Span::styled(line_num, Style::default().fg(theme.text_dim)),
                                 ];
                                 line_spans.extend(line.spans.iter().map(|s| Span::styled(s.content.to_string(), s.style)));
-                                list_items.push(ListItem::new(Line::from(line_spans)));
+                                msg_lines.push(Line::from(line_spans));
                             }
 
                             // Fold indicator
                             let folded_count = total_lines - fold_head - fold_tail;
                             let fold_msg = format!("│   ... {} lines folded ...", folded_count.max(1));
-                            list_items.push(ListItem::new(Line::from(vec![
+                            msg_lines.push(Line::from(vec![
                                 Span::styled(indent.clone(), Style::default().fg(theme.muted)),
                                 Span::styled(fold_msg, Style::default().fg(theme.muted).add_modifier(Modifier::ITALIC)),
-                            ])));
+                            ]));
 
                             // Show last fold_tail lines with line numbers
                             let tail_start = total_lines.saturating_sub(fold_tail);
@@ -834,7 +854,7 @@ impl ChatWidget {
                                     Span::styled(line_num, Style::default().fg(theme.text_dim)),
                                 ];
                                 line_spans.extend(line.spans.iter().map(|s| Span::styled(s.content.to_string(), s.style)));
-                                list_items.push(ListItem::new(Line::from(line_spans)));
+                                msg_lines.push(Line::from(line_spans));
                             }
                         } else {
                             // Show all lines with line numbers
@@ -845,17 +865,17 @@ impl ChatWidget {
                                     Span::styled(line_num, Style::default().fg(theme.text_dim)),
                                 ];
                                 line_spans.extend(line.spans.iter().map(|s| Span::styled(s.content.to_string(), s.style)));
-                                list_items.push(ListItem::new(Line::from(line_spans)));
+                                msg_lines.push(Line::from(line_spans));
                             }
                         }
 
                         // Footer: ╰──────────────────────╯
                         let footer_width = title_content.chars().count() + 2;
                         let footer = format!("╰{:─>width$}╯", "", width = footer_width);
-                        list_items.push(ListItem::new(Line::from(vec![
+                        msg_lines.push(Line::from(vec![
                             Span::styled(indent, Style::default().fg(theme.muted)),
                             Span::styled(truncate_to(&footer, available), border_style),
-                        ])));
+                        ]));
                         first_line = false;
                     }
                     MdSegment::Header { level, text } => {
@@ -868,11 +888,10 @@ impl ChatWidget {
                             2 => Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
                             _ => Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
                         };
-                        let item = ListItem::new(Line::from(vec![
+                        msg_lines.push(Line::from(vec![
                             Span::styled(indent, Style::default().fg(theme.muted)),
                             Span::styled(header_text, style),
                         ]));
-                        list_items.push(item);
                         first_line = false;
                     }
                 }
@@ -881,9 +900,16 @@ impl ChatWidget {
             // If the message has inline image preview lines, render them
             if let Some(ref img_lines) = msg.image_lines {
                 for img_line in img_lines {
-                    list_items.push(ListItem::new(img_line.clone()));
+                    msg_lines.push(img_line.clone());
                 }
             }
+
+            // Cache and push rendered lines
+            if should_cache {
+                let hash = super::content_hash(&msg.content);
+                self.render_cache.lock().unwrap().insert(msg_idx, hash, area.width, msg_lines.clone());
+            }
+            list_items.extend(msg_lines.into_iter().map(ListItem::new));
         }
 
         // Streaming cursor: append a blinking cursor block at the end

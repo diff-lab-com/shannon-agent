@@ -24,9 +24,13 @@ pub use chat::{ChatWidget, ChatMessage, ChatRole};
 pub use prompt::PromptWidget;
 pub use sidebar::{SidebarWidget, SidebarInfo};
 pub use key_hint::KeyHintWidget;
+#[allow(unused_imports)]
 pub use session_tab::{SessionTabWidget, SessionInfo};
+#[allow(unused_imports)]
 pub use tool_approval::{ToolApprovalWidget, ToolApprovalRequest, ApprovalDecision, RiskLevel};
+#[allow(unused_imports)]
 pub use attachment_bar::{AttachmentBarWidget, Attachment, AttachmentKind};
+#[allow(unused_imports)]
 pub use command_palette::{CommandPaletteWidget, PaletteCommand, CommandCategory};
 
 // Re-export shared utilities used by other crates

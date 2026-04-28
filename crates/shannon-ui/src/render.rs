@@ -30,18 +30,11 @@ const CODE_FOLD_HEAD: usize = 10;
 /// Number of lines to show at the end of a folded code block.
 const CODE_FOLD_TAIL: usize = 5;
 
-/// Cache for parsed markdown segments to avoid re-parsing on every render.
+/// Cache for rendered markdown output to avoid re-parsing on repeated calls.
 struct MarkdownCache {
-    entries: HashMap<u64, Vec<MarkdownSegment>>,
+    entries: HashMap<u64, Vec<Line<'static>>>,
     order: VecDeque<u64>,
     max_size: usize,
-}
-
-/// A parsed markdown segment (simple representation for caching).
-#[derive(Clone)]
-enum MarkdownSegment {
-    Text(String),
-    CodeBlock { lang: String, content: String },
 }
 
 impl MarkdownCache {
@@ -62,17 +55,17 @@ impl MarkdownCache {
         h
     }
 
-    fn get(&self, hash: u64) -> Option<&[MarkdownSegment]> {
+    fn get(&self, hash: u64) -> Option<&[Line<'static>]> {
         self.entries.get(&hash).map(|v| v.as_slice())
     }
 
-    fn insert(&mut self, hash: u64, segments: Vec<MarkdownSegment>) {
+    fn insert(&mut self, hash: u64, lines: Vec<Line<'static>>) {
         if self.entries.len() >= self.max_size {
             if let Some(old_key) = self.order.pop_front() {
                 self.entries.remove(&old_key);
             }
         }
-        self.entries.insert(hash, segments);
+        self.entries.insert(hash, lines);
         self.order.push_back(hash);
     }
 }
@@ -85,8 +78,8 @@ pub struct Renderer {
     syntax_set: SyntaxSet,
     /// Theme for syntax highlighting
     theme_set: ThemeSet,
-    /// Markdown parsing cache
-    markdown_cache: MarkdownCache,
+    /// Markdown rendering cache (Mutex for interior mutability in &self methods)
+    markdown_cache: std::sync::Mutex<MarkdownCache>,
 }
 
 impl Renderer {
@@ -98,7 +91,7 @@ impl Renderer {
             status_message: "Ready".to_string(),
             syntax_set,
             theme_set,
-            markdown_cache: MarkdownCache::new(128),
+            markdown_cache: std::sync::Mutex::new(MarkdownCache::new(128)),
         }
     }
 
@@ -199,6 +192,14 @@ impl Renderer {
     /// Render a block of markdown text into ratatui `Line` objects using
     /// pulldown-cmark for full CommonMark support.
     pub fn render_markdown(&self, text: &str) -> Vec<Line<'static>> {
+        // Check render cache first
+        let hash = MarkdownCache::compute_hash(text);
+        if let Ok(cache) = self.markdown_cache.lock() {
+            if let Some(cached) = cache.get(hash) {
+                return cached.to_vec();
+            }
+        }
+
         let mut output: Vec<Line<'static>> = Vec::new();
         let opts = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
         let parser = Parser::new_ext(text, opts);
@@ -455,6 +456,11 @@ impl Renderer {
         // Remove trailing empty line for cleaner display
         if output.last().is_some_and(|l| l.spans.is_empty()) {
             output.pop();
+        }
+
+        // Cache the rendered output
+        if let Ok(mut cache) = self.markdown_cache.lock() {
+            cache.insert(hash, output.clone());
         }
 
         output
@@ -964,6 +970,7 @@ pub fn render_diff(diff_text: &str) -> Vec<Line<'static>> {
 // ---------------------------------------------------------------------------
 
 /// Return the heading level (1-6) if the line starts with `#` markers, else `None`.
+#[allow(dead_code)]
 fn heading_level(line: &str) -> Option<usize> {
     let mut count = 0;
     for ch in line.chars() {
@@ -989,6 +996,7 @@ fn heading_level(line: &str) -> Option<usize> {
 /// - Last N/2 lines
 ///
 /// Returns the lines unchanged if they fit within max_lines.
+#[allow(dead_code)]
 pub fn truncate_output(lines: &[Line<'_>], max_lines: usize) -> Vec<Line<'static>> {
     if lines.len() <= max_lines {
         return lines
@@ -1026,6 +1034,7 @@ pub fn truncate_output(lines: &[Line<'_>], max_lines: usize) -> Vec<Line<'static
 }
 
 /// Convert a Line with any lifetime to a Line<'static> by owning all strings.
+#[allow(dead_code)]
 fn to_static_line(line: &Line<'_>) -> Line<'static> {
     Line::from(
         line.spans
@@ -1036,6 +1045,7 @@ fn to_static_line(line: &Line<'_>) -> Line<'static> {
 }
 
 /// Parse inline markdown fragments: `**bold**` and `` `code` ``.
+#[allow(dead_code)]
 fn parse_inline_fragments(text: &str) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut chars = text.char_indices().peekable();

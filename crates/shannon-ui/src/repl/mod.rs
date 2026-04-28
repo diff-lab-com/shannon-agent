@@ -3,6 +3,7 @@
 /// Number of lines above which a paste is shown as "[Pasted Text #N X lines]"
 const PASTE_THRESHOLD_LINES: usize = 5;
 
+#[allow(dead_code)]
 mod at_reference;
 mod commands;
 mod input;
@@ -22,7 +23,8 @@ use crate::{
         tool_approval::ToolApprovalWidget,
         attachment_bar::AttachmentBarWidget,
         command_palette::CommandPaletteWidget,
-        StreamingState, MessageRenderCache,
+        session_tab::SessionTabWidget,
+        StreamingState,
     },
     Result,
 };
@@ -189,6 +191,8 @@ pub struct ReplState {
     pub attachment_bar: AttachmentBarWidget,
     /// Command palette overlay widget (Ctrl+P)
     pub command_palette: Option<CommandPaletteWidget>,
+    /// Session tab bar widget (top of terminal, Ctrl+T to toggle)
+    pub session_tab: SessionTabWidget,
     /// Detailed streaming state for status indicator
     pub streaming_state: StreamingState,
 }
@@ -317,6 +321,7 @@ impl Default for ReplState {
             tool_approval: ToolApprovalWidget::new(),
             attachment_bar: AttachmentBarWidget::new(5),
             command_palette: None,
+            session_tab: SessionTabWidget::new(),
             streaming_state: StreamingState::Idle,
         }
     }
@@ -623,8 +628,6 @@ pub struct Repl {
     pub(crate) instruction_watcher: Option<shannon_core::project_instructions::InstructionWatcher>,
     /// Custom command file watcher for hot-reloading .claude/commands/ and .shannon/commands/
     pub(crate) command_watcher: Option<CustomCommandWatcher>,
-    /// Message render cache for avoiding redundant re-renders
-    pub(crate) render_cache: MessageRenderCache,
 }
 
 /// State for tab completion cycling
@@ -1373,7 +1376,6 @@ impl Repl {
                 }
             },
             command_watcher: Some(CustomCommandWatcher::new()),
-            render_cache: MessageRenderCache::new(128),
         };
 
         repl.sync_approval_mode_label();

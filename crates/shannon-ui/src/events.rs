@@ -1,6 +1,6 @@
 //! Event handling for terminal UI
 
-use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, MouseEvent, MouseEventKind};
+use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, MouseEvent};
 use std::io;
 use std::time::Duration;
 
