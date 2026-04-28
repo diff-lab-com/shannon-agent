@@ -176,6 +176,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "bind" => handle_bind(repl, args)?,
             "project" => handle_project(repl, args)?,
             "theme" => handle_theme(repl, args)?,
+            "session" => handle_session(repl, args)?,
             "commands" => handle_commands(repl, args)?,
             _ => handle_other_command(repl, cmd_name, args)?,
         }
@@ -4536,7 +4537,103 @@ fn handle_theme(repl: &mut Repl, args: &str) -> Result<()> {
     Ok(())
 }
 
-/// /terminal-setup — check shell integration, key bindings, PATH, and terminal capabilities.
+/// /session — manage conversation sessions (list, export).
+fn handle_session(repl: &mut Repl, args: &str) -> Result<()> {
+    let parts: Vec<&str> = args.trim().split_whitespace().collect();
+    let subcmd = parts.first().copied().unwrap_or("list");
+
+    match subcmd {
+        "list" | "ls" | "" => {
+            let sessions = repl.state_manager.list_persisted_sessions()
+                .unwrap_or_default();
+
+            if sessions.is_empty() {
+                repl.chat.add_message(ChatRole::System, "No saved sessions found.".to_string());
+                return Ok(());
+            }
+
+            let mut msg = String::from("Saved Sessions:\n\n");
+            for (i, s) in sessions.iter().take(20).enumerate() {
+                let title = s.title.as_deref()
+                    .or(s.preview.as_deref())
+                    .unwrap_or("(untitled)");
+                let time = s.updated_at.format("%m/%d %H:%M");
+                let tokens = s.total_input_tokens + s.total_output_tokens;
+                msg.push_str(&format!(
+                    "  {:>2}. {}  {}  {} turns  {} tokens\n      ID: {}\n\n",
+                    i + 1, title, time, s.turn_count, tokens, s.session_id,
+                ));
+            }
+
+            if sessions.len() > 20 {
+                msg.push_str(&format!("  ... and {} more\n", sessions.len() - 20));
+            }
+
+            msg.push_str("\nUsage: /session list | /session export");
+            repl.chat.add_message(ChatRole::System, msg);
+        }
+        "export" => {
+            // Export current session as markdown
+            let engine = match repl.query_engine.as_ref() {
+                Some(e) => e,
+                None => {
+                    repl.chat.add_message(ChatRole::System, "No active session to export.".to_string());
+                    return Ok(());
+                }
+            };
+
+            let messages = engine.conversation_history();
+            if messages.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Current session is empty.".to_string());
+                return Ok(());
+            }
+
+            let mut md = String::from("# Shannon Session Export\n\n");
+            md.push_str(&format!("Date: {}\nModel: {}\n\n---\n\n",
+                chrono::Utc::now().format("%Y-%m-%d %H:%M UTC"),
+                repl.state.model.as_deref().unwrap_or("unknown"),
+            ));
+
+            for msg in &messages {
+                let role = match msg.role.as_str() {
+                    "user" => "## User",
+                    "assistant" => "## Assistant",
+                    "system" => "## System",
+                    _ => "## Message",
+                };
+                let text = match &msg.content {
+                    shannon_core::api::MessageContent::Text(t) => t.clone(),
+                    shannon_core::api::MessageContent::Blocks(blocks) => {
+                        blocks.iter().filter_map(|b| match b {
+                            shannon_core::api::ContentBlock::Text { text } => Some(text.as_str()),
+                            _ => None,
+                        }).collect::<Vec<_>>().join("\n")
+                    }
+                };
+                md.push_str(&format!("{role}\n\n{text}\n\n---\n\n"));
+            }
+
+            let filename = format!("shannon-session-{}.md", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
+            let path = std::path::Path::new(&filename);
+            match std::fs::write(path, &md) {
+                Ok(()) => {
+                    repl.chat.add_message(ChatRole::System,
+                        format!("Session exported to {filename} ({} messages)", messages.len()));
+                }
+                Err(e) => {
+                    repl.chat.add_message(ChatRole::System,
+                        format!("Failed to export session: {e}"));
+                }
+            }
+        }
+        _ => {
+            repl.chat.add_message(ChatRole::System,
+                "Usage: /session list | /session export".to_string());
+        }
+    }
+
+    Ok(())
+}
 fn handle_terminal_setup(repl: &mut Repl) -> Result<()> {
     let mut report = String::from("Terminal Setup Check\n\n");
 
