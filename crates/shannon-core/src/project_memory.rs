@@ -452,6 +452,47 @@ pub fn load_memory_index(dir: &Path) -> Option<String> {
     None
 }
 
+/// Load all `.md` files from `.claude/rules/` directory.
+///
+/// Returns concatenated content of all rule files, sorted by filename for
+/// deterministic ordering. Returns `None` if the directory doesn't exist
+/// or contains no `.md` files.
+pub fn load_rules(dir: &Path) -> Option<String> {
+    let rules_dir = dir.join(".claude").join("rules");
+    if !rules_dir.is_dir() {
+        return None;
+    }
+
+    let mut entries: Vec<_> = std::fs::read_dir(&rules_dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .is_some_and(|ext| ext == "md")
+        })
+        .collect();
+
+    entries.sort_by_key(|e| e.file_name());
+
+    let mut parts: Vec<String> = Vec::new();
+    for entry in entries {
+        if let Ok(content) = std::fs::read_to_string(entry.path()) {
+            if !content.trim().is_empty() {
+                if let Some(name) = entry.file_name().to_str() {
+                    parts.push(format!("### Rule: {name}\n\n{content}"));
+                }
+            }
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(format!("=== Project Rules (.claude/rules/) ===\n\n{}", parts.join("\n\n")))
+    }
+}
+
 /// Resolve `@import` directives in content.
 ///
 /// Supports patterns like `@README`, `@docs/guide.md`, `@CONTRIBUTING`.

@@ -146,6 +146,26 @@ pub enum HookEventType {
     CwdChanged,
     /// When a permission is requested (before user prompt)
     PermissionRequest,
+    /// After user prompt is expanded (template variables resolved)
+    UserPromptExpansion,
+    /// After a batch of tools completes
+    PostToolBatch,
+    /// When configuration changes
+    ConfigChange,
+    /// After CLAUDE.md / instructions are loaded
+    InstructionsLoaded,
+    /// When a worktree is created
+    WorktreeCreate,
+    /// When a worktree is removed
+    WorktreeRemove,
+    /// When an interactive elicitation is triggered
+    Elicitation,
+    /// When an elicitation result is received
+    ElicitationResult,
+    /// When a task is created (Claude Code standard name)
+    TaskCreated,
+    /// When a task is completed (Claude Code standard name)
+    TaskCompleted,
 }
 
 impl HookEventType {
@@ -172,6 +192,16 @@ impl HookEventType {
             "FileChanged" => Some(Self::FileChanged),
             "CwdChanged" => Some(Self::CwdChanged),
             "PermissionRequest" => Some(Self::PermissionRequest),
+            "UserPromptExpansion" => Some(Self::UserPromptExpansion),
+            "PostToolBatch" => Some(Self::PostToolBatch),
+            "ConfigChange" => Some(Self::ConfigChange),
+            "InstructionsLoaded" => Some(Self::InstructionsLoaded),
+            "WorktreeCreate" => Some(Self::WorktreeCreate),
+            "WorktreeRemove" => Some(Self::WorktreeRemove),
+            "Elicitation" => Some(Self::Elicitation),
+            "ElicitationResult" => Some(Self::ElicitationResult),
+            "TaskCreated" => Some(Self::TaskCreated),
+            "TaskCompleted" => Some(Self::TaskCompleted),
             _ => None,
         }
     }
@@ -200,6 +230,16 @@ impl std::fmt::Display for HookEventType {
             Self::FileChanged => write!(f, "FileChanged"),
             Self::CwdChanged => write!(f, "CwdChanged"),
             Self::PermissionRequest => write!(f, "PermissionRequest"),
+            Self::UserPromptExpansion => write!(f, "UserPromptExpansion"),
+            Self::PostToolBatch => write!(f, "PostToolBatch"),
+            Self::ConfigChange => write!(f, "ConfigChange"),
+            Self::InstructionsLoaded => write!(f, "InstructionsLoaded"),
+            Self::WorktreeCreate => write!(f, "WorktreeCreate"),
+            Self::WorktreeRemove => write!(f, "WorktreeRemove"),
+            Self::Elicitation => write!(f, "Elicitation"),
+            Self::ElicitationResult => write!(f, "ElicitationResult"),
+            Self::TaskCreated => write!(f, "TaskCreated"),
+            Self::TaskCompleted => write!(f, "TaskCompleted"),
         }
     }
 }
@@ -361,6 +401,78 @@ pub enum HookEvent {
         /// Description of what the tool will do
         description: String,
     },
+    /// After user prompt is expanded (template variables resolved)
+    UserPromptExpansion {
+        /// The expanded prompt text
+        expanded_prompt: String,
+        /// The original prompt before expansion
+        original_prompt: String,
+    },
+    /// After a batch of tools completes
+    PostToolBatch {
+        /// Tool names in the batch
+        tool_names: Vec<String>,
+        /// Number of successful executions
+        success_count: usize,
+        /// Number of failed executions
+        failure_count: usize,
+    },
+    /// When configuration changes
+    ConfigChange {
+        /// Path to the changed config file
+        config_path: String,
+        /// Type of change (created, modified, deleted)
+        change_type: String,
+    },
+    /// After CLAUDE.md / instructions are loaded
+    InstructionsLoaded {
+        /// Number of instruction files loaded
+        files_count: usize,
+        /// Total size in bytes
+        total_bytes: usize,
+    },
+    /// When a worktree is created
+    WorktreeCreate {
+        /// Path to the new worktree
+        path: String,
+        /// Branch name for the worktree
+        branch: String,
+    },
+    /// When a worktree is removed
+    WorktreeRemove {
+        /// Path to the removed worktree
+        path: String,
+    },
+    /// When an interactive elicitation is triggered
+    Elicitation {
+        /// The question being asked
+        question: String,
+        /// The requesting tool or component
+        source: String,
+    },
+    /// When an elicitation result is received
+    ElicitationResult {
+        /// The question that was asked
+        question: String,
+        /// The user's response
+        response: String,
+    },
+    /// When a task is created (Claude Code standard)
+    TaskCreated {
+        /// The task ID
+        task_id: String,
+        /// Brief task description
+        subject: String,
+        /// Task priority
+        priority: String,
+    },
+    /// When a task is completed (Claude Code standard)
+    TaskCompleted {
+        /// The task ID
+        task_id: String,
+        /// Brief task description
+        subject: String,
+    },
 }
 
 impl HookEvent {
@@ -387,6 +499,16 @@ impl HookEvent {
             Self::FileChanged { .. } => HookEventType::FileChanged,
             Self::CwdChanged { .. } => HookEventType::CwdChanged,
             Self::PermissionRequest { .. } => HookEventType::PermissionRequest,
+            Self::UserPromptExpansion { .. } => HookEventType::UserPromptExpansion,
+            Self::PostToolBatch { .. } => HookEventType::PostToolBatch,
+            Self::ConfigChange { .. } => HookEventType::ConfigChange,
+            Self::InstructionsLoaded { .. } => HookEventType::InstructionsLoaded,
+            Self::WorktreeCreate { .. } => HookEventType::WorktreeCreate,
+            Self::WorktreeRemove { .. } => HookEventType::WorktreeRemove,
+            Self::Elicitation { .. } => HookEventType::Elicitation,
+            Self::ElicitationResult { .. } => HookEventType::ElicitationResult,
+            Self::TaskCreated { .. } => HookEventType::TaskCreated,
+            Self::TaskCompleted { .. } => HookEventType::TaskCompleted,
         }
     }
 
@@ -415,6 +537,16 @@ impl HookEvent {
             Self::FileChanged { path, .. } => path.clone(),
             Self::CwdChanged { new_cwd, .. } => new_cwd.clone(),
             Self::PermissionRequest { tool_name, .. } => tool_name.clone(),
+            Self::UserPromptExpansion { expanded_prompt, .. } => expanded_prompt.clone(),
+            Self::PostToolBatch { tool_names, .. } => tool_names.join(","),
+            Self::ConfigChange { config_path, .. } => config_path.clone(),
+            Self::InstructionsLoaded { files_count, .. } => files_count.to_string(),
+            Self::WorktreeCreate { path, .. } => path.clone(),
+            Self::WorktreeRemove { path } => path.clone(),
+            Self::Elicitation { source, .. } => source.clone(),
+            Self::ElicitationResult { question, .. } => question.clone(),
+            Self::TaskCreated { subject, .. } => subject.clone(),
+            Self::TaskCompleted { subject, .. } => subject.clone(),
         }
     }
 
@@ -522,12 +654,17 @@ impl HookResult {
 #[serde(rename_all = "lowercase")]
 pub enum HookType {
     /// Shell command execution (default). Receives event JSON on stdin.
+    /// Exit 0 = success, exit 2 = block operation, other = non-blocking error.
     Command,
     /// HTTP POST to a URL with event JSON as body.
     Http,
     /// Single-turn LLM evaluation. The prompt receives the event JSON
     /// and must return a JSON decision on stdout.
     Prompt,
+    /// Call a tool on a connected MCP server.
+    McpTool,
+    /// Spawn a sub-agent (with Read/Grep/Glob tools) for validation.
+    Agent,
 }
 
 impl Default for HookType {
@@ -557,6 +694,13 @@ pub struct HookDef {
     /// Whether to wait for the result before continuing (default: true)
     #[serde(default = "default_hook_blocking")]
     pub blocking: bool,
+    /// Environment variables to pass to the hook command.
+    /// Only listed vars from the current process env are forwarded.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_env_vars: Vec<String>,
+    /// Shell to use for command execution (default: system shell).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shell: Option<String>,
 }
 
 fn default_hook_timeout() -> u64 {
@@ -577,6 +721,8 @@ impl HookDef {
             headers: HashMap::new(),
             timeout: default_hook_timeout(),
             blocking: default_hook_blocking(),
+            allowed_env_vars: Vec::new(),
+            shell: None,
         }
     }
 
@@ -589,6 +735,8 @@ impl HookDef {
             headers: HashMap::new(),
             timeout: default_hook_timeout(),
             blocking: default_hook_blocking(),
+            allowed_env_vars: Vec::new(),
+            shell: None,
         }
     }
 
@@ -601,6 +749,8 @@ impl HookDef {
             headers: HashMap::new(),
             timeout: default_hook_timeout(),
             blocking: default_hook_blocking(),
+            allowed_env_vars: Vec::new(),
+            shell: None,
         }
     }
 
@@ -632,8 +782,11 @@ impl HookDef {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HookConfig {
-    /// Matcher pattern: regex or "*" for wildcard (match all)
+    /// Matcher pattern: exact, `"*"` wildcard, pipe-separated `"Edit|Write"`, or regex
     pub matcher: String,
+    /// Conditional: only fire if this tool+pattern matches (e.g. `"Bash(rm *)"`)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub if_condition: Option<String>,
     /// List of hook definitions to execute
     pub hooks: Vec<HookDef>,
 }
@@ -643,6 +796,7 @@ impl HookConfig {
     pub fn new(matcher: impl Into<String>) -> Self {
         Self {
             matcher: matcher.into(),
+            if_condition: None,
             hooks: Vec::new(),
         }
     }
@@ -653,10 +807,17 @@ impl HookConfig {
         self
     }
 
+    /// Set the conditional expression
+    pub fn with_condition(mut self, cond: impl Into<String>) -> Self {
+        self.if_condition = Some(cond.into());
+        self
+    }
+
     /// Check if this config matches the given subject string.
     ///
     /// Matching supports:
     /// - `"*"` wildcard: matches everything
+    /// - Pipe-separated: `"Edit|Write"` matches either
     /// - Exact string match
     /// - Regex pattern match (anchored to full string)
     /// - Fallback substring match if the pattern is not valid regex
@@ -670,13 +831,21 @@ impl HookConfig {
             return true;
         }
 
-        // Try as anchored regex
+        // Try as anchored regex (handles patterns like Ba(sh|z), Bash.*, etc.)
         if let Ok(re) = regex::Regex::new(&format!("^{}$", self.matcher)) {
-            re.is_match(subject)
-        } else {
-            // If not valid regex, fall back to substring match
-            subject.contains(&self.matcher)
+            return re.is_match(subject);
         }
+
+        // Pipe-separated matching: "Edit|Write" matches either
+        if self.matcher.contains('|') {
+            return self.matcher.split('|').any(|part| {
+                let part = part.trim();
+                part == "*" || part == subject
+            });
+        }
+
+        // Fall back to substring match
+        subject.contains(&self.matcher)
     }
 }
 
@@ -902,6 +1071,11 @@ impl HookManager {
                             let result = self.execute_prompt_hook(hook_def, &event_json).await?;
                             results.push(result);
                         }
+                        HookType::McpTool | HookType::Agent => {
+                            // MCP tool and agent hooks are always blocking
+                            let result = self.execute_hook(&hook_def.command, hook_def.timeout_duration(), &event_json).await?;
+                            results.push(result);
+                        }
                     }
                     continue;
                 } else {
@@ -914,6 +1088,9 @@ impl HookManager {
                         }
                         HookType::Prompt => {
                             self.execute_prompt_hook(hook_def, &event_json).await?
+                        }
+                        HookType::McpTool | HookType::Agent => {
+                            self.execute_hook(&hook_def.command, hook_def.timeout_duration(), &event_json).await?
                         }
                     }
                 };
@@ -955,7 +1132,21 @@ impl HookManager {
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             let exit_code = output.status.code().unwrap_or(-1);
 
-            let decision = HookResult::parse_decision(&stdout);
+            // Exit code semantics (Claude Code standard):
+            //   0 = success, parse stdout JSON for decision
+            //   2 = block operation, stderr shown to LLM
+            //   other = non-blocking error, continue execution
+            let decision = if exit_code == 2 {
+                HookDecision::Deny {
+                    reason: if stderr.is_empty() {
+                        "Hook blocked the operation (exit 2)".to_string()
+                    } else {
+                        stderr.clone()
+                    },
+                }
+            } else {
+                HookResult::parse_decision(&stdout)
+            };
 
             Ok::<HookResult, HookError>(HookResult {
                 exit_code,
@@ -1469,6 +1660,46 @@ More lines"#;
             .with_blocking(false);
         assert_eq!(hook.timeout, 10);
         assert!(!hook.blocking);
+    }
+
+    // ── Pipe-separated matcher tests ────────────────────────────────────
+
+    #[test]
+    fn test_matcher_pipe_separated_match() {
+        let config = HookConfig::new("Edit|Write");
+        assert!(config.matches("Edit"));
+        assert!(config.matches("Write"));
+        assert!(!config.matches("Bash"));
+    }
+
+    #[test]
+    fn test_matcher_pipe_separated_with_wildcard() {
+        let config = HookConfig::new("Bash|*");
+        assert!(config.matches("Bash"));
+        assert!(config.matches("Edit"));
+        assert!(config.matches("Anything"));
+    }
+
+    #[test]
+    fn test_matcher_single_no_pipe() {
+        let config = HookConfig::new("Bash");
+        assert!(config.matches("Bash"));
+        assert!(!config.matches("Edit"));
+    }
+
+    #[test]
+    fn test_matcher_wildcard() {
+        let config = HookConfig::new("*");
+        assert!(config.matches("Bash"));
+        assert!(config.matches("Edit"));
+        assert!(config.matches("Anything"));
+    }
+
+    #[test]
+    fn test_hook_config_with_condition() {
+        let config = HookConfig::new("Bash")
+            .with_condition("Bash(rm *)");
+        assert_eq!(config.if_condition.as_deref(), Some("Bash(rm *)"));
     }
 
     #[test]
@@ -2160,6 +2391,7 @@ More lines"#;
     fn test_hook_config_serialization_camel_case() {
         let config = HookConfig {
             matcher: "Bash".to_string(),
+            if_condition: None,
             hooks: vec![HookDef {
                 command: "echo test".to_string(),
                 r#type: HookType::Command,
@@ -2167,6 +2399,8 @@ More lines"#;
                 headers: HashMap::new(),
                 timeout: 10,
                 blocking: false,
+                allowed_env_vars: Vec::new(),
+                shell: None,
             }],
         };
 

@@ -30,8 +30,10 @@
 use crate::api::{
     ContentBlock, Message, MessageContent, ToolResultContent,
 };
+use crate::hooks::{HookEvent, HookManager};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
@@ -765,6 +767,8 @@ pub struct CompactEngine {
     config: CompactConfig,
     summarizer: Box<dyn Summarizer>,
     compacting: bool,
+    /// Optional hook manager for PreCompact/PostCompact lifecycle hooks.
+    hook_manager: Option<Arc<tokio::sync::RwLock<HookManager>>>,
 }
 
 impl CompactEngine {
@@ -775,6 +779,7 @@ impl CompactEngine {
             config,
             summarizer,
             compacting: false,
+            hook_manager: None,
         })
     }
 
@@ -786,6 +791,63 @@ impl CompactEngine {
     /// Create with an AI-powered summarizer for higher quality compression.
     pub fn with_ai_summarizer(client: crate::api::LlmClient) -> Result<Self, CompactError> {
         Self::new(CompactConfig::default(), Box::new(AiSummarizer::new(client)))
+    }
+
+    /// Set the hook manager for PreCompact/PostCompact lifecycle hooks.
+    ///
+    /// The hook manager is stored behind an `Arc<RwLock<...>>` so it can be
+    /// shared with other components (e.g. the tool execution service).
+    pub fn set_hook_manager(&mut self, hook_manager: Arc<tokio::sync::RwLock<HookManager>>) {
+        self.hook_manager = Some(hook_manager);
+    }
+
+    // ========================================================================
+    // Hook Helpers
+    // ========================================================================
+
+    /// Fire PreCompact hooks. Errors are logged but do not block compaction.
+    fn fire_pre_compact_hooks(&self, messages_count: usize, estimated_tokens: usize) {
+        if let Some(ref hm) = self.hook_manager {
+            let event = HookEvent::PreCompact {
+                messages_count,
+                estimated_tokens,
+            };
+            let hm = hm.clone();
+            // Use block_on since the compact methods are synchronous.
+            // This is safe because compact is called from async contexts
+            // that already have a tokio runtime available.
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async {
+                let hm_guard = hm.read().await;
+                if let Err(e) = hm_guard.run_hooks(&event).await {
+                    tracing::warn!("PreCompact hook error: {e}");
+                }
+            });
+        }
+    }
+
+    /// Fire PostCompact hooks. Errors are logged but do not block compaction.
+    fn fire_post_compact_hooks(
+        &self,
+        messages_before: usize,
+        messages_after: usize,
+        tokens_freed: usize,
+    ) {
+        if let Some(ref hm) = self.hook_manager {
+            let event = HookEvent::PostCompact {
+                messages_before,
+                messages_after,
+                tokens_freed,
+            };
+            let hm = hm.clone();
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async {
+                let hm_guard = hm.read().await;
+                if let Err(e) = hm_guard.run_hooks(&event).await {
+                    tracing::warn!("PostCompact hook error: {e}");
+                }
+            });
+        }
     }
 
     /// Get a reference to the config
@@ -874,6 +936,7 @@ impl CompactEngine {
         }
 
         let original_tokens = estimate_tokens(messages);
+        let messages_count_before = messages.len();
         if messages.is_empty() {
             return Err(CompactError::NoMessagesToCompact);
         }
@@ -889,6 +952,9 @@ impl CompactEngine {
             ));
         }
 
+        // Fire PreCompact hooks
+        self.fire_pre_compact_hooks(messages_count_before, original_tokens);
+
         self.compacting = true;
         let start = Instant::now();
 
@@ -900,6 +966,15 @@ impl CompactEngine {
             Ok(mut compact_result) => {
                 compact_result.duration = start.elapsed();
                 tracing::info!("{}", compact_result);
+
+                // Fire PostCompact hooks
+                let tokens_freed = compact_result.original_tokens.saturating_sub(compact_result.compacted_tokens);
+                self.fire_post_compact_hooks(
+                    messages_count_before,
+                    messages.len(),
+                    tokens_freed,
+                );
+
                 Ok(compact_result)
             }
             Err(e) => {
@@ -1363,6 +1438,7 @@ impl CompactEngine {
     /// Compress using message groups for smarter summarization
     pub fn group_compact(&mut self, messages: &mut Vec<Message>) -> Result<CompactResult, CompactError> {
         let original_tokens = estimate_tokens(messages);
+        let messages_count_before = messages.len();
         if messages.is_empty() {
             return Err(CompactError::NoMessagesToCompact);
         }
@@ -1372,6 +1448,9 @@ impl CompactEngine {
                 original_tokens,
             ));
         }
+
+        // Fire PreCompact hooks
+        self.fire_pre_compact_hooks(messages_count_before, original_tokens);
 
         let start = Instant::now();
 
@@ -1410,6 +1489,10 @@ impl CompactEngine {
             0.0
         };
 
+        // Fire PostCompact hooks
+        let tokens_freed = original_tokens.saturating_sub(compacted_tokens);
+        self.fire_post_compact_hooks(messages_count_before, messages.len(), tokens_freed);
+
         Ok(CompactResult {
             original_tokens,
             compacted_tokens,
@@ -1444,9 +1527,13 @@ impl CompactEngine {
         }
 
         let original_tokens = estimate_tokens(messages);
+        let messages_count_before = messages.len();
         if messages.len() <= self.config.keep_recent_count + 1 {
             return Ok(CompactResult::no_change(CompactStrategy::SummarizeOld, original_tokens));
         }
+
+        // Fire PreCompact hooks
+        self.fire_pre_compact_hooks(messages_count_before, original_tokens);
 
         let start = Instant::now();
         let mut total_micro_compacted = 0usize;
@@ -1538,6 +1625,10 @@ impl CompactEngine {
             0.0
         };
 
+        // Fire PostCompact hooks
+        let tokens_freed = original_tokens.saturating_sub(compacted_tokens);
+        self.fire_post_compact_hooks(messages_count_before, messages.len(), tokens_freed);
+
         Ok(CompactResult {
             original_tokens,
             compacted_tokens,
@@ -1547,6 +1638,11 @@ impl CompactEngine {
             duration: start.elapsed(),
             strategy: CompactStrategy::SummarizeOld,
         })
+    }
+
+    /// Get the hook manager, if configured.
+    pub fn hook_manager(&self) -> Option<&Arc<tokio::sync::RwLock<HookManager>>> {
+        self.hook_manager.as_ref()
     }
 }
 

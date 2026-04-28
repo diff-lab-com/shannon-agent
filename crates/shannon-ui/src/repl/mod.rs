@@ -1129,10 +1129,24 @@ impl Repl {
                 query_engine.append_system_prompt(&memory_content);
             }
 
-            // 3. Load git context (branch, recent commits, status)
+            // 3. Load .claude/rules/*.md
+            if let Some(rules) = shannon_core::project_memory::load_rules(&cwd) {
+                query_engine.append_system_prompt(&rules);
+            }
+
+            // 4. Load git context (branch, recent commits, status)
             if let Some(git_ctx) = shannon_core::project_instructions::git_context(&cwd) {
                 query_engine.append_system_prompt(&git_ctx);
             }
+
+            // 5. Attach ContextInjector for hot-reload + compaction reinjection
+            let storage_dir = dirs::home_dir()
+                .map(|h| h.join(".shannon"))
+                .unwrap_or_else(|| cwd.clone());
+            let injector = shannon_core::query_engine::ContextInjector::new(
+                cwd, storage_dir,
+            );
+            query_engine = query_engine.with_context_injector(injector);
         }
 
         // Create permission request channel

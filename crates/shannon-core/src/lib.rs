@@ -256,6 +256,8 @@ pub use project_memory::{
     ProjectMemoryError as ClaudeMdError,
     MemorySource,
     MergedMemory,
+    load_memory_index,
+    load_rules,
 };
 /// Core error types for Shannon
 pub mod error {

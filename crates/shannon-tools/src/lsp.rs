@@ -449,16 +449,116 @@ pub fn detect_language_id(file_path: &Path) -> &'static str {
 }
 
 /// Detect the appropriate language server command for a given language.
-fn detect_server_command(language_id: &str) -> Option<(&'static str, Vec<&'static str>)> {
+fn detect_server_command(language_id: &str) -> Option<(String, Vec<String>)> {
+    // 1. Try .lsp.json config discovery first
+    if let Some(cmd) = discover_lsp_config_command(language_id) {
+        return Some(cmd);
+    }
+
+    // 2. Fall back to hardcoded defaults
     match language_id {
-        "rust" => Some(("rust-analyzer", vec![])),
-        "typescript" | "javascript" => Some(("typescript-language-server", vec!["--stdio"])),
-        "python" => Some(("pylsp", vec![])),
-        "go" => Some(("gopls", vec![])),
-        "java" => Some(("jdtls", vec![])),
-        "c" | "cpp" => Some(("clangd", vec![])),
+        "rust" => Some(("rust-analyzer".to_string(), vec![])),
+        "typescript" | "javascript" => Some(("typescript-language-server".to_string(), vec!["--stdio".to_string()])),
+        "python" => Some(("pylsp".to_string(), vec![])),
+        "go" => Some(("gopls".to_string(), vec![])),
+        "java" => Some(("jdtls".to_string(), vec![])),
+        "c" | "cpp" => Some(("clangd".to_string(), vec![])),
         _ => None,
     }
+}
+
+// ---------------------------------------------------------------------------
+// .lsp.json Configuration
+// ---------------------------------------------------------------------------
+
+/// A single language server entry in `.lsp.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LspServerConfig {
+    /// Command to launch the language server.
+    pub command: String,
+    /// Arguments to pass to the command.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Map from file extension (with dot) to LSP language ID.
+    #[serde(default)]
+    pub extension_to_language: HashMap<String, String>,
+    /// Initialization options for the server.
+    #[serde(default)]
+    pub initialization_options: Option<serde_json::Value>,
+    /// Server settings.
+    #[serde(default)]
+    pub settings: Option<serde_json::Value>,
+    /// Startup timeout in milliseconds (default: 10000).
+    #[serde(default = "default_startup_timeout")]
+    pub startup_timeout: u64,
+    /// Shutdown timeout in milliseconds (default: 5000).
+    #[serde(default = "default_shutdown_timeout")]
+    pub shutdown_timeout: u64,
+    /// Whether to restart on crash (default: true).
+    #[serde(default = "default_restart_on_crash")]
+    pub restart_on_crash: bool,
+    /// Maximum restart attempts (default: 3).
+    #[serde(default = "default_max_restarts")]
+    pub max_restarts: u32,
+}
+
+fn default_startup_timeout() -> u64 { 10000 }
+fn default_shutdown_timeout() -> u64 { 5000 }
+fn default_restart_on_crash() -> bool { true }
+fn default_max_restarts() -> u32 { 3 }
+
+/// The full `.lsp.json` file structure: maps language names to server configs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LspConfig {
+    /// Map of language name (e.g., "rust", "typescript") to server config.
+    #[serde(flatten)]
+    pub servers: HashMap<String, LspServerConfig>,
+}
+
+/// Discovery paths for `.lsp.json`, in priority order (highest last).
+fn lsp_config_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    // User-level
+    if let Some(home) = dirs::home_dir() {
+        paths.push(home.join(".shannon").join(".lsp.json"));
+        paths.push(home.join(".claude").join(".lsp.json"));
+    }
+
+    // Project-level (highest priority)
+    if let Ok(cwd) = std::env::current_dir() {
+        paths.push(cwd.join(".lsp.json"));
+    }
+
+    paths
+}
+
+/// Load and merge all `.lsp.json` configs found on disk.
+pub fn load_lsp_config() -> Option<LspConfig> {
+    let mut merged = HashMap::new();
+
+    for path in lsp_config_paths() {
+        if path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(config) = serde_json::from_str::<LspConfig>(&content) {
+                    merged.extend(config.servers);
+                }
+            }
+        }
+    }
+
+    if merged.is_empty() {
+        None
+    } else {
+        Some(LspConfig { servers: merged })
+    }
+}
+
+/// Resolve a language ID to a server command using `.lsp.json` config.
+fn discover_lsp_config_command(language_id: &str) -> Option<(String, Vec<String>)> {
+    let config = load_lsp_config()?;
+    let server = config.servers.get(language_id)?;
+    Some((server.command.clone(), server.args.clone()))
 }
 
 /// Parse an LSP result into a list of locations.
@@ -804,7 +904,7 @@ impl GoToDefinitionTool {
 
         // Check if language server is available
         let which_result = Command::new("which")
-            .arg(server_cmd)
+            .arg(&server_cmd)
             .output()
             .await;
 
@@ -815,9 +915,9 @@ impl GoToDefinitionTool {
         }
 
         let root_path = find_workspace_root(&file_path);
-        let args: Vec<&str> = server_args.to_vec();
+        let args: Vec<&str> = server_args.iter().map(|s| s.as_str()).collect();
 
-        let mut client = LspClient::launch(server_cmd, &args, &root_path)
+        let mut client = LspClient::launch(&server_cmd, &args, &root_path)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
 
@@ -936,7 +1036,7 @@ impl FindReferencesTool {
         })?;
 
         let which_result = Command::new("which")
-            .arg(server_cmd)
+            .arg(&server_cmd)
             .output()
             .await;
 
@@ -947,9 +1047,9 @@ impl FindReferencesTool {
         }
 
         let root_path = find_workspace_root(&file_path);
-        let args: Vec<&str> = server_args.to_vec();
+        let args: Vec<&str> = server_args.iter().map(|s| s.as_str()).collect();
 
-        let mut client = LspClient::launch(server_cmd, &args, &root_path)
+        let mut client = LspClient::launch(&server_cmd, &args, &root_path)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
 
@@ -1078,7 +1178,7 @@ impl HoverTool {
         })?;
 
         let which_result = Command::new("which")
-            .arg(server_cmd)
+            .arg(&server_cmd)
             .output()
             .await;
 
@@ -1089,9 +1189,9 @@ impl HoverTool {
         }
 
         let root_path = find_workspace_root(&file_path);
-        let args: Vec<&str> = server_args.to_vec();
+        let args: Vec<&str> = server_args.iter().map(|s| s.as_str()).collect();
 
-        let mut client = LspClient::launch(server_cmd, &args, &root_path)
+        let mut client = LspClient::launch(&server_cmd, &args, &root_path)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
 
@@ -1210,7 +1310,7 @@ impl DocumentSymbolTool {
         })?;
 
         let which_result = Command::new("which")
-            .arg(server_cmd)
+            .arg(&server_cmd)
             .output()
             .await;
 
@@ -1221,9 +1321,9 @@ impl DocumentSymbolTool {
         }
 
         let root_path = find_workspace_root(&file_path);
-        let args: Vec<&str> = server_args.to_vec();
+        let args: Vec<&str> = server_args.iter().map(|s| s.as_str()).collect();
 
-        let mut client = LspClient::launch(server_cmd, &args, &root_path)
+        let mut client = LspClient::launch(&server_cmd, &args, &root_path)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
 
@@ -1380,15 +1480,15 @@ impl WorkspaceSymbolTool {
             ))
         })?;
 
-        let which_result = Command::new("which").arg(server_cmd).output().await;
+        let which_result = Command::new("which").arg(&server_cmd).output().await;
         if which_result.is_err() || !which_result.unwrap().status.success() {
             return Err(ToolError::ExecutionFailed(format!(
                 "Language server '{server_cmd}' not found. Please install it."
             )));
         }
 
-        let args: Vec<&str> = server_args.to_vec();
-        let mut client = LspClient::launch(server_cmd, &args, &root_path)
+        let args: Vec<&str> = server_args.iter().map(|s| s.as_str()).collect();
+        let mut client = LspClient::launch(&server_cmd, &args, &root_path)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
 
@@ -1584,7 +1684,7 @@ impl RenameSymbolTool {
             ))
         })?;
 
-        let which_result = Command::new("which").arg(server_cmd).output().await;
+        let which_result = Command::new("which").arg(&server_cmd).output().await;
         if which_result.is_err() || !which_result.unwrap().status.success() {
             return Err(ToolError::ExecutionFailed(format!(
                 "Language server '{server_cmd}' not found. Please install it."
@@ -1592,8 +1692,8 @@ impl RenameSymbolTool {
         }
 
         let root_path = find_workspace_root(&file_path);
-        let args: Vec<&str> = server_args.to_vec();
-        let mut client = LspClient::launch(server_cmd, &args, &root_path)
+        let args: Vec<&str> = server_args.iter().map(|s| s.as_str()).collect();
+        let mut client = LspClient::launch(&server_cmd, &args, &root_path)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
 
@@ -1783,7 +1883,7 @@ impl CodeActionsTool {
             ))
         })?;
 
-        let which_result = Command::new("which").arg(server_cmd).output().await;
+        let which_result = Command::new("which").arg(&server_cmd).output().await;
         if which_result.is_err() || !which_result.unwrap().status.success() {
             return Err(ToolError::ExecutionFailed(format!(
                 "Language server '{server_cmd}' not found. Please install it."
@@ -1791,8 +1891,8 @@ impl CodeActionsTool {
         }
 
         let root_path = find_workspace_root(&file_path);
-        let args: Vec<&str> = server_args.to_vec();
-        let mut client = LspClient::launch(server_cmd, &args, &root_path)
+        let args: Vec<&str> = server_args.iter().map(|s| s.as_str()).collect();
+        let mut client = LspClient::launch(&server_cmd, &args, &root_path)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
 

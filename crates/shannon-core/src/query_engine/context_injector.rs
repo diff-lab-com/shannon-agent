@@ -91,9 +91,10 @@ impl ContextInjector {
 
     /// Build the full reinjection context string used after compaction.
     ///
-    /// This combines project instructions and preference memory into a single
-    /// string that is passed to [`CompactEngine::compact_tiered`] so it can be
-    /// re-anchored at the start of the compacted message list.
+    /// This combines project instructions, preference memory, MEMORY.md index,
+    /// and .claude/rules into a single string that is passed to
+    /// [`CompactEngine::compact_tiered`] so it can be re-anchored at the start
+    /// of the compacted message list.
     pub fn reinjection_context(&self) -> String {
         let mut parts: Vec<String> = Vec::new();
 
@@ -101,6 +102,16 @@ impl ContextInjector {
             if !instructions.is_empty() {
                 parts.push(instructions);
             }
+        }
+
+        // MEMORY.md index
+        if let Some(memory_idx) = crate::project_memory::load_memory_index(&self.project_dir) {
+            parts.push(memory_idx);
+        }
+
+        // .claude/rules/*.md
+        if let Some(rules) = crate::project_memory::load_rules(&self.project_dir) {
+            parts.push(rules);
         }
 
         let prefs = self.preference_memory_text();
@@ -124,6 +135,26 @@ impl ContextInjector {
                 SystemContentBlock::cached(instructions)
             } else {
                 SystemContentBlock::text(instructions)
+            };
+            blocks.push(block);
+        }
+
+        // MEMORY.md index
+        if let Some(memory_idx) = crate::project_memory::load_memory_index(&self.project_dir) {
+            let block = if use_cache {
+                SystemContentBlock::cached(memory_idx)
+            } else {
+                SystemContentBlock::text(memory_idx)
+            };
+            blocks.push(block);
+        }
+
+        // .claude/rules/*.md
+        if let Some(rules) = crate::project_memory::load_rules(&self.project_dir) {
+            let block = if use_cache {
+                SystemContentBlock::cached(rules)
+            } else {
+                SystemContentBlock::text(rules)
             };
             blocks.push(block);
         }
