@@ -168,7 +168,11 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
 
         // Overlay diff viewer if active
         if let Some(ref viewer) = diff_viewer_state {
-            viewer.render(f, f.area(), &diff_data, &theme);
+            if state.diff_interactive && !state.interactive_hunks.is_empty() {
+                viewer.render_interactive(f, f.area(), &diff_data, &theme, &state.interactive_hunks, state.interactive_selected);
+            } else {
+                viewer.render(f, f.area(), &diff_data, &theme);
+            }
         }
 
         // Overlay toast notification if active

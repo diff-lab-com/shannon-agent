@@ -374,7 +374,7 @@ impl DiffViewerWidget {
         &self,
         frame: &mut Frame,
         area: Rect,
-        diff_data: &DiffData,
+        _diff_data: &DiffData,
         theme: &Theme,
         hunks: &[InteractiveHunk],
         selected_hunk: usize,

@@ -74,6 +74,11 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         return handle_command_palette_input(repl, key);
     }
 
+    // If diff viewer overlay is active, handle diff viewer keys
+    if repl.state.diff_viewer.is_some() {
+        return handle_diff_viewer_input(repl, key);
+    }
+
     match key.code {
         KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             open_command_palette(repl);
@@ -823,6 +828,120 @@ fn handle_multi_select_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         KeyCode::Esc => {
             repl.state.multi_select = None;
         }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Dismiss the diff viewer overlay and reset interactive state.
+fn dismiss_diff_viewer(repl: &mut Repl) {
+    repl.state.diff_viewer = None;
+    repl.state.diff_interactive = false;
+    repl.state.interactive_hunks.clear();
+    repl.state.interactive_selected = 0;
+}
+
+/// Handle key input for the diff viewer overlay (both normal and interactive modes).
+fn handle_diff_viewer_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
+    use crate::widgets::diff_viewer::HunkAction;
+
+    match key.code {
+        // Dismiss
+        KeyCode::Esc | KeyCode::Char('q') => {
+            dismiss_diff_viewer(repl);
+        }
+
+        // Navigation
+        KeyCode::Char('j') | KeyCode::Down => {
+            if let Some(ref mut viewer) = repl.state.diff_viewer {
+                if repl.state.diff_interactive {
+                    if repl.state.interactive_selected + 1 < repl.state.interactive_hunks.len() {
+                        repl.state.interactive_selected += 1;
+                    }
+                } else {
+                    viewer.scroll_offset = viewer.scroll_offset.saturating_add(1);
+                }
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if let Some(ref mut viewer) = repl.state.diff_viewer {
+                if repl.state.diff_interactive {
+                    repl.state.interactive_selected = repl.state.interactive_selected.saturating_sub(1);
+                } else {
+                    viewer.scroll_offset = viewer.scroll_offset.saturating_sub(1);
+                }
+            }
+        }
+
+        // Interactive-only actions
+        KeyCode::Char('a') if repl.state.diff_interactive => {
+            let idx = repl.state.interactive_selected;
+            if idx < repl.state.interactive_hunks.len() {
+                repl.state.interactive_hunks[idx].action = HunkAction::Accepted;
+            }
+        }
+        KeyCode::Char('r') if repl.state.diff_interactive => {
+            let idx = repl.state.interactive_selected;
+            if idx < repl.state.interactive_hunks.len() {
+                repl.state.interactive_hunks[idx].action = HunkAction::Rejected;
+            }
+        }
+        KeyCode::Char('A') if repl.state.diff_interactive => {
+            for hunk in &mut repl.state.interactive_hunks {
+                hunk.action = HunkAction::Accepted;
+            }
+        }
+        KeyCode::Char('R') if repl.state.diff_interactive => {
+            for hunk in &mut repl.state.interactive_hunks {
+                hunk.action = HunkAction::Rejected;
+            }
+        }
+        KeyCode::Enter if repl.state.diff_interactive => {
+            // Collect accepted content per file and apply via git apply
+            let accepted: Vec<_> = repl.state.interactive_hunks.iter()
+                .filter(|h| h.action == HunkAction::Accepted)
+                .collect();
+            if accepted.is_empty() {
+                dismiss_diff_viewer(repl);
+            } else {
+                // Reconstruct accepted diff and apply with git apply
+                let mut patch = String::new();
+                for hunk in &repl.state.interactive_hunks {
+                    if hunk.action == HunkAction::Accepted {
+                        for line in &hunk.lines {
+                            patch.push_str(line);
+                            patch.push('\n');
+                        }
+                    }
+                }
+                // Write patch to temp file and apply
+                let tmp = std::env::temp_dir().join("shannon-interactive-diff.patch");
+                if let Ok(()) = std::fs::write(&tmp, &patch) {
+                    let output = std::process::Command::new("git")
+                        .args(["apply", "--allow-empty", tmp.to_str().unwrap_or("")])
+                        .current_dir(&repl.state.working_directory)
+                        .output();
+                    match output {
+                        Ok(o) if o.status.success() => {
+                            let count = accepted.len();
+                            dismiss_diff_viewer(repl);
+                            repl.chat.add_message(ChatRole::System, format!("Applied {count} accepted hunk(s)."));
+                        }
+                        Ok(o) => {
+                            let err = String::from_utf8_lossy(&o.stderr);
+                            repl.chat.add_message(ChatRole::System, format!("git apply failed: {err}"));
+                        }
+                        Err(e) => {
+                            repl.chat.add_message(ChatRole::System, format!("Failed to run git apply: {e}"));
+                        }
+                    }
+                    let _ = std::fs::remove_file(&tmp);
+                } else {
+                    repl.chat.add_message(ChatRole::System, "Failed to write patch file.".to_string());
+                }
+            }
+        }
+
         _ => {}
     }
     Ok(())

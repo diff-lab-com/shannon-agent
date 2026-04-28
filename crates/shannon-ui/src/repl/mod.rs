@@ -129,6 +129,12 @@ pub struct ReplState {
     pub sidebar_visible: bool,
     /// Active diff viewer overlay (activated by /diff command)
     pub diff_viewer: Option<crate::widgets::diff_viewer::DiffViewerWidget>,
+    /// Interactive diff hunks (when in interactive review mode)
+    pub interactive_hunks: Vec<crate::widgets::diff_viewer::InteractiveHunk>,
+    /// Selected hunk index for interactive diff viewer
+    pub interactive_selected: usize,
+    /// Whether the diff viewer is in interactive mode
+    pub diff_interactive: bool,
     /// Whether incremental reverse search (Ctrl+R) is active
     pub incremental_search_active: bool,
     /// Current search query for incremental search
@@ -290,6 +296,9 @@ impl Default for ReplState {
             keybindings: crate::keybindings::load_keybindings(),
             sidebar_visible: false,
             diff_viewer: None,
+            interactive_hunks: Vec::new(),
+            interactive_selected: 0,
+            diff_interactive: false,
             incremental_search_active: false,
             incremental_search_query: String::new(),
             incremental_search_match_index: 0,

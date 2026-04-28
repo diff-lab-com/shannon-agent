@@ -3394,6 +3394,37 @@ fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
         return Ok(());
     }
 
+    // /diff interactive — open interactive hunk-by-hunk review
+    if trimmed == "interactive" || trimmed == "--interactive" {
+        let output = std::process::Command::new("git")
+            .args(["diff", "HEAD"])
+            .current_dir(&repl.state.working_directory)
+            .output();
+
+        match output {
+            Ok(o) if o.status.success() => {
+                let diff_str = String::from_utf8_lossy(&o.stdout);
+                let hunks = crate::widgets::diff_viewer::InteractiveHunk::parse_from_diff(&diff_str, None);
+                if hunks.is_empty() {
+                    repl.chat.add_message(ChatRole::System, "No diff hunks found.".to_string());
+                } else {
+                    repl.state.interactive_hunks = hunks;
+                    repl.state.interactive_selected = 0;
+                    repl.state.diff_interactive = true;
+                    repl.state.diff_viewer = Some(crate::widgets::diff_viewer::DiffViewerWidget::new());
+                }
+            }
+            Ok(o) => {
+                let err = String::from_utf8_lossy(&o.stderr);
+                repl.chat.add_message(ChatRole::System, format!("git diff failed: {err}"));
+            }
+            Err(e) => {
+                repl.chat.add_message(ChatRole::System, format!("Failed to run git diff: {e}"));
+            }
+        }
+        return Ok(());
+    }
+
     // /diff accept-all — keep all unstaged changes
     if trimmed == "accept-all" || trimmed == "keep-all" {
         let output = std::process::Command::new("git")
