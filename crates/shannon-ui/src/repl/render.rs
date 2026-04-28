@@ -31,6 +31,16 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
     let diff_viewer_state = repl.state.diff_viewer.clone();
     let diff_data = repl.diff_data.clone();
 
+    // Sync terminal window title with current state (OSC 0)
+    {
+        let model_short = state.model.as_deref()
+            .map(|m| m.split('/').last().unwrap_or(m))
+            .unwrap_or("shannon");
+        let icon = if state.streaming_active { "✦" } else { "◇" };
+        let title = format!("{icon} Shannon — {model_short} — {}", state.status);
+        let _ = crossterm::execute!(io::stdout(), crossterm::terminal::SetTitle(&title));
+    }
+
     terminal.draw(|f| {
         let pb = if state.progress_bar_visible {
             Some(&state.progress_bar)

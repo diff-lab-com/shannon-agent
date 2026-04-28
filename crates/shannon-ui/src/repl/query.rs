@@ -1,5 +1,15 @@
 //! REPL AI query handling and streaming display
 
+/// Rotating phrases shown during the thinking phase, cycled every 2 seconds.
+const THINKING_PHRASES: &[&str] = &[
+    "Thinking",
+    "Analyzing",
+    "Processing",
+    "Reasoning",
+    "Considering",
+    "Evaluating",
+];
+
 use crate::{
     stream_buffer::StreamBuffer,
     widgets::ChatRole,
@@ -346,7 +356,8 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
             if is_thinking {
                 thinking_dots = (thinking_dots + 1) % 4;
                 let dots = ".".repeat(thinking_dots);
-                repl.state.status = format!("Thinking{dots}");
+                let phase_idx = (stream_start.elapsed().as_secs() / 2) as usize % THINKING_PHRASES.len();
+                repl.state.status = format!("{}{dots}", THINKING_PHRASES[phase_idx]);
             }
 
             // Toast for long operations (>5s)
