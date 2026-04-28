@@ -5,9 +5,8 @@
 //! each character cell encodes two vertical pixels by setting the cell's
 //! foreground to the top pixel color and background to the bottom pixel color.
 //!
-//! Supports all terminals (no protocol required). For Kitty/Sixel/iTerm2
-//! terminals, a future enhancement could use native protocols for higher
-//! fidelity rendering.
+//! Also supports Kitty Graphics Protocol for high-fidelity rendering in
+//! Kitty terminal. Falls back to half-block encoding for other terminals.
 
 use base64::Engine;
 use image::{DynamicImage, GenericImageView, Rgba};
@@ -30,6 +29,7 @@ pub enum ImageProtocol {
 /// Check if terminal supports Kitty graphics protocol
 fn supports_kitty() -> bool {
     std::env::var("TERM").is_ok_and(|t| t.contains("kitty"))
+        || std::env::var("KITTY_WINDOW_ID").is_ok()
 }
 
 /// Check if terminal supports Sixel protocol
@@ -139,6 +139,9 @@ pub fn render_image_base64(
 }
 
 /// Render image bytes into ratatui `Line` objects.
+///
+/// If the terminal supports Kitty graphics protocol, uses native rendering
+/// for higher fidelity. Otherwise falls back to half-block characters.
 pub fn render_image_bytes(
     data: &[u8],
     config: &ImageRenderConfig,
@@ -152,6 +155,13 @@ pub fn render_image_bytes(
             ))];
         }
     };
+
+    let protocol = detect_protocol();
+    if protocol == ImageProtocol::Kitty {
+        if let Some(lines) = render_kitty_image(&img, data, config) {
+            return lines;
+        }
+    }
 
     render_halfblock_image(&img, config)
 }
@@ -356,6 +366,112 @@ pub fn encode_sixel(img: &DynamicImage, max_width: u16, max_height: u16) -> Opti
     output.push_str("\x1B\\");
 
     Some(output)
+}
+
+/// Render an image using Kitty Graphics Protocol.
+///
+/// Sends the raw image data (PNG/JPEG) directly to the terminal via Kitty's
+/// escape sequences. Falls back to half-block if encoding fails.
+fn render_kitty_image(
+    img: &DynamicImage,
+    raw_data: &[u8],
+    config: &ImageRenderConfig,
+) -> Option<Vec<Line<'static>>> {
+    let (orig_w, orig_h) = img.dimensions();
+
+    // Calculate display dimensions in character cells
+    let char_w = if config.max_width > 0 {
+        config.max_width.min(orig_w)
+    } else {
+        60u32
+    };
+    let pixel_w = char_w;
+    let pixel_h = if config.preserve_aspect {
+        let h = (pixel_w as f64 * orig_h as f64 / orig_w as f64).round() as u32;
+        if config.max_height > 0 { h.min(config.max_height * 2) } else { h }
+    } else if config.max_height > 0 {
+        config.max_height * 2
+    } else {
+        (pixel_w as f64 * orig_h as f64 / orig_w as f64).round() as u32
+    };
+
+    if pixel_w == 0 || pixel_h == 0 {
+        return None;
+    }
+
+    // Use raw PNG data if available (avoids re-encoding)
+    let encoded = encode_kitty(raw_data, pixel_w, pixel_h)?;
+    let char_rows = (pixel_h + 1) / 2;
+
+    // Build a single line containing the Kitty escape sequence, plus placeholder
+    // lines to reserve vertical space (Kitty renders the image in-place)
+    let mut lines = Vec::new();
+
+    // The Kitty escape goes on the first line; subsequent lines are empty to
+    // create vertical space so the image doesn't overlap other content.
+    lines.push(Line::from(Span::styled(
+        encoded,
+        Style::default(),
+    )));
+
+    // Reserve vertical space: each char row = 2 pixel rows
+    for _ in 1..char_rows {
+        lines.push(Line::from(""));
+    }
+
+    // Metadata line
+    lines.push(Line::from(Span::styled(
+        format!("[{orig_w}x{orig_h} via Kitty]"),
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    Some(lines)
+}
+
+/// Encode image data using Kitty Graphics Protocol.
+///
+/// Uses chunked transfer for large images. The image is sent as raw PNG data
+/// in base64 chunks via Kitty's `\x1b_G` escape sequences.
+fn encode_kitty(data: &[u8], width: u32, height: u32) -> Option<String> {
+    let b64 = base64::engine::general_purpose::STANDARD.encode(data);
+    let width_str = width.to_string();
+    let height_str = height.to_string();
+
+    // Kitty supports chunked transfer: first chunk has m=1 (more follows),
+    // subsequent chunks have m=1, last chunk has no m flag.
+    // Max safe chunk size: 4096 bytes of base64 data.
+    let chunk_size = 4096;
+    let mut result = String::new();
+
+    let total_chunks = (b64.len() + chunk_size - 1) / chunk_size;
+
+    for (i, chunk) in b64.as_bytes().chunks(chunk_size).enumerate() {
+        let chunk_str = std::str::from_utf8(chunk).ok()?;
+        let is_first = i == 0;
+        let is_last = i == total_chunks - 1;
+
+        if is_first && is_last {
+            // Single chunk: send entire image
+            result.push_str(&format!(
+                "\x1b_Ga=T,f=100,s={},v={};{}\x1b\\",
+                width_str, height_str, chunk_str
+            ));
+        } else if is_first {
+            // First chunk
+            result.push_str(&format!(
+                "\x1b_Ga=T,f=100,s={},v={},m=1;{}\x1b\\",
+                width_str, height_str, chunk_str
+            ));
+        } else if is_last {
+            // Last chunk
+            result.push_str(&format!("\x1b_Gm=1;{}\x1b\\", chunk_str));
+        } else {
+            // Middle chunk
+            result.push_str(&format!("\x1b_Gm=1;{}\x1b\\", chunk_str));
+        }
+    }
+
+    Some(result)
 }
 
 /// Simple color quantization for Sixel encoding.
