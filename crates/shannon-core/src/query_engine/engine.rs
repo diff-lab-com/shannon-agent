@@ -433,7 +433,7 @@ impl QueryEngine {
         let session_id_for_save = self.session_id;
         let cost_tracker = self.cost_tracker.clone();
         let hook_manager = self.hook_manager.clone();
-        let context_injector = self.context_injector.clone();
+        let _context_injector = self.context_injector.clone();
 
         // Search for relevant memories to augment the system prompt
         let memory_entries = if let Some(ref mem_store) = self.memory {
@@ -665,23 +665,11 @@ impl QueryEngine {
                                 message: "Compaction skipped (too many failures), truncating old messages".to_string(),
                             }));
                         } else {
-                            match crate::compact::CompactEngine::with_ai_summarizer(client.clone()) {
+                            match crate::compact::CompactEngine::with_defaults() {
                                 Ok(mut compact_engine) => {
                                     // Build re-injection context from ContextInjector if available,
                                     // otherwise fall back to the system prompt (truncated).
-                                    let reinjection = if let Some(ref injector) = context_injector {
-                                        let ctx = injector.reinjection_context();
-                                        if ctx.is_empty() { None } else { Some(ctx) }
-                                    } else {
-                                        system_prompt.as_deref().map(|sp| {
-                                            if sp.len() > 2000 {
-                                                format!("{}\n[...truncated]", &sp[..2000])
-                                            } else {
-                                                sp.to_string()
-                                            }
-                                        })
-                                    };
-                                    match compact_engine.compact_tiered(&mut messages, reinjection.as_deref()) {
+                                    match compact_engine.compact(&mut messages) {
                                         Ok(result) => {
                                             compaction_failures = 0; // reset on success
                                             let _ = tx.send(Ok(QueryEvent::Progress {

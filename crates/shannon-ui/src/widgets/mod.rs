@@ -12,6 +12,9 @@ pub mod prompt;
 pub mod sidebar;
 pub mod key_hint;
 pub mod session_tab;
+pub mod tool_approval;
+pub mod attachment_bar;
+pub mod command_palette;
 
 // Re-exports for convenient access
 pub use header::HeaderWidget;
@@ -22,6 +25,9 @@ pub use prompt::PromptWidget;
 pub use sidebar::{SidebarWidget, SidebarInfo};
 pub use key_hint::KeyHintWidget;
 pub use session_tab::{SessionTabWidget, SessionInfo};
+pub use tool_approval::{ToolApprovalWidget, ToolApprovalRequest, ApprovalDecision, RiskLevel};
+pub use attachment_bar::{AttachmentBarWidget, Attachment, AttachmentKind};
+pub use command_palette::{CommandPaletteWidget, PaletteCommand, CommandCategory};
 
 // Re-export shared utilities used by other crates
 pub use chat::{detect_diff_language, highlight_diff_line};
@@ -31,9 +37,13 @@ use crate::theme::Theme;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Rect},
     style::Style,
+    text::Line,
     widgets::Paragraph,
     Frame,
 };
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::time::Instant;
 
 // Layout constants (shared with sidebar module)
 use sidebar::{
@@ -43,6 +53,91 @@ use sidebar::{
     MIN_TERMINAL_WIDTH_VAL as MIN_TERMINAL_WIDTH,
     MIN_TERMINAL_HEIGHT_VAL as MIN_TERMINAL_HEIGHT,
 };
+
+// ---------------------------------------------------------------------------
+// Streaming state
+// ---------------------------------------------------------------------------
+
+/// Detailed streaming state for status indicator
+#[derive(Debug, Clone, PartialEq)]
+pub enum StreamingState {
+    Idle,
+    Thinking,
+    CallingTool { name: String },
+    Generating { elapsed_secs: u64 },
+}
+
+impl Default for StreamingState {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Message render cache
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+struct RenderCacheEntry {
+    content_hash: u64,
+    width: u16,
+    lines: Vec<Line<'static>>,
+    timestamp: Instant,
+}
+
+/// Per-message render cache with LRU eviction.
+#[derive(Debug, Clone)]
+pub struct MessageRenderCache {
+    entries: HashMap<usize, RenderCacheEntry>,
+    max_entries: usize,
+}
+
+impl MessageRenderCache {
+    pub fn new(max_entries: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            max_entries,
+        }
+    }
+
+    pub fn get(&mut self, index: usize, content_hash: u64, width: u16) -> Option<&Vec<Line<'static>>> {
+        let entry = self.entries.get_mut(&index)?;
+        if entry.content_hash == content_hash && entry.width == width {
+            entry.timestamp = Instant::now();
+            Some(&entry.lines)
+        } else {
+            None
+        }
+    }
+
+    pub fn insert(&mut self, index: usize, content_hash: u64, width: u16, lines: Vec<Line<'static>>) {
+        if self.entries.len() >= self.max_entries && !self.entries.contains_key(&index) {
+            if let Some(evict_key) = self.entries.iter().min_by_key(|(_, e)| e.timestamp).map(|(k, _)| *k) {
+                self.entries.remove(&evict_key);
+            }
+        }
+        self.entries.insert(index, RenderCacheEntry {
+            content_hash,
+            width,
+            lines,
+            timestamp: Instant::now(),
+        });
+    }
+
+    pub fn invalidate(&mut self, index: usize) {
+        self.entries.remove(&index);
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+}
+
+fn content_hash(s: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut hasher);
+    hasher.finish()
+}
 
 /// Main UI layout widget
 pub struct MainLayoutWidget;

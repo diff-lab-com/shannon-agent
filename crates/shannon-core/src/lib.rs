@@ -193,7 +193,7 @@ pub use session_history::{
 };
 pub use streaming_tool_executor::{StreamingToolExecutor, TrackedTool, ToolStatus};
 pub use tool_execution::{ToolExecutionService, ToolExecutionResult, ToolProgress, ToolProgressStatus};
-pub use compact::{CompactEngine, CompactConfig, CompactResult, CompactStrategy, MessageGroup, CompactError, AiSummarizer, RuleBasedSummarizer, Summarizer};
+pub use compact::{CompactEngine, CompactConfig, CompactResult, CompactStrategy, MessageGroup, CompactError, RuleBasedSummarizer, Summarizer};
 pub use context_pressure::{
     ContextPressureMonitor, PressureLevel, PressureMetrics, PressureRecommendation,
 };

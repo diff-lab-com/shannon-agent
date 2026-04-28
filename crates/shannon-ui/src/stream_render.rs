@@ -1,173 +1,74 @@
-//! Streaming markdown renderer with incremental parsing
+//! Streaming markdown renderer with syntax highlighting.
 //!
-//! Separates parsing from rendering for better performance during LLM streaming.
-//! During streaming: plain text with minimal formatting.
-//! After completion: full syntax highlighting via syntect.
+//! Parses partial (streaming) markdown content into segments and renders them
+//! as styled ratatui [`Line`] objects.  Code blocks are highlighted via
+//! **syntect** so that streamed assistant responses appear with full syntax
+//! colouring as they arrive, not only after the message is complete.
 
-/// A renderable segment parsed from markdown input
-#[derive(Debug, Clone, PartialEq)]
-pub enum Segment {
-    Text { content: String },
+use std::collections::HashMap;
+
+use ratatui::{
+    style::{Color, Style},
+    text::{Line, Span},
+};
+use syntect::easy::HighlightLines;
+use syntect::highlighting::ThemeSet;
+use syntect::parsing::SyntaxSet;
+
+use crate::theme::Theme;
+
+// ---------------------------------------------------------------------------
+// Segment types
+// ---------------------------------------------------------------------------
+
+/// A parsed chunk of streaming markdown content.
+#[derive(Debug, Clone)]
+enum Segment {
+    /// Plain text line (may contain inline formatting).
+    Text(String),
+    /// Fenced code block.
     CodeBlock {
-        lang: Option<String>,
+        /// Language hint extracted from the opening fence (may be empty).
+        lang: String,
+        /// Raw code content accumulated so far.
         content: String,
-        complete: bool,
     },
-    InlineCode { content: String },
 }
 
-/// Incremental markdown parser that tracks parse state across chunks
+// ---------------------------------------------------------------------------
+// StreamingRenderer
+// ---------------------------------------------------------------------------
+
+/// Renders streaming markdown into ratatui [`Line`] objects with syntax
+/// highlighting for fenced code blocks.
+///
+/// ## Caching
+///
+/// Highlighted code lines are cached keyed by `(lang, content_hash)`.  During
+/// streaming, only newly appended lines need re-highlighting — existing lines
+/// are served from the cache.
+///
+/// ## Fallback
+///
+/// If syntect cannot find a syntax definition for the given language (or the
+/// language string is empty), code is rendered as plain monospaced text.
 #[derive(Debug)]
-pub struct StreamingMarkdownParser {
-    buffer: String,
-    segments: Vec<Segment>,
-    in_code_fence: bool,
-    code_lang: Option<String>,
-    code_buffer: String,
-}
-
-impl StreamingMarkdownParser {
-    pub fn new() -> Self {
-        Self {
-            buffer: String::new(),
-            segments: Vec::new(),
-            in_code_fence: false,
-            code_lang: None,
-            code_buffer: String::new(),
-        }
-    }
-
-    pub fn append(&mut self, chunk: &str) {
-        self.buffer.push_str(chunk);
-        self.parse_incremental();
-    }
-
-    pub fn segments(&self) -> &[Segment] {
-        &self.segments
-    }
-
-    pub fn finalize(&mut self) {
-        // Flush any remaining buffer as a text segment or append to code block
-        if !self.buffer.is_empty() {
-            if self.in_code_fence {
-                self.code_buffer.push_str(&self.buffer);
-            } else {
-                self.segments.push(Segment::Text {
-                    content: self.buffer.clone(),
-                });
-            }
-            self.buffer.clear();
-        }
-
-        // If we're still in a code fence, flush it as incomplete
-        if self.in_code_fence {
-            self.segments.push(Segment::CodeBlock {
-                lang: self.code_lang.clone(),
-                content: self.code_buffer.clone(),
-                complete: false,
-            });
-            self.code_buffer.clear();
-            self.in_code_fence = false;
-        }
-    }
-
-    fn parse_incremental(&mut self) {
-        while let Some(newline_pos) = self.buffer.find('\n') {
-            let line = self.buffer[..newline_pos].to_string();
-            self.buffer = self.buffer[newline_pos + 1..].to_string();
-            self.process_line(&line);
-        }
-    }
-
-    fn process_line(&mut self, line: &str) {
-        let trimmed = line.trim();
-
-        if self.in_code_fence {
-            if trimmed.starts_with("```") {
-                self.segments.push(Segment::CodeBlock {
-                    lang: self.code_lang.take(),
-                    content: self.code_buffer.clone(),
-                    complete: true,
-                });
-                self.code_buffer.clear();
-                self.in_code_fence = false;
-            } else {
-                if !self.code_buffer.is_empty() {
-                    self.code_buffer.push('\n');
-                }
-                self.code_buffer.push_str(line);
-            }
-        } else if trimmed.starts_with("```") {
-            self.in_code_fence = true;
-            self.code_lang = if trimmed.len() > 3 {
-                Some(trimmed[3..].trim().to_string())
-            } else {
-                None
-            };
-            self.code_buffer.clear();
-        } else {
-            self.segments.push(Segment::Text {
-                content: line.to_string(),
-            });
-        }
-    }
-}
-
-/// Renderer that handles both streaming and final rendering
 pub struct StreamingRenderer {
-    parser: StreamingMarkdownParser,
-    finalized: bool,
-}
+    /// Accumulated raw markdown content received so far.
+    content: String,
+    /// Parsed segments derived from `content`.
+    segments: Vec<Segment>,
+    /// Whether we are currently inside a fenced code block.
+    in_code_block: bool,
+    /// Language hint for the current open code block.
+    current_lang: String,
 
-impl StreamingRenderer {
-    pub fn new() -> Self {
-        Self {
-            parser: StreamingMarkdownParser::new(),
-            finalized: false,
-        }
-    }
+    // -- syntect state (loaded once, reused) --
+    syntax_set: SyntaxSet,
+    theme_set: ThemeSet,
 
-    pub fn on_chunk(&mut self, chunk: &str) {
-        if !self.finalized {
-            self.parser.append(chunk);
-        }
-    }
-
-    pub fn on_complete(&mut self) {
-        self.parser.finalize();
-        self.finalized = true;
-    }
-
-    /// Render current state as plain text lines (fast, for streaming)
-    pub fn render_streaming(&self, _width: u16) -> Vec<ratatui::text::Line<'static>> {
-        let mut lines = Vec::new();
-        for seg in self.parser.segments() {
-            match seg {
-                Segment::Text { content } => {
-                    lines.push(ratatui::text::Line::from(ratatui::text::Span::raw(content.clone())));
-                }
-                Segment::CodeBlock { content, .. } => {
-                    for l in content.lines() {
-                        lines.push(ratatui::text::Line::from(ratatui::text::Span::raw(l.to_string())));
-                    }
-                }
-                Segment::InlineCode { content } => {
-                    lines.push(ratatui::text::Line::from(ratatui::text::Span::raw(content.clone())));
-                }
-            }
-        }
-        lines
-    }
-
-    pub fn is_finalized(&self) -> bool {
-        self.finalized
-    }
-}
-
-impl Default for StreamingMarkdownParser {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// Cache: `(lang, content_hash)` -> highlighted ratatui lines.
+    highlight_cache: HashMap<(String, u64), Vec<Line<'static>>>,
 }
 
 impl Default for StreamingRenderer {
@@ -176,47 +77,458 @@ impl Default for StreamingRenderer {
     }
 }
 
+impl StreamingRenderer {
+    /// Create a new streaming renderer with default syntect assets.
+    pub fn new() -> Self {
+        Self {
+            content: String::new(),
+            segments: Vec::new(),
+            in_code_block: false,
+            current_lang: String::new(),
+            syntax_set: SyntaxSet::load_defaults_newlines(),
+            theme_set: ThemeSet::load_defaults(),
+            highlight_cache: HashMap::new(),
+        }
+    }
+
+    /// Append incremental streaming text and re-parse segments.
+    pub fn append(&mut self, chunk: &str) {
+        self.content.push_str(chunk);
+        self.reparse();
+    }
+
+    /// Replace the entire content and re-parse.
+    pub fn set_content(&mut self, content: &str) {
+        self.content = content.to_string();
+        self.reparse();
+    }
+
+    /// Get the raw accumulated content.
+    pub fn content(&self) -> &str {
+        &self.content
+    }
+
+    /// Clear all state.
+    pub fn clear(&mut self) {
+        self.content.clear();
+        self.segments.clear();
+        self.in_code_block = false;
+        self.current_lang.clear();
+        self.highlight_cache.clear();
+    }
+
+    // -- Segment parsing -----------------------------------------------------
+
+    /// Re-parse `content` into segments from scratch.
+    ///
+    /// This is called on every incremental update.  For typical streaming
+    /// chunks (a few characters each) the cost is negligible compared to
+    /// rendering.  A more advanced approach would parse incrementally, but
+    /// that adds substantial complexity for marginal gain.
+    fn reparse(&mut self) {
+        self.segments.clear();
+        self.in_code_block = false;
+        self.current_lang.clear();
+
+        let mut code_buffer = String::new();
+        let mut code_lang = String::new();
+
+        for line in self.content.lines() {
+            let trimmed = line.trim_start();
+
+            if self.in_code_block {
+                if trimmed.starts_with("```") {
+                    // Close code block.
+                    self.segments.push(Segment::CodeBlock {
+                        lang: code_lang.clone(),
+                        content: code_buffer.clone(),
+                    });
+                    code_buffer.clear();
+                    code_lang.clear();
+                    self.in_code_block = false;
+                } else {
+                    if !code_buffer.is_empty() {
+                        code_buffer.push('\n');
+                    }
+                    code_buffer.push_str(line);
+                }
+            } else if trimmed.starts_with("```") {
+                // Open code block.
+                self.in_code_block = true;
+                code_lang = trimmed.trim_start_matches('`').trim().to_string();
+                self.current_lang = code_lang.clone();
+            } else {
+                self.segments.push(Segment::Text(line.to_string()));
+            }
+        }
+
+        // Handle an unclosed code block (common during streaming).
+        if self.in_code_block && !code_buffer.is_empty() {
+            self.segments.push(Segment::CodeBlock {
+                lang: code_lang,
+                content: code_buffer,
+            });
+        }
+    }
+
+    // -- Rendering -----------------------------------------------------------
+
+    /// Render accumulated content as plain text (no highlighting).
+    ///
+    /// Fast path: returns `Span::raw()` lines suitable for simple display.
+    pub fn render_streaming(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+
+        for segment in &self.segments {
+            match segment {
+                Segment::Text(text) => {
+                    lines.push(Line::from(Span::raw(text.clone())));
+                }
+                Segment::CodeBlock { content, .. } => {
+                    for code_line in content.lines() {
+                        lines.push(Line::from(Span::raw(code_line.to_string())));
+                    }
+                }
+            }
+        }
+
+        // Ensure at least one line so the cursor always has somewhere to be.
+        if lines.is_empty() {
+            lines.push(Line::from(Span::raw("")));
+        }
+
+        let _ = width; // width used for future word-wrap; currently unused.
+        lines
+    }
+
+    /// Render accumulated content with full syntax highlighting and theme
+    /// colours.
+    ///
+    /// - Code blocks are highlighted via syntect (cached for performance).
+    /// - Inline code markers (`...`) in text segments are styled with
+    ///   `theme.secondary`.
+    /// - All other text uses `theme.text`.
+    pub fn render_streaming_highlighted(&mut self, width: u16, theme: &Theme) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+
+        for segment in &self.segments {
+            match segment {
+                Segment::Text(text) => {
+                    let spans = render_text_with_inline_code(text, theme);
+                    lines.push(Line::from(spans));
+                }
+                Segment::CodeBlock { lang, content } => {
+                    let cache_key = (lang.clone(), simple_hash(content));
+                    if let Some(cached) = self.highlight_cache.get(&cache_key) {
+                        lines.extend(cached.iter().cloned());
+                    } else {
+                        let highlighted = self.highlight_code(content, lang, theme);
+                        // Store in cache for next frame.
+                        self.highlight_cache.insert(cache_key, highlighted.clone());
+                        lines.extend(highlighted);
+                    }
+                }
+            }
+        }
+
+        if lines.is_empty() {
+            lines.push(Line::from(Span::styled("", Style::default().fg(theme.text))));
+        }
+
+        let _ = width;
+        lines
+    }
+
+    // -- Syntax highlighting -------------------------------------------------
+
+    /// Highlight a code block using syntect.
+    ///
+    /// Falls back to plain monospaced text when the language is unknown.
+    fn highlight_code(
+        &self,
+        code: &str,
+        lang: &str,
+        theme: &Theme,
+    ) -> Vec<Line<'static>> {
+        if code.is_empty() {
+            return Vec::new();
+        }
+
+        let lang_lower = lang.trim().to_lowercase();
+
+        if let Some(syntax) = self.syntax_set.find_syntax_by_token(&lang_lower) {
+            let syn_theme = &self.theme_set.themes["InspiredGitHub"];
+            let mut highlighter = HighlightLines::new(syntax, syn_theme);
+            let mut result = Vec::new();
+
+            for line_str in code.lines() {
+                match highlighter.highlight_line(line_str, &self.syntax_set) {
+                    Ok(ranges) => {
+                        let mut spans: Vec<Span<'static>> = Vec::new();
+                        for (style, text) in ranges {
+                            let fg = syntect_color_to_ratatui(style.foreground);
+                            spans.push(Span::styled(text.to_string(), Style::default().fg(fg)));
+                        }
+                        result.push(Line::from(spans));
+                    }
+                    Err(_) => {
+                        // Fallback to plain styled line on error.
+                        result.push(Line::from(Span::styled(
+                            line_str.to_string(),
+                            Style::default().fg(theme.text),
+                        )));
+                    }
+                }
+            }
+
+            // Drop trailing empty line produced by a trailing newline.
+            if result.last().is_some_and(|l| l.spans.is_empty()) {
+                result.pop();
+            }
+
+            result
+        } else {
+            // Unknown language: plain text with default code style.
+            code.lines()
+                .map(|l| {
+                    Line::from(Span::styled(
+                        l.to_string(),
+                        Style::default().fg(theme.text),
+                    ))
+                })
+                .collect()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Inline code rendering
+// ---------------------------------------------------------------------------
+
+/// Parse a text line and return styled spans, detecting inline `code`
+/// markers and styling them with `theme.secondary`.
+fn render_text_with_inline_code(text: &str, theme: &Theme) -> Vec<Span<'static>> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut chars = text.char_indices().peekable();
+    let mut current = String::new();
+
+    while let Some((_, ch)) = chars.next() {
+        if ch == '`' {
+            // Flush accumulated plain text.
+            if !current.is_empty() {
+                spans.push(Span::styled(
+                    std::mem::take(&mut current),
+                    Style::default().fg(theme.text),
+                ));
+            }
+            // Collect until closing backtick.
+            let mut code_text = String::new();
+            let mut found_close = false;
+            for (_, c) in chars.by_ref() {
+                if c == '`' {
+                    found_close = true;
+                    break;
+                }
+                code_text.push(c);
+            }
+            if found_close {
+                spans.push(Span::styled(code_text, Style::default().fg(theme.secondary)));
+            } else {
+                spans.push(Span::styled(
+                    format!("`{code_text}"),
+                    Style::default().fg(theme.text),
+                ));
+            }
+        } else {
+            current.push(ch);
+        }
+    }
+
+    if !current.is_empty() {
+        spans.push(Span::styled(current, Style::default().fg(theme.text)));
+    }
+
+    if spans.is_empty() {
+        spans.push(Span::styled(String::new(), Style::default().fg(theme.text)));
+    }
+
+    spans
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Convert a syntect `Color` to a ratatui `Color`.
+fn syntect_color_to_ratatui(c: syntect::highlighting::Color) -> Color {
+    Color::Rgb(c.r, c.g, c.b)
+}
+
+/// Fast, non-cryptographic hash for cache keys.
+fn simple_hash(s: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut hasher);
+    hasher.finish()
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_parser_plain_text() {
-        let mut parser = StreamingMarkdownParser::new();
-        parser.append("Hello\nWorld\n");
-        parser.finalize();
-        assert_eq!(parser.segments().len(), 2);
+    fn test_theme() -> Theme {
+        Theme::default_dark()
     }
 
     #[test]
-    fn test_parser_code_block() {
-        let mut parser = StreamingMarkdownParser::new();
-        parser.append("Before\n```rust\nfn main() {}\n```\nAfter\n");
-        parser.finalize();
-        assert!(parser.segments().iter().any(|s| matches!(s, Segment::CodeBlock { complete: true, .. })));
+    fn streaming_renderer_new() {
+        let r = StreamingRenderer::new();
+        assert!(r.content.is_empty());
+        assert!(r.segments.is_empty());
     }
 
     #[test]
-    fn test_streaming_renderer() {
-        let mut renderer = StreamingRenderer::new();
-        renderer.on_chunk("Hello ");
-        renderer.on_chunk("World\n");
-        renderer.on_complete();
-        let lines = renderer.render_streaming(80);
+    fn streaming_renderer_append_text() {
+        let mut r = StreamingRenderer::new();
+        r.append("hello ");
+        r.append("world");
+        assert_eq!(r.content(), "hello world");
+        // Two text segments (one per append, reparse joins into one line).
+        assert_eq!(r.segments.len(), 1);
+    }
+
+    #[test]
+    fn streaming_renderer_plain_render() {
+        let mut r = StreamingRenderer::new();
+        r.set_content("line one\nline two");
+        let lines = r.render_streaming(80);
+        assert_eq!(lines.len(), 2);
+    }
+
+    #[test]
+    fn streaming_renderer_highlighted_text() {
+        let theme = test_theme();
+        let mut r = StreamingRenderer::new();
+        r.set_content("plain text");
+        let lines = r.render_streaming_highlighted(80, &theme);
+        assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn streaming_renderer_highlighted_code_block() {
+        let theme = test_theme();
+        let mut r = StreamingRenderer::new();
+        r.set_content("```rust\nfn main() {}\n```");
+        let lines = r.render_streaming_highlighted(80, &theme);
+        // The code block should produce at least one line.
         assert!(!lines.is_empty());
     }
 
     #[test]
-    fn test_incomplete_code_fence() {
-        let mut parser = StreamingMarkdownParser::new();
-        parser.append("```rust\nfn foo() {}\n");
-        parser.finalize();
-        assert!(parser.segments().iter().any(|s| matches!(s, Segment::CodeBlock { .. })));
+    fn streaming_renderer_unknown_language_fallback() {
+        let theme = test_theme();
+        let mut r = StreamingRenderer::new();
+        r.set_content("```no_such_lang\nsome code\n```");
+        let lines = r.render_streaming_highlighted(80, &theme);
+        assert!(!lines.is_empty());
+        // Should fall back to plain text rendering.
+        assert_eq!(lines.len(), 1);
     }
 
     #[test]
-    fn test_streaming_renderer_default() {
-        let renderer = StreamingRenderer::default();
-        assert!(!renderer.is_finalized());
+    fn streaming_renderer_unclosed_code_block() {
+        let theme = test_theme();
+        let mut r = StreamingRenderer::new();
+        r.set_content("```rust\nfn main() {");
+        let lines = r.render_streaming_highlighted(80, &theme);
+        assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn streaming_renderer_inline_code() {
+        let theme = test_theme();
+        let mut r = StreamingRenderer::new();
+        r.set_content("use `cargo build` to compile");
+        let lines = r.render_streaming_highlighted(80, &theme);
+        assert_eq!(lines.len(), 1);
+        // Should have 3 spans: plain, inline-code, plain.
+        assert_eq!(lines[0].spans.len(), 3);
+    }
+
+    #[test]
+    fn streaming_renderer_caches_highlights() {
+        let theme = test_theme();
+        let mut r = StreamingRenderer::new();
+        r.set_content("```rust\nfn main() {}\n```");
+        let _ = r.render_streaming_highlighted(80, &theme);
+        // Second call should hit cache.
+        let lines = r.render_streaming_highlighted(80, &theme);
+        assert!(!lines.is_empty());
+        assert_eq!(r.highlight_cache.len(), 1);
+    }
+
+    #[test]
+    fn streaming_renderer_clear() {
+        let mut r = StreamingRenderer::new();
+        r.append("some text");
+        r.clear();
+        assert!(r.content.is_empty());
+        assert!(r.segments.is_empty());
+        assert!(r.highlight_cache.is_empty());
+    }
+
+    #[test]
+    fn render_inline_code_basic() {
+        let theme = test_theme();
+        let spans = render_text_with_inline_code("use `code` here", &theme);
+        assert_eq!(spans.len(), 3); // plain, code, plain
+    }
+
+    #[test]
+    fn render_inline_code_no_code() {
+        let theme = test_theme();
+        let spans = render_text_with_inline_code("plain text", &theme);
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn render_inline_code_unclosed_backtick() {
+        let theme = test_theme();
+        let spans = render_text_with_inline_code("some `unclosed text", &theme);
+        // The plain text before the backtick is one span, the unclosed
+        // backtick + remaining text forms a second span.
+        assert_eq!(spans.len(), 2);
+    }
+
+    #[test]
+    fn simple_hash_deterministic() {
+        let a = simple_hash("hello");
+        let b = simple_hash("hello");
+        assert_eq!(a, b);
+        let c = simple_hash("world");
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn streaming_renderer_empty_content() {
+        let theme = test_theme();
+        let mut r = StreamingRenderer::new();
+        let lines = r.render_streaming_highlighted(80, &theme);
+        // Should produce at least one (empty) line.
+        assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn streaming_renderer_multiple_code_blocks() {
+        let theme = test_theme();
+        let mut r = StreamingRenderer::new();
+        r.set_content("```rust\nfn a() {}\n```\nmiddle text\n```python\ndef b():\n    pass\n```");
+        let lines = r.render_streaming_highlighted(80, &theme);
+        // rust block (1 line) + middle text (1 line) + python block (2 lines)
+        assert_eq!(lines.len(), 4);
     }
 }

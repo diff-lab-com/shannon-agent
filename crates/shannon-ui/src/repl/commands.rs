@@ -3948,12 +3948,7 @@ fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
         CompactStrategy::GroupCompress => compact_engine.group_compact(&mut messages),
         _ => {
             // Default: 3-tier compaction with re-injection of project context
-            let reinjection = repl.query_engine.as_ref().and_then(|e| {
-                e.system_prompt().map(|sp| {
-                    if sp.len() > 2000 { format!("{}\n[...truncated]", &sp[..2000]) } else { sp }
-                })
-            });
-            compact_engine.compact_tiered(&mut messages, reinjection.as_deref())
+            compact_engine.compact(&mut messages)
         }
     };
 
