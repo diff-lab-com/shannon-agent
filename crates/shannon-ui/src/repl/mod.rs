@@ -171,6 +171,8 @@ pub struct ReplState {
     pub approval_mode_label: String,
     /// Active sub-agents for sidebar display (refreshed from agent_registry)
     pub active_agents: Vec<AgentDisplay>,
+    /// LSP diagnostic store for displaying code diagnostics
+    pub diagnostic_store: crate::lsp_bridge::DiagnosticStore,
     /// Whether focus mode is active (header/statusbar hidden)
     pub focus_mode: bool,
     /// Whether fullscreen mode is active (ALL chrome hidden, chat fills terminal)
@@ -321,6 +323,7 @@ impl Default for ReplState {
             sidebar_tab: SidebarTab::default(),
             approval_mode_label: "AUTO".to_string(),
             active_agents: Vec::new(),
+            diagnostic_store: crate::lsp_bridge::DiagnosticStore::new(),
             focus_mode: false,
             fullscreen_mode: false,
             chat_search_active: false,
@@ -2048,6 +2051,14 @@ impl Repl {
             Vec::new()
         };
 
+        let diagnostics: Vec<_> = self.state.diagnostic_store.diagnostics.iter().take(50).map(|d| crate::lsp_bridge::Diagnostic {
+            severity: d.severity,
+            message: d.message.clone(),
+            file_path: d.file_path.clone(),
+            line: d.line,
+            source: d.source.clone(),
+        }).collect();
+
         Some(crate::widgets::SidebarInfo {
             model: self.state.model.clone(),
             tokens_used: self.state.tokens_used,
@@ -2059,6 +2070,7 @@ impl Repl {
             error_count,
             context_window,
             active_agents,
+            diagnostics,
         })
     }
 

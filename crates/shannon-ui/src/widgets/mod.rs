@@ -867,6 +867,7 @@ mod tests {
             error_count: 1,
             context_window: 200_000,
             active_agents: vec![],
+            diagnostics: vec![],
         };
         assert_eq!(info.context_window, 200_000);
         assert_eq!(info.error_count, 1);

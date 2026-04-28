@@ -31,6 +31,8 @@ pub struct SidebarInfo {
     pub context_window: usize,
     /// Active sub-agents for the Agents tab
     pub active_agents: Vec<crate::repl::AgentDisplay>,
+    /// LSP diagnostics for the Context tab
+    pub diagnostics: Vec<crate::lsp_bridge::Diagnostic>,
 }
 
 /// Right sidebar panel showing session metadata
@@ -160,6 +162,49 @@ impl SidebarWidget {
                         format!("  {} errors", info.error_count),
                         Style::default().fg(theme.error),
                     )));
+                }
+
+                // Diagnostics section
+                if !info.diagnostics.is_empty() {
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(Span::styled("Diagnostics", Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD))));
+                    let errs = info.diagnostics.iter().filter(|d| matches!(d.severity, super::super::lsp_bridge::DiagnosticSeverity::Error)).count();
+                    let warns = info.diagnostics.iter().filter(|d| matches!(d.severity, super::super::lsp_bridge::DiagnosticSeverity::Warning)).count();
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("{}", errs), Style::default().fg(theme.error)),
+                        Span::styled("E ", Style::default().fg(theme.text_dim)),
+                        Span::styled(format!("{}", warns), Style::default().fg(theme.warning)),
+                        Span::styled("W", Style::default().fg(theme.text_dim)),
+                    ]));
+                    for diag in info.diagnostics.iter().take(8) {
+                        let color = match diag.severity {
+                            super::super::lsp_bridge::DiagnosticSeverity::Error => theme.error,
+                            super::super::lsp_bridge::DiagnosticSeverity::Warning => theme.warning,
+                            super::super::lsp_bridge::DiagnosticSeverity::Info => theme.primary,
+                            super::super::lsp_bridge::DiagnosticSeverity::Hint => theme.text_dim,
+                        };
+                        let icon = match diag.severity {
+                            super::super::lsp_bridge::DiagnosticSeverity::Error => "E",
+                            super::super::lsp_bridge::DiagnosticSeverity::Warning => "W",
+                            super::super::lsp_bridge::DiagnosticSeverity::Info => "I",
+                            super::super::lsp_bridge::DiagnosticSeverity::Hint => "H",
+                        };
+                        let fname = diag.file_path.split('/').next_back().unwrap_or(&diag.file_path);
+                        lines.push(Line::from(vec![
+                            Span::styled(format!("[{icon}]"), Style::default().fg(color)),
+                            Span::styled(format!(" {}", truncate_to(fname, w.saturating_sub(6))), Style::default().fg(theme.text_dim)),
+                        ]));
+                        lines.push(Line::from(Span::styled(
+                            format!("  {}", truncate_to(&diag.message, w.saturating_sub(4))),
+                            Style::default().fg(color),
+                        )));
+                    }
+                    if info.diagnostics.len() > 8 {
+                        lines.push(Line::from(Span::styled(
+                            format!("  ...+{} more", info.diagnostics.len() - 8),
+                            Style::default().fg(theme.muted),
+                        )));
+                    }
                 }
             }
             crate::repl::SidebarTab::Files => {

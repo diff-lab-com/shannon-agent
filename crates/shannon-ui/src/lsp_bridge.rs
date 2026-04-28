@@ -175,8 +175,9 @@ impl LspDisplay {
 }
 
 /// Manages diagnostic state for display
+#[derive(Debug, Clone)]
 pub struct DiagnosticStore {
-    diagnostics: Vec<Diagnostic>,
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 impl DiagnosticStore {
