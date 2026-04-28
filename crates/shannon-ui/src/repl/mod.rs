@@ -19,6 +19,10 @@ use crate::{
     widgets::{
         ChatWidget, ChatRole, PromptWidget,
         progress::{ProgressBarWidget, SpinnerWidget, MultiProgressWidget},
+        tool_approval::ToolApprovalWidget,
+        attachment_bar::AttachmentBarWidget,
+        command_palette::CommandPaletteWidget,
+        StreamingState, MessageRenderCache,
     },
     Result,
 };
@@ -179,6 +183,14 @@ pub struct ReplState {
     pub pending_notifications: Vec<(String, std::time::Instant)>,
     /// Whether the first-run onboarding dialog is active
     pub onboarding_active: bool,
+    /// Tool approval overlay widget (shows when tool needs confirmation)
+    pub tool_approval: ToolApprovalWidget,
+    /// Attachment bar widget (shows attached files/images above prompt)
+    pub attachment_bar: AttachmentBarWidget,
+    /// Command palette overlay widget (Ctrl+P)
+    pub command_palette: Option<CommandPaletteWidget>,
+    /// Detailed streaming state for status indicator
+    pub streaming_state: StreamingState,
 }
 
 /// Tabs available in the sidebar panel
@@ -302,6 +314,10 @@ impl Default for ReplState {
             turn_count: 0,
             pending_notifications: Vec::new(),
             onboarding_active: false,
+            tool_approval: ToolApprovalWidget::new(),
+            attachment_bar: AttachmentBarWidget::new(5),
+            command_palette: None,
+            streaming_state: StreamingState::Idle,
         }
     }
 }
@@ -607,6 +623,8 @@ pub struct Repl {
     pub(crate) instruction_watcher: Option<shannon_core::project_instructions::InstructionWatcher>,
     /// Custom command file watcher for hot-reloading .claude/commands/ and .shannon/commands/
     pub(crate) command_watcher: Option<CustomCommandWatcher>,
+    /// Message render cache for avoiding redundant re-renders
+    pub(crate) render_cache: MessageRenderCache,
 }
 
 /// State for tab completion cycling
@@ -1355,6 +1373,7 @@ impl Repl {
                 }
             },
             command_watcher: Some(CustomCommandWatcher::new()),
+            render_cache: MessageRenderCache::new(128),
         };
 
         repl.sync_approval_mode_label();
@@ -1732,6 +1751,29 @@ impl Repl {
                     // Store the permission prompt and response channel
                     self.state.permission_dialog = Some(permission_req.prompt.clone());
                     self.state.permission_response_tx = Some(permission_req.response_tx);
+
+                    // Also populate the tool approval widget for enhanced display
+                    let risk = match permission_req.prompt.risk_level {
+                        shannon_core::permissions::RiskLevel::Safe
+                        | shannon_core::permissions::RiskLevel::Low => {
+                            crate::widgets::tool_approval::RiskLevel::Low
+                        }
+                        shannon_core::permissions::RiskLevel::Medium => {
+                            crate::widgets::tool_approval::RiskLevel::Medium
+                        }
+                        shannon_core::permissions::RiskLevel::High
+                        | shannon_core::permissions::RiskLevel::Critical => {
+                            crate::widgets::tool_approval::RiskLevel::High
+                        }
+                    };
+                    self.state.tool_approval.show_request(
+                        crate::widgets::tool_approval::ToolApprovalRequest {
+                            tool_name: permission_req.prompt.tool_name.clone(),
+                            description: permission_req.prompt.description.clone(),
+                            risk_level: risk,
+                            detail: None,
+                        },
+                    );
                 }
             }
 
@@ -1892,6 +1934,21 @@ impl Repl {
             crate::events::Event::Tick => {
                 // Advance spinner animation during query processing
                 if self.state.status != "Ready" {
+                    // Update streaming state for status indicator
+                    self.state.streaming_state = if self.state.thinking_phase {
+                        StreamingState::Thinking
+                    } else if self.state.streaming_active {
+                        StreamingState::Generating {
+                            elapsed_secs: self.state.streaming_start
+                                .map(|t| t.elapsed().as_secs())
+                                .unwrap_or(0),
+                        }
+                    } else if let Some(ref tool) = self.state.active_tool {
+                        StreamingState::CallingTool { name: tool.clone() }
+                    } else {
+                        StreamingState::Idle
+                    };
+
                     // Set phase based on current state for diverse animation
                     let phase = if self.state.thinking_phase {
                         crate::widgets::progress::SpinnerPhase::Thinking

@@ -6,7 +6,6 @@ use crate::{
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::vim::{Direction, VimAction};
-use crate::widgets::select::SelectItem;
 
 use super::Repl;
 
@@ -63,6 +62,16 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
     // If multi-select is active, handle multi-select input
     if repl.state.multi_select.is_some() {
         return handle_multi_select_input(repl, key);
+    }
+
+    // If tool approval overlay is active, handle approval keys
+    if repl.state.tool_approval.is_active() {
+        return handle_tool_approval_input(repl, key);
+    }
+
+    // If command palette overlay is active, handle palette keys
+    if repl.state.command_palette.is_some() {
+        return handle_command_palette_input(repl, key);
     }
 
     match key.code {
@@ -573,15 +582,97 @@ fn handle_input_dialog_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
 }
 
 fn open_command_palette(repl: &mut Repl) {
-    let command_names = repl.runtime.block_on(repl.command_registry.list_names());
-    let items: Vec<SelectItem<String>> = command_names.into_iter().map(|name| {
-        let display = format!("/{name}");
-        SelectItem::new(display.clone(), display)
-    }).collect();
+    let mut palette = crate::widgets::command_palette::CommandPaletteWidget::new();
 
-    let picker = crate::widgets::select::FuzzyPickerWidget::new("Command Palette".to_string())
-        .with_items(items);
-    repl.state.fuzzy_picker = Some(picker);
+    // Merge built-in commands from the registry into the palette
+    let command_names = repl.runtime.block_on(repl.command_registry.list_names());
+    for name in &command_names {
+        let cmd = crate::widgets::command_palette::PaletteCommand {
+            name: format!("/{name}"),
+            description: String::new(),
+            shortcut: None,
+            category: crate::widgets::command_palette::CommandCategory::Tools,
+        };
+        palette.commands.push(cmd);
+    }
+
+    palette.show();
+    repl.state.command_palette = Some(palette);
+}
+
+/// Handle key input for the command palette overlay
+fn handle_command_palette_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
+    let action = match &mut repl.state.command_palette {
+        Some(p) => match key.code {
+            KeyCode::Up => { p.move_up(); None }
+            KeyCode::Down => { p.move_down(); None }
+            KeyCode::Char(c) => { p.add_char(c); None }
+            KeyCode::Backspace => { p.backspace(); None }
+            KeyCode::Enter => {
+                let cmd = p.selected_command().map(|c| c.name.clone());
+                Some(cmd)
+            }
+            KeyCode::Esc => Some(None),
+            _ => None,
+        },
+        None => None,
+    };
+
+    match action {
+        Some(Some(cmd)) => {
+            repl.state.command_palette = None;
+            repl.prompt.set_input(cmd);
+            super::commands::submit_input(repl)?;
+        }
+        Some(None) => {
+            repl.state.command_palette = None;
+        }
+        None => {}
+    }
+    Ok(())
+}
+
+/// Handle key input for the tool approval overlay
+fn handle_tool_approval_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
+    let decision = repl.state.tool_approval.handle_key(key);
+
+    match decision {
+        Some(crate::widgets::tool_approval::ApprovalDecision::AllowOnce) => {
+            repl.state.tool_approval.dismiss();
+            // Forward to permission system
+            if let Some(ref tx) = repl.state.permission_response_tx.take() {
+                let _ = tx.send(shannon_core::permissions::PermissionChoice::AllowOnce);
+            }
+            repl.state.permission_dialog = None;
+        }
+        Some(crate::widgets::tool_approval::ApprovalDecision::AllowSession) => {
+            // Auto-approve for the rest of the session
+            if let Some(ref req) = repl.state.tool_approval.request {
+                let tool_name = req.tool_name.clone();
+                repl.state.tool_approval.auto_approve_rules.push(
+                    crate::widgets::tool_approval::AutoApproveRule {
+                        tool_name,
+                        pattern: "*".to_string(),
+                        approved: true,
+                    }
+                );
+            }
+            repl.state.tool_approval.dismiss();
+            if let Some(ref tx) = repl.state.permission_response_tx.take() {
+                let _ = tx.send(shannon_core::permissions::PermissionChoice::AlwaysAllow);
+            }
+            repl.state.permission_dialog = None;
+        }
+        Some(crate::widgets::tool_approval::ApprovalDecision::Deny) => {
+            repl.state.tool_approval.dismiss();
+            if let Some(ref tx) = repl.state.permission_response_tx.take() {
+                let _ = tx.send(shannon_core::permissions::PermissionChoice::Deny);
+            }
+            repl.state.permission_dialog = None;
+        }
+        _ => {} // Pending — no decision yet
+    }
+    Ok(())
 }
 
 fn handle_fuzzy_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {

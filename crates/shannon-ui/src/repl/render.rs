@@ -79,6 +79,20 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             status_parts.push(format!("{} notif", notif_count));
         }
 
+        // Streaming state indicator
+        match &state.streaming_state {
+            crate::widgets::StreamingState::Thinking => {
+                status_parts.push("thinking".to_string());
+            }
+            crate::widgets::StreamingState::CallingTool { name } => {
+                status_parts.push(format!("tool: {name}"));
+            }
+            crate::widgets::StreamingState::Generating { elapsed_secs } => {
+                status_parts.push(format!("streaming {elapsed_secs}s"));
+            }
+            crate::widgets::StreamingState::Idle => {}
+        }
+
         let display_status = if status_parts.is_empty() {
             "Ready".to_string()
         } else {
@@ -198,6 +212,28 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         // Overlay onboarding dialog on first run
         if state.onboarding_active {
             render_onboarding_overlay(f, f.area(), &theme);
+        }
+
+        // Overlay tool approval widget when active
+        if state.tool_approval.is_active() {
+            state.tool_approval.render(f, f.area(), &theme);
+        }
+
+        // Overlay command palette when visible
+        if let Some(ref palette) = state.command_palette {
+            palette.render(f, f.area(), &theme);
+        }
+
+        // Render attachment bar above prompt area
+        if !state.attachment_bar.is_empty() {
+            let bar_height = 1u16;
+            let bar_area = ratatui::layout::Rect {
+                x: f.area().x + 1,
+                y: f.area().bottom().saturating_sub(5),
+                width: f.area().width.saturating_sub(2),
+                height: bar_height,
+            };
+            state.attachment_bar.render(f, bar_area, &theme);
         }
 
         // Overlay fullscreen indicator in top-right corner
