@@ -8,6 +8,16 @@
 //!
 //! When tool schemas exceed their budget, the overflow tools are automatically
 //! deferred (hidden from the API schema and discoverable via `ToolSearch`).
+//!
+//! Conversation budget is further split into priority tiers:
+//! - **Critical** (40% of conversation): system messages, user instructions
+//! - **High** (30% of conversation): recent tool results, assistant responses
+//! - **Normal** (20% of conversation): older conversation turns
+//! - **Low** (10% of conversation): verbose output, historical context
+//!
+//! Budget adjusts dynamically under pressure (see [`adjust_for_pressure`]).
+
+use crate::context_pressure::PressureLevel;
 
 /// Default fraction of context reserved for the system prompt.
 pub const SYSTEM_PROMPT_FRACTION: f32 = 0.15;
@@ -15,6 +25,75 @@ pub const SYSTEM_PROMPT_FRACTION: f32 = 0.15;
 pub const TOOL_SCHEMA_FRACTION: f32 = 0.25;
 /// Default fraction of context reserved for conversation messages.
 pub const CONVERSATION_FRACTION: f32 = 0.60;
+
+/// Message priority for budget allocation and compaction decisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MessagePriority {
+    /// Verbose output, historical context — first to compact
+    Low,
+    /// Older conversation turns
+    Normal,
+    /// Recent tool results, assistant responses
+    High,
+    /// System messages, user instructions, protected messages — never compact
+    Critical,
+}
+
+impl std::fmt::Display for MessagePriority {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MessagePriority::Critical => write!(f, "CRITICAL"),
+            MessagePriority::High => write!(f, "HIGH"),
+            MessagePriority::Normal => write!(f, "NORMAL"),
+            MessagePriority::Low => write!(f, "LOW"),
+        }
+    }
+}
+
+/// Budget allocation within the conversation tier, split by priority.
+#[derive(Debug, Clone)]
+pub struct PriorityBudget {
+    /// Fraction of conversation budget for critical messages (default: 0.40)
+    pub critical_frac: f32,
+    /// Fraction for high-priority messages (default: 0.30)
+    pub high_frac: f32,
+    /// Fraction for normal-priority messages (default: 0.20)
+    pub normal_frac: f32,
+    /// Fraction for low-priority messages (default: 0.10)
+    pub low_frac: f32,
+}
+
+impl Default for PriorityBudget {
+    fn default() -> Self {
+        Self {
+            critical_frac: 0.40,
+            high_frac: 0.30,
+            normal_frac: 0.20,
+            low_frac: 0.10,
+        }
+    }
+}
+
+impl PriorityBudget {
+    /// Return the token budget for each priority level given a total conversation budget.
+    pub fn allocate(&self, conversation_budget: usize) -> PriorityAllocation {
+        PriorityAllocation {
+            critical: (conversation_budget as f32 * self.critical_frac) as usize,
+            high: (conversation_budget as f32 * self.high_frac) as usize,
+            normal: (conversation_budget as f32 * self.normal_frac) as usize,
+            low: (conversation_budget as f32 * self.low_frac) as usize,
+        }
+    }
+}
+
+/// Token allocation per priority level.
+#[derive(Debug, Clone)]
+pub struct PriorityAllocation {
+    pub critical: usize,
+    pub high: usize,
+    pub normal: usize,
+    pub low: usize,
+}
 
 /// Context window budget allocation.
 #[derive(Debug, Clone)]
@@ -27,6 +106,8 @@ pub struct ContextBudget {
     pub tool_schema_budget: usize,
     /// Maximum tokens for conversation messages.
     pub conversation_budget: usize,
+    /// Priority-based allocation within the conversation budget.
+    pub priority_budget: PriorityBudget,
 }
 
 impl ContextBudget {
@@ -37,6 +118,7 @@ impl ContextBudget {
             system_prompt_budget: (total_tokens as f32 * SYSTEM_PROMPT_FRACTION) as usize,
             tool_schema_budget: (total_tokens as f32 * TOOL_SCHEMA_FRACTION) as usize,
             conversation_budget: (total_tokens as f32 * CONVERSATION_FRACTION) as usize,
+            priority_budget: PriorityBudget::default(),
         }
     }
 
@@ -52,6 +134,51 @@ impl ContextBudget {
             system_prompt_budget: (total_tokens as f32 * system_frac) as usize,
             tool_schema_budget: (total_tokens as f32 * tool_frac) as usize,
             conversation_budget: (total_tokens as f32 * conversation_frac) as usize,
+            priority_budget: PriorityBudget::default(),
+        }
+    }
+
+    /// Return the priority-based token allocation for the conversation budget.
+    pub fn priority_allocation(&self) -> PriorityAllocation {
+        self.priority_budget.allocate(self.conversation_budget)
+    }
+
+    /// Dynamically adjust the budget allocation based on context pressure level.
+    ///
+    /// Under higher pressure, shifts budget toward critical messages and away
+    /// from low-priority content to preserve the most important context.
+    pub fn adjust_for_pressure(&mut self, level: PressureLevel) {
+        match level {
+            PressureLevel::Low | PressureLevel::Normal => {
+                // Default allocation — no change needed
+            }
+            PressureLevel::High => {
+                // Shrink low/normal, expand critical/high
+                self.priority_budget = PriorityBudget {
+                    critical_frac: 0.45,
+                    high_frac: 0.30,
+                    normal_frac: 0.15,
+                    low_frac: 0.10,
+                };
+            }
+            PressureLevel::Critical => {
+                // Aggressively protect critical content
+                self.priority_budget = PriorityBudget {
+                    critical_frac: 0.50,
+                    high_frac: 0.30,
+                    normal_frac: 0.15,
+                    low_frac: 0.05,
+                };
+            }
+            PressureLevel::Emergency => {
+                // Maximum protection for critical content only
+                self.priority_budget = PriorityBudget {
+                    critical_frac: 0.55,
+                    high_frac: 0.30,
+                    normal_frac: 0.10,
+                    low_frac: 0.05,
+                };
+            }
         }
     }
 
@@ -233,5 +360,50 @@ mod tests {
         assert!(tokens > 0);
         // JSON string is ~65 chars, so ~16 tokens
         assert!((10..=30).contains(&tokens), "Got {tokens}");
+    }
+
+    // ---- Priority Budget ----
+
+    #[test]
+    fn test_priority_budget_default_allocation() {
+        let pb = PriorityBudget::default();
+        let alloc = pb.allocate(120_000);
+        assert_eq!(alloc.critical, 48_000); // 40%
+        assert_eq!(alloc.high, 36_000);     // 30%
+        assert_eq!(alloc.normal, 24_000);   // 20%
+        assert_eq!(alloc.low, 12_000);      // 10%
+    }
+
+    #[test]
+    fn test_budget_priority_allocation() {
+        let budget = ContextBudget::new(200_000);
+        let alloc = budget.priority_allocation();
+        assert!(alloc.critical > 0);
+        assert!(alloc.high > alloc.normal);
+        assert!(alloc.normal > alloc.low);
+    }
+
+    #[test]
+    fn test_adjust_for_pressure_high() {
+        let mut budget = ContextBudget::new(200_000);
+        budget.adjust_for_pressure(PressureLevel::High);
+        let alloc = budget.priority_allocation();
+        // Critical should be larger than default
+        assert!(alloc.critical > 45_000);
+    }
+
+    #[test]
+    fn test_adjust_for_pressure_emergency() {
+        let mut budget = ContextBudget::new(200_000);
+        budget.adjust_for_pressure(PressureLevel::Emergency);
+        let alloc = budget.priority_allocation();
+        assert!(alloc.critical > alloc.high);
+    }
+
+    #[test]
+    fn test_message_priority_ordering() {
+        assert!(MessagePriority::Critical > MessagePriority::High);
+        assert!(MessagePriority::High > MessagePriority::Normal);
+        assert!(MessagePriority::Normal > MessagePriority::Low);
     }
 }

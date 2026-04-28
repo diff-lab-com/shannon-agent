@@ -219,8 +219,8 @@ pub fn discover_skill_directories(
 ) -> Vec<PathBuf> {
     let mut discovered = std::collections::HashSet::new();
 
-    // Skill directory names to search (Claude Code compat + Shannon)
-    let skill_dir_names = [".claude/skills", ".shannon/skills"];
+    // Skill directory names to search (Claude Code compat + Shannon + Agent Skills Standard)
+    let skill_dir_names = [".claude/skills", ".shannon/skills", ".agents/skills"];
 
     for file_path in file_paths {
         let mut current = file_path.parent()
@@ -256,6 +256,18 @@ pub fn discover_skill_directories(
             if user_skills.exists() && user_skills.is_dir() {
                 discovered.insert(user_skills);
             }
+        }
+    }
+
+    // System-level skills (XDG data directories)
+    if let Some(data_local) = dirs::data_local_dir() {
+        let xdg_skills = data_local.join("shannon").join("skills");
+        if xdg_skills.exists() && xdg_skills.is_dir() {
+            discovered.insert(xdg_skills);
+        }
+        let xdg_agents = data_local.join("agents").join("skills");
+        if xdg_agents.exists() && xdg_agents.is_dir() {
+            discovered.insert(xdg_agents);
         }
     }
 

@@ -116,7 +116,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
         repl.shared_executor.registry().await.contains(cmd_name).await
     });
     // Commands handled in the match block but not in the global registry
-    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "route", "mcp", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "rewind", "notify", "create-pr", "patch", "sandbox", "find", "grep", "conv-search", "copy", "paste", "add", "watch", "bind", "project", "terminal-setup", "theme", "diff", "commands"];
+    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "route", "mcp", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "rewind", "notify", "webhook", "create-pr", "patch", "sandbox", "find", "grep", "conv-search", "copy", "paste", "add", "watch", "bind", "project", "terminal-setup", "theme", "diff", "commands"];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
     if command_exists || is_repl_command {
@@ -153,6 +153,10 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "branch" | "fork" => handle_branch(repl, args)?,
             "web-search" | "websearch" | "search-web" => handle_web_search(repl, args)?,
             "review" => handle_review(repl, args)?,
+            "stage" => handle_stage(repl, args)?,
+            "stats" | "perf" => handle_stats(repl)?,
+            "loop" => handle_loop(repl, args)?,
+            "sandbox" => handle_sandbox(repl, args)?,
             "local-models" | "local" => handle_local_models(repl)?,
             "ci" | "gh-actions" => handle_ci(repl, args)?,
             "hooks" => handle_hooks(repl, args)?,
@@ -166,9 +170,9 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "undo" => handle_undo(repl, args)?,
             "rewind" => handle_rewind(repl, args)?,
             "notify" => handle_notify(repl, args)?,
+            "webhook" => handle_webhook(repl, args)?,
             "create-pr" => handle_create_pr(repl, args)?,
             "patch" => handle_patch(repl, args)?,
-            "sandbox" => handle_sandbox(repl, args)?,
             "copy" | "clip" => handle_copy(repl, args)?,
             "paste" => handle_paste(repl)?,
             "add" => handle_add(repl, args)?,
@@ -1547,6 +1551,128 @@ fn handle_notify(repl: &mut Repl, args: &str) -> Result<()> {
     Ok(())
 }
 
+/// Handle `/webhook` command — manage webhook receiver for external event injection.
+fn handle_webhook(repl: &mut Repl, args: &str) -> Result<()> {
+    let trimmed = args.trim();
+
+    match trimmed {
+        "start" | "on" => {
+            match repl.webhook_receiver {
+                Some(ref rx) => {
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        format!("Webhook receiver already running at {}", rx.address()),
+                    );
+                }
+                None => {
+                    let config = shannon_core::webhook::WebhookConfig::default();
+                    let port = config.port;
+                    let addr = format!("{}:{}", config.host, config.port);
+                    let mut receiver = shannon_core::webhook::WebhookReceiver::new(config);
+
+                    match receiver.try_start() {
+                        Ok(()) => {
+                            repl.chat.add_message(
+                                ChatRole::System,
+                                format!(
+                                    "Webhook receiver started on {addr}\n\n\
+                                     Endpoints:\n\
+                                       POST http://{addr}/webhook/github  — GitHub webhooks\n\
+                                       POST http://{addr}/webhook/generic — Generic webhooks\n\
+                                       POST http://{addr}/webhook/health — Health check\n\n\
+                                     Use /webhook status to check pending events.\n\
+                                     Use /webhook stop to shut down."
+                                ),
+                            );
+                            repl.webhook_receiver = Some(receiver);
+                        }
+                        Err(e) => {
+                            repl.chat.add_message(
+                                ChatRole::System,
+                                format!("Failed to start webhook receiver on port {port}: {e}"),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        "stop" | "off" => {
+            if let Some(mut rx) = repl.webhook_receiver.take() {
+                rx.stop();
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "Webhook receiver stopped.".to_string(),
+                );
+            } else {
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "No webhook receiver is running.".to_string(),
+                );
+            }
+        }
+        "status" => {
+            match repl.webhook_receiver {
+                Some(ref rx) => {
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        format!("Webhook receiver active at {}", rx.address()),
+                    );
+                }
+                None => {
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        "No webhook receiver running. Use /webhook start to begin.".to_string(),
+                    );
+                }
+            }
+        }
+        "poll" => {
+            if let Some(ref mut rx) = repl.webhook_receiver {
+                let mut count = 0;
+                while let Some(event) = rx.try_recv() {
+                    count += 1;
+                    let url_note = event.url
+                        .map(|u| format!("\n  Link: {u}"))
+                        .unwrap_or_default();
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        format!(
+                            "[Webhook: {}] {}\n  {}{url_note}",
+                            event.source, event.title, event.body
+                        ),
+                    );
+                }
+                if count == 0 {
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        "No pending webhook events.".to_string(),
+                    );
+                }
+            } else {
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "No webhook receiver running. Use /webhook start first.".to_string(),
+                );
+            }
+        }
+        _ => {
+            repl.chat.add_message(
+                ChatRole::System,
+                "Webhook receiver — receive external events into this session.\n\n\
+                 Usage:\n\
+                   /webhook start  — start the webhook HTTP server\n\
+                   /webhook stop   — stop the receiver\n\
+                   /webhook status — show receiver status\n\
+                   /webhook poll   — inject pending events into session\n\n\
+                 Default: 127.0.0.1:3789\n\
+                 GitHub: POST /webhook/github (issue_comment, PR reviews)\n\
+                 Generic: POST /webhook/generic {\"title\":\"...\",\"body\":\"...\"}".to_string(),
+            );
+        }
+    }
+    Ok(())
+}
+
 fn handle_create_pr(repl: &mut Repl, args: &str) -> Result<()> {
     let trimmed = args.trim();
 
@@ -1875,6 +2001,7 @@ fn handle_sandbox(repl: &mut Repl, args: &str) -> Result<()> {
             shannon_tools::DockerSandbox::is_available()
         );
         let status = if docker_available { "available" } else { "not installed/unavailable" };
+        let platform = detect_platform_sandbox();
 
         repl.chat.add_message(ChatRole::System,
             "Sandbox — execution isolation for shell commands\n\n\
@@ -1884,7 +2011,8 @@ fn handle_sandbox(repl: &mut Repl, args: &str) -> Result<()> {
                /sandbox docker       Enable Docker isolation\n\
                /sandbox direct       Disable sandbox (run directly)\n\
                /sandbox check        Check if Docker is available\n\n\
-             Docker: ".to_string() + status + "\n\n\
+             Docker: ".to_string() + status + "\n\
+             Platform: " + platform + "\n\n\
              When Docker sandbox is enabled, all /bash tool commands\n\
              run inside an isolated container with:\n\
                - No network access (network=none)\n\
@@ -4973,21 +5101,57 @@ fn handle_review(repl: &mut Repl, args: &str) -> Result<()> {
                     review.push_str(&format!("Summary: {} files changed, +{}/-{} lines\n\n", files.len(), additions, deletions));
 
                     // Basic automated checks
-                    let mut findings = Vec::new();
+                    let mut findings: Vec<String> = Vec::new();
 
                     // Check for potential secrets
-                    if diff_text.contains("API_KEY") || diff_text.contains("api_key") || diff_text.contains("password") {
-                        findings.push("[WARN] Potential secrets detected — review for accidental credential exposure");
+                    let secret_patterns = ["API_KEY", "api_key", "password", "secret_key", "access_token",
+                        "private_key", "credential", "auth_token", "BEGIN RSA", "BEGIN PRIVATE"];
+                    let added_lines: Vec<&str> = diff_text.lines()
+                        .filter(|l| l.starts_with('+') && !l.starts_with("+++"))
+                        .collect();
+                    for pat in &secret_patterns {
+                        if added_lines.iter().any(|l| l.contains(pat)) {
+                            findings.push("[SECURITY] Potential secret/credential detected — review for accidental exposure".to_string());
+                            break;
+                        }
                     }
 
                     // Check for large diffs
                     if additions + deletions > 500 {
-                        findings.push("[WARN] Large diff — consider splitting into smaller changes");
+                        findings.push("[WARN] Large diff — consider splitting into smaller changes".to_string());
+                    }
+
+                    // Check for debug prints left in
+                    let debug_patterns = ["println!", "console.log", "print(", "dbg!", "eprintln!", "fmt.Println"];
+                    for pat in &debug_patterns {
+                        if added_lines.iter().any(|l| l.contains(pat)) {
+                            findings.push(format!("[WARN] Debug output detected: `{pat}` — remove before commit"));
+                            break;
+                        }
+                    }
+
+                    // Check for unsafe code in Rust
+                    if added_lines.iter().any(|l| l.contains("unsafe ")) {
+                        findings.push("[REVIEW] Unsafe code block added — requires careful review".to_string());
+                    }
+
+                    // Check for unwrap() calls that could panic
+                    let unwrap_count = added_lines.iter().filter(|l| l.contains(".unwrap()")).count();
+                    if unwrap_count > 3 {
+                        findings.push(format!("[WARN] {unwrap_count} .unwrap() calls added — consider proper error handling"));
                     }
 
                     // Check for TODO/FIXME
-                    if diff_text.lines().filter(|l| l.starts_with('+')).any(|l| l.contains("TODO") || l.contains("FIXME")) {
-                        findings.push("[INFO] New TODO/FIXME comments added");
+                    if added_lines.iter().any(|l| l.contains("TODO") || l.contains("FIXME") || l.contains("HACK")) {
+                        findings.push("[INFO] New TODO/FIXME/HACK comments added".to_string());
+                    }
+
+                    // Check for hardcoded IPs or URLs
+                    let has_hardcoded = added_lines.iter().any(|l| {
+                        (l.contains("127.0.0.1") || l.contains("localhost")) && !l.contains("test") && !l.contains("example")
+                    });
+                    if has_hardcoded {
+                        findings.push("[WARN] Hardcoded localhost/127.0.0.1 detected — use configurable endpoints".to_string());
                     }
 
                     // Check for test changes
@@ -4995,15 +5159,15 @@ fn handle_review(repl: &mut Repl, args: &str) -> Result<()> {
                         .filter(|l| l.starts_with("diff --git"))
                         .any(|l| l.contains("test") || l.contains("spec"));
                     if has_test_changes {
-                        findings.push("[PASS] Test changes detected");
+                        findings.push("[PASS] Test changes detected".to_string());
                     } else if additions + deletions > 50 {
-                        findings.push("[WARN] No test changes — consider adding tests for new code");
+                        findings.push("[WARN] No test changes — consider adding tests for new code".to_string());
                     }
 
                     if findings.is_empty() {
                         review.push_str("Automated checks: No issues detected.\n");
                     } else {
-                        review.push_str("Automated findings:\n");
+                        review.push_str(&format!("Automated findings ({}):\n", findings.len()));
                         for finding in &findings {
                             review.push_str(&format!("  {finding}\n"));
                         }
@@ -5019,6 +5183,121 @@ fn handle_review(repl: &mut Repl, args: &str) -> Result<()> {
     }
 
     repl.chat.add_message(ChatRole::System, review);
+    Ok(())
+}
+
+/// `/stage [files...]` — interactive git staging helper.
+///
+/// Without arguments, shows unstaged changes and offers to stage them.
+/// With file arguments, stages those specific files.
+fn handle_stage(repl: &mut Repl, args: &str) -> Result<()> {
+    let target = args.trim();
+
+    if target.is_empty() {
+        // Show unstaged changes summary
+        let output = std::process::Command::new("git")
+            .args(["diff", "--stat"])
+            .current_dir(&repl.state.working_directory)
+            .output();
+
+        let mut msg = String::from("Interactive Stage\n\n");
+
+        match output {
+            Ok(result) => {
+                let stdout = String::from_utf8_lossy(&result.stdout);
+                let stderr = String::from_utf8_lossy(&result.stderr);
+
+                if !stderr.is_empty() && stdout.is_empty() {
+                    msg.push_str(&format!("Git error: {stderr}"));
+                } else if stdout.is_empty() {
+                    // Check for untracked files
+                    let untracked = std::process::Command::new("git")
+                        .args(["ls-files", "--others", "--exclude-standard"])
+                        .current_dir(&repl.state.working_directory)
+                        .output();
+                    if let Ok(ut_result) = untracked {
+                        let ut_files = String::from_utf8_lossy(&ut_result.stdout);
+                        if ut_files.trim().is_empty() {
+                            msg.push_str("No unstaged or untracked changes.\n");
+                        } else {
+                            let count = ut_files.lines().filter(|l| !l.is_empty()).count();
+                            msg.push_str(&format!("No unstaged changes, but {count} untracked file(s):\n"));
+                            for line in ut_files.lines().filter(|l| !l.is_empty()).take(20) {
+                                msg.push_str(&format!("  ? {line}\n"));
+                            }
+                            msg.push_str("\nUse /stage <file> to stage a file, or /stage --all to stage everything.");
+                        }
+                    }
+                } else {
+                    msg.push_str("Unstaged changes:\n```\n");
+                    msg.push_str(&stdout);
+                    msg.push_str("```\n\n");
+
+                    // List changed files for easy staging
+                    let files_output = std::process::Command::new("git")
+                        .args(["diff", "--name-only"])
+                        .current_dir(&repl.state.working_directory)
+                        .output();
+                    if let Ok(fo) = files_output {
+                        let files = String::from_utf8_lossy(&fo.stdout);
+                        let file_list: Vec<&str> = files.lines().filter(|l| !l.is_empty()).collect();
+                        if !file_list.is_empty() {
+                            msg.push_str("Files to stage:\n");
+                            for f in &file_list {
+                                msg.push_str(&format!("  /stage {f}\n"));
+                            }
+                            msg.push_str("\nTip: /stage --all to stage all changes.");
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                msg.push_str(&format!("Failed to run git diff: {e}"));
+            }
+        }
+
+        repl.chat.add_message(ChatRole::System, msg);
+    } else if target == "--all" || target == "-A" {
+        // Stage all changes
+        let output = std::process::Command::new("git")
+            .args(["add", "--all"])
+            .current_dir(&repl.state.working_directory)
+            .output();
+        match output {
+            Ok(o) if o.status.success() => {
+                repl.chat.add_message(ChatRole::System, "All changes staged.".to_string());
+            }
+            Ok(o) => {
+                let err = String::from_utf8_lossy(&o.stderr);
+                repl.chat.add_message(ChatRole::System, format!("git add failed: {err}"));
+            }
+            Err(e) => {
+                repl.chat.add_message(ChatRole::System, format!("Failed to run git add: {e}"));
+            }
+        }
+    } else {
+        // Stage specific files
+        let files: Vec<&str> = target.split_whitespace().collect();
+        let output = std::process::Command::new("git")
+            .args(["add"])
+            .args(&files)
+            .current_dir(&repl.state.working_directory)
+            .output();
+        match output {
+            Ok(o) if o.status.success() => {
+                let count = files.len();
+                repl.chat.add_message(ChatRole::System, format!("Staged {count} file(s)."));
+            }
+            Ok(o) => {
+                let err = String::from_utf8_lossy(&o.stderr);
+                repl.chat.add_message(ChatRole::System, format!("git add failed: {err}"));
+            }
+            Err(e) => {
+                repl.chat.add_message(ChatRole::System, format!("Failed to run git add: {e}"));
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -6028,4 +6307,179 @@ mode = \"suggest\"    # suggest | auto-edit | full-auto | readonly\n\
          /project model <name> — Set project model\n\
          /project set <key> <value> — Set config value".to_string());
     Ok(())
+}
+
+fn handle_stats(repl: &mut Repl) -> Result<()> {
+    repl.state.sidebar_tab = crate::repl::SidebarTab::Perf;
+    let dur = repl.state.session_start.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+    let tok = repl.state.tokens_used;
+    let turns = repl.current_turn;
+    let cost = repl.state.total_cost_usd;
+    let tools = repl.tools_invoked;
+    let cmds = repl.commands_run;
+    let tps = if dur > 0 && tok > 0 {
+        format!("{:.0} tok/s", tok as f64 / dur as f64)
+    } else {
+        "N/A".to_string()
+    };
+    let dur_str = if dur >= 3600 {
+        format!("{}h {}m", dur / 3600, (dur % 3600) / 60)
+    } else if dur >= 60 {
+        format!("{}m {}s", dur / 60, dur % 60)
+    } else {
+        format!("{}s", dur)
+    };
+    let model = repl.state.model.as_deref().unwrap_or("unknown");
+    repl.chat.add_message(ChatRole::System, format!(
+        "Performance stats (switched to Perf tab):\n  Model: {model}\n  Duration: {dur_str}\n  Tokens: {tok} ({tps})\n  Turns: {turns}\n  Cost: ${cost:.4}\n  Tools: {tools} | Commands: {cmds}"
+    ));
+    Ok(())
+}
+
+/// Handle `/loop` command — autonomous iteration engine.
+///
+/// Usage:
+///   /loop <task>           — start loop with task description
+///   /loop --max N <task>   — limit to N iterations
+///   /loop stop             — stop the current loop
+///   /loop status           — show current loop state
+fn handle_loop(repl: &mut Repl, args: &str) -> Result<()> {
+    let input = args.trim();
+
+    if input == "stop" || input == "cancel" {
+        if let Some(ref mut ls) = repl.state.loop_state {
+            ls.active = false;
+            let iter = ls.iteration;
+            repl.chat.add_message(ChatRole::System, format!(
+                "Loop stopped after {iter} iteration(s)."
+            ));
+        } else {
+            repl.chat.add_message(ChatRole::System, "No active loop to stop.".to_string());
+        }
+        repl.state.loop_state = None;
+        return Ok(());
+    }
+
+    if input == "status" {
+        if let Some(ref ls) = repl.state.loop_state {
+            repl.chat.add_message(ChatRole::System, format!(
+                "Loop active: iteration {}/{}\nTask: {}",
+                ls.iteration,
+                if ls.max_iterations == 0 { "unlimited".to_string() } else { ls.max_iterations.to_string() },
+                ls.task,
+            ));
+        } else {
+            repl.chat.add_message(ChatRole::System, "No active loop.".to_string());
+        }
+        return Ok(());
+    }
+
+    if input.is_empty() {
+        repl.chat.add_message(ChatRole::System,
+            "Usage:\n  /loop <task>         — start autonomous iteration\n  /loop --max N <task> — limit to N iterations\n  /loop stop           — stop current loop\n  /loop status         — show loop state".to_string()
+        );
+        return Ok(());
+    }
+
+    // Parse --max N
+    let (max_iter, task) = if input.starts_with("--max ") {
+        let rest = input.strip_prefix("--max ").unwrap_or("");
+        let parts: Vec<&str> = rest.splitn(2, ' ').collect();
+        let n: usize = parts.first().unwrap_or(&"0").parse().unwrap_or(0);
+        let t = parts.get(1).copied().unwrap_or("").trim();
+        (n, t.to_string())
+    } else {
+        (0, input.to_string())
+    };
+
+    if task.is_empty() {
+        repl.chat.add_message(ChatRole::System, "Error: no task description provided.".to_string());
+        return Ok(());
+    }
+
+    // Set up loop state
+    repl.state.loop_state = Some(super::LoopState {
+        task: task.clone(),
+        max_iterations: max_iter,
+        iteration: 0,
+        active: true,
+    });
+
+    repl.chat.add_message(ChatRole::System, format!(
+        "Loop started{}.\nTask: {task}\nType /loop stop to cancel.",
+        if max_iter > 0 { format!(" (max {max_iter} iterations)") } else { String::new() }
+    ));
+
+    // Trigger first iteration
+    let prompt = format!(
+        "[Loop iteration 1] Task: {task}\n\nPlease work on this task. After completing, summarize what you did and what remains."
+    );
+    repl.prompt.set_input(prompt);
+    submit_input(repl)?;
+
+    Ok(())
+}
+
+/// Called after a query completes. If a loop is active, triggers the next iteration.
+/// Returns true if a new loop iteration was started.
+pub(crate) fn check_loop_iteration(repl: &mut Repl) -> bool {
+    let should_continue = repl.state.loop_state.as_ref().map_or(false, |ls| ls.active);
+    if !should_continue {
+        return false;
+    }
+
+    let ls = repl.state.loop_state.as_mut().unwrap();
+    ls.iteration += 1;
+
+    // Check max iterations
+    if ls.max_iterations > 0 && ls.iteration >= ls.max_iterations {
+        let iter = ls.iteration;
+        repl.chat.add_message(ChatRole::System, format!(
+            "Loop completed: reached max {iter} iteration(s)."
+        ));
+        repl.state.loop_state = None;
+        return false;
+    }
+
+    let task = ls.task.clone();
+    let iter = ls.iteration + 1;
+
+    let prompt = format!(
+        "[Loop iteration {iter}] Continuing task: {task}\n\nReview what was done in the previous iteration and continue working. Summarize progress and what remains."
+    );
+    repl.prompt.set_input(prompt);
+
+    // Submit next iteration
+    if let Err(_) = submit_input(repl) {
+        repl.state.loop_state = None;
+        return false;
+    }
+
+    true
+}
+
+/// Check if platform sandbox (bwrap/seatbelt) is available.
+fn detect_platform_sandbox() -> &'static str {
+    #[cfg(target_os = "linux")]
+    {
+        if std::path::Path::new("/usr/bin/bwrap").exists() || which_exists("bwrap") {
+            return "bubblewrap (bwrap) available";
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if which_exists("sandbox-exec") {
+            return "seatbelt (sandbox-exec) available";
+        }
+    }
+    "no platform sandbox detected"
+}
+
+/// Simple check if a command exists in PATH.
+fn which_exists(cmd: &str) -> bool {
+    std::process::Command::new("which")
+        .arg(cmd)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }

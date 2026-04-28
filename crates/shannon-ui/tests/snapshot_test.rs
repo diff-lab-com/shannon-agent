@@ -176,6 +176,10 @@ fn test_sidebar_info_default() {
         context_window: 200000,
         active_agents: vec![],
         diagnostics: vec![],
+        session_duration_secs: 120,
+        turn_count: 5,
+        commands_run: 2,
+        tokens_per_sec: Some(42.0),
     };
 
     assert_eq!(info.model.as_deref(), Some("test-model"));
@@ -201,6 +205,10 @@ fn test_sidebar_info_with_files() {
         context_window: 200000,
         active_agents: vec![],
         diagnostics: vec![],
+        session_duration_secs: 300,
+        turn_count: 10,
+        commands_run: 5,
+        tokens_per_sec: None,
     };
 
     assert_eq!(info.modified_files.len(), 2);

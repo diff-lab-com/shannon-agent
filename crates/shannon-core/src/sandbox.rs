@@ -485,6 +485,49 @@ impl std::fmt::Display for SandboxType {
     }
 }
 
+/// User-facing sandbox mode controlling when sandboxing is applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxMode {
+    /// No sandboxing — all commands run directly.
+    Off,
+    /// Use platform sandbox (bwrap/seatbelt) for high-risk commands.
+    #[default]
+    Auto,
+    /// Always sandbox all commands (strict mode).
+    Always,
+}
+
+impl std::fmt::Display for SandboxMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SandboxMode::Off => write!(f, "off"),
+            SandboxMode::Auto => write!(f, "auto"),
+            SandboxMode::Always => write!(f, "always"),
+        }
+    }
+}
+
+impl SandboxMode {
+    /// Parse a sandbox mode from string.
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "off" | "disabled" | "none" => SandboxMode::Off,
+            "always" | "strict" | "on" => SandboxMode::Always,
+            _ => SandboxMode::Auto,
+        }
+    }
+
+    /// Whether sandboxing should be applied for a given risk level.
+    pub fn should_sandbox(self, is_high_risk: bool) -> bool {
+        match self {
+            SandboxMode::Off => false,
+            SandboxMode::Auto => is_high_risk,
+            SandboxMode::Always => true,
+        }
+    }
+}
+
 // ============================================================================
 // Sandbox Executor
 // ============================================================================

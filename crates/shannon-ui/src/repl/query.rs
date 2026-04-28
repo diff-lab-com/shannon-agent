@@ -533,6 +533,9 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                 repl.notifications_enabled,
                 &repl.state.status,
             );
+
+            // Check if loop iteration should continue
+            super::commands::check_loop_iteration(repl);
         }
         Err(e) => {
             let is_cancelled = e == "cancelled";

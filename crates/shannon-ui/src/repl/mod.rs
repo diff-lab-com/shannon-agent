@@ -205,6 +205,21 @@ pub struct ReplState {
     pub session_tab: SessionTabWidget,
     /// Detailed streaming state for status indicator
     pub streaming_state: StreamingState,
+    /// Loop engine state for autonomous iteration
+    pub loop_state: Option<LoopState>,
+}
+
+/// State for the autonomous loop iteration engine.
+#[derive(Debug, Clone)]
+pub struct LoopState {
+    /// The task to iterate on
+    pub task: String,
+    /// Maximum iterations (0 = unlimited until stopped)
+    pub max_iterations: usize,
+    /// Current iteration count
+    pub iteration: usize,
+    /// Whether the loop is active
+    pub active: bool,
 }
 
 /// Tabs available in the sidebar panel
@@ -217,15 +232,18 @@ pub enum SidebarTab {
     Files,
     /// Active sub-agents status
     Agents,
+    /// Performance metrics
+    Perf,
 }
 
 impl SidebarTab {
-    /// Cycle to the next tab: Context → Files → Agents → Context
+    /// Cycle to the next tab: Context → Files → Agents → Perf → Context
     pub fn next(self) -> Self {
         match self {
             SidebarTab::Context => SidebarTab::Files,
             SidebarTab::Files => SidebarTab::Agents,
-            SidebarTab::Agents => SidebarTab::Context,
+            SidebarTab::Agents => SidebarTab::Perf,
+            SidebarTab::Perf => SidebarTab::Context,
         }
     }
 }
@@ -340,6 +358,7 @@ impl Default for ReplState {
             command_palette: None,
             session_tab: SessionTabWidget::new(),
             streaming_state: StreamingState::Idle,
+            loop_state: None,
         }
     }
 }
@@ -641,6 +660,8 @@ pub struct Repl {
     pub(crate) notifier: shannon_core::notifier::Notifier,
     /// Whether desktop notifications are enabled
     pub(crate) notifications_enabled: bool,
+    /// Webhook receiver for external event injection
+    pub(crate) webhook_receiver: Option<shannon_core::webhook::WebhookReceiver>,
     /// Instruction file watcher for hot-reloading CLAUDE.md / AGENTS.md / GEMINI.md
     pub(crate) instruction_watcher: Option<shannon_core::project_instructions::InstructionWatcher>,
     /// Custom command file watcher for hot-reloading .claude/commands/ and .shannon/commands/
@@ -1384,6 +1405,7 @@ impl Repl {
                 n
             },
             notifications_enabled: false, // Disabled by default; enable via /notify
+            webhook_receiver: None,
             instruction_watcher: {
                 let cwd = std::env::current_dir().unwrap_or_default();
                 if cwd.exists() {
@@ -2071,6 +2093,19 @@ impl Repl {
             context_window,
             active_agents,
             diagnostics,
+            session_duration_secs: self.state.session_start
+                .map(|t| t.elapsed().as_secs())
+                .unwrap_or(0),
+            turn_count: self.current_turn,
+            commands_run: self.commands_run,
+            tokens_per_sec: {
+                let dur = self.state.session_start.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
+                if dur > 0.0 && self.state.tokens_used > 0 {
+                    Some(self.state.tokens_used as f64 / dur)
+                } else {
+                    None
+                }
+            },
         })
     }
 
@@ -2105,10 +2140,19 @@ impl Repl {
 
     /// Refresh active_agents from the SubAgentRegistry for sidebar display.
     /// Called from the main loop tick; uses the tokio runtime for async access.
+    /// Detects agent completions and sends desktop notifications.
     pub fn refresh_agents(&mut self) {
         if let Some(ref registry) = self.agent_registry {
             let agents = self.runtime.block_on(registry.list_agents());
-            self.state.active_agents = agents.into_iter().map(|a| {
+
+            // Detect agents that transitioned from active to completed/failed
+            let prev_names: std::collections::HashSet<String> = self.state.active_agents
+                .iter()
+                .filter(|a| a.active)
+                .map(|a| a.name.clone())
+                .collect();
+
+            let new_agents: Vec<AgentDisplay> = agents.into_iter().map(|a| {
                 let active = matches!(a.status, shannon_agents::AgentStatus::Running | shannon_agents::AgentStatus::Spawning | shannon_agents::AgentStatus::Idle);
                 AgentDisplay {
                     name: a.name,
@@ -2119,6 +2163,38 @@ impl Repl {
                     max_turns: a.config.max_turns,
                 }
             }).collect();
+
+            // Send desktop notification for newly completed agents
+            use shannon_core::notifier::{DesktopNotifier, NotificationHandler, Notification, NotificationLevel};
+            use chrono::Utc;
+
+            for agent in &new_agents {
+                if !agent.active && prev_names.contains(&agent.name) {
+                    let notifier = DesktopNotifier::new();
+                    let status = &agent.status;
+                    if status == "completed" {
+                        let notification = Notification {
+                            title: format!("Agent {} completed", agent.name),
+                            body: format!("Finished after {} turns", agent.turns_used),
+                            level: NotificationLevel::Success,
+                            id: format!("agent-{}-done", agent.name),
+                            timestamp: Utc::now(),
+                        };
+                        let _ = notifier.send(&notification);
+                    } else if status.starts_with("failed") {
+                        let notification = Notification {
+                            title: format!("Agent {} failed", agent.name),
+                            body: status.clone(),
+                            level: NotificationLevel::Error,
+                            id: format!("agent-{}-fail", agent.name),
+                            timestamp: Utc::now(),
+                        };
+                        let _ = notifier.send(&notification);
+                    }
+                }
+            }
+
+            self.state.active_agents = new_agents;
         }
     }
 
