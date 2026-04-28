@@ -159,6 +159,16 @@ pub struct ReplState {
     pub active_agents: Vec<AgentDisplay>,
     /// Whether focus mode is active (header/statusbar hidden)
     pub focus_mode: bool,
+    /// Whether fullscreen mode is active (ALL chrome hidden, chat fills terminal)
+    pub fullscreen_mode: bool,
+    /// Whether a chat search is active (user triggered via Ctrl+Shift+F or /search)
+    pub chat_search_active: bool,
+    /// Current search query for chat content search
+    pub chat_search_query: String,
+    /// Index of the currently focused search match
+    pub chat_search_match_index: usize,
+    /// Total number of search matches found
+    pub chat_search_total_matches: usize,
     /// Whether the transcript pager is active
     pub pager_active: bool,
     /// Scroll position for the transcript pager (line offset from top)
@@ -282,6 +292,11 @@ impl Default for ReplState {
             approval_mode_label: "AUTO".to_string(),
             active_agents: Vec::new(),
             focus_mode: false,
+            fullscreen_mode: false,
+            chat_search_active: false,
+            chat_search_query: String::new(),
+            chat_search_match_index: 0,
+            chat_search_total_matches: 0,
             pager_active: false,
             pager_scroll: 0,
             turn_count: 0,
@@ -1468,8 +1483,74 @@ impl Repl {
     /// Toggle focus mode (hide/show header and statusbar).
     pub fn toggle_focus_mode(&mut self) {
         self.state.focus_mode = !self.state.focus_mode;
+        if self.state.focus_mode {
+            // Entering focus mode disables fullscreen (focus is a subset)
+            self.state.fullscreen_mode = false;
+        }
         let label = if self.state.focus_mode { "Focus ON" } else { "Focus OFF" };
         self.state.toast = Some((format!("  {label}  "), std::time::Instant::now()));
+    }
+
+    /// Toggle fullscreen mode (hide ALL chrome, chat fills terminal).
+    /// Bound to F11.
+    pub fn toggle_fullscreen_mode(&mut self) {
+        self.state.fullscreen_mode = !self.state.fullscreen_mode;
+        if self.state.fullscreen_mode {
+            // Fullscreen implies focus mode too
+            self.state.focus_mode = true;
+        }
+        let label = if self.state.fullscreen_mode { "Fullscreen ON (F11)" } else { "Fullscreen OFF" };
+        self.state.toast = Some((format!("  {label}  "), std::time::Instant::now()));
+    }
+
+    /// Toggle chat search mode (highlight matches in chat).
+    pub fn toggle_chat_search(&mut self) {
+        if self.state.chat_search_active {
+            // Deactivate search
+            self.state.chat_search_active = false;
+            self.state.chat_search_query.clear();
+            self.state.chat_search_match_index = 0;
+            self.state.chat_search_total_matches = 0;
+        } else {
+            // Activate search
+            self.state.chat_search_active = true;
+            self.state.chat_search_query.clear();
+            self.state.chat_search_match_index = 0;
+            self.state.chat_search_total_matches = 0;
+        }
+    }
+
+    /// Update chat search results based on current query.
+    pub fn update_chat_search(&mut self) {
+        if !self.state.chat_search_active || self.state.chat_search_query.is_empty() {
+            self.state.chat_search_total_matches = 0;
+            self.state.chat_search_match_index = 0;
+            return;
+        }
+        let matches = self.chat.find_search_matches(&self.state.chat_search_query);
+        self.state.chat_search_total_matches = matches.len();
+        if self.state.chat_search_match_index >= matches.len() {
+            self.state.chat_search_match_index = 0;
+        }
+    }
+
+    /// Navigate to the next search match.
+    pub fn chat_search_next(&mut self) {
+        if self.state.chat_search_total_matches > 0 {
+            self.state.chat_search_match_index =
+                (self.state.chat_search_match_index + 1) % self.state.chat_search_total_matches;
+        }
+    }
+
+    /// Navigate to the previous search match.
+    pub fn chat_search_prev(&mut self) {
+        if self.state.chat_search_total_matches > 0 {
+            self.state.chat_search_match_index = if self.state.chat_search_match_index == 0 {
+                self.state.chat_search_total_matches - 1
+            } else {
+                self.state.chat_search_match_index - 1
+            };
+        }
     }
 
     /// Push a notification into the pending queue (shown in status bar).

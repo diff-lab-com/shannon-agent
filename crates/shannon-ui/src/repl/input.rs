@@ -112,6 +112,11 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         return handle_diff_viewer_input(repl, key);
     }
 
+    // If chat search (Ctrl+H) is active, handle search input
+    if repl.state.chat_search_active {
+        return handle_chat_search(repl, key);
+    }
+
     // If incremental search (Ctrl+R) is active, handle search keys
     if repl.state.incremental_search_active {
         return handle_incremental_search(repl, key);
@@ -328,12 +333,63 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             repl.toggle_focus_mode();
             Ok(())
         }
+        _ if kb.fullscreen.matches(&key) => {
+            repl.toggle_fullscreen_mode();
+            Ok(())
+        }
         _ if kb.transcript.matches(&key) => {
             repl.toggle_pager();
             Ok(())
         }
+        _ if kb.chat_search.matches(&key) => {
+            repl.toggle_chat_search();
+            Ok(())
+        }
         _ => Ok(()),
     }
+    }
+}
+
+/// Handle keys during chat search mode (Ctrl+H activated).
+/// Allows typing a search query, navigating matches, and dismissing.
+pub(crate) fn handle_chat_search(repl: &mut Repl, key: KeyEvent) -> crate::Result<()> {
+    match key.code {
+        // Escape or Ctrl+H again: close search
+        KeyCode::Esc => {
+            repl.state.chat_search_active = false;
+            repl.state.chat_search_query.clear();
+            repl.state.chat_search_total_matches = 0;
+            repl.state.chat_search_match_index = 0;
+            Ok(())
+        }
+        // Enter: close search but keep matches highlighted
+        KeyCode::Enter => {
+            repl.state.chat_search_active = false;
+            Ok(())
+        }
+        // Up arrow or Shift+N: previous match
+        KeyCode::Up => {
+            repl.chat_search_prev();
+            Ok(())
+        }
+        // Down arrow or N: next match
+        KeyCode::Down => {
+            repl.chat_search_next();
+            Ok(())
+        }
+        // Backspace: remove last char from query
+        KeyCode::Backspace => {
+            repl.state.chat_search_query.pop();
+            repl.update_chat_search();
+            Ok(())
+        }
+        // Printable character: append to query
+        KeyCode::Char(c) => {
+            repl.state.chat_search_query.push(c);
+            repl.update_chat_search();
+            Ok(())
+        }
+        _ => Ok(()),
     }
 }
 

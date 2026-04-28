@@ -85,6 +85,15 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             status_parts.join(" │ ")
         };
 
+        // Compute search matches if chat search is active
+        let (search_query, search_matches, search_focused_idx) = if state.chat_search_active || !state.chat_search_query.is_empty() {
+            let matches = chat.find_search_matches(&state.chat_search_query);
+            let focused = if matches.is_empty() { None } else { Some(state.chat_search_match_index.min(matches.len() - 1)) };
+            (Some(state.chat_search_query.clone()), matches, focused)
+        } else {
+            (None, Vec::new(), None)
+        };
+
         // Determine which overlay to render
         if let Some(ref dialog) = state.permission_dialog {
             render_permission_dialog(f, f.area(), dialog, &theme);
@@ -101,7 +110,8 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
                 state.model.as_deref(), Some(state.tokens_used),
                 &state.working_directory, Some(spinner), pb, sidebar_ref, &theme, state.sidebar_tab,
                 Some(&state.approval_mode_label),
-                state.focus_mode,
+                state.focus_mode, state.fullscreen_mode,
+                search_query.as_deref(), &search_matches, search_focused_idx,
             );
             // Then render the active overlay
             if let Some(ref dialog) = state.active_dialog {
@@ -123,7 +133,8 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
                 state.model.as_deref(), Some(state.tokens_used),
                 &state.working_directory, Some(spinner), pb, sidebar_ref, &theme, state.sidebar_tab,
                 Some(&state.approval_mode_label),
-                state.focus_mode,
+                state.focus_mode, state.fullscreen_mode,
+                search_query.as_deref(), &search_matches, search_focused_idx,
             );
         }
 
@@ -185,6 +196,26 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         // Overlay onboarding dialog on first run
         if state.onboarding_active {
             render_onboarding_overlay(f, f.area(), &theme);
+        }
+
+        // Overlay fullscreen indicator in top-right corner
+        if state.fullscreen_mode {
+            let indicator = " [FS] ";
+            let width = indicator.chars().count() as u16;
+            let indicator_area = ratatui::layout::Rect {
+                x: f.area().right().saturating_sub(width + 1),
+                y: f.area().y,
+                width,
+                height: 1,
+            };
+            let ind = Paragraph::new(indicator)
+                .style(ratatui::style::Style::default().fg(theme.primary).add_modifier(Modifier::BOLD));
+            f.render_widget(ind, indicator_area);
+        }
+
+        // Overlay chat search bar when active
+        if state.chat_search_active {
+            render_chat_search_overlay(f, f.area(), &state, &theme);
         }
     })?;
 
@@ -621,6 +652,8 @@ fn render_onboarding_overlay(
         Line::from(vec![Span::styled("  Enter           ", accent_style), Span::styled("Send message", text_style)]),
         Line::from(vec![Span::styled("  Ctrl+E          ", accent_style), Span::styled("Open external editor", text_style)]),
         Line::from(vec![Span::styled("  Ctrl+F          ", accent_style), Span::styled("Toggle focus mode", text_style)]),
+        Line::from(vec![Span::styled("  F11             ", accent_style), Span::styled("Toggle fullscreen", text_style)]),
+        Line::from(vec![Span::styled("  Ctrl+H          ", accent_style), Span::styled("Search chat messages", text_style)]),
         Line::from(vec![Span::styled("  Ctrl+G          ", accent_style), Span::styled("Transcript pager (j/k scroll)", text_style)]),
         Line::from(vec![Span::styled("  Ctrl+R          ", accent_style), Span::styled("Search command history", text_style)]),
         Line::from(vec![Span::styled("  Ctrl+X          ", accent_style), Span::styled("Leader key prefix", text_style)]),
@@ -652,4 +685,74 @@ fn render_onboarding_overlay(
         .wrap(Wrap { trim: true });
 
     frame.render_widget(paragraph, dialog_area);
+}
+
+/// Render chat search overlay bar (Ctrl+H activated).
+/// Shows the search query, match count, and navigation hints.
+fn render_chat_search_overlay(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    state: &super::ReplState,
+    theme: &Theme,
+) {
+    let bar_height = 3u16;
+    let bar_width = area.width.saturating_sub(4).min(60);
+    let y = area.bottom().saturating_sub(bar_height + 5);
+    let x = (area.width.saturating_sub(bar_width)) / 2;
+
+    let bar_area = Rect {
+        x: area.x + x,
+        y,
+        width: bar_width,
+        height: bar_height,
+    };
+
+    frame.render_widget(Clear, bar_area);
+
+    let query_display = if state.chat_search_query.is_empty() {
+        "(type to search chat)".to_string()
+    } else {
+        state.chat_search_query.clone()
+    };
+
+    let query_color = if state.chat_search_query.is_empty() {
+        Color::DarkGray
+    } else {
+        theme.primary
+    };
+
+    let match_info = if state.chat_search_total_matches > 0 {
+        format!("match {} of {}", state.chat_search_match_index + 1, state.chat_search_total_matches)
+    } else if state.chat_search_query.is_empty() {
+        String::new()
+    } else {
+        "no matches".to_string()
+    };
+
+    let lines = vec![
+        Line::from(vec![
+            Span::styled(" Ctrl+H ", Style::default().fg(Color::Black).bg(theme.primary)),
+            Span::styled(" chat-search  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(&query_display, Style::default().fg(query_color).add_modifier(Modifier::BOLD)),
+            Span::styled("▌", Style::default().fg(theme.primary)),
+        ]),
+        Line::from(vec![
+            Span::styled(" ↑↓ navigate  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(match_info, Style::default().fg(theme.secondary)),
+            Span::styled("  Enter", Style::default().fg(Color::Green)),
+            Span::styled(" accept  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Esc", Style::default().fg(Color::Red)),
+            Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
+        ]),
+    ];
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.primary))
+                .border_type(ratatui::widgets::BorderType::Rounded),
+        );
+
+    frame.render_widget(paragraph, bar_area);
 }

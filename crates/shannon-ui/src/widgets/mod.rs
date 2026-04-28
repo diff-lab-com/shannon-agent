@@ -1,6 +1,6 @@
 //! Ratatui widgets for Shannon UI
 
-use crate::tool_format::strip_ansi;
+use crate::tool_format::{strip_ansi, tool_category, ToolCategory};
 use crate::theme::Theme;
 use crate::render::Renderer;
 
@@ -307,6 +307,12 @@ pub struct ChatMessage {
     pub is_error: bool,
     /// Tool name for collapsed display (e.g., "bash", "write")
     pub tool_name: Option<String>,
+    /// When tool execution started (for duration display)
+    pub start_time: Option<chrono::DateTime<chrono::Utc>>,
+    /// How long the tool took, in seconds (set on completion)
+    pub duration_secs: Option<f64>,
+    /// Spinner frame index for running tools (cycles through braille dots)
+    pub spinner_frame: usize,
 }
 
 /// Role of the chat message sender
@@ -338,6 +344,9 @@ impl ChatWidget {
             image_lines: None,
             is_error: false,
             tool_name: None,
+            start_time: None,
+            duration_secs: None,
+            spinner_frame: 0,
         };
 
         let index = self.messages.len();
@@ -368,6 +377,9 @@ impl ChatWidget {
             image_lines: Some(image_lines),
             is_error: false,
             tool_name: None,
+            start_time: None,
+            duration_secs: None,
+            spinner_frame: 0,
         };
 
         let index = self.messages.len();
@@ -397,15 +409,31 @@ impl ChatWidget {
         }
     }
 
-    /// Add a tool result message with tool name and error status
-    pub fn add_tool_message(&mut self, tool_name: String, content: String, is_error: bool) -> usize {
+    /// Add a tool result message with tool name and error status.
+    ///
+    /// If `start_time` is provided, computes the duration from start to now
+    /// and stores it for display alongside the tool result.
+    pub fn add_tool_message(
+        &mut self,
+        tool_name: String,
+        content: String,
+        is_error: bool,
+        start_time: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> usize {
+        let now = chrono::Utc::now();
+        let duration_secs = start_time.map(|st| {
+            (now - st).num_milliseconds() as f64 / 1000.0
+        });
         let message = ChatMessage {
             role: ChatRole::Tool,
             content,
-            timestamp: chrono::Utc::now(),
+            timestamp: now,
             image_lines: None,
             is_error,
             tool_name: Some(tool_name),
+            start_time,
+            duration_secs,
+            spinner_frame: 0,
         };
         let index = self.messages.len();
         self.messages.push_back(message);
@@ -445,68 +473,178 @@ impl ChatWidget {
         }
     }
 
-    /// Render the chat widget
-    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    /// Render the chat widget with optional search highlighting.
+    ///
+    /// When `search_query` is Some, matching text in non-tool messages is highlighted
+    /// using `theme.selection_bg` background and `theme.primary` foreground. The
+    /// currently focused match (given by `focused_match`) gets a brighter highlight.
+    pub fn render_with_search(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        theme: &Theme,
+        search_query: Option<&str>,
+        search_matches: &[(usize, usize, usize)], // (msg_index, byte_start, byte_end)
+        focused_match_idx: Option<usize>,          // index into search_matches
+    ) {
         let mut list_items = Vec::new();
         let inner_width = area.width.saturating_sub(2) as usize; // subtract borders
 
-        for msg in self.messages.iter() {
-            // Collapsed tool messages: single-line summary
+        // Build a lookup: msg_index -> list of (match_global_idx, byte_start, byte_end)
+        let mut matches_by_msg: std::collections::HashMap<usize, Vec<(usize, usize, usize)>> =
+            std::collections::HashMap::new();
+        for (global_idx, &(msg_idx, start, end)) in search_matches.iter().enumerate() {
+            matches_by_msg.entry(msg_idx).or_default().push((global_idx, start, end));
+        }
+
+        let messages: Vec<&ChatMessage> = self.messages.iter().collect();
+
+        for (msg_idx, msg) in messages.iter().enumerate() {
+            // Add separator line between messages of different roles
+            if msg_idx > 0 {
+                let prev_role = messages[msg_idx - 1].role;
+                if prev_role != msg.role {
+                    let sep: String = "─".repeat(inner_width.min(120));
+                    list_items.push(ListItem::new(Line::from(Span::styled(
+                        sep,
+                        Style::default().fg(theme.border_dim),
+                    ))));
+                }
+            }
+
+            // Collapsed tool messages: single-line summary with category color/icon
             if msg.role == ChatRole::Tool && self.collapsed_tools {
                 let timestamp = msg.timestamp.format("%H:%M:%S").to_string();
                 let clean_content = strip_ansi(&msg.content);
                 let first_line = clean_content.lines().next().unwrap_or("");
-                // Build summary: use tool_name as label if available, else fall back to first line
                 let tool_label = msg.tool_name.as_deref().unwrap_or("tool");
+
+                // Determine category-specific icon, prefix, and color
+                let cat = tool_category(tool_label);
+                let (icon, prefix, cat_color) = match cat {
+                    ToolCategory::Read => ("\u{25B8}", "", theme.tool_read),       // ▸ read
+                    ToolCategory::Write => ("\u{270E}", "", theme.tool_write),     // ✎ write
+                    ToolCategory::Search => ("\u{229B}", "", theme.tool_search),  // ⊛ search
+                    ToolCategory::Bash => ("", "$ ", theme.tool_bash),             // $ bash
+                    ToolCategory::Agent => ("\u{25C6}", "", theme.tool_read),      // ◆ agent (uses read color)
+                };
+
+                // Build summary text
                 let summary_text = if msg.tool_name.is_some() {
-                    // Show first line as the detail after the tool name
                     let detail = first_line.strip_prefix(tool_label)
                         .map(|s| s.trim_start_matches(|c: char| c == ':' || c == ' '))
                         .unwrap_or(first_line);
                     if detail.is_empty() {
-                        tool_label.to_string()
+                        format!("{prefix}{tool_label}")
                     } else {
-                        format!("{tool_label}: {detail}")
+                        format!("{prefix}{tool_label}: {detail}")
                     }
                 } else {
                     first_line.to_string()
                 };
-                let label_len = tool_label.len() + timestamp.len() + 8; // "[HH:MM:SS] ⏵ label: "
-                let _available = inner_width.saturating_sub(label_len);
+
+                // Calculate available width for summary
                 let ts_len = timestamp.len();
-                let max_summary_width = inner_width.saturating_sub(ts_len + 6);
+                // Reserve space for: "[HH:MM:SS] ▸ summary  (2.3s) ✓"
+                let duration_str = msg.duration_secs.map(|d| {
+                    if d < 0.1 { format!("({:.0?}ms)", (d * 1000.0) as u32) }
+                    else if d < 60.0 { format!("({:.1}s)", d) }
+                    else { format!("({:.0}m{:.0}s)", d / 60.0, d % 60.0) }
+                });
+                let duration_display_len = duration_str.as_ref().map(|s| s.len() + 1).unwrap_or(0);
+                let status_len = 2; // " ✓" or " ✗"
+                let icon_prefix_len = if icon.is_empty() { 0 } else { icon.chars().count() + 1 };
+                let max_summary_width = inner_width
+                    .saturating_sub(ts_len + 4 + icon_prefix_len + duration_display_len + status_len);
+
                 let summary = if summary_text.chars().count() > max_summary_width {
                     let truncated: String = summary_text.chars().take(max_summary_width.saturating_sub(3)).collect();
                     format!("{truncated}...")
                 } else {
                     summary_text
                 };
+
+                // Status icon: ✓ success, ✗ error
                 let (status_icon, status_color) = if msg.is_error {
-                    ("✗", theme.error)
+                    ("\u{2717}", theme.error)  // ✗
                 } else {
-                    ("✓", theme.success)
+                    ("\u{2713}", theme.success) // ✓
                 };
-                let item = ListItem::new(Line::from(vec![
-                    Span::styled("[", Style::default().fg(theme.muted)),
-                    Span::styled(timestamp, Style::default().fg(theme.muted)),
-                    Span::styled("] ", Style::default().fg(theme.muted)),
-                    Span::styled("⏵ ", Style::default().fg(theme.tool_msg)),
-                    Span::styled(truncate_to(&summary, max_summary_width), Style::default().fg(theme.text_dim)),
-                    Span::styled(" ", Style::default().fg(theme.text_dim)),
-                    Span::styled(status_icon, Style::default().fg(status_color)),
-                ]));
-                list_items.push(item);
+
+                // Build the line spans
+                let mut spans: Vec<Span<'static>> = Vec::new();
+
+                // Timestamp: [HH:MM:SS]
+                spans.push(Span::styled("[", Style::default().fg(theme.muted)));
+                spans.push(Span::styled(timestamp, Style::default().fg(theme.muted)));
+                spans.push(Span::styled("] ", Style::default().fg(theme.muted)));
+
+                // Category icon
+                if !icon.is_empty() {
+                    spans.push(Span::styled(
+                        format!("{icon} "),
+                        Style::default().fg(cat_color),
+                    ));
+                }
+
+                // Summary text in category color
+                spans.push(Span::styled(
+                    truncate_to(&summary, max_summary_width),
+                    Style::default().fg(cat_color),
+                ));
+
+                // Duration display (dim)
+                if let Some(ref dur) = duration_str {
+                    spans.push(Span::styled(
+                        format!(" {dur}"),
+                        Style::default().fg(theme.muted),
+                    ));
+                }
+
+                // Status icon
+                spans.push(Span::styled(" ", Style::default()));
+                spans.push(Span::styled(status_icon, Style::default().fg(status_color)));
+
+                list_items.push(ListItem::new(Line::from(spans)));
                 continue;
             }
 
-            let (role_icon, role_name, role_color) = match msg.role {
-                ChatRole::User => (">", "You", theme.user_msg),
-                ChatRole::Assistant => ("✻", "Assistant", theme.assistant_msg),
-                ChatRole::System => ("!", "System", theme.system_msg),
-                ChatRole::Tool => ("⚙", "Tool", theme.tool_msg),
+            let (role_prefix, _role_name, role_color) = match msg.role {
+                ChatRole::User => ("You", "You", theme.user_msg),
+                ChatRole::Assistant => ("AI", "AI", theme.assistant_msg),
+                ChatRole::System => ("SYS", "System", theme.system_msg),
+                ChatRole::Tool => {
+                    // Use category color for tool messages when tool_name is known
+                    let cat_color = msg.tool_name.as_deref()
+                        .map(|name| {
+                            let cat = tool_category(name);
+                            match cat {
+                                ToolCategory::Read => theme.tool_read,
+                                ToolCategory::Write => theme.tool_write,
+                                ToolCategory::Search => theme.tool_search,
+                                ToolCategory::Bash => theme.tool_bash,
+                                ToolCategory::Agent => theme.tool_read,
+                            }
+                        })
+                        .unwrap_or(theme.tool_msg);
+                    ("Tool", "Tool", cat_color)  // ⚙
+                }
             };
 
             let timestamp = msg.timestamp.format("%H:%M:%S").to_string();
+
+            // Build the role prefix line: "[HH:MM:SS] You > " or "[HH:MM:SS] AI > "
+            // For tool messages, the prefix is "[HH:MM:SS] Tool ⚙: "
+            let (_prefix_display, prefix_len) = if msg.role == ChatRole::Tool {
+                // Tool messages keep the icon + name style
+                let ts_len = timestamp.len();
+                let display_len = ts_len + 2 + 5 + 3 + 1 + 4 + 2; // "[TS] Tool ⚙: "
+                (format!("[{timestamp}] Tool \u{2699}: "), display_len)
+            } else {
+                let ts_len = timestamp.len();
+                let display_len = ts_len + 2 + role_prefix.len() + 3; // "[TS] You > "
+                (format!("[{timestamp}] {role_prefix} > "), display_len)
+            };
 
             // Strip ANSI escape codes — ratatui doesn't interpret them
             let clean_content = strip_ansi(&msg.content);
@@ -514,7 +652,6 @@ impl ChatWidget {
             // Detect and render diff content inline for tool messages
             if msg.role == ChatRole::Tool && is_diff_content(&clean_content) {
                 let lang = detect_diff_language(&clean_content);
-                let prefix_len = timestamp.len() + role_icon.len() + role_name.len() + 7;
                 let indent = " ".repeat(prefix_len);
                 let mut first_line = true;
                 for line in clean_content.lines().take(50) {
@@ -525,9 +662,8 @@ impl ChatWidget {
                             Span::styled("[", Style::default().fg(theme.muted)),
                             Span::styled(timestamp.clone(), Style::default().fg(theme.muted)),
                             Span::styled("] ", Style::default().fg(theme.muted)),
-                            Span::styled(role_icon, Style::default().fg(role_color).add_modifier(Modifier::BOLD)),
-                            Span::styled(" ", Style::default()),
-                            Span::styled(role_name, Style::default().fg(role_color).add_modifier(Modifier::BOLD)),
+                            Span::styled("Tool ", Style::default().fg(role_color).add_modifier(Modifier::BOLD)),
+                            Span::styled("\u{2699}", Style::default().fg(role_color)),
                             Span::styled(": ", Style::default().fg(theme.text_dim)),
                         ];
                         spans.extend(diff_spans);
@@ -565,70 +701,143 @@ impl ChatWidget {
                     MdSegment::Text(lines) => {
                         for content_line in lines {
                             if first_line {
-                                let prefix_len = timestamp.len() + role_icon.len() + role_name.len() + 7;
                                 let available = inner_width.saturating_sub(prefix_len);
                                 let text = truncate_line(content_line, available);
                                 let mut spans = vec![
                                     Span::styled("[", Style::default().fg(theme.muted)),
                                     Span::styled(timestamp.clone(), Style::default().fg(theme.muted)),
                                     Span::styled("] ", Style::default().fg(theme.muted)),
-                                    Span::styled(role_icon, Style::default().fg(role_color).add_modifier(Modifier::BOLD)),
-                                    Span::styled(" ", Style::default()),
-                                    Span::styled(role_name, Style::default().fg(role_color).add_modifier(Modifier::BOLD)),
-                                    Span::styled(": ", Style::default().fg(theme.text_dim)),
+                                    Span::styled(format!("{role_prefix} > "), Style::default().fg(role_color).add_modifier(Modifier::BOLD)),
                                 ];
-                                spans.extend(parse_inline_formatting(&text, theme.text));
+
+                                // Apply search highlighting if active
+                                if let Some(query) = search_query {
+                                    if !query.is_empty() {
+                                        let msg_matches = matches_by_msg.get(&msg_idx);
+                                        spans.extend(highlight_search_in_text(
+                                            &text, theme.text, query, msg_matches, focused_match_idx, true,
+                                        ));
+                                    } else {
+                                        spans.extend(parse_inline_formatting(&text, theme.text));
+                                    }
+                                } else {
+                                    spans.extend(parse_inline_formatting(&text, theme.text));
+                                }
                                 list_items.push(ListItem::new(Line::from(spans)));
                                 first_line = false;
                             } else {
-                                let indent_len = timestamp.len() + role_icon.len() + role_name.len() + 7;
-                                let indent = " ".repeat(indent_len);
-                                let available = inner_width.saturating_sub(indent_len);
+                                let indent = " ".repeat(prefix_len);
+                                let available = inner_width.saturating_sub(prefix_len);
                                 let text = truncate_line(content_line, available);
                                 let mut spans = vec![
                                     Span::styled(indent, Style::default().fg(theme.muted)),
                                 ];
-                                spans.extend(parse_inline_formatting(&text, theme.text));
+
+                                // Apply search highlighting on continuation lines too
+                                if let Some(query) = search_query {
+                                    if !query.is_empty() {
+                                        let msg_matches = matches_by_msg.get(&msg_idx);
+                                        spans.extend(highlight_search_in_text(
+                                            &text, theme.text, query, msg_matches, focused_match_idx, false,
+                                        ));
+                                    } else {
+                                        spans.extend(parse_inline_formatting(&text, theme.text));
+                                    }
+                                } else {
+                                    spans.extend(parse_inline_formatting(&text, theme.text));
+                                }
                                 list_items.push(ListItem::new(Line::from(spans)));
                             }
                         }
                     }
                     MdSegment::CodeBlock { lang, code } => {
-                        let indent_len = timestamp.len() + role_icon.len() + role_name.len() + 5;
+                        let indent_len = prefix_len.saturating_sub(2); // slightly less indent for code
                         let indent = " ".repeat(indent_len);
                         let available = inner_width.saturating_sub(indent_len);
+                        let border_style = Style::default().fg(theme.muted);
 
-                        // Code block header
-                        let header = format!("╭─ {} ─", lang.as_deref().unwrap_or("code"));
+                        // Parse filename hint from lang string: e.g. "rust:src/main.rs"
+                        let lang_str = lang.as_deref().unwrap_or("code");
+                        let (display_lang, filename_hint) = if let Some(colon_pos) = lang_str.find(':') {
+                            let (l, f) = lang_str.split_at(colon_pos);
+                            (l.to_string(), Some(f[1..].to_string()))
+                        } else {
+                            (lang_str.to_string(), None)
+                        };
+
+                        // Title bar: ╭─ rust ─ src/main.rs ─╮
+                        let title_content = match &filename_hint {
+                            Some(fname) => format!(" {} ─ {} ", display_lang, fname),
+                            None => format!(" {} ", display_lang),
+                        };
+                        let header = format!("╭─{}─╮", title_content);
                         list_items.push(ListItem::new(Line::from(vec![
                             Span::styled(indent.clone(), Style::default().fg(theme.muted)),
-                            Span::styled(truncate_to(&header, available), Style::default().fg(theme.accent)),
+                            Span::styled(truncate_to(&header, available), border_style),
                         ])));
 
                         // Code lines with syntax highlighting using Renderer
-                        let highlighted_lines = CODE_RENDERER.highlight_code(&code, lang.as_deref().unwrap_or(""));
-                        for line in highlighted_lines {
-                            let mut line_spans = vec![
+                        let highlighted_lines = CODE_RENDERER.highlight_code(&code, &display_lang);
+                        let total_lines = highlighted_lines.len();
+                        let fold_threshold = 20;
+                        let fold_head = 10;
+                        let fold_tail = 5;
+
+                        if total_lines > fold_threshold {
+                            // Show first fold_head lines with line numbers
+                            for (i, line) in highlighted_lines.iter().enumerate().take(fold_head) {
+                                let line_num = format!("{:>4} │ ", i + 1);
+                                let mut line_spans = vec![
+                                    Span::styled(indent.clone(), Style::default().fg(theme.muted)),
+                                    Span::styled(line_num, Style::default().fg(theme.text_dim)),
+                                ];
+                                line_spans.extend(line.spans.iter().map(|s| Span::styled(s.content.to_string(), s.style)));
+                                list_items.push(ListItem::new(Line::from(line_spans)));
+                            }
+
+                            // Fold indicator
+                            let folded_count = total_lines - fold_head - fold_tail;
+                            let fold_msg = format!("│   ... {} lines folded ...", folded_count.max(1));
+                            list_items.push(ListItem::new(Line::from(vec![
                                 Span::styled(indent.clone(), Style::default().fg(theme.muted)),
-                                Span::styled("│ ", Style::default().fg(theme.accent)),
-                            ];
-                            line_spans.extend(line.spans);
-                            list_items.push(ListItem::new(Line::from(line_spans)));
+                                Span::styled(fold_msg, Style::default().fg(theme.muted).add_modifier(Modifier::ITALIC)),
+                            ])));
+
+                            // Show last fold_tail lines with line numbers
+                            let tail_start = total_lines.saturating_sub(fold_tail);
+                            for (i, line) in highlighted_lines[tail_start..].iter().enumerate() {
+                                let line_num = format!("{:>4} │ ", tail_start + i + 1);
+                                let mut line_spans = vec![
+                                    Span::styled(indent.clone(), Style::default().fg(theme.muted)),
+                                    Span::styled(line_num, Style::default().fg(theme.text_dim)),
+                                ];
+                                line_spans.extend(line.spans.iter().map(|s| Span::styled(s.content.to_string(), s.style)));
+                                list_items.push(ListItem::new(Line::from(line_spans)));
+                            }
+                        } else {
+                            // Show all lines with line numbers
+                            for (i, line) in highlighted_lines.iter().enumerate() {
+                                let line_num = format!("{:>4} │ ", i + 1);
+                                let mut line_spans = vec![
+                                    Span::styled(indent.clone(), Style::default().fg(theme.muted)),
+                                    Span::styled(line_num, Style::default().fg(theme.text_dim)),
+                                ];
+                                line_spans.extend(line.spans.iter().map(|s| Span::styled(s.content.to_string(), s.style)));
+                                list_items.push(ListItem::new(Line::from(line_spans)));
+                            }
                         }
 
-                        // Code block footer
+                        // Footer: ╰──────────────────────╯
+                        let footer_width = title_content.chars().count() + 2;
+                        let footer = format!("╰{:─>width$}╯", "", width = footer_width);
                         list_items.push(ListItem::new(Line::from(vec![
                             Span::styled(indent, Style::default().fg(theme.muted)),
-                            Span::styled(truncate_to("╰────────", available), Style::default().fg(theme.accent)),
+                            Span::styled(truncate_to(&footer, available), border_style),
                         ])));
                         first_line = false;
                     }
                     MdSegment::Header { level, text } => {
-                        let indent_len = if first_line {
-                            timestamp.len() + role_icon.len() + role_name.len() + 7
-                        } else {
-                            timestamp.len() + role_icon.len() + role_name.len() + 7
-                        };
+                        let indent_len = prefix_len;
                         let indent = " ".repeat(indent_len);
                         let available = inner_width.saturating_sub(indent_len);
                         let header_text = truncate_to(text, available);
@@ -722,6 +931,37 @@ impl ChatWidget {
             );
 
         frame.render_widget(list, area);
+    }
+
+    /// Render the chat widget (no search highlighting).
+    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        self.render_with_search(frame, area, theme, None, &[], None);
+    }
+
+    /// Find all occurrences of `query` in chat messages.
+    ///
+    /// Returns a list of `(message_index, byte_start, byte_end)` tuples.
+    /// The search is case-insensitive.
+    pub fn find_search_matches(&self, query: &str) -> Vec<(usize, usize, usize)> {
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let query_lower = query.to_lowercase();
+        let mut matches = Vec::new();
+        for (msg_idx, msg) in self.messages.iter().enumerate() {
+            let clean = strip_ansi(&msg.content);
+            let content_lower = clean.to_lowercase();
+            let mut search_from = 0;
+            while let Some(pos) = content_lower[search_from..].find(&query_lower) {
+                let abs_pos = search_from + pos;
+                matches.push((msg_idx, abs_pos, abs_pos + query.len()));
+                search_from = abs_pos + 1;
+                if search_from >= content_lower.len() {
+                    break;
+                }
+            }
+        }
+        matches
     }
 
     /// Get the number of messages
@@ -1680,7 +1920,7 @@ impl MainLayoutWidget {
         working_dir: &str,
         theme: &Theme,
     ) {
-        Self::render_complete_with_spinner(frame, chat, prompt, status, model, tokens_used, working_dir, None, None, None, theme, crate::repl::SidebarTab::default(), None, false);
+        Self::render_complete_with_spinner(frame, chat, prompt, status, model, tokens_used, working_dir, None, None, None, theme, crate::repl::SidebarTab::default(), None, false, false, None, &[], None);
     }
 
     /// Render the complete UI with spinner animation support
@@ -1700,6 +1940,10 @@ impl MainLayoutWidget {
         sidebar_tab: crate::repl::SidebarTab,
         approval_mode: Option<&str>,
         focus_mode: bool,
+        fullscreen_mode: bool,
+        search_query: Option<&str>,
+        search_matches: &[(usize, usize, usize)],
+        search_focused_idx: Option<usize>,
     ) {
         let area = frame.area();
 
@@ -1719,8 +1963,17 @@ impl MainLayoutWidget {
         let prompt_height = prompt.needed_height(area.width);
         let sidebar_visible = sidebar_info.is_some();
 
-        if focus_mode {
-            // Focus mode: only chat + prompt, maximized
+        // Render chat with optional search highlighting
+        let render_chat = |frame: &mut Frame, chat_area: Rect, theme: &Theme| {
+            if search_query.is_some() && !search_matches.is_empty() {
+                chat.render_with_search(frame, chat_area, theme, search_query, search_matches, search_focused_idx);
+            } else {
+                chat.render(frame, chat_area, theme);
+            }
+        };
+
+        if fullscreen_mode {
+            // Fullscreen: chat fills entire terminal + prompt, no chrome at all
             let chunks = ratatui::layout::Layout::default()
                 .direction(Direction::Vertical)
                 .margin(0)
@@ -1729,14 +1982,26 @@ impl MainLayoutWidget {
                     Constraint::Length(prompt_height),
                 ])
                 .split(area);
-            chat.render(frame, chunks[0], theme);
+            render_chat(frame, chunks[0], theme);
+            prompt.render(frame, chunks[1], theme);
+        } else if focus_mode {
+            // Focus mode: only chat + prompt, maximized (no header/status/sidebar)
+            let chunks = ratatui::layout::Layout::default()
+                .direction(Direction::Vertical)
+                .margin(0)
+                .constraints([
+                    Constraint::Min(0),
+                    Constraint::Length(prompt_height),
+                ])
+                .split(area);
+            render_chat(frame, chunks[0], theme);
             prompt.render(frame, chunks[1], theme);
         } else {
             let (header_area, chat_area, prompt_area, status_area, sidebar_area, _) =
                 Self::layout_with_sidebar(area, prompt_height, sidebar_visible);
 
             HeaderWidget::render(frame, header_area, model, tokens_used, working_dir, theme);
-            chat.render(frame, chat_area, theme);
+            render_chat(frame, chat_area, theme);
             prompt.render(frame, prompt_area, theme);
             StatusBarWidget::render_with_spinner(frame, status_area, status, model, tokens_used, spinner, progress_bar, theme, approval_mode);
 
@@ -1747,6 +2012,83 @@ impl MainLayoutWidget {
             }
         }
     }
+}
+
+/// Highlight search matches within a line of text, producing styled Spans.
+///
+/// Non-matching text uses `base_color`. Matching text uses `theme.selection_bg`
+/// background with `theme.primary` foreground. The focused match (if any) gets
+/// an additional BOLD modifier for visual distinction.
+fn highlight_search_in_text(
+    text: &str,
+    base_color: ratatui::style::Color,
+    query: &str,
+    msg_matches: Option<&Vec<(usize, usize, usize)>>,
+    _focused_match_idx: Option<usize>,
+    _is_first_line: bool,
+) -> Vec<Span<'static>> {
+    if query.is_empty() || text.is_empty() {
+        return parse_inline_formatting(text, base_color);
+    }
+
+    let query_lower = query.to_lowercase();
+    let text_lower = text.to_lowercase();
+
+    // Find all match positions within this text snippet
+    let mut match_positions: Vec<(usize, usize)> = Vec::new();
+    let mut search_from = 0;
+    while let Some(pos) = text_lower[search_from..].find(&query_lower) {
+        let abs_pos = search_from + pos;
+        match_positions.push((abs_pos, abs_pos + query.len()));
+        search_from = abs_pos + 1;
+        if search_from >= text_lower.len() {
+            break;
+        }
+    }
+
+    if match_positions.is_empty() {
+        return parse_inline_formatting(text, base_color);
+    }
+
+    // Determine if any of these matches are the focused one
+    // (We approximate by checking if msg_matches has a focused index)
+    let has_any_match = msg_matches.is_some();
+
+    let theme = Theme::detect();
+    let mut spans = Vec::new();
+    let mut last_end = 0;
+
+    for (start, end) in &match_positions {
+        // Text before the match
+        if *start > last_end {
+            let before = &text[last_end..*start];
+            spans.extend(parse_inline_formatting(before, base_color));
+        }
+
+        // The matched text - highlighted
+        let matched_text = &text[*start..*end];
+        let highlight_style = if has_any_match {
+            Style::default()
+                .fg(theme.primary)
+                .bg(theme.selection_bg)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+                .fg(theme.primary)
+                .bg(theme.selection_bg)
+        };
+        spans.push(Span::styled(matched_text.to_string(), highlight_style));
+
+        last_end = *end;
+    }
+
+    // Remaining text after last match
+    if last_end < text.len() {
+        let remaining = &text[last_end..];
+        spans.extend(parse_inline_formatting(remaining, base_color));
+    }
+
+    spans
 }
 
 #[cfg(test)]
@@ -1982,6 +2324,9 @@ mod tests {
             image_lines: None,
             is_error: false,
             tool_name: None,
+            start_time: None,
+            duration_secs: None,
+            spinner_frame: 0,
         };
         assert_eq!(msg.content, "Test message");
         assert_eq!(msg.role, ChatRole::User);
@@ -2270,7 +2615,7 @@ mod tests {
     #[test]
     fn test_add_tool_message() {
         let mut chat = ChatWidget::new(100);
-        let idx = chat.add_tool_message("bash".to_string(), "cargo test\nall passed".to_string(), false);
+        let idx = chat.add_tool_message("bash".to_string(), "cargo test\nall passed".to_string(), false, None);
         assert_eq!(chat.len(), 1);
         let msg = &chat.messages[idx];
         assert_eq!(msg.role, ChatRole::Tool);
@@ -2281,7 +2626,7 @@ mod tests {
     #[test]
     fn test_add_tool_message_error() {
         let mut chat = ChatWidget::new(100);
-        chat.add_tool_message("bash".to_string(), "error: build failed".to_string(), true);
+        chat.add_tool_message("bash".to_string(), "error: build failed".to_string(), true, None);
         let msg = &chat.messages[0];
         assert!(msg.is_error);
         assert_eq!(msg.tool_name.as_deref(), Some("bash"));

@@ -418,7 +418,8 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                     state.model.as_deref(), Some(state.tokens_used),
                     &state.working_directory, Some(spinner), pb, sidebar_info.as_ref(), &state.theme, state.sidebar_tab,
                     Some(&state.approval_mode_label),
-                    state.focus_mode,
+                    state.focus_mode, state.fullscreen_mode,
+                    None, &[], None,
                 );
                 if state.multi_progress_visible {
                     let mp_height = 3u16.min(f.area().height.saturating_sub(10));

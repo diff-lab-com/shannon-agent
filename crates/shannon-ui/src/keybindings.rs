@@ -32,8 +32,12 @@ pub struct KeyBindings {
     pub external_editor: KeyBinding,
     /// Toggle focus mode (hide header/statusbar)
     pub focus_mode: KeyBinding,
+    /// Toggle fullscreen mode (hide ALL chrome)
+    pub fullscreen: KeyBinding,
     /// Open transcript pager
     pub transcript: KeyBinding,
+    /// Toggle chat search (highlight matches)
+    pub chat_search: KeyBinding,
 }
 
 impl Default for KeyBindings {
@@ -48,7 +52,12 @@ impl Default for KeyBindings {
             leader: KeyBinding::ctrl('x'),
             external_editor: KeyBinding::ctrl('e'),
             focus_mode: KeyBinding::ctrl('f'),
+            fullscreen: KeyBinding {
+                code: KeyCode::F(11),
+                modifiers: KeyModifiers::NONE,
+            },
             transcript: KeyBinding::ctrl('g'),
+            chat_search: KeyBinding::ctrl('h'),
         }
     }
 }
@@ -80,7 +89,9 @@ struct KeyBindingsFile {
     leader: Option<String>,
     external_editor: Option<String>,
     focus_mode: Option<String>,
+    fullscreen: Option<String>,
     transcript: Option<String>,
+    chat_search: Option<String>,
 }
 
 /// Parse a key string like "ctrl+q", "ctrl+s", "escape", "f1" into a KeyBinding.
@@ -140,7 +151,9 @@ pub fn load_keybindings() -> KeyBindings {
         leader: file.leader.as_deref().and_then(parse_key).unwrap_or(defaults.leader),
         external_editor: file.external_editor.as_deref().and_then(parse_key).unwrap_or(defaults.external_editor),
         focus_mode: file.focus_mode.as_deref().and_then(parse_key).unwrap_or(defaults.focus_mode),
+        fullscreen: file.fullscreen.as_deref().and_then(parse_key).unwrap_or(defaults.fullscreen),
         transcript: file.transcript.as_deref().and_then(parse_key).unwrap_or(defaults.transcript),
+        chat_search: file.chat_search.as_deref().and_then(parse_key).unwrap_or(defaults.chat_search),
     }
 }
 
