@@ -223,7 +223,7 @@ impl MainLayoutWidget {
             HeaderWidget::render(frame, header_area, model, tokens_used, working_dir, theme);
             render_chat(frame, chat_area, theme);
             prompt.render(frame, prompt_area, theme);
-            StatusBarWidget::render_with_spinner(frame, status_area, status, model, tokens_used, spinner, progress_bar, theme, approval_mode);
+            StatusBarWidget::render_with_spinner(frame, status_area, status, model, tokens_used, None, None, None, spinner, progress_bar, theme, approval_mode);
 
             if let (Some(info), Some(sb_area)) = (sidebar_info, sidebar_area) {
                 if sb_area.width > 5 && sb_area.height > 3 {

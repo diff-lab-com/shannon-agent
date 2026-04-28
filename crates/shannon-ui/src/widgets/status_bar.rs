@@ -35,6 +35,9 @@ impl StatusBarWidget {
         status: &str,
         model: Option<&str>,
         tokens_used: Option<u64>,
+        max_tokens: Option<u64>,
+        cost_usd: Option<f64>,
+        git_branch: Option<&str>,
         spinner: Option<&crate::widgets::progress::SpinnerWidget>,
         progress_bar: Option<&crate::widgets::progress::ProgressBarWidget>,
         theme: &Theme,
@@ -42,9 +45,13 @@ impl StatusBarWidget {
     ) {
         // Build span with owned strings for proper lifetime
         let mut span_vec: Vec<Span<'static>> = Vec::new();
+        let mut right_vec: Vec<Span<'static>> = Vec::new();
 
         // Separator helper
         let sep = || -> Span<'static> {
+            Span::styled(" │ ", Style::default().fg(theme.muted))
+        };
+        let right_sep = || -> Span<'static> {
             Span::styled(" │ ", Style::default().fg(theme.muted))
         };
 
@@ -64,9 +71,51 @@ impl StatusBarWidget {
             span_vec.push(Span::styled(m.to_string(), Style::default().fg(theme.primary)));
         }
 
-        if let Some(t) = tokens_used {
+        // Context window usage with mini progress bar
+        if let Some(used) = tokens_used {
             span_vec.push(sep());
-            span_vec.push(Span::styled(format!("Ctx: {t}"), Style::default().fg(theme.secondary)));
+            if let Some(max) = max_tokens {
+                let pct = (used as f64 / max as f64).min(1.0);
+                let bar_w = 8usize;
+                let filled = (pct * bar_w as f64).round() as usize;
+                let mut bar = String::with_capacity(bar_w + 2);
+                bar.push('[');
+                for i in 0..bar_w {
+                    bar.push(if i < filled { '█' } else { '░' });
+                }
+                bar.push(']');
+                // Color based on usage: green < 50%, yellow < 80%, red >= 80%
+                let bar_color = if pct < 0.5 { theme.success }
+                    else if pct < 0.8 { theme.warning }
+                    else { theme.error };
+                span_vec.push(Span::styled(bar, Style::default().fg(bar_color)));
+                let used_k = used as f64 / 1000.0;
+                let max_k = max as f64 / 1000.0;
+                span_vec.push(Span::styled(
+                    format!(" {used_k:.1}k/{max_k:.0}k"),
+                    Style::default().fg(theme.secondary),
+                ));
+            } else {
+                span_vec.push(Span::styled(format_tokens(used), Style::default().fg(theme.secondary)));
+            }
+        }
+
+        // Cost estimation (right side)
+        if let Some(cost) = cost_usd {
+            right_vec.push(right_sep());
+            let cost_color = if cost < 0.01 { theme.text_dim }
+                else if cost < 0.10 { theme.text }
+                else { theme.warning };
+            right_vec.push(Span::styled(format!("${cost:.4}"), Style::default().fg(cost_color)));
+        }
+
+        // Git branch (right side)
+        if let Some(branch) = git_branch {
+            right_vec.push(right_sep());
+            right_vec.push(Span::styled(
+                format!(" {} {}", branch_icon(), branch),
+                Style::default().fg(theme.primary),
+            ));
         }
 
         // If a progress bar is provided with active progress, show inline progress
@@ -111,10 +160,37 @@ impl StatusBarWidget {
             span_vec.push(Span::styled(mode_label.to_string(), mode_style.add_modifier(Modifier::BOLD)));
         }
 
+        // Combine left and right spans with padding
+        let left_content: usize = span_vec.iter().map(|s| s.content.chars().count()).sum::<usize>();
+        let right_content: usize = right_vec.iter().map(|s| s.content.chars().count()).sum::<usize>();
+        let total_content = left_content + right_content;
+        let available = area.width as usize;
+        let padding_needed = available.saturating_sub(total_content);
+        if !right_vec.is_empty() && padding_needed > 3 {
+            span_vec.push(Span::raw(" ".repeat(padding_needed)));
+            span_vec.extend(right_vec);
+        }
+
         let paragraph = Paragraph::new(Line::from(span_vec))
             .style(Style::default().bg(theme.context_bar_bg))
             .alignment(Alignment::Left);
 
         frame.render_widget(paragraph, area);
     }
+}
+
+/// Format token count as human-readable string (e.g., "12.3k").
+fn format_tokens(tokens: u64) -> String {
+    if tokens < 1000 {
+        format!("{tokens}")
+    } else if tokens < 1_000_000 {
+        format!("{:.1}k", tokens as f64 / 1000.0)
+    } else {
+        format!("{:.1}M", tokens as f64 / 1_000_000.0)
+    }
+}
+
+/// Git branch icon (uses the standard branch symbol).
+fn branch_icon() -> &'static str {
+    "\u{E0A0}" //  git branch symbol from Powerline
 }
