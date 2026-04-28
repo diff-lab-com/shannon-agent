@@ -257,7 +257,9 @@ impl StreamingRenderer {
         let lang_lower = lang.trim().to_lowercase();
 
         if let Some(syntax) = self.syntax_set.find_syntax_by_token(&lang_lower) {
-            let syn_theme = &self.theme_set.themes["InspiredGitHub"];
+            let theme_name = theme.syntect_theme_name();
+            let syn_theme = self.theme_set.themes.get(theme_name)
+                .unwrap_or_else(|| &self.theme_set.themes["base16-eighties.dark"]);
             let mut highlighter = HighlightLines::new(syntax, syn_theme);
             let mut result = Vec::new();
 

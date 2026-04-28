@@ -1077,6 +1077,31 @@ impl Theme {
         }
         names
     }
+
+    /// Whether this is a dark theme (used to pick appropriate syntax highlighting).
+    pub fn is_dark(&self) -> bool {
+        // Heuristic: if the fullscreen background is darker than mid-gray, it's dark.
+        fn luminance(c: ratatui::style::Color) -> f32 {
+            match c {
+                ratatui::style::Color::Rgb(r, g, b) => (r as f32 * 0.299 + g as f32 * 0.587 + b as f32 * 0.114) / 255.0,
+                ratatui::style::Color::Black => 0.0,
+                ratatui::style::Color::White => 1.0,
+                ratatui::style::Color::DarkGray => 0.25,
+                ratatui::style::Color::Gray => 0.5,
+                _ => 0.0,
+            }
+        }
+        luminance(self.fullscreen_bg) < 0.5
+    }
+
+    /// Return the syntect theme name that best matches this UI theme.
+    pub fn syntect_theme_name(&self) -> &'static str {
+        if self.is_dark() {
+            "base16-eighties.dark"
+        } else {
+            "InspiredGitHub"
+        }
+    }
 }
 
 impl Default for Theme {

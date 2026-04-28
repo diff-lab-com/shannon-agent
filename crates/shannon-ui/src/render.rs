@@ -78,6 +78,8 @@ pub struct Renderer {
     syntax_set: SyntaxSet,
     /// Theme for syntax highlighting
     theme_set: ThemeSet,
+    /// Name of the syntect theme to use (synced with UI theme)
+    syntect_theme_name: String,
     /// Markdown rendering cache (Mutex for interior mutability in &self methods)
     markdown_cache: std::sync::Mutex<MarkdownCache>,
 }
@@ -91,8 +93,14 @@ impl Renderer {
             status_message: "Ready".to_string(),
             syntax_set,
             theme_set,
+            syntect_theme_name: "base16-eighties.dark".to_string(),
             markdown_cache: std::sync::Mutex::new(MarkdownCache::new(128)),
         }
+    }
+
+    /// Sync the syntect theme with the current UI theme.
+    pub fn set_theme(&mut self, theme: &crate::theme::Theme) {
+        self.syntect_theme_name = theme.syntect_theme_name().to_string();
     }
 
     /// Render the UI
@@ -146,7 +154,8 @@ impl Renderer {
         let language = language.trim().to_lowercase();
 
         if let Some(syntax) = self.syntax_set.find_syntax_by_token(&language) {
-            let theme = &self.theme_set.themes["InspiredGitHub"];
+            let theme = self.theme_set.themes.get(self.syntect_theme_name.as_str())
+                .unwrap_or_else(|| &self.theme_set.themes["base16-eighties.dark"]);
 
             let mut highlighter = HighlightLines::new(syntax, theme);
             let mut lines = Vec::new();

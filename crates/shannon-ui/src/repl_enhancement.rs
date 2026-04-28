@@ -840,7 +840,7 @@ fn highlight_code_ansi(
         return format!("\x1b[32m{code}\x1b[0m\n");
     };
 
-    let theme = &ts.themes["InspiredGitHub"];
+    let theme = &ts.themes["base16-eighties.dark"];
     let mut highlighter = HighlightLines::new(syntax, theme);
     let mut output = String::new();
 

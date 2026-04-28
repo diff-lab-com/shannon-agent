@@ -1390,6 +1390,7 @@ impl Repl {
         };
 
         repl.sync_approval_mode_label();
+        repl.renderer.set_theme(&repl.state.theme);
         Ok(repl)
     }
 
