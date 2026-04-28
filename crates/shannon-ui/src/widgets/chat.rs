@@ -3,8 +3,8 @@
 use crate::tool_format::{strip_ansi, tool_category, ToolCategory};
 use crate::theme::Theme;
 use crate::render::Renderer;
-use std::collections::VecDeque;
-use std::sync::LazyLock;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{LazyLock, Mutex};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
@@ -35,6 +35,167 @@ fn syntect_to_ratatui(c: syntect::highlighting::Color) -> ratatui::style::Color 
     ratatui::style::Color::Rgb(c.r, c.g, c.b)
 }
 
+// ── Syntax highlighting cache ──────────────────────────────────────────
+
+/// Cache for syntax-highlighted code blocks to avoid re-highlighting on every frame.
+struct SyntaxCache {
+    cache: HashMap<u64, Vec<Line<'static>>>,
+    capacity: usize,
+    order: Vec<u64>,
+}
+
+impl SyntaxCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            cache: HashMap::new(),
+            capacity,
+            order: Vec::new(),
+        }
+    }
+
+    fn compute_key(lang: &str, code: &str) -> u64 {
+        let mut h: u64 = code.len() as u64;
+        for (i, b) in lang.bytes().chain(code.bytes()).enumerate() {
+            h = h.wrapping_mul(31).wrapping_add(b as u64);
+            if i > 1024 { break; }
+        }
+        h
+    }
+
+    fn get(&self, key: u64) -> Option<&Vec<Line<'static>>> {
+        self.cache.get(&key)
+    }
+
+    fn insert(&mut self, key: u64, lines: Vec<Line<'static>>) {
+        if self.cache.len() >= self.capacity {
+            if let Some(old_key) = self.order.first().copied() {
+                self.cache.remove(&old_key);
+                self.order.remove(0);
+            }
+        }
+        self.cache.insert(key, lines);
+        self.order.push(key);
+    }
+}
+
+/// Lazy-initialized syntax highlighting cache.
+static SYNTAX_CACHE: LazyLock<Mutex<SyntaxCache>> = LazyLock::new(|| {
+    Mutex::new(SyntaxCache::new(64))
+});
+
+/// Highlight code with caching. Returns cached result if available.
+fn highlight_code_cached(code: &str, lang: &str) -> Vec<Line<'static>> {
+    let key = SyntaxCache::compute_key(lang, code);
+
+    if let Ok(cache) = SYNTAX_CACHE.lock() {
+        if let Some(lines) = cache.get(key) {
+            return lines.clone();
+        }
+    }
+
+    let lines = CODE_RENDERER.highlight_code(code, lang);
+
+    if let Ok(mut cache) = SYNTAX_CACHE.lock() {
+        cache.insert(key, lines.clone());
+    }
+
+    lines
+}
+
+// ── Message height cache for virtual scrolling ─────────────────────────
+
+/// Cached height calculations for messages, keyed by (index, content_hash).
+pub struct MessageHeightCache {
+    heights: HashMap<(usize, u64), usize>,
+}
+
+/// Simple hash of content for cache invalidation.
+fn content_hash(s: &str) -> u64 {
+    let mut h: u64 = s.len() as u64;
+    for (i, b) in s.bytes().enumerate() {
+        h = h.wrapping_mul(31).wrapping_add(b as u64);
+        if i > 64 { break; }
+    }
+    h
+}
+
+impl MessageHeightCache {
+    pub fn new() -> Self {
+        Self {
+            heights: HashMap::new(),
+        }
+    }
+
+    /// Get or compute the approximate height of a message in terminal rows.
+    pub fn get_or_compute(
+        &mut self,
+        index: usize,
+        msg: &ChatMessage,
+        collapsed: bool,
+        width: usize,
+    ) -> usize {
+        let hash = content_hash(&msg.content);
+        let key = (index, hash);
+        if let Some(&h) = self.heights.get(&key) {
+            return h;
+        }
+
+        let height = estimate_message_height(msg, collapsed, width);
+        self.heights.insert(key, height);
+        height
+    }
+
+    /// Invalidate a specific message (content changed during streaming).
+    pub fn invalidate(&mut self, index: usize) {
+        self.heights.retain(|(idx, _), _| *idx != index);
+    }
+
+    /// Invalidate all (e.g., on resize).
+    pub fn invalidate_all(&mut self) {
+        self.heights.clear();
+    }
+}
+
+/// Estimate the number of terminal rows a message will occupy.
+fn estimate_message_height(msg: &ChatMessage, collapsed: bool, width: usize) -> usize {
+    if width == 0 { return 1; }
+
+    // Collapsed tool messages: single line
+    if msg.role == ChatRole::Tool && collapsed {
+        return 1;
+    }
+
+    let content = strip_ansi(&msg.content);
+    let mut height = 0;
+
+    // Parse segments to count lines
+    let segments = parse_markdown_segments(&content);
+    for seg in &segments {
+        match seg {
+            MdSegment::Text(lines) => {
+                height += lines.len().max(1);
+            }
+            MdSegment::CodeBlock { code, .. } => {
+                let code_lines = code.lines().count();
+                // Header + footer + code lines
+                let total = 2 + code_lines;
+                // Folding: if > 20 lines, show 10 head + fold indicator + 5 tail = 16
+                height += if total > 20 { 10 + 1 + 5 + 2 } else { total + 2 };
+            }
+            MdSegment::Header { .. } => {
+                height += 1;
+            }
+        }
+    }
+
+    // Image lines
+    if let Some(ref imgs) = msg.image_lines {
+        height += imgs.len();
+    }
+
+    height.max(1)
+}
+
 /// Chat message widget
 pub struct ChatWidget {
     /// All chat messages
@@ -45,6 +206,8 @@ pub struct ChatWidget {
     pub collapsed_tools: bool,
     /// Whether streaming is active (show trailing cursor)
     pub streaming_active: bool,
+    /// Cached message heights for virtual scrolling
+    pub height_cache: MessageHeightCache,
 }
 
 /// A single chat message
@@ -65,6 +228,8 @@ pub struct ChatMessage {
     pub duration_secs: Option<f64>,
     /// Spinner frame index for running tools (cycles through braille dots)
     pub spinner_frame: usize,
+    /// Whether this tool message is individually folded (expanded when false)
+    pub folded: bool,
 }
 
 /// Role of the chat message sender
@@ -84,6 +249,7 @@ impl ChatWidget {
             scroll_offset: 0,
             collapsed_tools: true,
             streaming_active: false,
+            height_cache: MessageHeightCache::new(),
         }
     }
 
@@ -99,6 +265,7 @@ impl ChatWidget {
             start_time: None,
             duration_secs: None,
             spinner_frame: 0,
+            folded: true,
         };
 
         let index = self.messages.len();
@@ -132,6 +299,7 @@ impl ChatWidget {
             start_time: None,
             duration_secs: None,
             spinner_frame: 0,
+            folded: true,
         };
 
         let index = self.messages.len();
@@ -148,8 +316,8 @@ impl ChatWidget {
     pub fn update_message(&mut self, index: usize, content: String) {
         if let Some(msg) = self.messages.get_mut(index) {
             msg.content = content;
-            // Update timestamp to reflect the update time
             msg.timestamp = chrono::Utc::now();
+            self.height_cache.invalidate(index);
         }
     }
 
@@ -186,6 +354,7 @@ impl ChatWidget {
             start_time,
             duration_secs,
             spinner_frame: 0,
+            folded: true,
         };
         let index = self.messages.len();
         self.messages.push_back(message);
@@ -225,6 +394,24 @@ impl ChatWidget {
         }
     }
 
+    /// Toggle the fold state of a tool message by index.
+    pub fn toggle_fold(&mut self, index: usize) {
+        if let Some(msg) = self.messages.get_mut(index) {
+            msg.folded = !msg.folded;
+            self.height_cache.invalidate(index);
+        }
+    }
+
+    /// Toggle the fold state of the last tool message.
+    pub fn toggle_last_tool_fold(&mut self) {
+        for i in (0..self.messages.len()).rev() {
+            if self.messages[i].role == ChatRole::Tool {
+                self.toggle_fold(i);
+                return;
+            }
+        }
+    }
+
     /// Render the chat widget with optional search highlighting.
     ///
     /// When `search_query` is Some, matching text in non-tool messages is highlighted
@@ -241,6 +428,7 @@ impl ChatWidget {
     ) {
         let mut list_items = Vec::new();
         let inner_width = area.width.saturating_sub(2) as usize; // subtract borders
+        let visible_rows = area.height.saturating_sub(2) as usize;
 
         // Build a lookup: msg_index -> list of (match_global_idx, byte_start, byte_end)
         let mut matches_by_msg: std::collections::HashMap<usize, Vec<(usize, usize, usize)>> =
@@ -250,8 +438,57 @@ impl ChatWidget {
         }
 
         let messages: Vec<&ChatMessage> = self.messages.iter().collect();
+        let msg_count = messages.len();
+
+        // Virtual scrolling: compute approximate message heights and determine
+        // which messages fall within the visible window.
+        let (vis_start, vis_end) = if msg_count > 0 && visible_rows > 0 {
+            // Accumulate heights from the end (latest messages shown at bottom).
+            // scroll_offset = index of focused message (0 = oldest, last = newest).
+            // Default: scroll_offset = last index → show latest messages.
+            let focused = self.scroll_offset.min(msg_count - 1);
+
+            // Walk backwards from focused message accumulating rows
+            let mut end_idx = focused;
+            let mut rows_used = 0usize;
+            for i in (0..=focused).rev() {
+                let h = estimate_message_height(messages[i], self.collapsed_tools, inner_width);
+                if rows_used + h > visible_rows { break; }
+                rows_used += h;
+                // Include 1-row separator if applicable
+                if i > 0 && messages[i - 1].role != messages[i].role {
+                    rows_used += 1;
+                }
+                end_idx = i;
+            }
+
+            // Walk forward from focused to fill remaining rows
+            let mut fwd_idx = focused;
+            let mut fwd_rows = 0usize;
+            for i in focused..msg_count {
+                let h = estimate_message_height(messages[i], self.collapsed_tools, inner_width);
+                if fwd_rows + h > visible_rows { break; }
+                fwd_rows += h;
+                if i + 1 < msg_count && messages[i].role != messages[i + 1].role {
+                    fwd_rows += 1;
+                }
+                fwd_idx = i;
+            }
+
+            // Buffer of 3 messages on each side for smooth scrolling
+            let start = end_idx.saturating_sub(3);
+            let end = (fwd_idx + 3).min(msg_count - 1);
+            (start, end)
+        } else {
+            (0, msg_count.saturating_sub(1))
+        };
 
         for (msg_idx, msg) in messages.iter().enumerate() {
+            // Virtual scrolling: skip messages outside the visible window
+            if msg_count > 20 && (msg_idx < vis_start || msg_idx > vis_end) {
+                continue;
+            }
+
             // Add separator line between messages of different roles
             if msg_idx > 0 {
                 let prev_role = messages[msg_idx - 1].role;
@@ -264,8 +501,8 @@ impl ChatWidget {
                 }
             }
 
-            // Collapsed tool messages: single-line summary with category color/icon
-            if msg.role == ChatRole::Tool && self.collapsed_tools {
+            // Collapsed/folded tool messages: single-line summary with category color/icon
+            if msg.role == ChatRole::Tool && (self.collapsed_tools || msg.folded) {
                 let timestamp = msg.timestamp.format("%H:%M:%S").to_string();
                 let clean_content = strip_ansi(&msg.content);
                 let first_line = clean_content.lines().next().unwrap_or("");
@@ -357,6 +594,17 @@ impl ChatWidget {
                 spans.push(Span::styled(" ", Style::default()));
                 spans.push(Span::styled(status_icon, Style::default().fg(status_color)));
 
+                // Line count hint for individually folded messages
+                if !self.collapsed_tools && msg.folded {
+                    let line_count = clean_content.lines().count();
+                    if line_count > 1 {
+                        spans.push(Span::styled(
+                            format!(" [+{}]", line_count.saturating_sub(1)),
+                            Style::default().fg(theme.muted),
+                        ));
+                    }
+                }
+
                 list_items.push(ListItem::new(Line::from(spans)));
                 continue;
             }
@@ -408,7 +656,14 @@ impl ChatWidget {
                 let mut first_line = true;
                 for line in clean_content.lines().take(50) {
                     let color = diff_line_color(line, theme);
-                    let diff_spans = highlight_diff_line(line, lang.as_deref(), color);
+                    let word_color = if line.starts_with('+') && !line.starts_with("+++") {
+                        Some(theme.diff_added_word)
+                    } else if line.starts_with('-') && !line.starts_with("---") {
+                        Some(theme.diff_removed_word)
+                    } else {
+                        None
+                    };
+                    let diff_spans = highlight_diff_line(line, lang.as_deref(), color, word_color);
                     if first_line {
                         let mut spans = vec![
                             Span::styled("[", Style::default().fg(theme.muted)),
@@ -528,8 +783,8 @@ impl ChatWidget {
                             Span::styled(truncate_to(&header, available), border_style),
                         ])));
 
-                        // Code lines with syntax highlighting using Renderer
-                        let highlighted_lines = CODE_RENDERER.highlight_code(&code, &display_lang);
+                        // Code lines with syntax highlighting (cached)
+                        let highlighted_lines = highlight_code_cached(&code, &display_lang);
                         let total_lines = highlighted_lines.len();
                         let fold_threshold = 20;
                         let fold_head = 10;
@@ -1020,7 +1275,14 @@ pub fn detect_diff_language(content: &str) -> Option<String> {
 /// Syntax-highlight a single diff line's content, returning colored Spans.
 /// The `prefix` ("+" or "-") and `base_color` set the diff-line color,
 /// while the content after the prefix gets syntax highlighting.
-pub fn highlight_diff_line(line: &str, lang: Option<&str>, base_color: ratatui::style::Color) -> Vec<Span<'static>> {
+/// When `word_color` is Some, changed words within the line are highlighted
+/// with that color for word-level diff emphasis.
+pub fn highlight_diff_line(
+    line: &str,
+    lang: Option<&str>,
+    base_color: ratatui::style::Color,
+    word_color: Option<ratatui::style::Color>,
+) -> Vec<Span<'static>> {
     // Determine prefix and content
     let (prefix, content) = if (line.starts_with('+') && !line.starts_with("+++"))
         || (line.starts_with('-') && !line.starts_with("---"))
@@ -1061,8 +1323,41 @@ pub fn highlight_diff_line(line: &str, lang: Option<&str>, base_color: ratatui::
         }
     }
 
-    // Fallback: plain content with base color
-    spans.push(Span::styled(content.to_string(), Style::default().fg(base_color)));
+    // Fallback: plain content with word-level highlighting for changed words
+    if let Some(wc) = word_color {
+        let word_spans = highlight_diff_words(content, base_color, wc);
+        spans.extend(word_spans);
+    } else {
+        spans.push(Span::styled(content.to_string(), Style::default().fg(base_color)));
+    }
+    spans
+}
+
+/// Highlight individual changed words within a diff content line.
+/// Detects word boundaries (whitespace, punctuation transitions) and applies
+/// `word_color` to tokens that look like changed content (not whitespace).
+fn highlight_diff_words(content: &str, base_color: ratatui::style::Color, word_color: ratatui::style::Color) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut current = String::new();
+    let mut in_word = false;
+
+    for ch in content.chars() {
+        let is_word_char = ch.is_alphanumeric() || ch == '_' || ch == '-';
+        if is_word_char != in_word && !current.is_empty() {
+            let color = if in_word { word_color } else { base_color };
+            spans.push(Span::styled(std::mem::take(&mut current), Style::default().fg(color)));
+        }
+        current.push(ch);
+        in_word = is_word_char;
+    }
+    if !current.is_empty() {
+        let color = if in_word { word_color } else { base_color };
+        spans.push(Span::styled(current, Style::default().fg(color)));
+    }
+
+    if spans.is_empty() {
+        spans.push(Span::styled(content.to_string(), Style::default().fg(base_color)));
+    }
     spans
 }
 

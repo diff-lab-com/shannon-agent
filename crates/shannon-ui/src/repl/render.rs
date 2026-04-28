@@ -300,7 +300,14 @@ pub fn render_permission_dialog(
             } else {
                 theme.text
             };
-            let spans = crate::widgets::highlight_diff_line(line, lang.as_deref(), color);
+            let word_color = if line.starts_with('+') && !line.starts_with("+++") {
+                Some(theme.diff_added_word)
+            } else if line.starts_with('-') && !line.starts_with("---") {
+                Some(theme.diff_removed_word)
+            } else {
+                None
+            };
+            let spans = crate::widgets::highlight_diff_line(line, lang.as_deref(), color, word_color);
             content_lines.push(Line::from(spans));
         }
         if diff_lines.len() > 15 {
