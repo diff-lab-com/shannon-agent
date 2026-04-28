@@ -614,8 +614,8 @@ fn render_plan_overlay(
     plan: &super::PlanState,
     theme: &Theme,
 ) {
-    let dialog_width = 70.min(area.width.saturating_sub(4));
-    let dialog_height = 20.min(area.height.saturating_sub(4));
+    let dialog_width = 72.min(area.width.saturating_sub(4));
+    let dialog_height = 24.min(area.height.saturating_sub(4));
     let x = (area.width.saturating_sub(dialog_width)) / 2;
     let y = (area.height.saturating_sub(dialog_height)) / 2;
     let dialog_area = Rect {
@@ -627,55 +627,81 @@ fn render_plan_overlay(
 
     frame.render_widget(Clear, dialog_area);
 
+    // Count numbered steps for the title
+    let all_lines: Vec<&str> = plan.content.lines().collect();
+    let step_count = all_lines.iter().filter(|l| l.starts_with("## ") || (l.starts_with(|c: char| c.is_ascii_digit()) && l.contains('.'))).count();
+    let step_label = if step_count > 0 { format!(" ({step_count} steps)") } else { String::new() };
+
+    let inner_width = dialog_width.saturating_sub(2) as usize;
     let mut content_lines = vec![
         Line::from(vec![
-            Span::styled(" Plan Review ", Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("Goal: ", Style::default().fg(theme.muted)),
-            Span::styled(&plan.description, Style::default().fg(theme.text)),
+            Span::styled(" Goal: ", Style::default().fg(theme.muted)),
+            Span::styled(truncate_visual(&plan.description, inner_width.saturating_sub(8)), Style::default().fg(theme.text)),
         ]),
         Line::from(""),
         Line::from(Span::styled(
-            "── Steps ──────────────────────────────",
+            format!("{} Steps {}{}", "─".repeat(3), "─".repeat(inner_width.saturating_sub(12)), step_label),
             Style::default().fg(theme.text_dim),
         )),
     ];
 
-    // Render plan steps with numbered markers
-    for line in plan.content.lines().take(12) {
+    // Header takes 3 lines + 2 for spacing + 2 for action bar + 1 trailing
+    let header_lines = 3;
+    let footer_lines = 3;
+    let available_body = dialog_height as usize - header_lines - footer_lines;
+
+    // Collect step lines with styling
+    let mut step_lines: Vec<Line> = Vec::new();
+    let mut step_num = 0u32;
+    for line in &all_lines {
         let styled = if line.starts_with("## ") {
-            Span::styled(line.to_string(), Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))
+            step_num += 1;
+            let label = line.trim_start_matches("## ").trim();
+            Line::from(vec![
+                Span::styled(format!(" {step_num}. "), Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
+                Span::styled(label.to_string(), Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+            ])
         } else if line.starts_with("- ") {
-            Span::styled(format!("  {line}"), Style::default().fg(theme.text))
-        } else if line.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
-            Span::styled(format!("  {line}"), Style::default().fg(theme.text))
+            Line::from(vec![
+                Span::styled("    ", Style::default().fg(theme.text_dim)),
+                Span::styled("• ", Style::default().fg(theme.muted)),
+                Span::styled(line[2..].to_string(), Style::default().fg(theme.text)),
+            ])
+        } else if line.starts_with(|c: char| c.is_ascii_digit()) && line.contains('.') {
+            step_num += 1;
+            Line::from(vec![
+                Span::styled(format!(" {step_num}. "), Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
+                Span::styled(line.to_string(), Style::default().fg(theme.text)),
+            ])
         } else if line.is_empty() {
-            Span::raw("")
+            Line::raw("")
         } else {
-            Span::styled(format!("  {line}"), Style::default().fg(theme.text_dim))
+            Line::from(Span::styled(
+                truncate_visual(&format!("  {line}"), inner_width),
+                Style::default().fg(theme.text_dim),
+            ))
         };
-        content_lines.push(Line::from(styled));
+        step_lines.push(styled);
     }
 
-    // Truncation notice
-    let total_lines = plan.content.lines().count();
-    if total_lines > 12 {
+    // Apply scroll offset
+    let total = step_lines.len();
+    let scroll = plan.scroll_offset.min(total.saturating_sub(available_body));
+    let visible: Vec<Line> = step_lines.into_iter().skip(scroll).take(available_body).collect();
+    content_lines.extend(visible);
+
+    // Scroll indicator
+    let remaining_content = total.saturating_sub(scroll + available_body);
+    if remaining_content > 0 || scroll > 0 {
+        let pos_info = format!(" line {}-{} of {total} ", scroll + 1, (scroll + available_body).min(total));
         content_lines.push(Line::from(Span::styled(
-            format!("  ... ({} more lines)", total_lines.saturating_sub(12)),
+            format!("  j/k: scroll {pos_info}"),
             Style::default().fg(theme.muted),
         )));
-    }
-
-    // Fill remaining space then add action bar
-    let used = content_lines.len() as u16;
-    let remaining = dialog_height.saturating_sub(used + 4);
-    for _ in 0..remaining {
+    } else {
         content_lines.push(Line::from(""));
     }
 
-    content_lines.push(Line::from(""));
     content_lines.push(Line::from(vec![
         Span::styled("[Enter] ", Style::default().fg(theme.success)),
         Span::styled("Approve    ", Style::default().fg(theme.text)),
@@ -685,6 +711,7 @@ fn render_plan_overlay(
         Span::styled("Dismiss", Style::default().fg(theme.text)),
     ]));
 
+    let title = format!(" Plan Awaiting Review{step_label} ");
     let paragraph = Paragraph::new(content_lines)
         .block(
             Block::default()
@@ -692,7 +719,7 @@ fn render_plan_overlay(
                 .border_style(Style::default().fg(theme.accent))
                 .border_type(ratatui::widgets::BorderType::Rounded)
                 .title(Span::styled(
-                    " Plan Awaiting Review ",
+                    title,
                     Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
                 )),
         )

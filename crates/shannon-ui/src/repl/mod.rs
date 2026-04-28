@@ -253,6 +253,8 @@ pub struct PlanState {
     pub description: String,
     /// Whether the plan has been approved
     pub approved: bool,
+    /// Scroll offset for long plans
+    pub scroll_offset: usize,
 }
 
 impl Default for ReplState {

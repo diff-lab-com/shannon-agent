@@ -74,6 +74,11 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         return handle_command_palette_input(repl, key);
     }
 
+    // If plan overlay is active and not yet approved, handle scroll
+    if repl.state.plan.active && !repl.state.plan.approved {
+        return handle_plan_input(repl, key);
+    }
+
     // If diff viewer overlay is active, handle diff viewer keys
     if repl.state.diff_viewer.is_some() {
         return handle_diff_viewer_input(repl, key);
@@ -849,6 +854,39 @@ fn dismiss_diff_viewer(repl: &mut Repl) {
     repl.state.diff_interactive = false;
     repl.state.interactive_hunks.clear();
     repl.state.interactive_selected = 0;
+}
+
+/// Handle key input for the plan review overlay.
+fn handle_plan_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
+    let total_lines = repl.state.plan.content.lines().count();
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            repl.state.plan.scroll_offset = repl.state.plan.scroll_offset.saturating_add(1).min(total_lines);
+            Ok(())
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            repl.state.plan.scroll_offset = repl.state.plan.scroll_offset.saturating_sub(1);
+            Ok(())
+        }
+        KeyCode::Enter => {
+            repl.state.plan.approved = true;
+            repl.state.status = "Plan approved — executing".to_string();
+            Ok(())
+        }
+        KeyCode::Esc => {
+            repl.state.plan.active = false;
+            repl.state.plan.scroll_offset = 0;
+            repl.state.status = "Plan rejected".to_string();
+            Ok(())
+        }
+        KeyCode::Char('p') | KeyCode::Char('P') => {
+            repl.state.plan.active = false;
+            repl.state.plan.scroll_offset = 0;
+            repl.state.status = "Ready".to_string();
+            Ok(())
+        }
+        _ => Ok(())
+    }
 }
 
 /// Handle key input for the diff viewer overlay (both normal and interactive modes).

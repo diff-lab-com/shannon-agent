@@ -4240,6 +4240,7 @@ fn handle_plan(repl: &mut Repl, args: &str) -> Result<()> {
                 content: plan_content.clone(),
                 description: description.clone(),
                 approved: false,
+                scroll_offset: 0,
             };
             repl.state.status = "Plan mode — review plan".to_string();
             let msg = format!(
