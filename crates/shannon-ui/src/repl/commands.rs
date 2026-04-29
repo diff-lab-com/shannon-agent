@@ -620,7 +620,7 @@ fn handle_memory(repl: &mut Repl, args: &str) -> Result<()> {
             let removed = store.cleanup(chrono::Duration::days(90), 500).unwrap_or(0);
             repl.chat.add_message(ChatRole::System, format!("Cleanup complete: removed {removed} stale memories. {} remaining.", store.len()));
         }
-        "stats" | "status" | _ => {
+        _ => {
             let engine = match repl.query_engine.as_ref() {
                 Some(e) => e,
                 None => {
@@ -659,12 +659,12 @@ pub(crate) fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
 
     // Handle /image paste subcommand
     if input.starts_with("paste") {
-        return handle_image_paste(repl, input[5..].trim());
+        return handle_image_paste(repl, input.strip_prefix("paste").unwrap().trim());
     }
 
     // Handle /image url <url> subcommand
     if input.starts_with("url ") {
-        return handle_image_url(repl, input[4..].trim());
+        return handle_image_url(repl, input.strip_prefix("url ").unwrap().trim());
     }
 
     // Auto-detect URL (starts with http:// or https://)
@@ -675,7 +675,7 @@ pub(crate) fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
     // Split path from optional prompt
     let (path, prompt) = if input.starts_with('"') {
         // Quoted path: "path with spaces" prompt
-        if let Some(end) = input[1..].find('"') {
+        if let Some(end) = input.strip_prefix('"').unwrap().find('"') {
             let path = &input[1..end + 1];
             let prompt = input[end + 2..].trim();
             (path.to_string(), if prompt.is_empty() { "Describe this image.".to_string() } else { prompt.to_string() })
@@ -693,7 +693,7 @@ pub(crate) fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
     // Expand ~ to home dir
     let expanded_path = if path.starts_with("~/") {
         if let Some(home) = dirs::home_dir() {
-            home.join(&path[2..]).to_string_lossy().to_string()
+            home.join(path.strip_prefix("~/").unwrap()).to_string_lossy().to_string()
         } else {
             path.clone()
         }
@@ -1220,7 +1220,7 @@ fn handle_commands(repl: &mut Repl, args: &str) -> Result<()> {
                         repl.chat.add_message(ChatRole::System, "Editor closed. Use /commands reload to apply changes.".to_string());
                     }
                     Ok(s) => {
-                        repl.chat.add_message(ChatRole::System, format!("Editor exited with status: {}", s));
+                        repl.chat.add_message(ChatRole::System, format!("Editor exited with status: {s}"));
                     }
                     Err(e) => {
                         repl.chat.add_message(ChatRole::System, format!("Failed to launch editor: {e}"));
@@ -2087,7 +2087,7 @@ fn handle_patch(repl: &mut Repl, args: &str) -> Result<()> {
         "preview": !apply,
     });
 
-    let tool_name = if apply { "Edit" } else { "Edit" };
+    let tool_name = "Edit";
     match repl.runtime.block_on(engine.tools().execute(tool_name, input)) {
         Ok(result) => {
             let prefix = if apply { "Applied" } else { "Preview" };
@@ -3456,7 +3456,7 @@ fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
                                             for res in resources {
                                                 let uri = res.get("uri").and_then(|u| u.as_str()).unwrap_or("?");
                                                 let name_field = res.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                                                msg.push_str(&format!("    {} ({})\n", uri, name_field));
+                                                msg.push_str(&format!("    {uri} ({name_field})\n"));
                                             }
                                         }
                                     }
@@ -3486,7 +3486,7 @@ fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
                                     for res in resources {
                                         let uri = res.get("uri").and_then(|u| u.as_str()).unwrap_or("?");
                                         let name_field = res.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                                        msg.push_str(&format!("  {} ({})\n", uri, name_field));
+                                        msg.push_str(&format!("  {uri} ({name_field})\n"));
                                     }
                                     repl.chat.add_message(ChatRole::System, msg);
                                 }
@@ -4082,7 +4082,7 @@ fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
             Ok(o) if o.status.success() => {
                 let stat = String::from_utf8_lossy(&o.stdout);
                 let mut msg = format!("Diff: {base}...HEAD\n```\n{stat}```\n\n");
-                msg.push_str(&format!("Use /diff interactive for hunk-by-hunk review"));
+                msg.push_str("Use /diff interactive for hunk-by-hunk review");
                 repl.chat.add_message(ChatRole::System, msg);
             }
             Ok(o) => {
@@ -4108,7 +4108,7 @@ fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
                 Ok(o) if o.status.success() => {
                     let stat = String::from_utf8_lossy(&o.stdout);
                     let mut msg = format!("Diff vs {gitref}\n```\n{stat}```\n\n");
-                    msg.push_str(&format!("Use /diff interactive for hunk-by-hunk review"));
+                    msg.push_str("Use /diff interactive for hunk-by-hunk review");
                     repl.chat.add_message(ChatRole::System, msg);
                 }
                 Ok(o) => {
@@ -5165,7 +5165,7 @@ fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
                 }
             }
         }
-        "help" | _ => {
+        _ => {
             repl.chat.add_message(ChatRole::System,
                 "Permission Commands:\n\
                  /permissions status — Show current permission policies and overrides\n\
@@ -5241,7 +5241,7 @@ fn handle_theme(repl: &mut Repl, args: &str) -> Result<()> {
 
 /// /session — manage conversation sessions (list, export).
 fn handle_session(repl: &mut Repl, args: &str) -> Result<()> {
-    let parts: Vec<&str> = args.trim().split_whitespace().collect();
+    let parts: Vec<&str> = args.split_whitespace().collect();
     let subcmd = parts.first().copied().unwrap_or("list");
 
     match subcmd {
@@ -6092,7 +6092,7 @@ fn handle_ci(repl: &mut Repl, args: &str) -> Result<()> {
                 }
             }
         }
-        "help" | _ => {
+        _ => {
             repl.chat.add_message(ChatRole::System, "\
 CI/GitHub Actions Commands:
   /ci            — Show recent workflow runs (default: 10)
@@ -6899,7 +6899,7 @@ fn handle_stats(repl: &mut Repl) -> Result<()> {
     } else if dur >= 60 {
         format!("{}m {}s", dur / 60, dur % 60)
     } else {
-        format!("{}s", dur)
+        format!("{dur}s")
     };
     let model = repl.state.model.as_deref().unwrap_or("unknown");
     repl.chat.add_message(ChatRole::System, format!(
@@ -6995,7 +6995,7 @@ fn handle_loop(repl: &mut Repl, args: &str) -> Result<()> {
 /// Called after a query completes. If a loop is active, triggers the next iteration.
 /// Returns true if a new loop iteration was started.
 pub(crate) fn check_loop_iteration(repl: &mut Repl) -> bool {
-    let should_continue = repl.state.loop_state.as_ref().map_or(false, |ls| ls.active);
+    let should_continue = repl.state.loop_state.as_ref().is_some_and(|ls| ls.active);
     if !should_continue {
         return false;
     }
@@ -7022,7 +7022,7 @@ pub(crate) fn check_loop_iteration(repl: &mut Repl) -> bool {
     repl.prompt.set_input(prompt);
 
     // Submit next iteration
-    if let Err(_) = submit_input(repl) {
+    if submit_input(repl).is_err() {
         repl.state.loop_state = None;
         return false;
     }
@@ -7144,10 +7144,10 @@ Agent definitions are loaded from:
                 let mut output = format!("Agent: {} (TOML)\n", def.name);
                 output.push_str(&format!("Description: {}\n", def.description));
                 if let Some(model) = &def.model {
-                    output.push_str(&format!("Model: {}\n", model));
+                    output.push_str(&format!("Model: {model}\n"));
                 }
                 if let Some(prompt) = &def.system_prompt {
-                    output.push_str(&format!("System Prompt: {}\n", prompt));
+                    output.push_str(&format!("System Prompt: {prompt}\n"));
                 }
                 if !def.allowed_tools.is_empty() {
                     output.push_str(&format!("Allowed Tools: {}\n", def.allowed_tools.join(", ")));
@@ -7157,7 +7157,7 @@ Agent definitions are loaded from:
                 }
                 output.push_str(&format!("Max Concurrent Tasks: {}\n", def.max_concurrent_tasks));
                 if let Some(temp) = def.temperature {
-                    output.push_str(&format!("Temperature: {}\n", temp));
+                    output.push_str(&format!("Temperature: {temp}\n"));
                 }
                 repl.chat.add_message(ChatRole::System, output);
                 return Ok(());
@@ -7169,7 +7169,7 @@ Agent definitions are loaded from:
                 output.push_str(&format!("Description: {}\n", def.description));
                 output.push_str(&format!("Source: {}\n", def.source_path.display()));
                 if let Some(model) = &def.model {
-                    output.push_str(&format!("Model: {}\n", model));
+                    output.push_str(&format!("Model: {model}\n"));
                 }
                 if let Some(tools) = &def.allowed_tools {
                     output.push_str(&format!("Allowed Tools: {}\n", tools.join(", ")));
@@ -7178,19 +7178,19 @@ Agent definitions are loaded from:
                     output.push_str(&format!("Allowed Directories: {}\n", dirs.join(", ")));
                 }
                 if let Some(max_turns) = def.max_turns {
-                    output.push_str(&format!("Max Turns: {}\n", max_turns));
+                    output.push_str(&format!("Max Turns: {max_turns}\n"));
                 }
                 if !def.body_instructions.is_empty() {
                     output.push_str(&format!("Instructions:\n{}\n", def.body_instructions));
                 }
                 if let Some(suffix) = &def.system_prompt_suffix {
-                    output.push_str(&format!("Prompt Suffix: {}\n", suffix));
+                    output.push_str(&format!("Prompt Suffix: {suffix}\n"));
                 }
                 repl.chat.add_message(ChatRole::System, output);
                 return Ok(());
             }
 
-            repl.chat.add_message(ChatRole::System, format!("Agent '{}' not found.", name));
+            repl.chat.add_message(ChatRole::System, format!("Agent '{name}' not found."));
         }
         "run" => {
             let name = parts.get(1).copied().unwrap_or("");
@@ -7243,7 +7243,7 @@ Agent definitions are loaded from:
             let (def, system_prompt) = match config {
                 Some(c) => c,
                 None => {
-                    repl.chat.add_message(ChatRole::System, format!("Agent '{}' not found. Use /agent list to see available agents.", name));
+                    repl.chat.add_message(ChatRole::System, format!("Agent '{name}' not found. Use /agent list to see available agents."));
                     return Ok(());
                 }
             };
@@ -7316,25 +7316,24 @@ The agent will be saved as a markdown file in .claude/agents/{name}.md".to_strin
 
             let registry = AgentDefinitionRegistry::load_from_dirs();
             if registry.get(name).is_some() {
-                repl.chat.add_message(ChatRole::System, format!("Agent '{}' already exists. Use /agent edit {} to modify it.", name, name));
+                repl.chat.add_message(ChatRole::System, format!("Agent '{name}' already exists. Use /agent edit {name} to modify it."));
                 return Ok(());
             }
 
             let loader = CustomAgentLoader::new();
             if loader.load(name).is_ok() {
-                repl.chat.add_message(ChatRole::System, format!("Agent '{}' already exists. Use /agent edit {} to modify it.", name, name));
+                repl.chat.add_message(ChatRole::System, format!("Agent '{name}' already exists. Use /agent edit {name} to modify it."));
                 return Ok(());
             }
 
-            repl.state.pending_dialog_action = Some(format!("create_agent:{}", name));
+            repl.state.pending_dialog_action = Some(format!("create_agent:{name}"));
 
             repl.chat.add_message(ChatRole::System, format!(
-                "Creating agent '{}'. Please provide the following information:\n\
+                "Creating agent '{name}'. Please provide the following information:\n\
                  1. Description: What does this agent do?\n\
                  2. Model (optional): opus, sonnet, or haiku (default: sonnet)\n\
                  3. Tools (optional): Comma-separated tool names\n\
-                 4. Instructions: The agent's system prompt",
-                name
+                 4. Instructions: The agent's system prompt"
             ));
         }
         "edit" => {
@@ -7347,8 +7346,7 @@ The agent will be saved as a markdown file in .claude/agents/{name}.md".to_strin
             let registry = AgentDefinitionRegistry::load_from_dirs();
             let source_path = if let Some(_def) = registry.get(name) {
                 repl.chat.add_message(ChatRole::System, format!(
-                    "Agent '{}' is defined in TOML format. Edit the file directly: .shannon/agents/{}.toml",
-                    name, name
+                    "Agent '{name}' is defined in TOML format. Edit the file directly: .shannon/agents/{name}.toml"
                 ));
                 return Ok(());
             } else {
@@ -7356,7 +7354,7 @@ The agent will be saved as a markdown file in .claude/agents/{name}.md".to_strin
                 match loader.load(name) {
                     Ok(def) => def.source_path.clone(),
                     Err(_) => {
-                        repl.chat.add_message(ChatRole::System, format!("Agent '{}' not found.", name));
+                        repl.chat.add_message(ChatRole::System, format!("Agent '{name}' not found."));
                         return Ok(());
                     }
                 }
@@ -7417,7 +7415,7 @@ fn handle_routine(repl: &mut Repl, args: &str) -> Result<()> {
             let routine = shannon_core::scheduled_routines::ScheduledRoutine::new(name, prompt, interval);
             let id = routine.id.clone();
             repl.state.routine_manager.add(routine);
-            repl.chat.add_message(ChatRole::System, format!("Added routine [{}]. Use /routine list to see all.", id));
+            repl.chat.add_message(ChatRole::System, format!("Added routine [{id}]. Use /routine list to see all."));
         }
         "remove" | "rm" | "delete" => {
             let id = parts.get(1).copied().unwrap_or("");
@@ -7427,7 +7425,7 @@ fn handle_routine(repl: &mut Repl, args: &str) -> Result<()> {
             }
             match repl.state.routine_manager.remove(id) {
                 Some(r) => repl.chat.add_message(ChatRole::System, format!("Removed routine: {}", r.name)),
-                None => repl.chat.add_message(ChatRole::System, format!("Routine '{}' not found.", id)),
+                None => repl.chat.add_message(ChatRole::System, format!("Routine '{id}' not found.")),
             };
         }
         "toggle" => {
@@ -7439,7 +7437,7 @@ fn handle_routine(repl: &mut Repl, args: &str) -> Result<()> {
             match repl.state.routine_manager.toggle(id) {
                 Some(enabled) => repl.chat.add_message(ChatRole::System,
                     format!("Routine {} is now {}", id, if enabled { "enabled" } else { "disabled" })),
-                None => repl.chat.add_message(ChatRole::System, format!("Routine '{}' not found.", id)),
+                None => repl.chat.add_message(ChatRole::System, format!("Routine '{id}' not found.")),
             };
         }
         "fire" => {
@@ -7448,7 +7446,7 @@ fn handle_routine(repl: &mut Repl, args: &str) -> Result<()> {
                 repl.chat.add_message(ChatRole::System, "No routines are due to fire.".to_string());
             } else {
                 for (name, prompt) in due {
-                    repl.chat.add_message(ChatRole::System, format!("Routine '{}' fired: {}", name, prompt));
+                    repl.chat.add_message(ChatRole::System, format!("Routine '{name}' fired: {prompt}"));
                 }
             }
         }
@@ -7471,7 +7469,7 @@ fn handle_routine(repl: &mut Repl, args: &str) -> Result<()> {
         }
         _ => {
             repl.chat.add_message(ChatRole::System,
-                format!("Unknown routine subcommand: '{}'. Use /routine help.", subcmd));
+                format!("Unknown routine subcommand: '{subcmd}'. Use /routine help."));
         }
     }
     Ok(())

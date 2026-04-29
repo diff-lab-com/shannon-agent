@@ -139,13 +139,13 @@ impl FeatureFlag {
 
 impl std::fmt::Display for FeatureFlag {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(self.0)
     }
 }
 
 impl AsRef<str> for FeatureFlag {
     fn as_ref(&self) -> &str {
-        &self.0
+        self.0
     }
 }
 
@@ -435,7 +435,7 @@ impl FeatureFlagManager {
         let path = self
             .config_file
             .as_ref()
-            .ok_or_else(|| FlagError::HomeNotFound)?;
+            .ok_or(FlagError::HomeNotFound)?;
 
         // Ensure parent directory exists.
         if let Some(parent) = path.parent() {

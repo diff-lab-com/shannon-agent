@@ -45,6 +45,7 @@ pub struct PlanEntry {
 
 /// Internal state for the plan mode system.
 #[derive(Debug, Clone)]
+#[derive(Default)]
 struct PlanState {
     active: bool,
     current_plan: Option<PlanEntry>,
@@ -52,16 +53,6 @@ struct PlanState {
     plan_file_path: Option<PathBuf>,
 }
 
-impl Default for PlanState {
-    fn default() -> Self {
-        Self {
-            active: false,
-            current_plan: None,
-            plan_history: Vec::new(),
-            plan_file_path: None,
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // PlanManager — public API wrapping Arc<RwLock<PlanState>>
@@ -485,8 +476,7 @@ impl Tool for EnterPlanModeTool {
             "Entered plan mode. File modifications are disabled.".to_string()
         } else {
             format!(
-                "Entered plan mode. File modifications are disabled. Reason: {}",
-                reason
+                "Entered plan mode. File modifications are disabled. Reason: {reason}"
             )
         };
 
@@ -610,8 +600,7 @@ impl Tool for ExitPlanModeTool {
 
         let content = match plan_id {
             Some(ref id) => format!(
-                "Exited plan mode. Plan saved with ID: {}",
-                id
+                "Exited plan mode. Plan saved with ID: {id}"
             ),
             None => "Exited plan mode.".to_string(),
         };
@@ -1322,7 +1311,7 @@ mod tests {
         for i in 0..5 {
             let mgr = manager.clone();
             handles.push(thread::spawn(move || {
-                mgr.set_plan(&format!("Plan from thread {}", i))
+                mgr.set_plan(&format!("Plan from thread {i}"))
             }));
         }
 
@@ -1390,9 +1379,8 @@ mod tests {
         let result = tool.execute(json!({})).await.unwrap();
         assert!(!result.is_error);
         assert!(result.content.contains("not active"));
-        assert_eq!(
-            result.metadata.get("plan_mode_active").unwrap().as_bool().unwrap(),
-            false
+        assert!(
+            !result.metadata.get("plan_mode_active").unwrap().as_bool().unwrap()
         );
 
         // Activate and set a plan.
@@ -1403,9 +1391,8 @@ mod tests {
         assert!(!result.is_error);
         assert!(result.content.contains("Test plan content"));
         assert!(result.content.contains("pending"));
-        assert_eq!(
-            result.metadata.get("plan_mode_active").unwrap().as_bool().unwrap(),
-            true
+        assert!(
+            result.metadata.get("plan_mode_active").unwrap().as_bool().unwrap()
         );
         assert!(result.metadata.contains_key("plan_id"));
     }

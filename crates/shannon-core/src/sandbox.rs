@@ -901,8 +901,7 @@ pub fn is_protected_path(path: &Path) -> bool {
 pub fn check_write_allowed(path: &Path) -> Result<(), SandboxError> {
     if is_protected_path(path) {
         return Err(SandboxError::InvalidConfig(format!(
-            "Write to protected path {:?} is denied. Use --dangerously-skip-protected to override.",
-            path
+            "Write to protected path {path:?} is denied. Use --dangerously-skip-protected to override."
         )));
     }
     Ok(())
@@ -919,8 +918,7 @@ pub fn check_write_allowed_with_extras(path: &Path, extras: &[String]) -> Result
         let trimmed = p.trim_end_matches('/');
         if path_str == trimmed || path_str.starts_with(&format!("{trimmed}/")) {
             return Err(SandboxError::InvalidConfig(format!(
-                "Write to protected path {:?} is denied.",
-                path
+                "Write to protected path {path:?} is denied."
             )));
         }
     }

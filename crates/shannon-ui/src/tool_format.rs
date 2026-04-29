@@ -66,7 +66,7 @@ fn is_light_terminal() -> bool {
         if let Some(bg_str) = parts.last() {
             if let Ok(bg) = bg_str.trim().parse::<u8>() {
                 // ANSI colors 7, 10-15, 230-255 are typically light
-                return bg >= 7 && bg <= 15 || bg >= 230;
+                return (7..=15).contains(&bg) || bg >= 230;
             }
         }
     }
@@ -184,16 +184,16 @@ pub fn format_read_summary(tool_name: &str, result: &str) -> String {
     let lines: Vec<&str> = result.lines().filter(|l| !l.trim().is_empty()).collect();
     let count = lines.len();
     let summary = match tool_name {
-        "read" | "cat" | "head" | "tail" => format!("Read {} lines", count),
+        "read" | "cat" | "head" | "tail" => format!("Read {count} lines"),
         "grep" | "search" => {
             if count == 0 { "No matches found".to_string() }
-            else { format!("Found {} results", count) }
+            else { format!("Found {count} results") }
         }
         "glob" | "find" | "list" | "ls" => {
             if count == 0 { "No files found".to_string() }
-            else { format!("Found {} files", count) }
+            else { format!("Found {count} files") }
         }
-        _ => format!("{} results", count),
+        _ => format!("{count} results"),
     };
     let mut output = format!("{} {} {}", colors::DIM, summary, colors::RESET);
     if count > 0 {
@@ -703,7 +703,7 @@ fn format_diff_line_enhanced(
             let gutter = format_line_gutter(line.new_line, line.kind, config, light);
             out.push_str(&gutter);
             out.push_str(bg);
-            out.push_str("+");
+            out.push('+');
             out.push_str(content);
             out.push_str(reset);
         }
@@ -717,7 +717,7 @@ fn format_diff_line_enhanced(
             let gutter = format_line_gutter(line.old_line, line.kind, config, light);
             out.push_str(&gutter);
             out.push_str(bg);
-            out.push_str("-");
+            out.push('-');
             out.push_str(content);
             out.push_str(reset);
         }
@@ -730,7 +730,7 @@ fn format_diff_line_enhanced(
             let gutter = format_line_gutter(line.new_line, line.kind, config, light);
             out.push_str(&gutter);
             out.push_str(bg);
-            out.push_str(" ");
+            out.push(' ');
             out.push_str(line.content);
             out.push_str(reset);
         }
@@ -876,7 +876,7 @@ fn format_diff_with_config(s: &str, config: &DiffConfig) -> String {
                     let gutter = format_line_gutter(rem_dl.old_line, rem_dl.kind, config, light);
                     output.push_str(&gutter);
                     output.push_str(bg);
-                    output.push_str("-");
+                    output.push('-');
                     output.push_str(&rem_fmt);
                     output.push_str(diff_colors::RESET);
                     output.push('\n');
@@ -888,7 +888,7 @@ fn format_diff_with_config(s: &str, config: &DiffConfig) -> String {
                     let gutter = format_line_gutter(add_dl.new_line, add_dl.kind, config, light);
                     output.push_str(&gutter);
                     output.push_str(bg);
-                    output.push_str("+");
+                    output.push('+');
                     output.push_str(&add_fmt);
                     output.push_str(diff_colors::RESET);
                     output.push('\n');
@@ -991,7 +991,7 @@ fn format_diff_collapsed(
                         let gutter = format_line_gutter(rem_dl.old_line, rem_dl.kind, config, light);
                         output.push_str(&gutter);
                         output.push_str(bg);
-                        output.push_str("-");
+                        output.push('-');
                         output.push_str(&rem_fmt);
                         output.push_str(diff_colors::RESET);
                         output.push('\n');
@@ -1002,7 +1002,7 @@ fn format_diff_collapsed(
                         let gutter = format_line_gutter(add_dl.new_line, add_dl.kind, config, light);
                         output.push_str(&gutter);
                         output.push_str(bg);
-                        output.push_str("+");
+                        output.push('+');
                         output.push_str(&add_fmt);
                         output.push_str(diff_colors::RESET);
                         output.push('\n');
@@ -1030,7 +1030,7 @@ fn format_diff_collapsed(
                         let gutter = format_line_gutter(rem_dl.old_line, rem_dl.kind, config, light);
                         output.push_str(&gutter);
                         output.push_str(bg);
-                        output.push_str("-");
+                        output.push('-');
                         output.push_str(&rem_fmt);
                         output.push_str(diff_colors::RESET);
                         output.push('\n');
@@ -1041,7 +1041,7 @@ fn format_diff_collapsed(
                         let gutter = format_line_gutter(add_dl.new_line, add_dl.kind, config, light);
                         output.push_str(&gutter);
                         output.push_str(bg);
-                        output.push_str("+");
+                        output.push('+');
                         output.push_str(&add_fmt);
                         output.push_str(diff_colors::RESET);
                         output.push('\n');
@@ -1076,7 +1076,7 @@ fn format_diff_collapsed(
                         let gutter = format_line_gutter(rem_dl.old_line, rem_dl.kind, config, light);
                         output.push_str(&gutter);
                         output.push_str(bg);
-                        output.push_str("-");
+                        output.push('-');
                         output.push_str(&rem_fmt);
                         output.push_str(diff_colors::RESET);
                         output.push('\n');
@@ -1087,7 +1087,7 @@ fn format_diff_collapsed(
                         let gutter = format_line_gutter(add_dl.new_line, add_dl.kind, config, light);
                         output.push_str(&gutter);
                         output.push_str(bg);
-                        output.push_str("+");
+                        output.push('+');
                         output.push_str(&add_fmt);
                         output.push_str(diff_colors::RESET);
                         output.push('\n');

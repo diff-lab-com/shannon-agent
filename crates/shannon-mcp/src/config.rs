@@ -388,7 +388,7 @@ pub fn expand_env_vars(input: &str) -> String {
                     Err(_) => {
                         if modifier.starts_with('?') {
                             let err_msg = if modifier.len() > 1 {
-                                &modifier[1..]
+                                modifier.strip_prefix('?').unwrap()
                             } else {
                                 "required env var not set"
                             };
@@ -412,10 +412,7 @@ pub fn expand_env_vars(input: &str) -> String {
                 // Bare $VAR form: consume identifier characters [A-Za-z_][A-Za-z0-9_]*
                 let mut var_name = String::new();
                 while let Some(&next) = chars.peek() {
-                    if next.is_ascii_alphabetic() || next == '_' {
-                        var_name.push(next);
-                        chars.next();
-                    } else if !var_name.is_empty() && next.is_ascii_digit() {
+                    if next.is_ascii_alphabetic() || next == '_' || (!var_name.is_empty() && next.is_ascii_digit()) {
                         var_name.push(next);
                         chars.next();
                     } else {

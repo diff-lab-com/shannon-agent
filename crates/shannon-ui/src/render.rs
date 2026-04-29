@@ -374,7 +374,7 @@ impl Renderer {
                 Event::Start(Tag::Link { dest_url, .. }) => {
                     // OSC 8 hyperlink open sequence
                     inline_spans.push(Span::styled(
-                        format!("\x1b]8;;{}\x1b\\", dest_url),
+                        format!("\x1b]8;;{dest_url}\x1b\\"),
                         Style::default(),
                     ));
                 }
@@ -402,7 +402,7 @@ impl Renderer {
                 Event::Code(code) => {
                     let target = if in_table { &mut current_cell_spans } else { &mut inline_spans };
                     target.push(Span::styled(
-                        format!("`{}`", code),
+                        format!("`{code}`"),
                         Style::default().fg(Color::Yellow),
                     ));
                 }
@@ -491,7 +491,7 @@ fn flush_inline(spans: &mut Vec<Span<'static>>, output: &mut Vec<Line<'static>>)
     if spans.is_empty() {
         return;
     }
-    let line_spans: Vec<Span<'static>> = spans.drain(..).collect();
+    let line_spans: Vec<Span<'static>> = std::mem::take(spans);
     output.push(Line::from(line_spans));
 }
 
@@ -503,16 +503,12 @@ fn prepend_blockquote(spans: &mut Vec<Span<'static>>, depth: usize) {
     }
     // Build the prefix: "│ " for each level, with inner levels using "│ "
     let mut prefix_spans: Vec<Span<'static>> = Vec::new();
-    for level in 0..depth {
-        let bar_style = if level == 0 {
-            Style::default().fg(Color::DarkGray)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
+    for _ in 0..depth {
+        let bar_style = Style::default().fg(Color::DarkGray);
         prefix_spans.push(Span::styled("│ ".to_string(), bar_style));
     }
     // Prepend before existing spans
-    let existing: Vec<Span<'static>> = spans.drain(..).collect();
+    let existing: Vec<Span<'static>> = std::mem::take(spans);
     spans.extend(prefix_spans);
     spans.extend(existing);
 }
@@ -595,11 +591,11 @@ fn render_aligned_table(
                     pad_center(&truncated, width)
                 }
                 Some(pulldown_cmark::Alignment::Right) => {
-                    format!("{:>width$}", truncated, width = width)
+                    format!("{truncated:>width$}")
                 }
                 _ => {
                     // Left-aligned (default) or None
-                    format!("{:<width$}", truncated, width = width)
+                    format!("{truncated:<width$}")
                 }
             };
             spans.push(Span::styled(aligned, style));
@@ -665,10 +661,10 @@ fn render_code_block_with_border(
 
     // Title bar: ╭─ rust ─ src/main.rs ─╮
     let title_content = match filename_hint {
-        Some(fname) => format!(" {} ─ {} ", display_lang, fname),
-        None => format!(" {} ", display_lang),
+        Some(fname) => format!(" {display_lang} ─ {fname} "),
+        None => format!(" {display_lang} "),
     };
-    let title_bar = format!("╭─{}─╮", title_content);
+    let title_bar = format!("╭─{title_content}─╮");
     output.push(Line::from(Span::styled(title_bar, border_style)));
 
     let total_lines = highlighted_lines.len();
@@ -1026,7 +1022,7 @@ pub fn truncate_output(lines: &[Line<'_>], max_lines: usize) -> Vec<Line<'static
 
     // Truncation indicator
     let indicator = Line::from(Span::styled(
-        format!("... (truncated {} lines) ...", truncated_count),
+        format!("... (truncated {truncated_count} lines) ..."),
         Style::default()
             .fg(Color::DarkGray)
             .add_modifier(Modifier::ITALIC),
@@ -1259,7 +1255,7 @@ mod tests {
         let renderer = Renderer::new();
         let lines = renderer.render_markdown("# Hello World");
         // Heading + trailing empty line
-        assert!(lines.len() >= 1);
+        assert!(!lines.is_empty());
         let text = spans_to_string(&lines[0].spans);
         assert!(text.contains("Hello World"));
     }
@@ -1270,7 +1266,7 @@ mod tests {
         for level in 1..=6 {
             let md = format!("{} Heading {}", "#".repeat(level), level);
             let lines = renderer.render_markdown(&md);
-            assert!(lines.len() >= 1, "Heading level {level}");
+            assert!(!lines.is_empty(), "Heading level {level}");
             let text = spans_to_string(&lines[0].spans);
             assert!(text.contains(&format!("Heading {level}")), "Heading level {level}");
         }
@@ -1282,12 +1278,12 @@ mod tests {
         let lines = renderer.render_markdown("# Hello");
         let text = spans_to_string(&lines[0].spans);
         // H1 should have "█ " prefix
-        assert!(text.starts_with("█ "), "H1 heading should have █ prefix: got {}", text);
+        assert!(text.starts_with("█ "), "H1 heading should have █ prefix: got {text}");
 
         let lines = renderer.render_markdown("## Hello");
         let text = spans_to_string(&lines[0].spans);
         // H2 should have "▌ " prefix
-        assert!(text.starts_with("▌ "), "H2 heading should have ▌ prefix: got {}", text);
+        assert!(text.starts_with("▌ "), "H2 heading should have ▌ prefix: got {text}");
     }
 
     #[test]
@@ -1307,8 +1303,8 @@ mod tests {
         let lines = renderer.render_markdown(md);
         // First line should be title bar starting with ╭
         let first_text = spans_to_string(&lines[0].spans);
-        assert!(first_text.starts_with("╭"), "Code block should start with ╭: got {}", first_text);
-        assert!(first_text.contains("rust"), "Title bar should contain language: got {}", first_text);
+        assert!(first_text.starts_with("╭"), "Code block should start with ╭: got {first_text}");
+        assert!(first_text.contains("rust"), "Title bar should contain language: got {first_text}");
     }
 
     #[test]
@@ -1318,7 +1314,7 @@ mod tests {
         let lines = renderer.render_markdown(md);
         let first_text = spans_to_string(&lines[0].spans);
         assert!(first_text.contains("rust"), "Title should contain language");
-        assert!(first_text.contains("src/main.rs"), "Title should contain filename: got {}", first_text);
+        assert!(first_text.contains("src/main.rs"), "Title should contain filename: got {first_text}");
     }
 
     #[test]
@@ -1368,8 +1364,8 @@ mod tests {
         assert!(!lines.is_empty());
         // Find the ☑ character in the output
         let all_text: String = lines.iter().map(|l| spans_to_string(&l.spans)).collect();
-        assert!(all_text.contains('☑'), "Should contain checked checkbox: got {}", all_text);
-        assert!(all_text.contains('☐'), "Should contain unchecked checkbox: got {}", all_text);
+        assert!(all_text.contains('☑'), "Should contain checked checkbox: got {all_text}");
+        assert!(all_text.contains('☐'), "Should contain unchecked checkbox: got {all_text}");
     }
 
     #[test]
@@ -1403,7 +1399,7 @@ mod tests {
         assert!(!lines.is_empty());
         // Should contain blockquote bar
         let all_text: String = lines.iter().map(|l| spans_to_string(&l.spans)).collect();
-        assert!(all_text.contains('│'), "Blockquote should contain │ bar: got {}", all_text);
+        assert!(all_text.contains('│'), "Blockquote should contain │ bar: got {all_text}");
         assert!(all_text.contains("Quoted text"), "Should contain quoted text");
     }
 
@@ -1416,7 +1412,7 @@ mod tests {
         let all_text: String = lines.iter().map(|l| spans_to_string(&l.spans)).collect();
         // Should have at least 2 bar characters for nested blockquote
         let bar_count = all_text.chars().filter(|c| *c == '│').count();
-        assert!(bar_count >= 2, "Nested blockquote should have multiple bars: got {} bars", bar_count);
+        assert!(bar_count >= 2, "Nested blockquote should have multiple bars: got {bar_count} bars");
     }
 
     #[test]
@@ -1462,7 +1458,7 @@ mod tests {
         // Create a code block with more than 20 lines
         let mut code = String::from("```rust\n");
         for i in 0..25 {
-            code.push_str(&format!("let line_{} = {};\n", i, i));
+            code.push_str(&format!("let line_{i} = {i};\n"));
         }
         code.push_str("```");
 
@@ -1471,7 +1467,7 @@ mod tests {
         // Should have title + 10 head lines + fold indicator + 5 tail lines + footer
         // That's about 18 lines, not 25+ lines of code
         let all_text: String = lines.iter().map(|l| spans_to_string(&l.spans)).collect();
-        assert!(all_text.contains("lines folded"), "Long code block should be folded: got {}", all_text);
+        assert!(all_text.contains("lines folded"), "Long code block should be folded: got {all_text}");
     }
 
     #[test]

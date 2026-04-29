@@ -1374,7 +1374,7 @@ mod query_pipeline_tests {
             .create();
 
         let client = make_client(&server);
-        let mut tool_registry = ToolRegistry::new();
+        let tool_registry = ToolRegistry::new();
         // Register a bash tool mock
         use async_trait::async_trait;
         struct MockBashTool;

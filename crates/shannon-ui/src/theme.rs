@@ -1344,7 +1344,7 @@ mod tests {
             "everforest", "ayu", "flexoki", "dark_daltonized", "light_daltonized",
         ];
         for name in &names {
-            assert!(Theme::named(name).is_some(), "Theme '{}' should load", name);
+            assert!(Theme::named(name).is_some(), "Theme '{name}' should load");
             let theme = Theme::named(name).unwrap();
             assert_eq!(theme.name, *name);
         }

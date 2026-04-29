@@ -1300,9 +1300,7 @@ impl AgentCoordinator {
         // Verify the team exists and the agent is a member
         {
             let teams = self.teams.read().await;
-            let Some(team) = teams.get(team_name) else {
-                return None;
-            };
+            let team = teams.get(team_name)?;
             if !team.members.contains_key(agent_name) {
                 return None;
             }

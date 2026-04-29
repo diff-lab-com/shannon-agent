@@ -456,8 +456,8 @@ mod tests {
         let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
 
         // Shannon-specific checks should always be present
-        assert!(names.iter().any(|n| *n == "Rust Toolchain"), "Should include Rust Toolchain check");
-        assert!(names.iter().any(|n| *n == "Shannon Config"), "Should include Shannon Config check");
+        assert!(names.contains(&"Rust Toolchain"), "Should include Rust Toolchain check");
+        assert!(names.contains(&"Shannon Config"), "Should include Shannon Config check");
     }
 
     #[test]

@@ -756,7 +756,7 @@ mod tests {
                 body_instructions: String::new(),
                 source_path: PathBuf::from("test.md"),
             };
-            assert!(def.validate().is_ok(), "Model '{}' should be valid", m);
+            assert!(def.validate().is_ok(), "Model '{m}' should be valid");
         }
     }
 

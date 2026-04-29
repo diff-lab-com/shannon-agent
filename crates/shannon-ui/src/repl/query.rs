@@ -578,7 +578,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                     updated_at: chrono::Utc::now(),
                     total_input_tokens: repl.state.tokens_used,
                     total_output_tokens: 0,
-                    turn_count: repl.current_turn as usize,
+                    turn_count: repl.current_turn,
                     title: None,
                     parent_session_id: None,
                     branch_point_message_index: None,

@@ -19,6 +19,12 @@ pub struct StreamBuffer {
     catchup_count: u64,
 }
 
+impl Default for StreamBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StreamBuffer {
     pub fn new() -> Self {
         Self {

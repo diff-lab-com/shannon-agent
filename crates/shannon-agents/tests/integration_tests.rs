@@ -293,8 +293,8 @@ mod coordinator_tests {
         coordinator.create_team("test-team".into(), "A test team".into()).await.unwrap();
         let cfg1 = TeammateConfig { agent_type: "worker".into(), ..Default::default() };
         let cfg2 = TeammateConfig { agent_type: "reviewer".into(), ..Default::default() };
-        coordinator.add_teammate("test-team".into(), "agent-1".into(), cfg1).await.unwrap();
-        coordinator.add_teammate("test-team".into(), "agent-2".into(), cfg2).await.unwrap();
+        coordinator.add_teammate("test-team", "agent-1".into(), cfg1).await.unwrap();
+        coordinator.add_teammate("test-team", "agent-2".into(), cfg2).await.unwrap();
 
         // Verify team exists with 2 members
         let status = coordinator.team_status("test-team").await.unwrap();
@@ -1580,7 +1580,7 @@ mod conversation_history_tests {
         let response = agent.handle_chat_message(msg).await.unwrap();
         match &response.content {
             MessageContent::Text(t) => assert_eq!(t, "response text"),
-            other => panic!("Expected Text response, got {:?}", other),
+            other => panic!("Expected Text response, got {other:?}"),
         }
 
         let history = agent.conversation_history().await;

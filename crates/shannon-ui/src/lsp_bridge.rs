@@ -106,7 +106,7 @@ impl LspDisplay {
             lines.push(Line::from(vec![
                 Span::raw("  "),
                 Span::styled(
-                    format!("{}:{}", path, ln),
+                    format!("{path}:{ln}"),
                     Style::default().fg(theme.text_dim),
                 ),
             ]));

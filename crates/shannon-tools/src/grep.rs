@@ -795,7 +795,7 @@ mod tests {
         for i in 0..20 {
             fs::write(
                 dir.path().join(format!("file_{i}.txt")),
-                "match line here\nanother line\n".to_string(),
+                "match line here\nanother line\n",
             )
             .unwrap();
         }

@@ -398,7 +398,7 @@ fn compress_json(value: &serde_json::Value, budget: usize) -> String {
             let value_budget = 200; // max chars per value
             let mut keys_shown = 0;
             let total_keys = map.len();
-            for (key, val) in map {
+            for (key, val) in map.into_iter() {
                 let val_str = serde_json::to_string(val).unwrap_or_default();
                 let display_val = if val_str.len() > value_budget {
                     let mut v_end = value_budget;
@@ -4760,7 +4760,7 @@ mod tests {
 
     #[test]
     fn test_tool_result_truncated_json() {
-        let items: Vec<String> = (0..5000).map(|i| format!(r#"{{"id": {}, "data": "item {}"}}"#, i, i)).collect();
+        let items: Vec<String> = (0..5000).map(|i| format!(r#"{{"id": {i}, "data": "item {i}"}}"#)).collect();
         let content = format!("[{}]", items.join(",\n"));
         let result = truncate_tool_result(&content, MAX_TOOL_RESULT_CHARS);
         assert!(result.len() <= MAX_TOOL_RESULT_CHARS + 200);

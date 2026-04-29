@@ -1284,7 +1284,7 @@ mod tests {
             let skill = Skill::new(
                 format!("skill-{i:02}"),
                 format!("skill-{i:02}"),
-                format!("This is skill number {} with a description that takes some tokens", i),
+                format!("This is skill number {i} with a description that takes some tokens"),
                 "Content".to_string(),
             );
             registry.register(skill).unwrap();
@@ -1297,7 +1297,7 @@ mod tests {
         // With a very small budget, fewer skills should be returned
         let limited = registry.available_skills_metadata_with_budget(20);
         assert!(limited.len() < 20);
-        assert!(limited.len() > 0);
+        assert!(!limited.is_empty());
     }
 
     #[test]

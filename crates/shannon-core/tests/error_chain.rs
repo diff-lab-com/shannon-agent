@@ -91,7 +91,7 @@ fn test_anthropic_error_parsing() {
             assert_eq!(error_type, "invalid_request_error");
             assert!(message.contains("messages: required field"));
         }
-        _ => panic!("Expected ProviderError, got {:?}", err),
+        _ => panic!("Expected ProviderError, got {err:?}"),
     }
 }
 
@@ -115,7 +115,7 @@ fn test_openai_error_parsing_400() {
             assert_eq!(error_type, "invalid_request_error");
             assert!(message.contains("max tokens"));
         }
-        _ => panic!("Expected ProviderError, got {:?}", err),
+        _ => panic!("Expected ProviderError, got {err:?}"),
     }
 }
 
@@ -130,7 +130,7 @@ fn test_ollama_error_parsing() {
             assert_eq!(error_type, "ollama_error");
             assert!(message.contains("model not found"));
         }
-        _ => panic!("Expected ProviderError, got {:?}", err),
+        _ => panic!("Expected ProviderError, got {err:?}"),
     }
 }
 
@@ -154,7 +154,7 @@ fn test_500_maps_to_api_error() {
             assert_eq!(status, 500);
             assert_eq!(message, "internal error");
         }
-        _ => panic!("Expected ApiError variant, got {:?}", err),
+        _ => panic!("Expected ApiError variant, got {err:?}"),
     }
 }
 
@@ -165,7 +165,7 @@ fn test_503_maps_to_api_error() {
         ApiError::ApiError { status, .. } => {
             assert_eq!(status, 503);
         }
-        _ => panic!("Expected ApiError variant, got {:?}", err),
+        _ => panic!("Expected ApiError variant, got {err:?}"),
     }
 }
 
@@ -179,7 +179,7 @@ fn test_unknown_provider_fallback() {
             assert_eq!(error_type, "http_418");
             assert_eq!(message, "some plain text error");
         }
-        _ => panic!("Expected ProviderError, got {:?}", err),
+        _ => panic!("Expected ProviderError, got {err:?}"),
     }
 }
 
@@ -192,7 +192,7 @@ fn test_tool_error_not_found_conversion() {
 
     match exec_err {
         ToolExecutionError::ToolNotFound(name) => assert_eq!(name, "my_tool"),
-        _ => panic!("Expected ToolNotFound, got {:?}", exec_err),
+        _ => panic!("Expected ToolNotFound, got {exec_err:?}"),
     }
 }
 
@@ -205,7 +205,7 @@ fn test_tool_error_invalid_input_conversion() {
         ToolExecutionError::InvalidInput { reason, .. } => {
             assert!(reason.contains("missing field"));
         }
-        _ => panic!("Expected InvalidInput, got {:?}", exec_err),
+        _ => panic!("Expected InvalidInput, got {exec_err:?}"),
     }
 }
 
@@ -218,7 +218,7 @@ fn test_tool_error_execution_failed_conversion() {
         ToolExecutionError::ExecutionFailed(msg) => {
             assert!(msg.contains("exit code 1"));
         }
-        _ => panic!("Expected ExecutionFailed, got {:?}", exec_err),
+        _ => panic!("Expected ExecutionFailed, got {exec_err:?}"),
     }
 }
 
@@ -231,7 +231,7 @@ fn test_tool_error_registry_error_conversion() {
         ToolExecutionError::Internal(msg) => {
             assert!(msg.contains("duplicate name"));
         }
-        _ => panic!("Expected Internal, got {:?}", exec_err),
+        _ => panic!("Expected Internal, got {exec_err:?}"),
     }
 }
 
@@ -246,7 +246,7 @@ fn test_permission_error_denied_conversion() {
         ToolExecutionError::PermissionDenied { reason, .. } => {
             assert!(reason.contains("dangerous command"));
         }
-        _ => panic!("Expected PermissionDenied, got {:?}", exec_err),
+        _ => panic!("Expected PermissionDenied, got {exec_err:?}"),
     }
 }
 
@@ -259,7 +259,7 @@ fn test_permission_error_invalid_conversion() {
         ToolExecutionError::PermissionDenied { reason, .. } => {
             assert!(reason.contains("bad format"));
         }
-        _ => panic!("Expected PermissionDenied, got {:?}", exec_err),
+        _ => panic!("Expected PermissionDenied, got {exec_err:?}"),
     }
 }
 

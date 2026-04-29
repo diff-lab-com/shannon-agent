@@ -206,7 +206,7 @@ async fn test_e2e_simple_text_query_produces_complete_output() {
         .mock("POST", "/v1/messages")
         .with_status(200)
         .with_header("content-type", "text/event-stream")
-        .with_body(&anthropic_sse_text("msg_simple", "Rust is a systems programming language."))
+        .with_body(anthropic_sse_text("msg_simple", "Rust is a systems programming language."))
         .create();
 
     let client = make_client(&server, LlmProvider::Anthropic);
@@ -284,7 +284,7 @@ async fn test_e2e_tool_execution_pipeline() {
         .create();
 
     let client = make_client(&server, LlmProvider::Anthropic);
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Box::new(RecordableTool::new(
         "bash",
         ToolOutput::success("total 0\ndrwxr-xr-x 2 user user 64 Jan 1 00:00 .".to_string()),
@@ -341,7 +341,7 @@ async fn test_e2e_multi_turn_conversation_preserves_context() {
         .mock("POST", "/v1/messages")
         .with_status(200)
         .with_header("content-type", "text/event-stream")
-        .with_body(&anthropic_sse_text("msg_t1", "I'll remember that."))
+        .with_body(anthropic_sse_text("msg_t1", "I'll remember that."))
         .expect(1)
         .create();
 
@@ -350,7 +350,7 @@ async fn test_e2e_multi_turn_conversation_preserves_context() {
         .mock("POST", "/v1/messages")
         .with_status(200)
         .with_header("content-type", "text/event-stream")
-        .with_body(&anthropic_sse_text("msg_t2", "You told me Rust is your favorite."))
+        .with_body(anthropic_sse_text("msg_t2", "You told me Rust is your favorite."))
         .expect(1)
         .create();
 
@@ -633,7 +633,7 @@ fn test_cost_tracker_pricing_accuracy() {
 
 #[tokio::test]
 async fn test_tool_registry_execution_integration() {
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
 
     // Register multiple tools
     registry.register(Box::new(RecordableTool::new(
@@ -671,7 +671,7 @@ async fn test_tool_registry_execution_integration() {
 
 #[tokio::test]
 async fn test_tool_registry_duplicate_rejected() {
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Box::new(RecordableTool::new(
         "dup",
         ToolOutput::success("ok".to_string()),
@@ -818,7 +818,7 @@ async fn test_e2e_tool_error_propagates_as_is_error_result() {
         .create();
 
     let client = make_client(&server, LlmProvider::Anthropic);
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Box::new(FailingTool)).unwrap();
 
     let engine = QueryEngine::with_defaults(
@@ -899,7 +899,7 @@ async fn test_e2e_permission_denied_recovers_gracefully() {
         .mock("POST", "/v1/messages")
         .with_status(200)
         .with_header("content-type", "text/event-stream")
-        .with_body(&anthropic_sse_tool_then_text(
+        .with_body(anthropic_sse_tool_then_text(
             "msg_danger",
             "bash",
             "toolu_danger",
@@ -914,12 +914,12 @@ async fn test_e2e_permission_denied_recovers_gracefully() {
         .mock("POST", "/v1/messages")
         .with_status(200)
         .with_header("content-type", "text/event-stream")
-        .with_body(&anthropic_sse_final_text("msg_recovery", "Understood, I won't delete files."))
+        .with_body(anthropic_sse_final_text("msg_recovery", "Understood, I won't delete files."))
         .expect(1)
         .create();
 
     let client = make_client(&server, LlmProvider::Anthropic);
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Box::new(RecordableTool::new(
         "bash",
         ToolOutput::success("deleted".to_string()),

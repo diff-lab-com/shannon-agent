@@ -211,14 +211,14 @@ impl FilePersistence {
         // Acquire exclusive lock
         let lock_file = std::fs::OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&lock_path)
             .map_err(AgentError::Io)?;
         FileExt::lock_exclusive(&lock_file)
-            .map_err(|e| AgentError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to acquire exclusive lock on {:?}: {}", lock_path, e),
+            .map_err(|e| AgentError::Io(std::io::Error::other(
+                format!("Failed to acquire exclusive lock on {lock_path:?}: {e}"),
             )))?;
 
         let result = (|| -> Result<(), AgentError> {
@@ -244,14 +244,14 @@ impl FilePersistence {
         // Acquire shared lock for reading
         let lock_file = std::fs::OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&lock_path)
             .map_err(AgentError::Io)?;
         FileExt::lock_shared(&lock_file)
-            .map_err(|e| AgentError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to acquire shared lock on {:?}: {}", lock_path, e),
+            .map_err(|e| AgentError::Io(std::io::Error::other(
+                format!("Failed to acquire shared lock on {lock_path:?}: {e}"),
             )))?;
 
         let result = std::fs::read_to_string(&task_path)
@@ -306,14 +306,14 @@ impl FilePersistence {
             // Acquire exclusive lock before deleting
             let lock_file = std::fs::OpenOptions::new()
                 .create(true)
+                .truncate(false)
                 .read(true)
                 .write(true)
                 .open(&lock_path)
                 .map_err(AgentError::Io)?;
             FileExt::lock_exclusive(&lock_file)
-                .map_err(|e| AgentError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("Failed to acquire lock for delete: {}", e),
+                .map_err(|e| AgentError::Io(std::io::Error::other(
+                    format!("Failed to acquire lock for delete: {e}"),
                 )))?;
 
             let result = std::fs::remove_file(&task_path)
@@ -353,14 +353,14 @@ impl FilePersistence {
         let lock_path = tasks_dir.join(".highwatermark.lock");
         let lock_file = std::fs::OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&lock_path)
             .map_err(AgentError::Io)?;
         FileExt::lock_exclusive(&lock_file)
-            .map_err(|e| AgentError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to lock highwatermark: {}", e),
+            .map_err(|e| AgentError::Io(std::io::Error::other(
+                format!("Failed to lock highwatermark: {e}"),
             )))?;
 
         let result = std::fs::write(&path, value.to_string())
@@ -383,14 +383,14 @@ impl FilePersistence {
         // Acquire exclusive lock for the read-modify-write
         let lock_file = std::fs::OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&lock_path)
             .map_err(AgentError::Io)?;
         FileExt::lock_exclusive(&lock_file)
-            .map_err(|e| AgentError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to lock highwatermark for increment: {}", e),
+            .map_err(|e| AgentError::Io(std::io::Error::other(
+                format!("Failed to lock highwatermark for increment: {e}"),
             )))?;
 
         let current = if hw_path.exists() {
@@ -436,14 +436,14 @@ impl FilePersistence {
         // Acquire exclusive lock
         let lock_file = std::fs::OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&lock_path)
             .map_err(AgentError::Io)?;
         FileExt::lock_exclusive(&lock_file)
-            .map_err(|e| AgentError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to lock inbox for {}: {}", agent_name, e),
+            .map_err(|e| AgentError::Io(std::io::Error::other(
+                format!("Failed to lock inbox for {agent_name}: {e}"),
             )))?;
 
         let result = (|| -> Result<(), AgentError> {
@@ -455,7 +455,7 @@ impl FilePersistence {
 
             let line = serde_json::to_string(message)
                 .map_err(AgentError::Serialization)?;
-            writeln!(file, "{}", line)
+            writeln!(file, "{line}")
                 .map_err(AgentError::Io)?;
             Ok(())
         })();
@@ -484,14 +484,14 @@ impl FilePersistence {
         // Acquire exclusive lock (read + clear is a write operation)
         let lock_file = std::fs::OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&lock_path)
             .map_err(AgentError::Io)?;
         FileExt::lock_exclusive(&lock_file)
-            .map_err(|e| AgentError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to lock inbox for read: {}", e),
+            .map_err(|e| AgentError::Io(std::io::Error::other(
+                format!("Failed to lock inbox for read: {e}"),
             )))?;
 
         let result = (|| -> Result<Vec<InboxMessage>, AgentError> {
@@ -551,14 +551,14 @@ impl FilePersistence {
         // Acquire exclusive lock
         let lock_file = std::fs::OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&lock_path)
             .map_err(AgentError::Io)?;
         FileExt::lock_exclusive(&lock_file)
-            .map_err(|e| AgentError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to acquire claim lock for task {}: {}", task_id, e),
+            .map_err(|e| AgentError::Io(std::io::Error::other(
+                format!("Failed to acquire claim lock for task {task_id}: {e}"),
             )))?;
 
         let result = (|| -> Result<TaskFile, AgentError> {

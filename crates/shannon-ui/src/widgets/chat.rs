@@ -119,6 +119,12 @@ fn content_hash(s: &str) -> u64 {
     h
 }
 
+impl Default for MessageHeightCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MessageHeightCache {
     pub fn new() -> Self {
         Self {
@@ -527,7 +533,7 @@ impl ChatWidget {
                 // Build summary text
                 let summary_text = if msg.tool_name.is_some() {
                     let detail = first_line.strip_prefix(tool_label)
-                        .map(|s| s.trim_start_matches(|c: char| c == ':' || c == ' '))
+                        .map(|s| s.trim_start_matches([':', ' ']))
                         .unwrap_or(first_line);
                     if detail.is_empty() {
                         format!("{prefix}{tool_label}")
@@ -543,7 +549,7 @@ impl ChatWidget {
                 // Reserve space for: "[HH:MM:SS] ▸ summary  (2.3s) ✓"
                 let duration_str = msg.duration_secs.map(|d| {
                     if d < 0.1 { format!("({:.0?}ms)", (d * 1000.0) as u32) }
-                    else if d < 60.0 { format!("({:.1}s)", d) }
+                    else if d < 60.0 { format!("({d:.1}s)") }
                     else { format!("({:.0}m{:.0}s)", d / 60.0, d % 60.0) }
                 });
                 let duration_display_len = duration_str.as_ref().map(|s| s.len() + 1).unwrap_or(0);
@@ -797,8 +803,8 @@ impl ChatWidget {
 
                         // Title bar: ╭─ rust ─ src/main.rs ─ [copy] ╮
                         let title_content = match &filename_hint {
-                            Some(fname) => format!(" {} ─ {} ", display_lang, fname),
-                            None => format!(" {} ", display_lang),
+                            Some(fname) => format!(" {display_lang} ─ {fname} "),
+                            None => format!(" {display_lang} "),
                         };
 
                         // Check if this message has active copy feedback (within 2 seconds)
@@ -812,14 +818,14 @@ impl ChatWidget {
                             " [copy]"
                         };
 
-                        let header_with_hint = format!("╭─{}─{}╮", title_content, copy_hint);
+                        let header_with_hint = format!("╭─{title_content}─{copy_hint}╮");
                         msg_lines.push(Line::from(vec![
                             Span::styled(indent.clone(), Style::default().fg(theme.muted)),
                             Span::styled(truncate_to(&header_with_hint, available), border_style),
                         ]));
 
                         // Code lines with syntax highlighting (cached)
-                        let highlighted_lines = highlight_code_cached(&code, &display_lang);
+                        let highlighted_lines = highlight_code_cached(code, &display_lang);
                         let total_lines = highlighted_lines.len();
                         let fold_threshold = 20;
                         let fold_head = 10;
@@ -1344,22 +1350,19 @@ pub fn highlight_diff_line(
         let (ref ss, ref theme) = *DIFF_SYNTAX;
         if let Some(syntax) = ss.find_syntax_by_token(lang).or_else(|| ss.find_syntax_by_extension(lang)) {
             let mut highlighter = HighlightLines::new(syntax, theme);
-            match highlighter.highlight_line(content, ss) {
-                Ok(ranges) => {
-                    for (style, text) in ranges {
-                        let fg = syntect_to_ratatui(style.foreground);
-                        let mut s = Style::default().fg(fg);
-                        if style.font_style.contains(syntect::highlighting::FontStyle::BOLD) {
-                            s = s.add_modifier(Modifier::BOLD);
-                        }
-                        if style.font_style.contains(syntect::highlighting::FontStyle::ITALIC) {
-                            s = s.add_modifier(Modifier::ITALIC);
-                        }
-                        spans.push(Span::styled(text.to_string(), s));
+            if let Ok(ranges) = highlighter.highlight_line(content, ss) {
+                for (style, text) in ranges {
+                    let fg = syntect_to_ratatui(style.foreground);
+                    let mut s = Style::default().fg(fg);
+                    if style.font_style.contains(syntect::highlighting::FontStyle::BOLD) {
+                        s = s.add_modifier(Modifier::BOLD);
                     }
-                    return spans;
+                    if style.font_style.contains(syntect::highlighting::FontStyle::ITALIC) {
+                        s = s.add_modifier(Modifier::ITALIC);
+                    }
+                    spans.push(Span::styled(text.to_string(), s));
                 }
-                Err(_) => {} // fall through to plain
+                return spans;
             }
         }
     }

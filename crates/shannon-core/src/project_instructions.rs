@@ -250,7 +250,7 @@ fn resolve_content_imports_inner(
 
         if in_code_block {
             resolved.push_str(line);
-            resolved.push_str("\n");
+            resolved.push('\n');
             continue;
         }
 
@@ -307,8 +307,7 @@ fn process_import_line_inner(
                         };
                         if !canonical.starts_with(&root_canonical) {
                             eprintln!(
-                                "warning: @import path '{}' escapes project directory, skipping",
-                                path_str
+                                "warning: @import path '{path_str}' escapes project directory, skipping"
                             );
                             result.push('@');
                             i += 1;
@@ -323,8 +322,7 @@ fn process_import_line_inner(
                 // Check remaining depth
                 if remaining_depth == 0 {
                     eprintln!(
-                        "warning: @import max depth exceeded for '{}', skipping",
-                        path_str
+                        "warning: @import max depth exceeded for '{path_str}', skipping"
                     );
                     result.push('@');
                     i += 1;
@@ -337,8 +335,7 @@ fn process_import_line_inner(
                         let new_bytes = file_content.len();
                         if *total_imported_bytes + new_bytes > max_total_size {
                             eprintln!(
-                                "warning: @import total size limit exceeded at '{}', skipping",
-                                path_str
+                                "warning: @import total size limit exceeded at '{path_str}', skipping"
                             );
                             result.push('@');
                             i += 1;
@@ -352,8 +349,7 @@ fn process_import_line_inner(
                         };
                         if visited.contains(&visit_key) {
                             eprintln!(
-                                "warning: circular @import detected for '{}', skipping",
-                                path_str
+                                "warning: circular @import detected for '{path_str}', skipping"
                             );
                             result.push('@');
                             i += 1;
@@ -384,8 +380,7 @@ fn process_import_line_inner(
                         );
 
                         result.push_str(&format!(
-                            "--- {} (imported) ---\n{}\n---\n",
-                            path_str, nested_content
+                            "--- {path_str} (imported) ---\n{nested_content}\n---\n"
                         ));
 
                         // Skip past the @path in the original line
@@ -393,7 +388,7 @@ fn process_import_line_inner(
                         continue;
                     }
                     Err(e) => {
-                        eprintln!("warning: @import file '{}' not found: {}", path_str, e);
+                        eprintln!("warning: @import file '{path_str}' not found: {e}");
                         result.push('@');
                         i += 1;
                         continue;
@@ -608,7 +603,7 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
                         DEFAULT_MAX_IMPORT_SIZE,
                     );
                     all_imported.extend(imported);
-                    let rel_path = format!(".claude/{}", filename);
+                    let rel_path = format!(".claude/{filename}");
                     all_content.push_str(&format!(
                         "## {} Scope: {} ---\n\n{}\n\n",
                         InstructionScope::Local.name(),
@@ -1167,8 +1162,7 @@ mod tests {
         // The file is too large to import under the 50-byte limit
         assert!(
             !resolved.contains("XXX"),
-            "Large import should be skipped: {:?}",
-            resolved
+            "Large import should be skipped: {resolved:?}"
         );
         assert!(imported.is_empty(), "No files imported due to size limit");
         let _ = fs::remove_dir_all(&tmp);

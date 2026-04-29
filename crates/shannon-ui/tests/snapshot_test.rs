@@ -99,7 +99,7 @@ fn test_chat_widget_empty() {
 
     let buf = terminal.backend().buffer().clone();
     let text = buffer_text(&buf, Rect::new(0, 0, 60, 10));
-    assert!(text.len() > 0);
+    assert!(!text.is_empty());
 }
 
 #[test]

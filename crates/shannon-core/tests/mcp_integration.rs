@@ -54,7 +54,7 @@ fn test_mcp_adapter_with_env() {
 /// Test: McpToolAdapter can be registered in ToolRegistry.
 #[test]
 fn test_mcp_adapter_registration_in_tool_registry() {
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
 
     let adapter = shannon_core::mcp_tool_adapter::McpToolAdapter::new(
         "my-server".to_string(),
@@ -77,7 +77,7 @@ fn test_mcp_adapter_registration_in_tool_registry() {
 /// Test: Multiple MCP adapters from same server can be registered.
 #[test]
 fn test_multiple_mcp_adapters_registration() {
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
 
     // Register multiple tools from the same MCP server
     for tool_name in &["read", "write", "search"] {

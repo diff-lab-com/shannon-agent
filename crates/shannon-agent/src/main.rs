@@ -7,7 +7,6 @@
 //!   shannon-agent --name worker-1 --model claude-sonnet-4-20250514
 
 use clap::Parser;
-use serde_json;
 use shannon_agents::{
     frame_message, parse_message,
     AgentReadyParams, ExecuteTaskParams, TaskCompleteParams, TaskProgressParams,

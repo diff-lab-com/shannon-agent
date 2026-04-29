@@ -70,7 +70,7 @@ impl StatusBarWidget {
             span_vec.push(Span::styled("🎯 ", Style::default().fg(theme.primary)));
             let truncated_goal = if goal_text.chars().count() > 40 {
                 let truncated: String = goal_text.chars().take(37).collect();
-                format!("{}...", truncated)
+                format!("{truncated}...")
             } else {
                 goal_text.to_string()
             };
@@ -164,8 +164,8 @@ impl StatusBarWidget {
                 label if label == "SUGGEST" || label == "PLAN" || label == "RO" => {
                     Style::default().fg(theme.warning)
                 }
-                label if label == "AUTO" => Style::default().fg(theme.success),
-                label if label == "FULL" => Style::default().fg(theme.primary),
+                "AUTO" => Style::default().fg(theme.success),
+                "FULL" => Style::default().fg(theme.primary),
                 label if label == "BYPASS" || label == "YOLO" => {
                     Style::default().fg(ratatui::style::Color::Red)
                 }

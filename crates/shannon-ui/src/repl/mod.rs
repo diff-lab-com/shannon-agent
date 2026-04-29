@@ -1517,60 +1517,57 @@ impl Repl {
             .or(most_recent.preview.as_deref())
             .unwrap_or("Untitled");
 
-        match self.state_manager.load_session(&session_id) {
-            Ok(Some(data)) => {
-                let msg_count = data.messages.len();
-                if msg_count == 0 {
-                    return;
-                }
-
-                // Show notice before restoring messages
-                self.chat.add_message(ChatRole::System, format!(
-                    "Auto-restored session: \"{}\" ({} messages, {})\nType /clear to start fresh.",
-                    title, msg_count, most_recent.model,
-                ));
-
-                // Populate chat widget with restored messages
-                for msg in &data.messages {
-                    let role = match msg.role.as_str() {
-                        "user" => ChatRole::User,
-                        "assistant" => ChatRole::Assistant,
-                        "system" => ChatRole::System,
-                        _ => ChatRole::Tool,
-                    };
-                    let text = match &msg.content {
-                        MessageContent::Text(t) => t.clone(),
-                        MessageContent::Blocks(blocks) => blocks
-                            .iter()
-                            .filter_map(|b| match b {
-                                ContentBlock::Text { text } => Some(text.as_str()),
-                                _ => None,
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n"),
-                    };
-                    self.chat.add_message(role, text);
-                }
-
-                // Restore in query engine
-                if let Some(ref mut engine) = self.query_engine {
-                    engine.replace_conversation(data.messages);
-                    if let Err(e) = engine.restore_session(session_id) {
-                        tracing::warn!("Auto-restore engine session failed: {e}");
-                    }
-                }
-
-                self.state.tokens_used = most_recent.total_input_tokens + most_recent.total_output_tokens;
-                if !most_recent.model.is_empty() {
-                    self.state.model = Some(most_recent.model.clone());
-                }
-
-                tracing::info!(
-                    "Auto-restored session {} (\"{}\", {} msgs)",
-                    session_id, title, msg_count,
-                );
+        if let Ok(Some(data)) = self.state_manager.load_session(&session_id) {
+            let msg_count = data.messages.len();
+            if msg_count == 0 {
+                return;
             }
-            Ok(None) | Err(_) => {}
+
+            // Show notice before restoring messages
+            self.chat.add_message(ChatRole::System, format!(
+                "Auto-restored session: \"{}\" ({} messages, {})\nType /clear to start fresh.",
+                title, msg_count, most_recent.model,
+            ));
+
+            // Populate chat widget with restored messages
+            for msg in &data.messages {
+                let role = match msg.role.as_str() {
+                    "user" => ChatRole::User,
+                    "assistant" => ChatRole::Assistant,
+                    "system" => ChatRole::System,
+                    _ => ChatRole::Tool,
+                };
+                let text = match &msg.content {
+                    MessageContent::Text(t) => t.clone(),
+                    MessageContent::Blocks(blocks) => blocks
+                        .iter()
+                        .filter_map(|b| match b {
+                            ContentBlock::Text { text } => Some(text.as_str()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                };
+                self.chat.add_message(role, text);
+            }
+
+            // Restore in query engine
+            if let Some(ref mut engine) = self.query_engine {
+                engine.replace_conversation(data.messages);
+                if let Err(e) = engine.restore_session(session_id) {
+                    tracing::warn!("Auto-restore engine session failed: {e}");
+                }
+            }
+
+            self.state.tokens_used = most_recent.total_input_tokens + most_recent.total_output_tokens;
+            if !most_recent.model.is_empty() {
+                self.state.model = Some(most_recent.model.clone());
+            }
+
+            tracing::info!(
+                "Auto-restored session {} (\"{}\", {} msgs)",
+                session_id, title, msg_count,
+            );
         }
     }
 
@@ -1956,7 +1953,7 @@ impl Repl {
             let due = self.state.routine_manager.drain_due();
             for (name, prompt) in due {
                 self.chat.add_message(ChatRole::System,
-                    format!("[Routine: {}] {}", name, prompt));
+                    format!("[Routine: {name}] {prompt}"));
             }
 
             // Draw UI
@@ -2175,7 +2172,7 @@ impl Repl {
             .filter(|(_, m)| m.role == ChatRole::Tool && m.is_error)
             .count();
         let context_window = self.state.model.as_deref()
-            .map(|m| shannon_core::model_registry::context_window_for(m))
+            .map(shannon_core::model_registry::context_window_for)
             .unwrap_or(200_000);
 
         // Refresh active_agents from registry if available
@@ -2228,7 +2225,7 @@ impl Repl {
     /// Returns true if auto-compaction was performed.
     pub fn check_context_pressure(&mut self) -> bool {
         let context_window = self.state.model.as_deref()
-            .map(|m| shannon_core::model_registry::context_window_for(m))
+            .map(shannon_core::model_registry::context_window_for)
             .unwrap_or(200_000) as u64;
 
         if context_window == 0 || self.state.tokens_used == 0 {

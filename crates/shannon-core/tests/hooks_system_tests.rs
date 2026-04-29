@@ -150,7 +150,7 @@ mod hook_event_type_tests {
         for variant in &variants {
             let json = serde_json::to_string(variant).unwrap();
             let parsed: HookEventType = serde_json::from_str(&json).unwrap();
-            assert_eq!(*variant, parsed, "Round-trip failed for {:?}", variant);
+            assert_eq!(*variant, parsed, "Round-trip failed for {variant:?}");
         }
     }
 

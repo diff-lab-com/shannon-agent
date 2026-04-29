@@ -308,7 +308,7 @@ impl PreferenceMemoryManager {
             // Sort: High first, then Normal, then Low.
             entries.sort_by(|a, b| b.priority.cmp(&a.priority));
 
-            lines.push(format!("### {}", cat));
+            lines.push(format!("### {cat}"));
             for entry in entries {
                 lines.push(format!("- {}", entry.rule));
             }
@@ -656,7 +656,7 @@ fn format_preferences_markdown(entries: &[PreferenceEntry]) -> String {
             continue;
         }
 
-        out.push_str(&format!("\n## {}\n", cat));
+        out.push_str(&format!("\n## {cat}\n"));
 
         for entry in &entries_for_cat {
             let reinforcement = if entry.reinforcement_count > 0 {

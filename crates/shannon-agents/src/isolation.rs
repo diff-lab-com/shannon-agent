@@ -265,7 +265,7 @@ impl IsolatedContext {
         // Standard approximation: ~4 characters per token for English text.
         // Use `.ceil()` via integer arithmetic to avoid pulling in floats
         // everywhere: (len + 3) / 4.
-        (s.len() + 3) / 4
+        s.len().div_ceil(4)
     }
 }
 

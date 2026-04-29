@@ -645,7 +645,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_registration() {
-        let mut registry = ToolRegistry::new();
+        let registry = ToolRegistry::new();
         let tool = Box::new(DummyTool {
             name: "test_tool".to_string(),
         });
@@ -656,7 +656,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_execution() {
-        let mut registry = ToolRegistry::new();
+        let registry = ToolRegistry::new();
         let tool = Box::new(DummyTool {
             name: "test_tool".to_string(),
         });
@@ -712,7 +712,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_tool_execution() {
-        let mut registry = ToolRegistry::new();
+        let registry = ToolRegistry::new();
 
         // Register multiple tools
         for i in 0..5 {
@@ -752,7 +752,7 @@ mod tests {
     async fn test_tool_execution_with_permission_checks() {
         use crate::permissions::{PermissionPrompt, RiskLevel};
 
-        let mut registry = ToolRegistry::new();
+        let registry = ToolRegistry::new();
         let tool = Box::new(AsyncTool {
             name: "secure_tool".to_string(),
             delay_ms: 0,
@@ -786,7 +786,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_registry_with_multiple_tools() {
-        let mut registry = ToolRegistry::new();
+        let registry = ToolRegistry::new();
 
         // Register multiple tools with different characteristics
         let tools = vec![
@@ -831,7 +831,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_unregister() {
-        let mut registry = ToolRegistry::new();
+        let registry = ToolRegistry::new();
 
         let tool = Box::new(DummyTool {
             name: "temp_tool".to_string(),
@@ -851,7 +851,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_duplicate_tool_registration_fails() {
-        let mut registry = ToolRegistry::new();
+        let registry = ToolRegistry::new();
 
         let tool1 = Box::new(DummyTool {
             name: "dup_tool".to_string(),
@@ -879,7 +879,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_metadata() {
-        let mut registry = ToolRegistry::new();
+        let registry = ToolRegistry::new();
 
         let tool = Box::new(DummyTool {
             name: "metadata_tool".to_string(),
@@ -934,7 +934,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_output_with_metadata() {
-        let mut registry = ToolRegistry::new();
+        let registry = ToolRegistry::new();
 
         struct MetadataTool {
             name: String,

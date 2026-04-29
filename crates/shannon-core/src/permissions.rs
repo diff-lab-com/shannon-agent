@@ -303,7 +303,7 @@ impl PermissionRule {
             if cmd_pattern.contains('*') {
                 // Convert glob to simple regex
                 let regex_pattern = cmd_pattern.replace('*', ".*");
-                if let Ok(re) = regex::Regex::new(&format!("^{}$", regex_pattern)) {
+                if let Ok(re) = regex::Regex::new(&format!("^{regex_pattern}$")) {
                     re.is_match(command)
                 } else {
                     // Fallback to contains check
@@ -2342,15 +2342,13 @@ mod tests {
 
     #[test]
     fn test_approval_mode_cycle_includes_new_modes() {
-        let modes = vec![
-            ApprovalMode::Suggest,
+        let modes = [ApprovalMode::Suggest,
             ApprovalMode::AutoEdit,
             ApprovalMode::Plan,
             ApprovalMode::FullAuto,
             ApprovalMode::Auto,
             ApprovalMode::PlanReadonly,
-            ApprovalMode::Readonly,
-        ];
+            ApprovalMode::Readonly];
 
         // Test cycling through all modes
         let mut current = ApprovalMode::Suggest;

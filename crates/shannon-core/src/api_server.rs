@@ -504,7 +504,7 @@ async fn handle_ws_socket(mut socket: WebSocket, state: AppState) {
         model: None,
     };
     if let Ok(json) = serde_json::to_string(&greeting) {
-        let _ = socket.send(WsMsg::Text(json.into())).await;
+        let _ = socket.send(WsMsg::Text(json)).await;
     }
 
     loop {
@@ -522,7 +522,7 @@ async fn handle_ws_socket(mut socket: WebSocket, state: AppState) {
                     message: format!("Invalid message: {e}"),
                 };
                 if let Ok(json) = serde_json::to_string(&err) {
-                    let _ = socket.send(WsMsg::Text(json.into())).await;
+                    let _ = socket.send(WsMsg::Text(json)).await;
                 }
                 continue;
             }
@@ -602,7 +602,7 @@ async fn handle_ws_socket(mut socket: WebSocket, state: AppState) {
 
                     if let Some(msg) = server_msg {
                         if let Ok(json) = serde_json::to_string(&msg) {
-                            if socket.send(WsMsg::Text(json.into())).await.is_err() {
+                            if socket.send(WsMsg::Text(json)).await.is_err() {
                                 break;
                             }
                         }
@@ -623,7 +623,7 @@ async fn handle_ws_socket(mut socket: WebSocket, state: AppState) {
                     model: s.model.clone(),
                 };
                 if let Ok(json) = serde_json::to_string(&info) {
-                    let _ = socket.send(WsMsg::Text(json.into())).await;
+                    let _ = socket.send(WsMsg::Text(json)).await;
                 }
             }
             WsClientMessage::Info => {
@@ -633,7 +633,7 @@ async fn handle_ws_socket(mut socket: WebSocket, state: AppState) {
                     model: s.model.clone(),
                 };
                 if let Ok(json) = serde_json::to_string(&info) {
-                    let _ = socket.send(WsMsg::Text(json.into())).await;
+                    let _ = socket.send(WsMsg::Text(json)).await;
                 }
             }
             WsClientMessage::Cancel => {
@@ -642,7 +642,7 @@ async fn handle_ws_socket(mut socket: WebSocket, state: AppState) {
                     message: "Cancel not yet supported".to_string(),
                 };
                 if let Ok(json) = serde_json::to_string(&err) {
-                    let _ = socket.send(WsMsg::Text(json.into())).await;
+                    let _ = socket.send(WsMsg::Text(json)).await;
                 }
             }
         }

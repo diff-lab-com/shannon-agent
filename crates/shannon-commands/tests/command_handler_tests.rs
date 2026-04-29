@@ -256,7 +256,7 @@ mod search_tests {
 
     #[test]
     fn test_search_history_count_limit() {
-        let entries: Vec<String> = (0..100).map(|i| format!("cargo cmd {}", i)).collect();
+        let entries: Vec<String> = (0..100).map(|i| format!("cargo cmd {i}")).collect();
         let opts = SearchOptions {
             pattern: "cargo".to_string(),
             count: 5,

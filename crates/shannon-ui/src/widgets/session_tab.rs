@@ -28,6 +28,12 @@ pub struct SessionTabWidget {
     pub visible: bool,
 }
 
+impl Default for SessionTabWidget {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SessionTabWidget {
     pub fn new() -> Self {
         let default_session = SessionInfo {

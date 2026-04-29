@@ -60,7 +60,7 @@ mod updater_tests {
         match status {
             UpdateStatus::UpToDate { current } => assert!(!current.is_empty()),
             UpdateStatus::CheckFailed { .. } => {} // cached failure is also ok
-            other => panic!("Expected cached result, got {:?}", other),
+            other => panic!("Expected cached result, got {other:?}"),
         }
     }
 
@@ -222,7 +222,7 @@ mod oauth_tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             OAuthError::MissingField(field) => assert_eq!(field, "client_id"),
-            other => panic!("Expected MissingField, got {:?}", other),
+            other => panic!("Expected MissingField, got {other:?}"),
         }
     }
 
@@ -232,7 +232,7 @@ mod oauth_tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             OAuthError::MissingField(field) => assert_eq!(field, "id"),
-            other => panic!("Expected MissingField, got {:?}", other),
+            other => panic!("Expected MissingField, got {other:?}"),
         }
     }
 
@@ -450,7 +450,7 @@ mod tool_registry_tests {
 
     #[test]
     fn test_register_and_lookup() {
-        let mut registry = ToolRegistry::new();
+        let registry = ToolRegistry::new();
         registry.register(Box::new(DummyTool { name: "foo".into() })).unwrap();
         let tool = registry.get("foo").unwrap();
         assert_eq!(tool.name(), "foo");
@@ -458,7 +458,7 @@ mod tool_registry_tests {
 
     #[test]
     fn test_register_duplicate_rejected() {
-        let mut registry = ToolRegistry::new();
+        let registry = ToolRegistry::new();
         registry.register(Box::new(DummyTool { name: "dup".into() })).unwrap();
         let result = registry.register(Box::new(DummyTool { name: "dup".into() }));
         assert!(result.is_err());
@@ -472,7 +472,7 @@ mod tool_registry_tests {
 
     #[test]
     fn test_list_registered_tools() {
-        let mut registry = ToolRegistry::new();
+        let registry = ToolRegistry::new();
         registry.register(Box::new(DummyTool { name: "a".into() })).unwrap();
         registry.register(Box::new(DummyTool { name: "b".into() })).unwrap();
 
@@ -485,7 +485,7 @@ mod tool_registry_tests {
 
     #[tokio::test]
     async fn test_execute_tool_through_registry() {
-        let mut registry = ToolRegistry::new();
+        let registry = ToolRegistry::new();
         registry.register(Box::new(DummyTool { name: "echo".into() })).unwrap();
         let tool = registry.get("echo").unwrap();
         let result = tool.execute(json!({})).await.unwrap();
@@ -597,7 +597,7 @@ mod state_extra_tests {
         let msgs: Vec<Message> = (0..100)
             .map(|i| Message {
                 role: if i % 2 == 0 { "user" } else { "assistant" }.to_string(),
-                content: MessageContent::Text(format!("Message {}", i)),
+                content: MessageContent::Text(format!("Message {i}")),
             })
             .collect();
         mgr.save_session(&id, &msgs, &Default::default()).unwrap();

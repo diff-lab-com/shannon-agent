@@ -61,6 +61,7 @@ pub struct PersistedSessionState {
 
 /// Additional metadata attached to a persisted session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct PersistMetadata {
     /// User-given name for the session.
     pub name: Option<String>,
@@ -72,16 +73,6 @@ pub struct PersistMetadata {
     pub tags: Vec<String>,
 }
 
-impl Default for PersistMetadata {
-    fn default() -> Self {
-        Self {
-            name: None,
-            tool_use_count: 0,
-            total_tokens: 0,
-            tags: Vec::new(),
-        }
-    }
-}
 
 /// Lightweight summary used when listing sessions without loading full
 /// conversation history.

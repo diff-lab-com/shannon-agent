@@ -225,7 +225,7 @@ mod tests {
 
     /// Helper: build a registry pre-populated with several fake tools.
     fn build_test_registry() -> Arc<RwLock<ToolRegistry>> {
-        let mut reg = ToolRegistry::new();
+        let reg = ToolRegistry::new();
         reg.register(Box::new(FakeTool {
             name: "ReadFile".into(),
             description: "Read the contents of a file from disk".into(),

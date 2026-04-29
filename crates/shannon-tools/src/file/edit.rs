@@ -822,7 +822,7 @@ mod tests {
         let new = "a\nB\nc\nd\ne\nF\ng";
         let hunks = compute_diff_hunks(old, new);
         // Two separate changes should produce two hunks if far enough apart
-        assert!(hunks.len() >= 1);
+        assert!(!hunks.is_empty());
     }
 
     #[test]

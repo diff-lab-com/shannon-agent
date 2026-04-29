@@ -810,7 +810,7 @@ fn test_repl_clear_command() {
     repl.prompt.set_input("/clear".to_string());
     super::commands::submit_input(&mut repl).unwrap();
     // After clear: original messages removed, "Chat cleared." added
-    assert!(repl.chat.len() >= 1);
+    assert!(!repl.chat.is_empty());
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Chat cleared"));
 }
@@ -3076,7 +3076,7 @@ fn test_permission_mode_bypass_not_in_cycle() {
         // cycle_next never produces BypassPermissions from safe modes
         // (Readonly cycles to Suggest, not BypassPermissions)
         assert_ne!(mode.cycle_next(), ApprovalMode::BypassPermissions,
-            "cycle_next from {:?} should not produce BypassPermissions", mode);
+            "cycle_next from {mode:?} should not produce BypassPermissions");
     }
 }
 

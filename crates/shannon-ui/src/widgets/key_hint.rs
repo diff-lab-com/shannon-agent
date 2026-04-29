@@ -77,7 +77,7 @@ impl KeyHintWidget {
             }
             // Key binding in primary color
             spans.push(Span::styled(
-                format!("{key}"),
+                key.to_string(),
                 Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
             ));
             // Description in dim color

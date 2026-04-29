@@ -34,7 +34,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
     // Sync terminal window title with current state (OSC 0)
     {
         let model_short = state.model.as_deref()
-            .map(|m| m.split('/').last().unwrap_or(m))
+            .map(|m| m.split('/').next_back().unwrap_or(m))
             .unwrap_or("shannon");
         crate::a11y::set_enabled(state.accessibility_mode);
         let icon = crate::a11y::title_icon(state.streaming_active);
@@ -58,7 +58,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
 
         // Model name
         if let Some(ref model) = state.model {
-            let short = model.split('/').last().unwrap_or(model);
+            let short = model.split('/').next_back().unwrap_or(model);
             status_parts.push(short.to_string());
         }
 
@@ -72,7 +72,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         // Token usage
         if state.tokens_used > 0 {
             let k = state.tokens_used as f64 / 1000.0;
-            status_parts.push(format!("{:.1}k tokens", k));
+            status_parts.push(format!("{k:.1}k tokens"));
         }
 
         // Session duration
@@ -81,13 +81,13 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             if dur.as_secs() >= 60 {
                 let mins = dur.as_secs() / 60;
                 let secs = dur.as_secs() % 60;
-                status_parts.push(format!("{}m{}s", mins, secs));
+                status_parts.push(format!("{mins}m{secs}s"));
             }
         }
 
         // Notification badge
         if notif_count > 0 {
-            status_parts.push(format!("{} notif", notif_count));
+            status_parts.push(format!("{notif_count} notif"));
         }
 
         // Streaming state indicator
@@ -671,7 +671,7 @@ fn render_plan_overlay(
             Line::from(vec![
                 Span::styled("    ", Style::default().fg(theme.text_dim)),
                 Span::styled("• ", Style::default().fg(theme.muted)),
-                Span::styled(line[2..].to_string(), Style::default().fg(theme.text)),
+                Span::styled(line.strip_prefix("- ").unwrap().to_string(), Style::default().fg(theme.text)),
             ])
         } else if line.starts_with(|c: char| c.is_ascii_digit()) && line.contains('.') {
             step_num += 1;

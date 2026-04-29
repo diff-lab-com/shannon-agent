@@ -79,7 +79,9 @@ pub fn execute_in_pty(
     });
 
     // Wait for the child process with optional timeout
-    let result = if let Some(timeout) = timeout_ms {
+    
+
+    if let Some(timeout) = timeout_ms {
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout);
         loop {
             match child.try_wait() {
@@ -119,9 +121,7 @@ pub fn execute_in_pty(
             stdout,
             exit_code: code,
         })
-    };
-
-    result
+    }
 }
 
 #[cfg(test)]

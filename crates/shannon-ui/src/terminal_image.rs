@@ -317,7 +317,7 @@ pub fn encode_sixel(img: &DynamicImage, max_width: u16, max_height: u16) -> Opti
 
     // Set raster attributes: Pan, Pad, Ph, Pv
     // Pan=1, Pad=1 (aspect ratio 1:1), Ph=width, Pv=height
-    output.push_str(&format!("\"1;1;{};{}\x1B\\", width, height));
+    output.push_str(&format!("\"1;1;{width};{height}\x1B\\"));
 
     // For each color in palette, encode pixels
     for (color_idx, color) in palette.iter().enumerate() {
@@ -325,7 +325,7 @@ pub fn encode_sixel(img: &DynamicImage, max_width: u16, max_height: u16) -> Opti
         let r = (color[0] as f32 / 255.0 * 100.0) as u8;
         let g = (color[1] as f32 / 255.0 * 100.0) as u8;
         let b = (color[2] as f32 / 255.0 * 100.0) as u8;
-        output.push_str(&format!("#{};2;{};{};{}", color_idx, r, g, b));
+        output.push_str(&format!("#{color_idx};2;{r};{g};{b}"));
 
         // Encode pixels in sixel format (6 vertical pixels per character)
         for y in (0..height).step_by(6) {
@@ -401,7 +401,7 @@ fn render_kitty_image(
 
     // Use raw PNG data if available (avoids re-encoding)
     let encoded = encode_kitty(raw_data, pixel_w, pixel_h)?;
-    let char_rows = (pixel_h + 1) / 2;
+    let char_rows = pixel_h.div_ceil(2);
 
     // Build a single line containing the Kitty escape sequence, plus placeholder
     // lines to reserve vertical space (Kitty renders the image in-place)
@@ -443,7 +443,7 @@ fn encode_kitty(data: &[u8], width: u32, height: u32) -> Option<String> {
     let chunk_size = 4096;
     let mut result = String::new();
 
-    let total_chunks = (b64.len() + chunk_size - 1) / chunk_size;
+    let total_chunks = b64.len().div_ceil(chunk_size);
 
     for (i, chunk) in b64.as_bytes().chunks(chunk_size).enumerate() {
         let chunk_str = std::str::from_utf8(chunk).ok()?;
@@ -453,21 +453,19 @@ fn encode_kitty(data: &[u8], width: u32, height: u32) -> Option<String> {
         if is_first && is_last {
             // Single chunk: send entire image
             result.push_str(&format!(
-                "\x1b_Ga=T,f=100,s={},v={};{}\x1b\\",
-                width_str, height_str, chunk_str
+                "\x1b_Ga=T,f=100,s={width_str},v={height_str};{chunk_str}\x1b\\"
             ));
         } else if is_first {
             // First chunk
             result.push_str(&format!(
-                "\x1b_Ga=T,f=100,s={},v={},m=1;{}\x1b\\",
-                width_str, height_str, chunk_str
+                "\x1b_Ga=T,f=100,s={width_str},v={height_str},m=1;{chunk_str}\x1b\\"
             ));
         } else if is_last {
             // Last chunk
-            result.push_str(&format!("\x1b_Gm=1;{}\x1b\\", chunk_str));
+            result.push_str(&format!("\x1b_Gm=1;{chunk_str}\x1b\\"));
         } else {
             // Middle chunk
-            result.push_str(&format!("\x1b_Gm=1;{}\x1b\\", chunk_str));
+            result.push_str(&format!("\x1b_Gm=1;{chunk_str}\x1b\\"));
         }
     }
 

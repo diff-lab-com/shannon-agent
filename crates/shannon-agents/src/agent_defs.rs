@@ -506,7 +506,7 @@ capabilities = ["test"]
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("bad.toml");
         let mut f = std::fs::File::create(&file_path).unwrap();
-        write!(f, "name = \"\"\n").unwrap();
+        writeln!(f, "name = \"\"").unwrap();
 
         let result = AgentDefinition::from_file(&file_path);
         assert!(result.is_err());

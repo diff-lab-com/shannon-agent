@@ -1111,7 +1111,7 @@ mod tests {
 
     /// Helper to build a service with Echo and Fail tools registered.
     async fn make_service() -> ToolExecutionService {
-        let mut registry = ToolRegistry::new();
+        let registry = ToolRegistry::new();
         registry.register(Box::new(EchoTool)).unwrap();
         registry.register(Box::new(FailTool)).unwrap();
         registry.register(Box::new(PanicTool)).unwrap();
@@ -1423,7 +1423,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_service_permission_denied() {
-        let mut registry = ToolRegistry::new();
+        let registry = ToolRegistry::new();
         registry.register(Box::new(EchoTool)).unwrap();
         let registry = Arc::new(registry);
 
@@ -1546,7 +1546,7 @@ mod tests {
         );
         mgr.load_from_path(&hooks_path).unwrap();
 
-        let mut registry = ToolRegistry::new();
+        let registry = ToolRegistry::new();
         registry.register(Box::new(EchoTool)).unwrap();
         registry.register(Box::new(FailTool)).unwrap();
         registry.register(Box::new(PanicTool)).unwrap();

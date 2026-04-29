@@ -95,10 +95,10 @@ impl SidebarWidget {
         let w = inner.width as usize;
 
         // Tab header
-        let ctx_label = if tab == crate::repl::SidebarTab::Context { " Ctx " } else { " Ctx " };
-        let files_label = if tab == crate::repl::SidebarTab::Files { " Files " } else { " Files " };
-        let agents_label = if tab == crate::repl::SidebarTab::Agents { " Agents " } else { " Agents " };
-        let perf_label = if tab == crate::repl::SidebarTab::Perf { " Perf " } else { " Perf " };
+        let ctx_label = " Ctx ";
+        let files_label = " Files ";
+        let agents_label = " Agents ";
+        let perf_label = " Perf ";
         let ctx_style = if tab == crate::repl::SidebarTab::Context {
             Style::default().fg(theme.primary).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
         } else {
@@ -218,9 +218,9 @@ impl SidebarWidget {
                     let errs = info.diagnostics.iter().filter(|d| matches!(d.severity, super::super::lsp_bridge::DiagnosticSeverity::Error)).count();
                     let warns = info.diagnostics.iter().filter(|d| matches!(d.severity, super::super::lsp_bridge::DiagnosticSeverity::Warning)).count();
                     lines.push(Line::from(vec![
-                        Span::styled(format!("{}", errs), Style::default().fg(theme.error)),
+                        Span::styled(format!("{errs}"), Style::default().fg(theme.error)),
                         Span::styled("E ", Style::default().fg(theme.text_dim)),
-                        Span::styled(format!("{}", warns), Style::default().fg(theme.warning)),
+                        Span::styled(format!("{warns}"), Style::default().fg(theme.warning)),
                         Span::styled("W", Style::default().fg(theme.text_dim)),
                     ]));
                     for diag in info.diagnostics.iter().take(8) {
@@ -311,7 +311,7 @@ impl SidebarWidget {
                 } else if dur >= 60 {
                     format!("{}m {}s", dur / 60, dur % 60)
                 } else {
-                    format!("{}s", dur)
+                    format!("{dur}s")
                 };
                 lines.push(Line::from(Span::styled(dur_str, Style::default().fg(theme.text))));
                 lines.push(Line::from(""));
@@ -346,14 +346,14 @@ impl SidebarWidget {
                 if info.turn_count > 0 {
                     let per_turn = info.cost_usd / info.turn_count as f64;
                     lines.push(Line::from(Span::styled(
-                        format!("  ${:.4}/turn", per_turn),
+                        format!("  ${per_turn:.4}/turn"),
                         Style::default().fg(theme.text_dim),
                     )));
                 }
                 if info.tokens_used > 0 {
                     let per_tok = info.cost_usd / info.tokens_used as f64 * 1000.0;
                     lines.push(Line::from(Span::styled(
-                        format!("  ${:.4}/1k tok", per_tok),
+                        format!("  ${per_tok:.4}/1k tok"),
                         Style::default().fg(theme.text_dim),
                     )));
                 }
@@ -390,7 +390,7 @@ impl SidebarWidget {
                     ]));
                     let chg_rate = if dur > 0 {
                         let lines_per_min = ((info.total_additions + info.total_deletions) as f64 / dur as f64) * 60.0;
-                        format!("  {:.0} lines/min", lines_per_min)
+                        format!("  {lines_per_min:.0} lines/min")
                     } else {
                         String::new()
                     };

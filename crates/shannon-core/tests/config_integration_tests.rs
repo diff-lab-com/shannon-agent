@@ -81,7 +81,7 @@ mod credential_manager_tests {
             CredentialError::AlreadyExists(msg) => {
                 assert!(msg.contains("anthropic"));
             }
-            other => panic!("Expected AlreadyExists, got {:?}", other),
+            other => panic!("Expected AlreadyExists, got {other:?}"),
         }
     }
 
@@ -593,7 +593,7 @@ mod settings_tests {
         let mut settings = Settings::default();
         for bad in &["unknown", "admin", "readwrite", ""] {
             settings.permissions_mode = bad.to_string();
-            assert!(settings.validate().is_err(), "Expected error for permissions_mode={}", bad);
+            assert!(settings.validate().is_err(), "Expected error for permissions_mode={bad}");
         }
     }
 
@@ -602,7 +602,7 @@ mod settings_tests {
         for mode in &["ask", "auto", "readonly"] {
             let mut settings = Settings::default();
             settings.permissions_mode = mode.to_string();
-            assert!(settings.validate().is_ok(), "Expected ok for permissions_mode={}", mode);
+            assert!(settings.validate().is_ok(), "Expected ok for permissions_mode={mode}");
         }
     }
 
@@ -1504,7 +1504,7 @@ max_tokens = 1024
             model: Some("debug-test".to_string()),
             ..Default::default()
         };
-        let debug_str = format!("{:?}", config);
+        let debug_str = format!("{config:?}");
         assert!(debug_str.contains("debug-test"));
     }
 }

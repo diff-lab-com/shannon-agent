@@ -2880,8 +2880,7 @@ mod tests {
         let mut messages = vec![system_msg("System prompt")];
         for i in 0..15 {
             messages.push(user_msg(&format!(
-                "This is a longer user message number {} with extra padding text to increase token count",
-                i
+                "This is a longer user message number {i} with extra padding text to increase token count"
             )));
         }
         let result = super::compact_messages(
@@ -2906,8 +2905,7 @@ mod tests {
         let mut messages = vec![system_msg("System")];
         for i in 0..5 {
             messages.push(user_msg(&format!(
-                "This is a regular conversation message number {} with enough text to matter for compaction",
-                i
+                "This is a regular conversation message number {i} with enough text to matter for compaction"
             )));
         }
         // Add code-heavy messages
@@ -2915,8 +2913,7 @@ mod tests {
         messages.push(assistant_msg("I see you have ```python\nprint('hello')\n``` in lib.py"));
         for i in 0..5 {
             messages.push(user_msg(&format!(
-                "Follow up message number {} with additional padding for token budget",
-                i
+                "Follow up message number {i} with additional padding for token budget"
             )));
         }
         let result = super::compact_messages(
@@ -2942,8 +2939,7 @@ mod tests {
         ];
         for i in 0..15 {
             messages.push(user_msg(&format!(
-                "This is a conversation message number {} with enough words to consume tokens",
-                i
+                "This is a conversation message number {i} with enough words to consume tokens"
             )));
         }
         let result = super::compact_messages(

@@ -80,7 +80,7 @@ mod rule_decision_tests {
     #[test]
     fn clone_produces_equal_value() {
         let original = RuleDecision::Deny;
-        let cloned = original.clone();
+        let cloned = original;
         assert_eq!(original, cloned);
     }
 }
@@ -146,7 +146,7 @@ mod rule_source_tests {
     #[test]
     fn clone_produces_equal_value() {
         let original = RuleSource::Explicit;
-        let cloned = original.clone();
+        let cloned = original;
         assert_eq!(original, cloned);
     }
 }
@@ -1075,7 +1075,7 @@ mod permission_classifier_tests {
             Err(PermissionClassifierError::InvalidPattern { id, .. }) => {
                 assert_eq!(id, "my-bad-rule");
             }
-            Err(other) => panic!("expected InvalidPattern, got: {}", other),
+            Err(other) => panic!("expected InvalidPattern, got: {other}"),
             Ok(_) => panic!("expected error, got success"),
         }
     }
@@ -1769,7 +1769,7 @@ mod permission_classifier_error_tests {
     #[test]
     fn parse_error_display() {
         let err = PermissionClassifierError::ParseError("bad input".into());
-        let msg = format!("{}", err);
+        let msg = format!("{err}");
         assert!(msg.contains("bad input"));
     }
 
@@ -1780,7 +1780,7 @@ mod permission_classifier_error_tests {
             pattern: "(bad".into(),
             source: regex::Error::Syntax("(bad".into()),
         };
-        let msg = format!("{}", err);
+        let msg = format!("{err}");
         assert!(msg.contains("rule-1"));
         assert!(msg.contains("(bad"));
     }
@@ -1790,7 +1790,7 @@ mod permission_classifier_error_tests {
         let err = PermissionClassifierError::NoMatchingRules {
             tool: "Bash".into(),
         };
-        let msg = format!("{}", err);
+        let msg = format!("{err}");
         assert!(msg.contains("Bash"));
     }
 

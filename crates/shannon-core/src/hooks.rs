@@ -1220,7 +1220,7 @@ impl HookManager {
                 Ok(resp) => {
                     let status = resp.status().as_u16() as i32;
                     let body = resp.text().await.unwrap_or_default();
-                    let decision = if status >= 200 && status < 300 {
+                    let decision = if (200..300).contains(&status) {
                         // Try parsing decision from response body
                         HookResult::parse_decision(&body)
                     } else {
@@ -1229,7 +1229,7 @@ impl HookManager {
                         }
                     };
                     Ok::<HookResult, HookError>(HookResult {
-                        exit_code: status as i32,
+                        exit_code: status,
                         stdout: body,
                         stderr: String::new(),
                         decision,
@@ -1333,7 +1333,7 @@ impl HookManager {
                 stdout,
                 stderr,
                 decision,
-                command: format!("prompt: {}", command),
+                command: format!("prompt: {command}"),
             })
         })
         .await;

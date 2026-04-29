@@ -1212,13 +1212,13 @@ fn strip_command_wrappers(command: &str) -> &str {
 
         // "env VAR=val <cmd>" or "env -i <cmd>"
         if stripped.starts_with("env ") {
-            remaining = stripped[4..].trim_start();
+            remaining = stripped.strip_prefix("env ").unwrap().trim_start();
             continue;
         }
 
         // "xargs <cmd>" — skip xargs, the next token is the actual command
         if stripped.starts_with("xargs ") {
-            remaining = stripped[6..].trim_start();
+            remaining = stripped.strip_prefix("xargs ").unwrap().trim_start();
             continue;
         }
 
