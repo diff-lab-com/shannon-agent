@@ -109,6 +109,8 @@ fn highlight_code_cached(code: &str, lang: &str) -> Vec<Line<'static>> {
 /// Cached height calculations for messages, keyed by (index, content_hash).
 pub struct MessageHeightCache {
     heights: HashMap<(usize, u64), usize>,
+    order: VecDeque<(usize, u64)>,
+    capacity: usize,
 }
 
 /// Simple hash of content for cache invalidation.
@@ -128,9 +130,13 @@ impl Default for MessageHeightCache {
 }
 
 impl MessageHeightCache {
+    const DEFAULT_CAPACITY: usize = 512;
+
     pub fn new() -> Self {
         Self {
             heights: HashMap::new(),
+            order: VecDeque::new(),
+            capacity: Self::DEFAULT_CAPACITY,
         }
     }
 
@@ -148,19 +154,29 @@ impl MessageHeightCache {
             return h;
         }
 
+        // Evict oldest entry if at capacity
+        if self.heights.len() >= self.capacity {
+            if let Some(old_key) = self.order.pop_front() {
+                self.heights.remove(&old_key);
+            }
+        }
+
         let height = estimate_message_height(msg, collapsed, width);
         self.heights.insert(key, height);
+        self.order.push_back(key);
         height
     }
 
     /// Invalidate a specific message (content changed during streaming).
     pub fn invalidate(&mut self, index: usize) {
         self.heights.retain(|(idx, _), _| *idx != index);
+        self.order.retain(|(idx, _)| *idx != index);
     }
 
     /// Invalidate all (e.g., on resize).
     pub fn invalidate_all(&mut self) {
         self.heights.clear();
+        self.order.clear();
     }
 }
 

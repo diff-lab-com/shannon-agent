@@ -135,22 +135,30 @@ impl CommandRegistry {
 
     /// Remove a command by name
     pub async fn unregister(&self, name: &str) -> CommandResult<()> {
-        let commands = self.commands.read().await;
-        let _cmd = commands.get(name).cloned();
-        drop(commands);
-
-        let commands = self.commands.read().await;
-        if commands.get(name).is_some() {
-            // Remove aliases
+        let mut commands = self.commands.write().await;
+        if commands.remove(name).is_some() {
+            // Remove aliases pointing to this command
             let mut aliases = self.aliases.write().await;
             aliases.retain(|_, v| v != name);
-
-            // Remove command
-            self.commands.write().await.remove(name);
             Ok(())
         } else {
             Err(CommandError::NotFound(name.to_string()))
         }
+    }
+
+    /// Remove a command by name (sync wrapper).
+    pub fn unregister_sync(&self, name: &str) {
+        let commands = Arc::clone(&self.commands);
+        let aliases = Arc::clone(&self.aliases);
+        let name = name.to_string();
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async move {
+                let mut cmds = commands.write().await;
+                if cmds.remove(&name).is_some() {
+                    aliases.write().await.retain(|_, v| *v != name);
+                }
+            });
+        });
     }
 
     /// Check if a command exists

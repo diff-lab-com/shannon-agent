@@ -484,6 +484,7 @@ pub(crate) struct CustomCommandWatcher {
     #[allow(dead_code)]
     watcher: Option<notify::RecommendedWatcher>,
     dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    registered_names: Vec<String>,
 }
 
 impl CustomCommandWatcher {
@@ -528,7 +529,7 @@ impl CustomCommandWatcher {
             Err(_) => None,
         };
 
-        Self { dirs, watcher, dirty }
+        Self { dirs, watcher, dirty, registered_names: Vec::new() }
     }
 
     /// Check if filesystem events were received and reload if needed.
@@ -537,6 +538,12 @@ impl CustomCommandWatcher {
         if !self.dirty.swap(false, std::sync::atomic::Ordering::Relaxed) {
             return 0;
         }
+
+        // Unregister previously registered custom commands to prevent duplicates
+        for name in &self.registered_names {
+            let _ = registry.unregister_sync(name);
+        }
+        self.registered_names.clear();
 
         // Re-scan and re-register all custom commands
         let mut current_files: Vec<CustomCommandEntry> = Vec::new();
@@ -590,6 +597,7 @@ impl CustomCommandWatcher {
                 prompt_template: Some(entry.template.clone()),
             }));
             registry.register_sync(command);
+            self.registered_names.push(entry.name.clone());
         }
 
         let count = current_files.len();

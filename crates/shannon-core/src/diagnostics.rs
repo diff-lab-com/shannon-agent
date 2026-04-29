@@ -460,50 +460,33 @@ struct ErrorPatternAccum {
     count: usize,
 }
 
+static HEX_RE: once_cell::sync::Lazy<Regex> =
+    once_cell::sync::Lazy::new(|| Regex::new(r"0x[0-9a-fA-F]{4,}").expect("hex regex"));
+static UUID_RE: once_cell::sync::Lazy<Regex> =
+    once_cell::sync::Lazy::new(|| Regex::new(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}").expect("uuid regex"));
+static UNIX_PATH_RE: once_cell::sync::Lazy<Regex> =
+    once_cell::sync::Lazy::new(|| Regex::new(r"(?:/[\w._-]+){2,}").expect("unix path regex"));
+static WIN_PATH_RE: once_cell::sync::Lazy<Regex> =
+    once_cell::sync::Lazy::new(|| Regex::new(r"[A-Za-z]:\\(?:[\w._-]+\\?)+").expect("windows path regex"));
+static LINE_COL_RE: once_cell::sync::Lazy<Regex> =
+    once_cell::sync::Lazy::new(|| Regex::new(r":\d{1,5}(:\d{1,5})?").expect("line:col regex"));
+static IDENT_RE: once_cell::sync::Lazy<Regex> =
+    once_cell::sync::Lazy::new(|| Regex::new(r"`[^`]+`").expect("identifier regex"));
+static STR_RE: once_cell::sync::Lazy<Regex> =
+    once_cell::sync::Lazy::new(|| Regex::new(r#""[^"]+""#).expect("string regex"));
+
 /// Normalize an error message so that similar errors map to the same pattern.
-///
-/// Strips:
-/// - Hex addresses (e.g. `0x7f3a...`)
-/// - File paths that look like Unix/Windows paths
-/// - Line numbers after `:line` or `:col:line`
-/// - UUIDs
-/// - Numeric IDs that look variable
 fn normalize_message(message: &str) -> String {
     let mut result = message.to_string();
 
-    // Strip hex addresses like 0x7f3a4b2c (run early to protect hex digits)
-    let hex_re = Regex::new(r"0x[0-9a-fA-F]{4,}").expect("hex regex should be valid");
-    result = hex_re.replace_all(&result, "HEXADDR").to_string();
-
-    // Strip UUIDs
-    let uuid_re = Regex::new(
-        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
-    )
-    .expect("uuid regex should be valid");
-    result = uuid_re.replace_all(&result, "<UUID>").to_string();
-
-    // Strip absolute Unix paths: /home/user/... or /usr/lib/...
-    let unix_path_re = Regex::new(r"(?:/[\w._-]+){2,}").expect("unix path regex should be valid");
-    result = unix_path_re.replace_all(&result, "<PATH>").to_string();
-
-    // Strip Windows paths: C:\Users\...
-    let win_path_re = Regex::new(r"[A-Za-z]:\\(?:[\w._-]+\\?)+").expect("windows path regex should be valid");
-    result = win_path_re.replace_all(&result, "<PATH>").to_string();
-
-    // Strip line:col references (e.g. `:42` or `:42:10`)
-    let line_col_re = Regex::new(r":\d{1,5}(:\d{1,5})?").expect("line:col regex should be valid");
-    result = line_col_re.replace_all(&result, ":<NUM>").to_string();
-
-    // Restore hex address markers (after line-col so digits aren't consumed)
+    result = HEX_RE.replace_all(&result, "HEXADDR").to_string();
+    result = UUID_RE.replace_all(&result, "<UUID>").to_string();
+    result = UNIX_PATH_RE.replace_all(&result, "<PATH>").to_string();
+    result = WIN_PATH_RE.replace_all(&result, "<PATH>").to_string();
+    result = LINE_COL_RE.replace_all(&result, ":<NUM>").to_string();
     result = result.replace("HEXADDR", "0xHEX");
-
-    // Normalize backtick-quoted identifiers (e.g. `module_name` -> `<IDENT>`)
-    let ident_re = Regex::new(r"`[^`]+`").expect("identifier regex should be valid");
-    result = ident_re.replace_all(&result, "`<IDENT>`").to_string();
-
-    // Normalize double-quoted strings to group similar errors
-    let str_re = Regex::new(r#""[^"]+""#).expect("string regex should be valid");
-    result = str_re.replace_all(&result, "\"<STR>\"").to_string();
+    result = IDENT_RE.replace_all(&result, "`<IDENT>`").to_string();
+    result = STR_RE.replace_all(&result, "\"<STR>\"").to_string();
 
     result
 }

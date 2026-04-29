@@ -315,12 +315,24 @@ fn handle_tab_completion(repl: &mut Repl) -> Result<()> {
 
     if let Some((completion, start, end)) = tab_complete(repl, &input, &command_names) {
         let mut new_input = String::new();
-        if start > 0 && start <= input.len() {
-            new_input.push_str(&input[..start]);
+        if start > 0 {
+            let safe_start = input.char_indices()
+                .take_while(|(i, _)| *i < start)
+                .last()
+                .map(|(i, c)| i + c.len_utf8())
+                .unwrap_or(0);
+            new_input.push_str(&input[..safe_start]);
         }
         new_input.push_str(&completion);
         if end < input.len() {
-            new_input.push_str(&input[end..]);
+            let safe_end = input.char_indices()
+                .take_while(|(i, _)| *i < end)
+                .last()
+                .map(|(i, c)| i + c.len_utf8())
+                .unwrap_or(input.len());
+            if safe_end < input.len() {
+                new_input.push_str(&input[safe_end..]);
+            }
         }
         repl.prompt.set_input(new_input);
     }
@@ -512,8 +524,16 @@ pub(crate) fn extract_completion_word(input: &str, _repl: &Repl) -> (String, usi
         }
         Some(space_pos) => {
             // Argument mode — extract last word after space
-            let word_start = space_pos + 1;
-            let word = &trimmed[word_start..];
+            let byte_pos = trimmed[..=space_pos].len();
+            let word_start = byte_pos.min(trimmed.len());
+            let word = trimmed.char_indices()
+                .take_while(|(i, _)| *i < word_start)
+                .last()
+                .map(|(i, c)| i + c.len_utf8())
+                .and_then(|safe_start| {
+                    if safe_start < trimmed.len() { Some(&trimmed[safe_start..]) } else { None }
+                })
+                .unwrap_or("");
             (word.to_string(), word_start, input.len())
         }
     }

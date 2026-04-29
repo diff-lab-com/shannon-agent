@@ -2885,6 +2885,7 @@ dependencies = [
  "hmac",
  "libc",
  "mockito",
+ "once_cell",
  "regex",
  "reqwest",
  "rust-i18n",
