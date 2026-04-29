@@ -186,6 +186,11 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             }
         }
 
+        // Overlay full keyboard shortcuts panel if toggled (F1)
+        if state.show_key_hints {
+            crate::widgets::key_hint::KeyHintWidget::render_full(f, &theme);
+        }
+
         // Overlay toast notification if active
         if let Some((ref msg, started)) = state.toast {
             let elapsed = started.elapsed().as_secs();

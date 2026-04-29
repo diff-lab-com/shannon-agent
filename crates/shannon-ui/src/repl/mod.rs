@@ -3,7 +3,6 @@
 /// Number of lines above which a paste is shown as "[Pasted Text #N X lines]"
 const PASTE_THRESHOLD_LINES: usize = 5;
 
-#[allow(dead_code)]
 mod at_reference;
 mod commands;
 mod input;
@@ -139,6 +138,8 @@ pub struct ReplState {
     pub interactive_selected: usize,
     /// Whether the diff viewer is in interactive mode
     pub diff_interactive: bool,
+    /// Whether the full key hints overlay is shown (toggled by F1)
+    pub show_key_hints: bool,
     /// Whether incremental reverse search (Ctrl+R) is active
     pub incremental_search_active: bool,
     /// Current search query for incremental search
@@ -329,6 +330,7 @@ impl Default for ReplState {
             interactive_hunks: Vec::new(),
             interactive_selected: 0,
             diff_interactive: false,
+            show_key_hints: false,
             incremental_search_active: false,
             incremental_search_query: String::new(),
             incremental_search_match_index: 0,

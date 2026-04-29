@@ -84,7 +84,23 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         return handle_diff_viewer_input(repl, key);
     }
 
+    // If key hints overlay is active, dismiss on any key
+    if repl.state.show_key_hints {
+        repl.state.show_key_hints = false;
+        return Ok(());
+    }
+
     match key.code {
+        // F1: show full keyboard shortcuts overlay
+        KeyCode::F(1) => {
+            repl.state.show_key_hints = true;
+            Ok(())
+        }
+        // Ctrl+V: paste image from system clipboard
+        KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            super::commands::handle_image_paste_from_input(repl)?;
+            Ok(())
+        }
         KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             open_command_palette(repl);
             Ok(())
@@ -801,11 +817,53 @@ fn handle_file_selector_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             repl.state.file_selector = None;
 
             if let Some(path) = selected_path {
-                repl.prompt.set_input(path);
-                repl.chat.add_message(
-                    ChatRole::System,
-                    "File selected — press Enter to send as query, or edit the path.".to_string(),
-                );
+                // Enhance @ reference: detect PDF/URL/directory and process
+                let result = super::at_reference::detect_reference_kind(&path);
+                match result {
+                    super::at_reference::AtReferenceKind::Pdf => {
+                        let processed = super::at_reference::extract_pdf_text(&path);
+                        if processed.is_error {
+                            repl.chat.add_message(ChatRole::System, processed.status_message.unwrap_or_default());
+                            repl.prompt.set_input(path);
+                        } else {
+                            repl.prompt.set_input(processed.injected_text);
+                            if let Some(msg) = processed.status_message {
+                                repl.chat.add_message(ChatRole::System, msg);
+                            }
+                        }
+                    }
+                    super::at_reference::AtReferenceKind::Directory => {
+                        let processed = super::at_reference::generate_directory_tree(&path, None);
+                        if processed.is_error {
+                            repl.chat.add_message(ChatRole::System, processed.status_message.unwrap_or_default());
+                            repl.prompt.set_input(path);
+                        } else {
+                            repl.prompt.set_input(processed.injected_text);
+                            if let Some(msg) = processed.status_message {
+                                repl.chat.add_message(ChatRole::System, msg);
+                            }
+                        }
+                    }
+                    super::at_reference::AtReferenceKind::Url(url) => {
+                        let processed = super::at_reference::fetch_url_content(&url);
+                        if processed.is_error {
+                            repl.chat.add_message(ChatRole::System, processed.status_message.unwrap_or_default());
+                            repl.prompt.set_input(path);
+                        } else {
+                            repl.prompt.set_input(processed.injected_text);
+                            if let Some(msg) = processed.status_message {
+                                repl.chat.add_message(ChatRole::System, msg);
+                            }
+                        }
+                    }
+                    super::at_reference::AtReferenceKind::File => {
+                        repl.prompt.set_input(path);
+                        repl.chat.add_message(
+                            ChatRole::System,
+                            "File selected — press Enter to send as query, or edit the path.".to_string(),
+                        );
+                    }
+                }
             }
         }
         KeyCode::Backspace => {
