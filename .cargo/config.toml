@@ -1,12 +1,15 @@
-# Limit parallel compilation to reduce peak memory usage.
-# With 20 cores, default is 20 parallel rustc invocations (~40-80Gi peak).
-# Capping at 6 keeps peak under ~12Gi while still utilizing multiple cores.
+# Limit parallel compilation to cap peak memory at ~4Gi.
+# Default: 20 parallel rustc × ~2Gi each = 40-80Gi peak.
+# jobs=2, codegen-units=1: 2 parallel × ~1.5Gi = ~3Gi peak.
 [build]
-jobs = 6
+jobs = 2
 
-# Fewer codegen units = less memory per crate, slightly slower compile.
+# Minimum codegen units + lighter debug info = less memory per crate.
+# "line-tables-only" preserves line info for panics without full variable data.
 [profile.dev]
-codegen-units = 4
+codegen-units = 1
+debug = "line-tables-only"
 
 [profile.test]
-codegen-units = 4
+codegen-units = 1
+debug = "line-tables-only"
