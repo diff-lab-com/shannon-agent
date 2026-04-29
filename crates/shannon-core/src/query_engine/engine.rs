@@ -730,9 +730,9 @@ impl QueryEngine {
 
                 // Call the API — use structured system blocks when available for prompt caching
                 let stream_result = if let Some(ref blocks) = system_blocks_opt {
-                    client.send_message_stream_structured(messages.clone(), tools_schema.clone(), blocks.clone()).await
+                    client.send_message_stream_structured_with_retry(messages.clone(), tools_schema.clone(), blocks.clone()).await
                 } else {
-                    client.send_message_stream(messages.clone(), tools_schema.clone(), system_prompt.clone()).await
+                    client.send_message_stream_with_retry(messages.clone(), tools_schema.clone(), system_prompt.clone()).await
                 };
                 match stream_result {
                     Ok(mut stream) => {

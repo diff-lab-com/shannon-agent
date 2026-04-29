@@ -565,6 +565,49 @@ impl LlmClient {
             }
         }
     }
+
+    /// Send a structured streaming message with retry logic and optional provider fallback.
+    pub async fn send_message_stream_structured_with_retry(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<ToolDefinition>>,
+        system_blocks: Vec<super::types::SystemContentBlock>,
+    ) -> Result<MessageStream, ApiError> {
+        let retry_config = &self.config.retry_config;
+        let result = retry_request(retry_config, || {
+            self.send_message_stream_structured(messages.clone(), tools.clone(), system_blocks.clone())
+        })
+        .await;
+
+        match result {
+            Ok(stream) => Ok(stream),
+            Err(primary_err) => {
+                if let (Some(fallback_provider), Some(fallback_base_url)) =
+                    (&self.config.fallback_provider, &self.config.fallback_base_url)
+                {
+                    tracing::warn!(
+                        "Primary provider {} structured stream failed: {}. Falling back to {} at {}",
+                        self.config.provider,
+                        primary_err,
+                        fallback_provider,
+                        fallback_base_url,
+                    );
+                    let mut fallback_config = self.config.clone();
+                    fallback_config.provider = fallback_provider.clone();
+                    fallback_config.base_url = fallback_base_url.clone();
+                    let fallback_retry = fallback_config.retry_config.clone();
+                    let fallback_client = Self::new(fallback_config);
+                    retry_request(&fallback_retry, || {
+                        fallback_client
+                            .send_message_stream_structured(messages.clone(), tools.clone(), system_blocks.clone())
+                    })
+                    .await
+                } else {
+                    Err(primary_err)
+                }
+            }
+        }
+    }
 }
 
 /// Backward-compatible alias

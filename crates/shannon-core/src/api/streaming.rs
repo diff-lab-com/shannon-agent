@@ -209,6 +209,7 @@ pub fn sse_stream_from_response_resumable(
         tools,
         system,
         reconnects_remaining: max_reconnects,
+        initial_reconnects: max_reconnects,
         reconnecting: false,
         saw_message_stop: false,
         pending_reconnect: None,
@@ -229,6 +230,7 @@ struct ResumableSseStream {
     tools: Option<Vec<super::types::ToolDefinition>>,
     system: Option<String>,
     reconnects_remaining: u32,
+    initial_reconnects: u32,
     reconnecting: bool,
     saw_message_stop: bool,
     pending_reconnect: Option<tokio::sync::oneshot::Receiver<Result<MessageStream, ApiError>>>,
@@ -277,12 +279,16 @@ impl Stream for ResumableSseStream {
                 Poll::Ready(Some(Ok(event)))
             }
             Poll::Ready(Some(Err(e))) => {
-                // Only reconnect on connection/transport errors, not parse errors
-                let is_connection_error = matches!(
+                // Reconnect on connection/transport errors and retryable server errors
+                let is_reconnectable = matches!(
                     &e,
                     ApiError::HttpError(_)
+                    | ApiError::Timeout
+                    | ApiError::StreamEndedUnexpectedly
+                    | ApiError::RateLimitExceeded
+                    | ApiError::ApiError { status: 500..=599, .. }
                 );
-                if !is_connection_error || self.reconnects_remaining == 0 {
+                if !is_reconnectable || self.reconnects_remaining == 0 {
                     Poll::Ready(Some(Err(e)))
                 } else {
                     self.start_reconnect(cx);
@@ -309,8 +315,13 @@ impl ResumableSseStream {
     fn start_reconnect(&mut self, cx: &mut Context<'_>) {
         self.reconnects_remaining -= 1;
         let eid = self.last_event_id.lock().ok().and_then(|g| g.clone());
+
+        // Exponential backoff: 1s, 2s, 4s, 8s, ...
+        let attempts_used = self.initial_reconnects - self.reconnects_remaining;
+        let backoff_secs = 1u64 << (attempts_used - 1).min(4);
+
         tracing::info!(
-            "Stream dropped unexpectedly. Reconnecting ({} attempts left, last_event_id={:?})",
+            "Stream dropped unexpectedly. Reconnecting in {backoff_secs}s ({} attempts left, last_event_id={:?})",
             self.reconnects_remaining,
             eid,
         );
@@ -322,6 +333,7 @@ impl ResumableSseStream {
         let system = self.system.clone();
 
         tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
             let reconnect_client = super::client::LlmClient::new(config);
             let result = reconnect_client
                 .send_message_stream_resumable(messages, tools, system, eid)
