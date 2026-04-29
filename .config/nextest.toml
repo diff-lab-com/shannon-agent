@@ -1,0 +1,27 @@
+# nextest configuration for Shannon Code
+# https://nexte.st/book/configuration.html
+
+[profile.default]
+# Default: use all cores for test execution within each binary.
+# Overrides the old --test-threads=1 restriction which was needed
+# because cargo test runs all binaries serially in one process.
+test-threads = "num-cpus"
+
+# Each test runs in its own process (nextest default), so env var
+# contention between tests is already isolated. But some crates
+# share filesystem state — keep those single-threaded below.
+
+# Crates with env var / filesystem contention: single-threaded.
+[[profile.default.overrides]]
+filter = 'package(shannon-core)'
+test-threads = 1
+
+[[profile.default.overrides]]
+filter = 'package(shannon-commands)'
+test-threads = 1
+
+# CI profile: stricter timeouts, retries for flaky tests.
+[profile.ci]
+test-threads = "num-cpus"
+failure-output = "immediate-final"
+fail-fast = false
