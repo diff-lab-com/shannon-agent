@@ -72,7 +72,8 @@ perf.data*
 flamegraph.svg
 
 # 依赖缓存
-.cargo/
+.cargo/*
+!.cargo/config.toml
 .cached/
 
 # 构建输出
