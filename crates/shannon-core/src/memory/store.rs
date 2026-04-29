@@ -99,7 +99,11 @@ impl MemoryStore {
             .cloned()
             .collect();
 
-        results.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).expect("confidence values should be comparable"));
+        results.sort_by(|a, b| {
+            let score_a = relevance_score(a);
+            let score_b = relevance_score(b);
+            score_b.partial_cmp(&score_a).expect("relevance scores should be comparable")
+        });
         results
     }
 
@@ -446,4 +450,15 @@ fn deduplicate_memories(memories: Vec<MemoryEntry>) -> Vec<MemoryEntry> {
     }
 
     unique
+}
+
+/// Compute a composite relevance score for a memory entry.
+///
+/// Combines confidence (40%), access frequency (30%), and recency (30%).
+fn relevance_score(entry: &MemoryEntry) -> f64 {
+    let confidence = entry.confidence;
+    let access = (entry.access_count as f64).ln_1p() / 5.0_f64.ln_1p().max(0.01); // normalize: 5 accesses = 1.0
+    let age_hours = (Utc::now() - entry.accessed_at).num_hours().max(0) as f64;
+    let recency = 1.0 / (1.0 + age_hours / 168.0); // half-life of 1 week
+    0.4 * confidence + 0.3 * access.min(1.0) + 0.3 * recency
 }
