@@ -569,6 +569,25 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
             // patterns, persist them to the memory store automatically.
             auto_save_memory(repl, &response);
 
+            // Auto-save session state after each turn
+            if let Some(ref engine) = repl.query_engine {
+                let messages = engine.conversation_history();
+                let metadata = shannon_core::state::SessionPersistMetadata {
+                    model: repl.state.model.clone().unwrap_or_default(),
+                    created_at: repl.session_started_at.unwrap_or_else(chrono::Utc::now),
+                    updated_at: chrono::Utc::now(),
+                    total_input_tokens: repl.state.tokens_used,
+                    total_output_tokens: 0,
+                    turn_count: repl.current_turn as usize,
+                    title: None,
+                    parent_session_id: None,
+                    branch_point_message_index: None,
+                };
+                if let Err(e) = repl.state_manager.save_session(&engine.session_id(), &messages, &metadata) {
+                    tracing::debug!("Auto-save session error: {e}");
+                }
+            }
+
             // Check context pressure and auto-compact if needed
             repl.check_context_pressure();
 
