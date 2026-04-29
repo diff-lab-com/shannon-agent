@@ -95,6 +95,7 @@ pub mod preference_memory;
 pub mod feature_flags;
 pub mod session_persist;
 pub mod webhook;
+pub mod scheduled_routines;
 
 pub mod i18n;
 

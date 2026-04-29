@@ -75,7 +75,17 @@ impl LlmClient {
             | LlmProvider::Mistral
             | LlmProvider::DeepSeek
             | LlmProvider::Groq
-            | LlmProvider::Together => {
+            | LlmProvider::Together
+            | LlmProvider::OpenRouter
+            | LlmProvider::Cohere
+            | LlmProvider::Fireworks
+            | LlmProvider::Perplexity
+            | LlmProvider::Xai
+            | LlmProvider::Ai21
+            | LlmProvider::SiliconFlow
+            | LlmProvider::Zhipu
+            | LlmProvider::Cloudflare
+            | LlmProvider::Replicate => {
                 headers.push(("Authorization".to_string(), format!("Bearer {}", self.config.api_key)));
             }
             LlmProvider::Custom => {

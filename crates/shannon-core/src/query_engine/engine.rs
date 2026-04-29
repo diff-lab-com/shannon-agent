@@ -385,6 +385,16 @@ impl QueryEngine {
         self.conversation = ConversationState::default();
     }
 
+    /// Restore a previously saved conversation (for session resume)
+    pub fn restore_messages(&mut self, messages: Vec<crate::api::Message>) {
+        self.conversation.messages = messages;
+    }
+
+    /// Get the current conversation messages (for session persistence).
+    pub fn conversation_messages(&self) -> &[crate::api::Message] {
+        &self.conversation.messages
+    }
+
     /// Get a reference to the underlying LLM client.
     pub fn client(&self) -> &LlmClient {
         &self.client

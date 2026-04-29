@@ -116,7 +116,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
         repl.shared_executor.registry().await.contains(cmd_name).await
     });
     // Commands handled in the match block but not in the global registry
-    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "route", "mcp", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "rewind", "notify", "webhook", "create-pr", "patch", "sandbox", "find", "grep", "conv-search", "copy", "paste", "add", "watch", "bind", "project", "terminal-setup", "theme", "diff", "commands"];
+    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "agent", "route", "mcp", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "rewind", "notify", "webhook", "routine", "create-pr", "patch", "sandbox", "find", "grep", "conv-search", "copy", "paste", "add", "watch", "bind", "project", "terminal-setup", "theme", "diff", "commands"];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
     if command_exists || is_repl_command {
@@ -148,6 +148,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "plan" => handle_plan(repl, args)?,
             "team" => handle_team(repl, args)?,
             "agents" => handle_agents(repl, args)?,
+            "agent" => handle_agent(repl, args)?,
             "route" => handle_route(repl, args)?,
             "mcp" => handle_mcp(repl, args)?,
             "branch" | "fork" => handle_branch(repl, args)?,
@@ -171,6 +172,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "rewind" => handle_rewind(repl, args)?,
             "notify" => handle_notify(repl, args)?,
             "webhook" => handle_webhook(repl, args)?,
+            "routine" => handle_routine(repl, args)?,
             "create-pr" => handle_create_pr(repl, args)?,
             "patch" => handle_patch(repl, args)?,
             "copy" | "clip" => handle_copy(repl, args)?,
@@ -6482,4 +6484,425 @@ fn which_exists(cmd: &str) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+/// Handle custom agent definition commands
+fn handle_agent(repl: &mut Repl, args: &str) -> Result<()> {
+    use shannon_agents::agent_defs::AgentDefinitionRegistry;
+    use shannon_agents::custom_agent::CustomAgentLoader;
+    use std::path::PathBuf;
+
+    let parts: Vec<&str> = args.splitn(3, ' ').collect();
+    let subcommand = parts.first().copied().unwrap_or("help");
+
+    match subcommand {
+        "help" | "" => {
+            repl.chat.add_message(ChatRole::System, "\
+/agent list                    — List all available agent definitions
+/agent run <name> [prompt]     — Run an agent with optional prompt
+/agent create <name>           — Interactive agent creation wizard
+/agent edit <name>             — Edit an agent definition
+/agent show <name>             — Show agent definition details
+
+Agent definitions are loaded from:
+  .claude/agents/*.md  (project-local, highest priority)
+  .shannon/agents/*.toml (project-local)
+  ~/.claude/agents/*.md (user-global)
+  ~/.shannon/agents/*.toml (user-global)".to_string());
+        }
+        "list" => {
+            let registry = AgentDefinitionRegistry::load_from_dirs();
+            let loader = CustomAgentLoader::new();
+
+            let custom_agents = match loader.discover() {
+                Ok(agents) => agents,
+                Err(e) => {
+                    repl.chat.add_message(ChatRole::System, format!("Error loading custom agents: {e}"));
+                    return Ok(());
+                }
+            };
+
+            let mut output = String::new();
+
+            let toml_defs = registry.list_names();
+            if !toml_defs.is_empty() {
+                output.push_str(&format!("TOML Agents ({}):\n", toml_defs.len()));
+                for name in &toml_defs {
+                    if let Some(def) = registry.get(name) {
+                        let model = def.model.as_deref().unwrap_or("default");
+                        let tools = if def.allowed_tools.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" tools=[{}]", def.allowed_tools.join(","))
+                        };
+                        output.push_str(&format!("  - {}{}: {} ({})\n", name, tools, def.description, model));
+                    }
+                }
+            }
+
+            let md_names: Vec<_> = custom_agents.keys().cloned().collect();
+            if !md_names.is_empty() {
+                if !output.is_empty() {
+                    output.push('\n');
+                }
+                output.push_str(&format!("Markdown Agents ({}):\n", md_names.len()));
+                for name in &md_names {
+                    let def = &custom_agents[name];
+                    let model = def.model.as_deref().unwrap_or("default");
+                    let tools = def.allowed_tools.as_ref()
+                        .map(|t| format!(" tools=[{}]", t.join(", ")))
+                        .unwrap_or_default();
+                    output.push_str(&format!("  - {}{}: {} ({})\n", name, tools, def.description, model));
+                }
+            }
+
+            if output.is_empty() {
+                output.push_str("No agent definitions found.\n");
+                output.push_str("Create agents in .claude/agents/*.md or .shannon/agents/*.toml\n");
+            }
+
+            repl.chat.add_message(ChatRole::System, output);
+        }
+        "show" => {
+            let name = parts.get(1).copied().unwrap_or("");
+            if name.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Usage: /agent show <name>".to_string());
+                return Ok(());
+            }
+
+            let registry = AgentDefinitionRegistry::load_from_dirs();
+            if let Some(def) = registry.get(name) {
+                let mut output = format!("Agent: {} (TOML)\n", def.name);
+                output.push_str(&format!("Description: {}\n", def.description));
+                if let Some(model) = &def.model {
+                    output.push_str(&format!("Model: {}\n", model));
+                }
+                if let Some(prompt) = &def.system_prompt {
+                    output.push_str(&format!("System Prompt: {}\n", prompt));
+                }
+                if !def.allowed_tools.is_empty() {
+                    output.push_str(&format!("Allowed Tools: {}\n", def.allowed_tools.join(", ")));
+                }
+                if !def.capabilities.is_empty() {
+                    output.push_str(&format!("Capabilities: {}\n", def.capabilities.join(", ")));
+                }
+                output.push_str(&format!("Max Concurrent Tasks: {}\n", def.max_concurrent_tasks));
+                if let Some(temp) = def.temperature {
+                    output.push_str(&format!("Temperature: {}\n", temp));
+                }
+                repl.chat.add_message(ChatRole::System, output);
+                return Ok(());
+            }
+
+            let loader = CustomAgentLoader::new();
+            if let Ok(def) = loader.load(name) {
+                let mut output = format!("Agent: {} (Markdown)\n", def.name);
+                output.push_str(&format!("Description: {}\n", def.description));
+                output.push_str(&format!("Source: {}\n", def.source_path.display()));
+                if let Some(model) = &def.model {
+                    output.push_str(&format!("Model: {}\n", model));
+                }
+                if let Some(tools) = &def.allowed_tools {
+                    output.push_str(&format!("Allowed Tools: {}\n", tools.join(", ")));
+                }
+                if let Some(dirs) = &def.allowed_directories {
+                    output.push_str(&format!("Allowed Directories: {}\n", dirs.join(", ")));
+                }
+                if let Some(max_turns) = def.max_turns {
+                    output.push_str(&format!("Max Turns: {}\n", max_turns));
+                }
+                if !def.body_instructions.is_empty() {
+                    output.push_str(&format!("Instructions:\n{}\n", def.body_instructions));
+                }
+                if let Some(suffix) = &def.system_prompt_suffix {
+                    output.push_str(&format!("Prompt Suffix: {}\n", suffix));
+                }
+                repl.chat.add_message(ChatRole::System, output);
+                return Ok(());
+            }
+
+            repl.chat.add_message(ChatRole::System, format!("Agent '{}' not found.", name));
+        }
+        "run" => {
+            let name = parts.get(1).copied().unwrap_or("");
+            let prompt = parts.get(2).copied().unwrap_or("");
+
+            if name.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Usage: /agent run <name> [prompt]".to_string());
+                return Ok(());
+            }
+
+            let registry = AgentDefinitionRegistry::load_from_dirs();
+            let config = if let Some(def) = registry.get(name) {
+                let system_prompt = def.system_prompt.clone()
+                    .unwrap_or_else(|| def.description.clone());
+                Some((def.clone(), system_prompt))
+            } else {
+                let loader = CustomAgentLoader::new();
+                if let Ok(def) = loader.load(name) {
+                    let mut prompt_parts = Vec::new();
+                    if !def.body_instructions.is_empty() {
+                        prompt_parts.push(def.body_instructions.clone());
+                    }
+                    if let Some(suffix) = &def.system_prompt_suffix {
+                        prompt_parts.push(suffix.clone());
+                    }
+                    let system_prompt = if prompt_parts.is_empty() {
+                        def.description.clone()
+                    } else {
+                        prompt_parts.join("\n\n")
+                    };
+
+                    let toml_def = shannon_agents::agent_defs::AgentDefinition {
+                        name: def.name.clone(),
+                        description: def.description.clone(),
+                        system_prompt: Some(system_prompt.clone()),
+                        model: def.model.clone(),
+                        capabilities: vec![],
+                        allowed_tools: def.allowed_tools.unwrap_or_default(),
+                        max_concurrent_tasks: 3,
+                        plan_mode_required: false,
+                        temperature: None,
+                    };
+
+                    Some((toml_def, system_prompt))
+                } else {
+                    None
+                }
+            };
+
+            let (def, system_prompt) = match config {
+                Some(c) => c,
+                None => {
+                    repl.chat.add_message(ChatRole::System, format!("Agent '{}' not found. Use /agent list to see available agents.", name));
+                    return Ok(());
+                }
+            };
+
+            use shannon_agents::{AgentCoordinator, CoordinatorConfig, SubAgentRegistry, AgentConfig};
+
+            if repl.agent_registry.is_none() {
+                let config = CoordinatorConfig::default();
+                let coordinator = repl.runtime.block_on(AgentCoordinator::new(config))
+                    .expect("failed to create agent coordinator");
+                repl.agent_registry = Some(std::sync::Arc::new(SubAgentRegistry::new(
+                    std::sync::Arc::new(coordinator),
+                )));
+            }
+
+            let agent_config = AgentConfig {
+                name: format!("agent-{}", def.name),
+                model: def.model.clone().unwrap_or_else(|| {
+                    repl.state.model.clone().unwrap_or_else(|| "claude-sonnet-4-6".to_string())
+                }),
+                system_prompt,
+                tools: def.allowed_tools.clone(),
+                working_directory: PathBuf::from("."),
+                max_turns: def.max_concurrent_tasks as u32,
+                team: None,
+            };
+
+            let registry = repl.agent_registry.as_ref().unwrap().clone();
+            match repl.runtime.block_on(registry.spawn(agent_config)) {
+                Ok(agent) => {
+                    repl.chat.add_message(ChatRole::System, format!(
+                        "Agent '{}' spawned (id: {}, status: {})",
+                        agent.name, agent.id, agent.status
+                    ));
+
+                    if !prompt.is_empty() {
+                        match repl.runtime.block_on(registry.send_message("repl", &agent.name, serde_json::json!(prompt))) {
+                            Ok(_) => {
+                                repl.chat.add_message(ChatRole::System, format!("Message sent to agent '{}'.", agent.name));
+                            }
+                            Err(e) => {
+                                repl.chat.add_message(ChatRole::System, format!("Failed to send message: {e}"));
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    repl.chat.add_message(ChatRole::System, format!("Failed to spawn agent: {e}"));
+                }
+            }
+        }
+        "create" => {
+            let name = parts.get(1).copied().unwrap_or("");
+            if name.is_empty() {
+                repl.chat.add_message(ChatRole::System, "\
+Agent Creation Wizard
+====================
+
+Usage: /agent create <name>
+
+This will guide you through creating an agent definition interactively.
+The agent will be saved as a markdown file in .claude/agents/{name}.md".to_string());
+                return Ok(());
+            }
+
+            if !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+                repl.chat.add_message(ChatRole::System, "Agent name must contain only alphanumeric characters, hyphens, and underscores.".to_string());
+                return Ok(());
+            }
+
+            let registry = AgentDefinitionRegistry::load_from_dirs();
+            if registry.get(name).is_some() {
+                repl.chat.add_message(ChatRole::System, format!("Agent '{}' already exists. Use /agent edit {} to modify it.", name, name));
+                return Ok(());
+            }
+
+            let loader = CustomAgentLoader::new();
+            if loader.load(name).is_ok() {
+                repl.chat.add_message(ChatRole::System, format!("Agent '{}' already exists. Use /agent edit {} to modify it.", name, name));
+                return Ok(());
+            }
+
+            repl.state.pending_dialog_action = Some(format!("create_agent:{}", name));
+
+            repl.chat.add_message(ChatRole::System, format!(
+                "Creating agent '{}'. Please provide the following information:\n\
+                 1. Description: What does this agent do?\n\
+                 2. Model (optional): opus, sonnet, or haiku (default: sonnet)\n\
+                 3. Tools (optional): Comma-separated tool names\n\
+                 4. Instructions: The agent's system prompt",
+                name
+            ));
+        }
+        "edit" => {
+            let name = parts.get(1).copied().unwrap_or("");
+            if name.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Usage: /agent edit <name>".to_string());
+                return Ok(());
+            }
+
+            let registry = AgentDefinitionRegistry::load_from_dirs();
+            let source_path = if let Some(_def) = registry.get(name) {
+                repl.chat.add_message(ChatRole::System, format!(
+                    "Agent '{}' is defined in TOML format. Edit the file directly: .shannon/agents/{}.toml",
+                    name, name
+                ));
+                return Ok(());
+            } else {
+                let loader = CustomAgentLoader::new();
+                match loader.load(name) {
+                    Ok(def) => def.source_path.clone(),
+                    Err(_) => {
+                        repl.chat.add_message(ChatRole::System, format!("Agent '{}' not found.", name));
+                        return Ok(());
+                    }
+                }
+            };
+
+            repl.chat.add_message(ChatRole::System, format!(
+                "Editing agent '{}' (source: {})\n\
+                 To edit, modify the file directly and run /agent show {} to verify.",
+                name, source_path.display(), name
+            ));
+        }
+        _ => {
+            repl.chat.add_message(ChatRole::System, format!("Unknown subcommand: {subcommand}. Use /agent help."));
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_routine(repl: &mut Repl, args: &str) -> Result<()> {
+    let parts: Vec<&str> = args.trim().splitn(3, ' ').collect();
+    let subcmd = parts.first().copied().unwrap_or("list");
+
+    match subcmd {
+        "list" | "ls" | "" => {
+            let routines = repl.state.routine_manager.list();
+            if routines.is_empty() {
+                repl.chat.add_message(ChatRole::System, "No scheduled routines. Use /routine add <name> <interval_secs> <prompt>".to_string());
+                return Ok(());
+            }
+            let mut msg = String::from("Scheduled Routines:\n\n");
+            for r in routines {
+                let status = if r.enabled { "ON" } else { "OFF" };
+                let last = r.last_fired.map(|t| t.format("%H:%M:%S").to_string()).unwrap_or("never".into());
+                msg.push_str(&format!(
+                    "  [{}] {} ({})\n    Interval: {}s | Fires: {} | Last: {}\n    Prompt: {}\n\n",
+                    r.id, r.name, status, r.interval_secs, r.fire_count, last,
+                    if r.prompt.len() > 60 { format!("{}...", &r.prompt[..57]) } else { r.prompt.clone() }
+                ));
+            }
+            repl.chat.add_message(ChatRole::System, msg);
+        }
+        "add" => {
+            if parts.len() < 4 {
+                repl.chat.add_message(ChatRole::System,
+                    "Usage: /routine add <name> <interval_secs> <prompt>\n\nExample: /routine add status-check 300 Check git status".to_string());
+                return Ok(());
+            }
+            let name = parts[1].to_string();
+            let interval: u64 = match parts[2].parse() {
+                Ok(i) if i > 0 => i,
+                _ => {
+                    repl.chat.add_message(ChatRole::System, "Interval must be a positive number of seconds.".to_string());
+                    return Ok(());
+                }
+            };
+            let prompt = parts[3].to_string();
+            let routine = shannon_core::scheduled_routines::ScheduledRoutine::new(name, prompt, interval);
+            let id = routine.id.clone();
+            repl.state.routine_manager.add(routine);
+            repl.chat.add_message(ChatRole::System, format!("Added routine [{}]. Use /routine list to see all.", id));
+        }
+        "remove" | "rm" | "delete" => {
+            let id = parts.get(1).copied().unwrap_or("");
+            if id.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Usage: /routine remove <id>".to_string());
+                return Ok(());
+            }
+            match repl.state.routine_manager.remove(id) {
+                Some(r) => repl.chat.add_message(ChatRole::System, format!("Removed routine: {}", r.name)),
+                None => repl.chat.add_message(ChatRole::System, format!("Routine '{}' not found.", id)),
+            };
+        }
+        "toggle" => {
+            let id = parts.get(1).copied().unwrap_or("");
+            if id.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Usage: /routine toggle <id>".to_string());
+                return Ok(());
+            }
+            match repl.state.routine_manager.toggle(id) {
+                Some(enabled) => repl.chat.add_message(ChatRole::System,
+                    format!("Routine {} is now {}", id, if enabled { "enabled" } else { "disabled" })),
+                None => repl.chat.add_message(ChatRole::System, format!("Routine '{}' not found.", id)),
+            };
+        }
+        "fire" => {
+            let due = repl.state.routine_manager.drain_due();
+            if due.is_empty() {
+                repl.chat.add_message(ChatRole::System, "No routines are due to fire.".to_string());
+            } else {
+                for (name, prompt) in due {
+                    repl.chat.add_message(ChatRole::System, format!("Routine '{}' fired: {}", name, prompt));
+                }
+            }
+        }
+        "save" => {
+            let path = shannon_core::scheduled_routines::RoutineManager::default_storage_path();
+            match repl.state.routine_manager.save_to_file(&path) {
+                Ok(()) => repl.chat.add_message(ChatRole::System, format!("Routines saved to {}", path.display())),
+                Err(e) => repl.chat.add_message(ChatRole::System, format!("Failed to save: {e}")),
+            };
+        }
+        "help" | "-h" | "--help" => {
+            repl.chat.add_message(ChatRole::System,
+                "Scheduled Routines — recurring task execution\n\n\
+                 Commands:\n  /routine list                     — show all routines\n  \
+                 /routine add <name> <secs> <prompt> — add a new routine\n  \
+                 /routine remove <id>               — remove a routine\n  \
+                 /routine toggle <id>               — enable/disable\n  \
+                 /routine fire                      — manually check and fire due routines\n  \
+                 /routine save                      — persist routines to disk".to_string());
+        }
+        _ => {
+            repl.chat.add_message(ChatRole::System,
+                format!("Unknown routine subcommand: '{}'. Use /routine help.", subcmd));
+        }
+    }
+    Ok(())
 }

@@ -74,6 +74,8 @@ pub enum PermissionChoice {
 /// Shannon extensions:
 /// - `full-auto` → [`FullAuto`]:  auto-approve everything except critical
 /// - `readonly`  → [`Readonly`]:  only allow read operations
+/// - `auto`      → [`Auto`]:      background safety classifier auto-approves low-risk operations
+/// - `plan-ro`   → [`PlanReadonly`]: read-only analysis mode, no tool execution allowed
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum ApprovalMode {
     /// Ask for confirmation on every tool execution.
@@ -97,6 +99,12 @@ pub enum ApprovalMode {
     DontAsk,
     /// Only allow read operations — no writes, no bash.
     Readonly,
+    /// Background safety classifier auto-approves low-risk operations, asks for high-risk.
+    /// Safe/Low risk: auto-approve, Medium+ risk: prompt, Critical: deny.
+    Auto,
+    /// Read-only analysis mode - no tool execution allowed, only read operations.
+    /// Denies all tool execution except Read/Grep/Glob/List operations.
+    PlanReadonly,
 }
 
 impl std::fmt::Display for ApprovalMode {
@@ -109,6 +117,8 @@ impl std::fmt::Display for ApprovalMode {
             Self::BypassPermissions => write!(f, "bypassPermissions"),
             Self::DontAsk => write!(f, "dontAsk"),
             Self::Readonly => write!(f, "readonly"),
+            Self::Auto => write!(f, "auto-classifier"),
+            Self::PlanReadonly => write!(f, "plan-readonly"),
         }
     }
 }
@@ -124,24 +134,28 @@ impl ApprovalMode {
             "bypasspermissions" | "bypass_permissions" | "bypass-permissions" => Some(Self::BypassPermissions),
             "dontask" | "dont_ask" | "dont-ask" => Some(Self::DontAsk),
             "readonly" | "read-only" | "read_only" => Some(Self::Readonly),
+            "auto-classifier" | "auto_classifier" | "classifier" => Some(Self::Auto),
+            "plan-readonly" | "plan_readonly" | "plan_ro" => Some(Self::PlanReadonly),
             _ => None,
         }
     }
 
     /// Returns all variant names for display (Claude Code compatible).
     pub fn all_names() -> &'static [&'static str] {
-        &["default", "plan", "auto", "full-auto", "bypassPermissions", "dontAsk", "readonly"]
+        &["default", "plan", "auto", "full-auto", "bypassPermissions", "dontAsk", "readonly", "auto-classifier", "plan-readonly"]
     }
 
     /// Cycle to the next commonly-used mode (Shift+Tab pattern).
-    /// Cycles through: Suggest → AutoEdit → Plan → FullAuto → Readonly → Suggest
+    /// Cycles through: Suggest → AutoEdit → Plan → FullAuto → Auto → PlanReadonly → Readonly → Suggest
     /// Skips BypassPermissions and DontAsk (those are set explicitly via /mode).
     pub fn cycle_next(self) -> Self {
         match self {
             Self::Suggest => Self::AutoEdit,
             Self::AutoEdit => Self::Plan,
             Self::Plan => Self::FullAuto,
-            Self::FullAuto => Self::Readonly,
+            Self::FullAuto => Self::Auto,
+            Self::Auto => Self::PlanReadonly,
+            Self::PlanReadonly => Self::Readonly,
             Self::Readonly => Self::Suggest,
             // BypassPermissions and DontAsk cycle back to Suggest
             Self::BypassPermissions | Self::DontAsk => Self::Suggest,
@@ -158,6 +172,8 @@ impl ApprovalMode {
             Self::BypassPermissions => "BYPASS",
             Self::DontAsk => "YOLO",
             Self::Readonly => "RO",
+            Self::Auto => "CLASSIFY",
+            Self::PlanReadonly => "PLAN-RO",
         }
     }
 
@@ -171,6 +187,8 @@ impl ApprovalMode {
             Self::BypassPermissions => "Skip all permission checks (dangerous, trusted env only)",
             Self::DontAsk => "Accept everything without prompting",
             Self::Readonly => "Only allow read operations — no writes, no bash",
+            Self::Auto => "Auto-approve Safe/Low risk; prompt Medium+; deny Critical",
+            Self::PlanReadonly => "Read-only analysis: deny all tool execution except Read/Grep/Glob/List",
         }
     }
 
@@ -193,7 +211,163 @@ impl ApprovalMode {
             Self::FullAuto => risk_level < RiskLevel::Critical,
             Self::BypassPermissions | Self::DontAsk => true,
             Self::Readonly => false, // handled at a higher level
+            Self::Auto => {
+                // Auto-approve Safe and Low risk; prompt for Medium and High; deny Critical
+                risk_level <= RiskLevel::Low
+            }
+            Self::PlanReadonly => false, // handled at a higher level (deny all except read operations)
         }
+    }
+}
+
+/// Decision for a permission rule (distinct from classifier's RuleDecision)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PermissionRuleDecision {
+    /// Automatically allow the operation
+    Allow,
+    /// Automatically deny the operation
+    Deny,
+    /// Ask the user for confirmation
+    Ask,
+}
+
+/// Source of a permission rule (distinct from classifier's RuleSource)
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PermissionRuleSource {
+    /// User-configured rule
+    User,
+    /// Project-configured rule
+    Project,
+    /// Managed/system rule
+    Managed,
+}
+
+/// A permission rule for matching tool commands (glob-style patterns)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionRule {
+    /// Glob-style pattern for matching tool commands (e.g., "Bash(git *)", "Read(*)")
+    pub pattern: String,
+    /// Decision to make when this rule matches
+    pub decision: PermissionRuleDecision,
+    /// Source of this rule
+    pub source: PermissionRuleSource,
+    /// Optional description of why this rule exists
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+impl PermissionRule {
+    /// Create a new permission rule
+    pub fn new(pattern: String, decision: PermissionRuleDecision, source: PermissionRuleSource) -> Self {
+        Self {
+            pattern,
+            decision,
+            source,
+            description: None,
+        }
+    }
+
+    /// Create a new permission rule with a description
+    pub fn with_description(
+        pattern: String,
+        decision: PermissionRuleDecision,
+        source: PermissionRuleSource,
+        description: String,
+    ) -> Self {
+        Self {
+            pattern,
+            decision,
+            source,
+            description: Some(description),
+        }
+    }
+
+    /// Check if this rule matches the given tool name and command
+    pub fn matches(&self, tool_name: &str, command: &str) -> bool {
+        // Pattern format: "ToolName(pattern)" or just "ToolName"
+        if let Some((tool_pattern, cmd_pattern)) = self.pattern.split_once('(') {
+            // Strip trailing ')'
+            let cmd_pattern = cmd_pattern.strip_suffix(')').unwrap_or(cmd_pattern);
+
+            // Check if tool name matches
+            if tool_pattern != "*" && !tool_name.eq_ignore_ascii_case(tool_pattern) {
+                return false;
+            }
+
+            // Check if command matches the pattern
+            if cmd_pattern == "*" || cmd_pattern == "**" {
+                return true;
+            }
+
+            // Simple glob matching for command
+            if cmd_pattern.contains('*') {
+                // Convert glob to simple regex
+                let regex_pattern = cmd_pattern.replace('*', ".*");
+                if let Ok(re) = regex::Regex::new(&format!("^{}$", regex_pattern)) {
+                    re.is_match(command)
+                } else {
+                    // Fallback to contains check
+                    command.contains(&cmd_pattern.replace('*', ""))
+                }
+            } else {
+                command.contains(cmd_pattern)
+            }
+        } else {
+            // No command pattern, just match tool name
+            self.pattern.eq_ignore_ascii_case(tool_name) || self.pattern == "*"
+        }
+    }
+}
+
+/// A set of permission rules with ordered evaluation
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PermissionRuleSet {
+    /// Ordered list of rules (first match wins)
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    rules: Vec<PermissionRule>,
+}
+
+impl PermissionRuleSet {
+    /// Create a new empty rule set
+    pub fn new() -> Self {
+        Self { rules: Vec::new() }
+    }
+
+    /// Add a rule to the set
+    pub fn add_rule(&mut self, rule: PermissionRule) {
+        self.rules.push(rule);
+    }
+
+    /// Add a rule with builder-style pattern
+    pub fn with_rule(mut self, rule: PermissionRule) -> Self {
+        self.rules.push(rule);
+        self
+    }
+
+    /// Evaluate rules for a given tool and command
+    /// Returns the first matching rule's decision, or None if no rules match
+    pub fn evaluate(&self, tool_name: &str, command: &str) -> Option<PermissionRuleDecision> {
+        for rule in &self.rules {
+            if rule.matches(tool_name, command) {
+                return Some(rule.decision);
+            }
+        }
+        None
+    }
+
+    /// Get all rules in the set
+    pub fn rules(&self) -> &[PermissionRule] {
+        &self.rules
+    }
+
+    /// Clear all rules
+    pub fn clear(&mut self) {
+        self.rules.clear();
+    }
+
+    /// Remove rules by source
+    pub fn remove_by_source(&mut self, source: &PermissionRuleSource) {
+        self.rules.retain(|r| &r.source != source);
     }
 }
 
@@ -1002,6 +1176,48 @@ impl PermissionManager {
                 return Err(PermissionError::Denied(format!(
                     "Readonly mode: {tool_name} is not a read operation"
                 )));
+            }
+            ApprovalMode::PlanReadonly => {
+                // Only allow read-only tools (Read, Grep, Glob, List operations)
+                // Deny all tool execution - this is analysis-only mode
+                if is_read_only_tool_name(tool_name) {
+                    return Ok(None);
+                }
+                return Err(PermissionError::Denied(format!(
+                    "PlanReadonly mode: tool execution not allowed (read-only analysis mode): {tool_name}"
+                )));
+            }
+            ApprovalMode::Auto => {
+                // Run classifier first to get risk level
+                let result = self.classifier.classify(tool_name, tool_input);
+                let risk = convert_classifier_risk(result.risk_level);
+
+                // Check memory for always-allowed
+                if self.memory.is_always_allowed(session_id, tool_name) {
+                    return Ok(None);
+                }
+
+                // Destructive tools always require confirmation
+                if self.is_tool_destructive(tool_name) {
+                    return Ok(self.create_permission_prompt(tool_name, tool_input, session_id));
+                }
+
+                // Auto mode: auto-approve Safe/Low, prompt Medium+, deny Critical
+                if risk <= RiskLevel::Low {
+                    return Ok(None);
+                } else if risk >= RiskLevel::Critical {
+                    return Err(PermissionError::Denied(format!(
+                        "Auto mode: critical-risk operations denied: {tool_name} (risk: {risk:?})"
+                    )));
+                }
+
+                // Medium or High risk: prompt user
+                return self.create_permission_prompt_with_risk(
+                    tool_name,
+                    tool_input,
+                    session_id,
+                    risk,
+                );
             }
             ApprovalMode::Plan => {
                 // If plan is approved for this session, auto-approve all tools
@@ -2024,5 +2240,376 @@ mod tests {
         );
         assert!(result.is_ok());
         assert!(result.unwrap().is_none()); // auto-approved via glob
+    }
+
+    // ── New permission modes tests ─────────────────────────────────────
+
+    #[test]
+    fn test_auto_mode_auto_approves_low_risk() {
+        let mut mgr = PermissionManager::new();
+        mgr.set_approval_mode(ApprovalMode::Auto);
+        let sid = Uuid::new_v4();
+
+        // Safe/Low risk operations should be auto-approved
+        // Read tool has Safe risk in policy
+        let result = mgr.classify_and_check(
+            sid,
+            "Read",
+            &serde_json::json!({"path": "/tmp/test"}),
+        );
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none()); // auto-approved
+    }
+
+    #[test]
+    fn test_auto_mode_prompts_medium_risk() {
+        let mut mgr = PermissionManager::new();
+        mgr.set_approval_mode(ApprovalMode::Auto);
+        let sid = Uuid::new_v4();
+
+        // Medium risk operations should prompt
+        // FileWrite has Medium risk in policy
+        let result = mgr.classify_and_check(
+            sid,
+            "FileWrite",
+            &serde_json::json!({"path": "/tmp/test"}),
+        );
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_some()); // prompt needed
+    }
+
+    #[test]
+    fn test_auto_mode_denies_critical_risk() {
+        let mut mgr = PermissionManager::new();
+        mgr.set_approval_mode(ApprovalMode::Auto);
+        let sid = Uuid::new_v4();
+
+        // Critical risk operations should be denied
+        let result = mgr.classify_and_check(
+            sid,
+            "Bash",
+            &serde_json::json!({"command": "rm -rf /"}),
+        );
+        assert!(result.is_err()); // denied
+    }
+
+    #[test]
+    fn test_plan_readonly_mode_allows_read_tools() {
+        let mut mgr = PermissionManager::new();
+        mgr.set_approval_mode(ApprovalMode::PlanReadonly);
+        let sid = Uuid::new_v4();
+
+        // Read tools should be allowed
+        let result = mgr.classify_and_check(
+            sid,
+            "read",
+            &serde_json::json!({"path": "/tmp/test"}),
+        );
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none()); // auto-allowed
+    }
+
+    #[test]
+    fn test_plan_readonly_mode_denies_write_tools() {
+        let mut mgr = PermissionManager::new();
+        mgr.set_approval_mode(ApprovalMode::PlanReadonly);
+        let sid = Uuid::new_v4();
+
+        // Write tools should be denied
+        let result = mgr.classify_and_check(
+            sid,
+            "bash",
+            &serde_json::json!({"command": "ls"}),
+        );
+        assert!(result.is_err()); // denied
+    }
+
+    #[test]
+    fn test_approval_mode_display_new_modes() {
+        assert_eq!(ApprovalMode::Auto.to_string(), "auto-classifier");
+        assert_eq!(ApprovalMode::PlanReadonly.to_string(), "plan-readonly");
+    }
+
+    #[test]
+    fn test_approval_mode_from_str_new_modes() {
+        assert_eq!(ApprovalMode::from_str_ci("auto-classifier"), Some(ApprovalMode::Auto));
+        assert_eq!(ApprovalMode::from_str_ci("auto_classifier"), Some(ApprovalMode::Auto));
+        assert_eq!(ApprovalMode::from_str_ci("classifier"), Some(ApprovalMode::Auto));
+        assert_eq!(ApprovalMode::from_str_ci("plan-readonly"), Some(ApprovalMode::PlanReadonly));
+        assert_eq!(ApprovalMode::from_str_ci("plan_readonly"), Some(ApprovalMode::PlanReadonly));
+        assert_eq!(ApprovalMode::from_str_ci("plan_ro"), Some(ApprovalMode::PlanReadonly));
+    }
+
+    #[test]
+    fn test_approval_mode_cycle_includes_new_modes() {
+        let modes = vec![
+            ApprovalMode::Suggest,
+            ApprovalMode::AutoEdit,
+            ApprovalMode::Plan,
+            ApprovalMode::FullAuto,
+            ApprovalMode::Auto,
+            ApprovalMode::PlanReadonly,
+            ApprovalMode::Readonly,
+        ];
+
+        // Test cycling through all modes
+        let mut current = ApprovalMode::Suggest;
+        for expected in &modes[1..] {
+            current = current.cycle_next();
+            assert_eq!(current, *expected);
+        }
+
+        // After Readonly, should cycle back to Suggest
+        current = current.cycle_next();
+        assert_eq!(current, ApprovalMode::Suggest);
+    }
+
+    #[test]
+    fn test_approval_mode_short_label_new_modes() {
+        assert_eq!(ApprovalMode::Auto.short_label(), "CLASSIFY");
+        assert_eq!(ApprovalMode::PlanReadonly.short_label(), "PLAN-RO");
+    }
+
+    #[test]
+    fn test_approval_mode_description_new_modes() {
+        let auto_desc = ApprovalMode::Auto.description();
+        assert!(auto_desc.contains("Auto-approve Safe/Low"));
+
+        let plan_ro_desc = ApprovalMode::PlanReadonly.description();
+        assert!(plan_ro_desc.contains("Read-only analysis") || plan_ro_desc.contains("read-only analysis"));
+    }
+
+    // ── PermissionRule and PermissionRuleSet tests ──────────────────────
+
+    #[test]
+    fn test_permission_rule_creation() {
+        let rule = PermissionRule::new(
+            "Bash(git *)".to_string(),
+            PermissionRuleDecision::Allow,
+            PermissionRuleSource::User,
+        );
+        assert_eq!(rule.pattern, "Bash(git *)");
+        assert_eq!(rule.decision, PermissionRuleDecision::Allow);
+        assert_eq!(rule.source, PermissionRuleSource::User);
+        assert!(rule.description.is_none());
+    }
+
+    #[test]
+    fn test_permission_rule_with_description() {
+        let rule = PermissionRule::with_description(
+            "Read(*)".to_string(),
+            PermissionRuleDecision::Allow,
+            PermissionRuleSource::Project,
+            "Allow all read operations".to_string(),
+        );
+        assert_eq!(rule.description, Some("Allow all read operations".to_string()));
+    }
+
+    #[test]
+    fn test_permission_rule_matches_tool_only() {
+        let rule = PermissionRule::new(
+            "Bash".to_string(),
+            PermissionRuleDecision::Ask,
+            PermissionRuleSource::Managed,
+        );
+        assert!(rule.matches("Bash", "any command"));
+        assert!(rule.matches("Bash", "ls -la"));
+        assert!(!rule.matches("Read", "something"));
+    }
+
+    #[test]
+    fn test_permission_rule_matches_tool_with_wildcard() {
+        let rule = PermissionRule::new(
+            "Bash(*)".to_string(),
+            PermissionRuleDecision::Allow,
+            PermissionRuleSource::User,
+        );
+        assert!(rule.matches("Bash", "any command"));
+        assert!(rule.matches("Bash", "ls -la"));
+        assert!(!rule.matches("Read", "something"));
+    }
+
+    #[test]
+    fn test_permission_rule_matches_tool_with_pattern() {
+        let rule = PermissionRule::new(
+            "Bash(git *)".to_string(),
+            PermissionRuleDecision::Allow,
+            PermissionRuleSource::Project,
+        );
+        assert!(rule.matches("Bash", "git status"));
+        assert!(rule.matches("Bash", "git commit -m 'test'"));
+        assert!(!rule.matches("Bash", "ls -la"));
+        assert!(!rule.matches("Read", "git status"));
+    }
+
+    #[test]
+    fn test_permission_rule_set_creation() {
+        let rule_set = PermissionRuleSet::new();
+        assert_eq!(rule_set.rules().len(), 0);
+    }
+
+    #[test]
+    fn test_permission_rule_set_add_rule() {
+        let mut rule_set = PermissionRuleSet::new();
+        let rule = PermissionRule::new(
+            "Bash(git *)".to_string(),
+            PermissionRuleDecision::Allow,
+            PermissionRuleSource::User,
+        );
+        rule_set.add_rule(rule);
+        assert_eq!(rule_set.rules().len(), 1);
+    }
+
+    #[test]
+    fn test_permission_rule_set_with_builder() {
+        let rule_set = PermissionRuleSet::new()
+            .with_rule(PermissionRule::new(
+                "Read(*)".to_string(),
+                PermissionRuleDecision::Allow,
+                PermissionRuleSource::Managed,
+            ))
+            .with_rule(PermissionRule::new(
+                "Bash(rm *)".to_string(),
+                PermissionRuleDecision::Deny,
+                PermissionRuleSource::User,
+            ));
+        assert_eq!(rule_set.rules().len(), 2);
+    }
+
+    #[test]
+    fn test_permission_rule_set_evaluate_first_match_wins() {
+        let mut rule_set = PermissionRuleSet::new();
+        rule_set.add_rule(PermissionRule::new(
+            "Bash(*)".to_string(),
+            PermissionRuleDecision::Deny,
+            PermissionRuleSource::Managed,
+        ));
+        rule_set.add_rule(PermissionRule::new(
+            "Bash(git *)".to_string(),
+            PermissionRuleDecision::Allow,
+            PermissionRuleSource::User,
+        ));
+
+        // First matching rule should win (Deny)
+        let result = rule_set.evaluate("Bash", "git status");
+        assert_eq!(result, Some(PermissionRuleDecision::Deny));
+    }
+
+    #[test]
+    fn test_permission_rule_set_evaluate_no_match() {
+        let rule_set = PermissionRuleSet::new().with_rule(PermissionRule::new(
+            "Read(*)".to_string(),
+            PermissionRuleDecision::Allow,
+            PermissionRuleSource::Managed,
+        ));
+
+        let result = rule_set.evaluate("Bash", "ls -la");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_permission_rule_set_evaluate_ordered() {
+        let mut rule_set = PermissionRuleSet::new();
+        // Add rules in reverse order - first one should still win
+        rule_set.add_rule(PermissionRule::new(
+            "Bash(git *)".to_string(),
+            PermissionRuleDecision::Allow,
+            PermissionRuleSource::User,
+        ));
+        rule_set.add_rule(PermissionRule::new(
+            "Bash(*)".to_string(),
+            PermissionRuleDecision::Ask,
+            PermissionRuleSource::Managed,
+        ));
+
+        let result = rule_set.evaluate("Bash", "git status");
+        assert_eq!(result, Some(PermissionRuleDecision::Allow));
+    }
+
+    #[test]
+    fn test_permission_rule_set_clear() {
+        let mut rule_set = PermissionRuleSet::new()
+            .with_rule(PermissionRule::new(
+                "Read(*)".to_string(),
+                PermissionRuleDecision::Allow,
+                PermissionRuleSource::Managed,
+            ))
+            .with_rule(PermissionRule::new(
+                "Bash(*)".to_string(),
+                PermissionRuleDecision::Ask,
+                PermissionRuleSource::User,
+            ));
+        assert_eq!(rule_set.rules().len(), 2);
+
+        rule_set.clear();
+        assert_eq!(rule_set.rules().len(), 0);
+    }
+
+    #[test]
+    fn test_permission_rule_set_remove_by_source() {
+        let mut rule_set = PermissionRuleSet::new();
+        rule_set.add_rule(PermissionRule::new(
+            "Read(*)".to_string(),
+            PermissionRuleDecision::Allow,
+            PermissionRuleSource::Managed,
+        ));
+        rule_set.add_rule(PermissionRule::new(
+            "Bash(*)".to_string(),
+            PermissionRuleDecision::Ask,
+            PermissionRuleSource::User,
+        ));
+        rule_set.add_rule(PermissionRule::new(
+            "Write(*)".to_string(),
+            PermissionRuleDecision::Allow,
+            PermissionRuleSource::User,
+        ));
+        assert_eq!(rule_set.rules().len(), 3);
+
+        rule_set.remove_by_source(&PermissionRuleSource::User);
+        assert_eq!(rule_set.rules().len(), 1);
+        assert_eq!(rule_set.rules()[0].source, PermissionRuleSource::Managed);
+    }
+
+    #[test]
+    fn test_permission_rule_serialization() {
+        let rule = PermissionRule::with_description(
+            "Bash(git *)".to_string(),
+            PermissionRuleDecision::Allow,
+            PermissionRuleSource::Project,
+            "Allow git commands".to_string(),
+        );
+
+        let json = serde_json::to_string(&rule).unwrap();
+        let parsed: PermissionRule = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.pattern, rule.pattern);
+        assert_eq!(parsed.decision, rule.decision);
+        assert_eq!(parsed.source, rule.source);
+        assert_eq!(parsed.description, rule.description);
+    }
+
+    #[test]
+    fn test_permission_rule_decision_serialization() {
+        for decision in [
+            PermissionRuleDecision::Allow,
+            PermissionRuleDecision::Deny,
+            PermissionRuleDecision::Ask,
+        ] {
+            let json = serde_json::to_string(&decision).unwrap();
+            let parsed: PermissionRuleDecision = serde_json::from_str(&json).unwrap();
+            assert_eq!(decision, parsed);
+        }
+    }
+
+    #[test]
+    fn test_permission_rule_source_serialization() {
+        for source in [
+            PermissionRuleSource::User,
+            PermissionRuleSource::Project,
+            PermissionRuleSource::Managed,
+        ] {
+            let json = serde_json::to_string(&source).unwrap();
+            let parsed: PermissionRuleSource = serde_json::from_str(&json).unwrap();
+            assert_eq!(source, parsed);
+        }
     }
 }

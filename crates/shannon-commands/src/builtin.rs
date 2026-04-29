@@ -29,6 +29,7 @@ mod credentials;
 mod debug;
 mod doctor;
 mod mcp;
+mod lsp;
 mod repl;
 
 /// Register all built-in commands
@@ -55,6 +56,7 @@ pub fn all_commands() -> Vec<Command> {
         debug::command(),
         doctor::command(),
         mcp::command(),
+        lsp::command(),
     ];
     cmds.extend(repl::all_commands());
     cmds
@@ -176,5 +178,16 @@ pub mod mcp_utils {
         format_tool_list, format_annotations, format_duration,
         ServerStateDisplay, ServerStateInfo, ServerStatusInfo,
         ToolInfo, AnnotationInfo,
+    };
+}
+
+/// Re-export LSP command utilities for REPL integration
+#[allow(unused_imports)]
+pub mod lsp_utils {
+    pub use super::lsp::{
+        LspSubcommand, parse_lsp_subcommand,
+        format_lsp_help, format_server_list,
+        LspServerStatus, LspServerState,
+        get_default_server_command, is_valid_language,
     };
 }

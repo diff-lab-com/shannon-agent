@@ -11,6 +11,66 @@ const DEFAULT_MAX_IMPORT_DEPTH: usize = 5;
 /// Default maximum total imported content size in bytes.
 const DEFAULT_MAX_IMPORT_SIZE: usize = 100 * 1024;
 
+/// Instruction scope levels for hierarchical priority.
+///
+/// Priority order (highest to lowest):
+/// 1. Managed - Remote/organization managed instructions
+/// 2. Project - Project root instructions
+/// 3. User - User-level instructions (~/.claude/)
+/// 4. Local - Local project (.claude/, gitignored)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum InstructionScope {
+    /// Managed/remote instructions (highest priority)
+    Managed = 100,
+    /// Project root instructions (repo root CLAUDE.md)
+    Project = 75,
+    /// Project root scope alias
+    ProjectRoot = 74,
+    /// User instructions (~/.claude/CLAUDE.md)
+    User = 50,
+    /// Global scope alias (user-level)
+    Global = 49,
+    /// Local project instructions (.claude/CLAUDE.md, gitignored)
+    Local = 25,
+    /// Directory-specific instructions (cwd-relative)
+    Directory = 10,
+}
+
+impl InstructionScope {
+    /// Get the display name for this scope.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Managed => "managed",
+            Self::Project | Self::ProjectRoot => "project",
+            Self::User | Self::Global => "user",
+            Self::Local => "local",
+            Self::Directory => "directory",
+        }
+    }
+
+    /// Get the display description for this scope.
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::Managed => "Managed/remote instructions (highest priority)",
+            Self::Project | Self::ProjectRoot => "Project root instructions (repository root)",
+            Self::User | Self::Global => "User instructions (~/.claude/)",
+            Self::Local => "Local project (.claude/, gitignored)",
+            Self::Directory => "Directory-specific instructions (cwd-relative)",
+        }
+    }
+}
+
+/// A single instruction file with its scope.
+#[derive(Debug, Clone)]
+pub struct InstructionFile {
+    /// The file path.
+    pub path: PathBuf,
+    /// The content of the file.
+    pub content: String,
+    /// The scope level of this instruction.
+    pub scope: InstructionScope,
+}
+
 /// Result of loading project instructions.
 #[derive(Debug, Clone)]
 pub struct ProjectInstructions {
@@ -20,6 +80,8 @@ pub struct ProjectInstructions {
     pub loaded_files: Vec<String>,
     /// Files pulled in via @import references.
     pub imported_files: Vec<String>,
+    /// Individual instruction files with their scopes.
+    pub instruction_files: Vec<InstructionFile>,
 }
 
 /// Load project instructions from the given directory and all parent directories.
@@ -31,17 +93,37 @@ pub struct ProjectInstructions {
 ///
 /// Returns `None` if no instruction files are found.
 pub fn load_from_directory(dir: &Path) -> Option<ProjectInstructions> {
-    let mut found: Vec<(PathBuf, String)> = Vec::new();
+    load_from_directory_with_scope(dir, InstructionScope::Directory)
+}
+
+/// Load project instructions with a specific scope level.
+///
+/// This allows the caller to specify the scope level for the starting directory,
+/// enabling proper hierarchical scoping.
+fn load_from_directory_with_scope(dir: &Path, base_scope: InstructionScope) -> Option<ProjectInstructions> {
+    let mut found: Vec<(PathBuf, String, InstructionScope)> = Vec::new();
 
     // Walk up from dir to root, collecting instruction files
     let mut current = Some(dir.to_path_buf());
     while let Some(path) = current.take() {
+        // Determine scope for this level
+        let scope = if path == dir {
+            base_scope
+        } else {
+            // Parent directories get lower scope
+            match base_scope {
+                InstructionScope::Project => InstructionScope::User,
+                InstructionScope::Local => InstructionScope::Project,
+                _ => base_scope,
+            }
+        };
+
         for filename in INSTRUCTION_FILES {
             let candidate = path.join(filename);
             if candidate.is_file() {
                 if let Ok(content) = std::fs::read_to_string(&candidate) {
                     if !content.trim().is_empty() {
-                        found.push((candidate, content));
+                        found.push((candidate, content, scope));
                     }
                 }
             }
@@ -58,7 +140,7 @@ pub fn load_from_directory(dir: &Path) -> Option<ProjectInstructions> {
 
     let loaded_files: Vec<String> = found
         .iter()
-        .map(|(p, _)| {
+        .map(|(p, _, _)| {
             p.strip_prefix(dir)
                 .unwrap_or(p)
                 .to_string_lossy()
@@ -68,7 +150,9 @@ pub fn load_from_directory(dir: &Path) -> Option<ProjectInstructions> {
 
     let mut content = String::from("# Project Instructions\n\n");
     let mut all_imported_files: Vec<String> = Vec::new();
-    for (path, file_content) in &found {
+    let mut instruction_files: Vec<InstructionFile> = Vec::new();
+
+    for (path, file_content, scope) in &found {
         let display_name = path
             .strip_prefix(dir)
             .unwrap_or(path)
@@ -82,13 +166,24 @@ pub fn load_from_directory(dir: &Path) -> Option<ProjectInstructions> {
             DEFAULT_MAX_IMPORT_SIZE,
         );
         all_imported_files.extend(imported);
-        content.push_str(&format!("--- {display_name} ---\n\n{resolved}\n\n"));
+
+        // Add scope header
+        content.push_str(&format!("## {} Scope: {} ---\n\n", scope.name(), display_name));
+        content.push_str(&resolved);
+        content.push_str("\n\n");
+
+        instruction_files.push(InstructionFile {
+            path: path.clone(),
+            content: file_content.clone(),
+            scope: *scope,
+        });
     }
 
     Some(ProjectInstructions {
         content,
         loaded_files,
         imported_files: all_imported_files,
+        instruction_files,
     })
 }
 
@@ -422,11 +517,49 @@ pub fn git_context(dir: &Path) -> Option<String> {
 /// Load full project context: instruction files + git context.
 /// Returns None only if nothing at all is available.
 pub fn load_full_context(dir: &Path) -> Option<ProjectInstructions> {
+    load_full_context_with_scopes(dir)
+}
+
+/// Load full project context with scope-aware organization.
+///
+/// This function loads instructions from multiple sources in priority order:
+/// 1. Managed instructions (highest priority) - remote/organization settings
+/// 2. Project instructions - repository root CLAUDE.md
+/// 3. User instructions - ~/.claude/CLAUDE.md
+/// 4. Local instructions - .claude/CLAUDE.md (gitignored)
+/// 5. Git context - repository information
+///
+/// Priority: managed > project > user > local
+///
+/// Returns None only if nothing at all is available.
+fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
     let mut all_content = String::new();
     let mut all_files: Vec<String> = Vec::new();
     let mut all_imported: Vec<String> = Vec::new();
+    let mut instruction_files: Vec<InstructionFile> = Vec::new();
 
-    // Load user-level instructions from ~/.claude/CLAUDE.md (global user instructions)
+    // 1. Load managed instructions (highest priority)
+    // TODO: Integrate with RemoteManagedSettings for organization-level instructions
+    // For now, this is a placeholder for future integration
+    if let Ok(Some(managed_content)) = load_managed_instructions(dir) {
+        all_content.push_str(&format!(
+            "## {} Scope: managed ---\n\n{}\n\n",
+            InstructionScope::Managed.name(),
+            managed_content
+        ));
+        all_files.push("managed instructions".to_string());
+    }
+
+    // 2. Load project-level instructions (walks up from dir to root, highest priority first)
+    if let Some(proj) = load_from_directory_with_scope(dir, InstructionScope::Project) {
+        // Skip the header since we already added it in load_from_directory_with_scope
+        all_content.push_str(&proj.content.replacen("# Project Instructions\n\n", "", 1));
+        all_files.extend(proj.loaded_files);
+        all_imported.extend(proj.imported_files);
+        instruction_files.extend(proj.instruction_files);
+    }
+
+    // 3. Load user-level global instructions from ~/.claude/CLAUDE.md
     if let Some(home) = dirs::home_dir() {
         let claude_dir = home.join(".claude");
         for filename in INSTRUCTION_FILES {
@@ -442,23 +575,58 @@ pub fn load_full_context(dir: &Path) -> Option<ProjectInstructions> {
                             DEFAULT_MAX_IMPORT_SIZE,
                         );
                         all_imported.extend(imported);
-                        all_content
-                            .push_str(&format!("--- ~/.claude/{filename} ---\n\n{resolved}\n\n"));
+                        all_content.push_str(&format!(
+                            "## {} Scope: ~/.claude/{} ---\n\n{}\n\n",
+                            InstructionScope::User.name(),
+                            filename,
+                            resolved
+                        ));
                         all_files.push(format!("~/.claude/{filename}"));
+                        instruction_files.push(InstructionFile {
+                            path: home_file,
+                            content,
+                            scope: InstructionScope::User,
+                        });
                     }
                 }
             }
         }
     }
 
-    // Load project-level instructions (walks up from dir to root)
-    if let Some(proj) = load_from_directory(dir) {
-        all_content.push_str(&proj.content);
-        all_files.extend(proj.loaded_files);
-        all_imported.extend(proj.imported_files);
+    // 4. Load local project instructions (.claude/CLAUDE.md, gitignored, lowest priority)
+    let local_claude_dir = dir.join(".claude");
+    for filename in INSTRUCTION_FILES {
+        let local_file = local_claude_dir.join(filename);
+        if local_file.is_file() {
+            if let Ok(content) = std::fs::read_to_string(&local_file) {
+                if !content.trim().is_empty() {
+                    let (resolved, imported) = resolve_content_imports(
+                        &content,
+                        &local_claude_dir,
+                        dir,
+                        DEFAULT_MAX_IMPORT_DEPTH,
+                        DEFAULT_MAX_IMPORT_SIZE,
+                    );
+                    all_imported.extend(imported);
+                    let rel_path = format!(".claude/{}", filename);
+                    all_content.push_str(&format!(
+                        "## {} Scope: {} ---\n\n{}\n\n",
+                        InstructionScope::Local.name(),
+                        rel_path,
+                        resolved
+                    ));
+                    all_files.push(rel_path);
+                    instruction_files.push(InstructionFile {
+                        path: local_file,
+                        content,
+                        scope: InstructionScope::Local,
+                    });
+                }
+            }
+        }
     }
 
-    // Load git context
+    // 5. Load git context
     if let Some(git) = git_context(dir) {
         all_content.push_str(&git);
         all_files.push("git context".to_string());
@@ -471,8 +639,108 @@ pub fn load_full_context(dir: &Path) -> Option<ProjectInstructions> {
             content: all_content,
             loaded_files: all_files,
             imported_files: all_imported,
+            instruction_files,
         })
     }
+}
+
+/// Placeholder for loading managed/organization instructions.
+///
+/// In the future, this will integrate with RemoteManagedSettings to fetch
+/// organization-level instructions from remote sources.
+fn load_managed_instructions(_dir: &Path) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    // TODO: Integrate with RemoteManagedSettings
+    // This will fetch instructions from:
+    // - Remote organization settings
+    // - Managed configuration providers
+    // - Organization-level CLAUDE.md templates
+    Ok(None)
+}
+
+/// Get active instruction scopes for a directory.
+///
+/// Returns a list of scopes that have instruction files available.
+pub fn get_active_scopes(dir: &Path) -> Vec<InstructionScope> {
+    let mut scopes = Vec::new();
+
+    // Check global scope
+    if let Some(home) = dirs::home_dir() {
+        let claude_dir = home.join(".claude");
+        for filename in INSTRUCTION_FILES {
+            if claude_dir.join(filename).is_file() {
+                scopes.push(InstructionScope::Global);
+                break;
+            }
+        }
+    }
+
+    // Check local scope (.claude/)
+    let local_claude_dir = dir.join(".claude");
+    for filename in INSTRUCTION_FILES {
+        if local_claude_dir.join(filename).is_file() {
+            scopes.push(InstructionScope::Local);
+            break;
+        }
+    }
+
+    // Check directory/project scope by walking up
+    if load_from_directory_with_scope(dir, InstructionScope::Directory).is_some() {
+        // Check if we're in a subdirectory (has parent instructions)
+        let has_parent = dir.parent().is_some_and(|parent| {
+            load_from_directory_with_scope(parent, InstructionScope::ProjectRoot).is_some()
+        });
+        scopes.push(if has_parent {
+            InstructionScope::Directory
+        } else {
+            InstructionScope::ProjectRoot
+        });
+    }
+
+    scopes.sort();
+    scopes.dedup();
+    scopes
+}
+
+/// Get detailed information about loaded instruction files.
+///
+/// Returns a formatted string showing which instruction files are loaded
+/// at each scope level.
+pub fn get_instruction_info(dir: &Path) -> String {
+    let mut info = String::from("Instruction Files by Scope:\n\n");
+
+    if let Some(instructions) = load_full_context_with_scopes(dir) {
+        for file in &instructions.instruction_files {
+            let display_path = if let Some(home) = dirs::home_dir() {
+                file.path.strip_prefix(&home).ok().and_then(|p| {
+                    if p.starts_with(".claude") {
+                        Some(format!("~/{}", p.to_string_lossy()))
+                    } else {
+                        None
+                    }
+                }).unwrap_or_else(|| {
+                    file.path.strip_prefix(dir).ok().map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_else(|| file.path.to_string_lossy().to_string())
+                })
+            } else {
+                file.path.to_string_lossy().to_string()
+            };
+
+            info.push_str(&format!(
+                "  [{}] {} - {}\n",
+                file.scope.name(),
+                display_path,
+                file.scope.description()
+            ));
+        }
+
+        if instructions.instruction_files.is_empty() {
+            info.push_str("  No instruction files found.\n");
+        }
+    } else {
+        info.push_str("  No instruction context available.\n");
+    }
+
+    info
 }
 
 // ---------------------------------------------------------------------------
@@ -511,7 +779,7 @@ impl InstructionWatcher {
     fn scan_mtimes(&mut self) -> std::collections::HashMap<PathBuf, std::time::SystemTime> {
         let mut current_mtimes = std::collections::HashMap::new();
 
-        // Check home-level instructions
+        // Check home-level instructions (global scope)
         if let Some(home) = dirs::home_dir() {
             for filename in INSTRUCTION_FILES {
                 let path = home.join(".claude").join(filename);
@@ -525,7 +793,20 @@ impl InstructionWatcher {
             }
         }
 
-        // Walk up from watch_dir to root
+        // Check local project instructions (.claude/ in current directory)
+        let local_claude_dir = self.watch_dir.join(".claude");
+        for filename in INSTRUCTION_FILES {
+            let path = local_claude_dir.join(filename);
+            if path.is_file() {
+                if let Ok(meta) = std::fs::metadata(&path) {
+                    if let Ok(mtime) = meta.modified() {
+                        current_mtimes.insert(path, mtime);
+                    }
+                }
+            }
+        }
+
+        // Walk up from watch_dir to root (project scope)
         let mut current = Some(self.watch_dir.clone());
         while let Some(path) = current.take() {
             for filename in INSTRUCTION_FILES {

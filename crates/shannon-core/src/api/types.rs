@@ -42,6 +42,26 @@ pub enum LlmProvider {
     Groq,
     /// Together AI (api.together.xyz)
     Together,
+    /// OpenRouter (openrouter.ai)
+    OpenRouter,
+    /// Cohere (api.cohere.com)
+    Cohere,
+    /// Fireworks AI (api.fireworks.ai)
+    Fireworks,
+    /// Perplexity AI (api.perplexity.ai)
+    Perplexity,
+    /// xAI / Grok (api.x.ai)
+    Xai,
+    /// AI21 Labs (api.ai21.com)
+    Ai21,
+    /// Cloudflare Workers AI (api.cloudflare.com)
+    Cloudflare,
+    /// Replicate (api.replicate.com)
+    Replicate,
+    /// SiliconFlow (api.siliconflow.cn)
+    SiliconFlow,
+    /// Zhipu / BigModel (open.bigmodel.cn)
+    Zhipu,
 }
 
 impl LlmProvider {
@@ -80,6 +100,26 @@ impl LlmProvider {
             || url.contains("together.ai")
         {
             LlmProvider::Together
+        } else if url.contains("openrouter.ai") {
+            LlmProvider::OpenRouter
+        } else if url.contains("api.cohere.com") || url.contains("cohere.ai") {
+            LlmProvider::Cohere
+        } else if url.contains("api.fireworks.ai") || url.contains("fireworks.ai") {
+            LlmProvider::Fireworks
+        } else if url.contains("api.perplexity.ai") || url.contains("perplexity.ai") {
+            LlmProvider::Perplexity
+        } else if url.contains("api.x.ai") || url.contains("x.ai") {
+            LlmProvider::Xai
+        } else if url.contains("api.ai21.com") || url.contains("ai21.com") {
+            LlmProvider::Ai21
+        } else if url.contains("api.cloudflare.com") && url.contains("workers-ai") {
+            LlmProvider::Cloudflare
+        } else if url.contains("api.replicate.com") || url.contains("replicate.com") {
+            LlmProvider::Replicate
+        } else if url.contains("siliconflow.cn") {
+            LlmProvider::SiliconFlow
+        } else if url.contains("bigmodel.cn") || url.contains("zhipuai.cn") {
+            LlmProvider::Zhipu
         } else {
             LlmProvider::Custom
         }
@@ -101,6 +141,16 @@ impl LlmProvider {
             LlmProvider::DeepSeek => "/v1/chat/completions",
             LlmProvider::Groq => "/openai/v1/chat/completions",
             LlmProvider::Together => "/v1/chat/completions",
+            LlmProvider::OpenRouter => "/api/v1/chat/completions",
+            LlmProvider::Cohere => "/v2/chat",
+            LlmProvider::Fireworks => "/v1/chat/completions",
+            LlmProvider::Perplexity => "/chat/completions",
+            LlmProvider::Xai => "/v1/chat/completions",
+            LlmProvider::Ai21 => "/v1/chat/completions",
+            LlmProvider::Cloudflare => "/client/v4/accounts/",
+            LlmProvider::Replicate => "/v1/predictions",
+            LlmProvider::SiliconFlow => "/v1/chat/completions",
+            LlmProvider::Zhipu => "/api/paas/v4/chat/completions",
         }
     }
 
@@ -117,6 +167,16 @@ impl LlmProvider {
             LlmProvider::DeepSeek => "https://api.deepseek.com",
             LlmProvider::Groq => "https://api.groq.com",
             LlmProvider::Together => "https://api.together.xyz",
+            LlmProvider::OpenRouter => "https://openrouter.ai",
+            LlmProvider::Cohere => "https://api.cohere.com",
+            LlmProvider::Fireworks => "https://api.fireworks.ai",
+            LlmProvider::Perplexity => "https://api.perplexity.ai",
+            LlmProvider::Xai => "https://api.x.ai",
+            LlmProvider::Ai21 => "https://api.ai21.com",
+            LlmProvider::Cloudflare => "https://api.cloudflare.com",
+            LlmProvider::Replicate => "https://api.replicate.com",
+            LlmProvider::SiliconFlow => "https://api.siliconflow.cn",
+            LlmProvider::Zhipu => "https://open.bigmodel.cn",
             LlmProvider::Custom => "http://localhost:8080",
         }
     }
@@ -134,6 +194,14 @@ impl LlmProvider {
                 | LlmProvider::DeepSeek
                 | LlmProvider::Groq
                 | LlmProvider::Together
+                | LlmProvider::OpenRouter
+                | LlmProvider::Cohere
+                | LlmProvider::Fireworks
+                | LlmProvider::Perplexity
+                | LlmProvider::Xai
+                | LlmProvider::Ai21
+                | LlmProvider::SiliconFlow
+                | LlmProvider::Zhipu
         )
     }
 
@@ -157,6 +225,16 @@ impl std::fmt::Display for LlmProvider {
             LlmProvider::DeepSeek => write!(f, "deepseek"),
             LlmProvider::Groq => write!(f, "groq"),
             LlmProvider::Together => write!(f, "together"),
+            LlmProvider::OpenRouter => write!(f, "openrouter"),
+            LlmProvider::Cohere => write!(f, "cohere"),
+            LlmProvider::Fireworks => write!(f, "fireworks"),
+            LlmProvider::Perplexity => write!(f, "perplexity"),
+            LlmProvider::Xai => write!(f, "xai"),
+            LlmProvider::Ai21 => write!(f, "ai21"),
+            LlmProvider::Cloudflare => write!(f, "cloudflare"),
+            LlmProvider::Replicate => write!(f, "replicate"),
+            LlmProvider::SiliconFlow => write!(f, "siliconflow"),
+            LlmProvider::Zhipu => write!(f, "zhipu"),
         }
     }
 }

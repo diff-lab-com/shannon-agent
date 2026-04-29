@@ -115,6 +115,8 @@ pub struct ReplState {
     pub model_picker: Option<crate::widgets::select::ModelPickerWidget>,
     /// Current completion suggestions to display (populated by Tab, cleared by typing)
     pub completion_suggestions: Vec<String>,
+    /// Scheduled routine manager for recurring tasks
+    pub routine_manager: shannon_core::scheduled_routines::RoutineManager,
     /// Index of the currently highlighted completion suggestion
     pub completion_suggestion_index: usize,
     /// Plan mode state
@@ -313,6 +315,7 @@ impl Default for ReplState {
             multi_select: None,
             model_picker: None,
             completion_suggestions: Vec::new(),
+            routine_manager: shannon_core::scheduled_routines::RoutineManager::new(),
             completion_suggestion_index: 0,
             plan: PlanState::default(),
             sandbox_mode: shannon_tools::SandboxMode::Direct,
@@ -1843,6 +1846,13 @@ impl Repl {
 
             // Check custom command files for filesystem changes (notify-based)
             self.check_reload_commands();
+
+            // Check scheduled routines and inject due prompts
+            let due = self.state.routine_manager.drain_due();
+            for (name, prompt) in due {
+                self.chat.add_message(ChatRole::System,
+                    format!("[Routine: {}] {}", name, prompt));
+            }
 
             // Draw UI
             render::draw_frame(&mut terminal, self)?;

@@ -277,6 +277,16 @@ pub fn provider_display_name(p: &LlmProvider) -> &'static str {
         LlmProvider::Azure => "Azure",
         LlmProvider::Bedrock => "Bedrock",
         LlmProvider::Together => "Together",
+        LlmProvider::OpenRouter => "OpenRouter",
+        LlmProvider::Cohere => "Cohere",
+        LlmProvider::Fireworks => "Fireworks",
+        LlmProvider::Perplexity => "Perplexity",
+        LlmProvider::Xai => "xAI",
+        LlmProvider::Ai21 => "AI21",
+        LlmProvider::Cloudflare => "Cloudflare",
+        LlmProvider::Replicate => "Replicate",
+        LlmProvider::SiliconFlow => "SiliconFlow",
+        LlmProvider::Zhipu => "Zhipu",
         LlmProvider::Custom => "Custom",
     }
 }

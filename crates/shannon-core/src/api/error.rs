@@ -108,7 +108,17 @@ impl ApiError {
                 | LlmProvider::Mistral
                 | LlmProvider::DeepSeek
                 | LlmProvider::Groq
-                | LlmProvider::Together => {
+                | LlmProvider::Together
+                | LlmProvider::OpenRouter
+                | LlmProvider::Cohere
+                | LlmProvider::Fireworks
+                | LlmProvider::Perplexity
+                | LlmProvider::Xai
+                | LlmProvider::Ai21
+                | LlmProvider::SiliconFlow
+                | LlmProvider::Zhipu
+                | LlmProvider::Cloudflare
+                | LlmProvider::Replicate => {
                     // OpenAI-compatible: { "error": { "message": "...", "type": "...", "code": "..." } }
                     if let Some(err_obj) = val.get("error").and_then(|e| e.as_object()) {
                         let error_type = err_obj

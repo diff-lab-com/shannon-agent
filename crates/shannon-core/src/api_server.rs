@@ -1,14 +1,15 @@
-//! HTTP API server for Shannon Code.
+//! HTTP/WebSocket API server for Shannon Code.
 //!
-//! Exposes a REST and SSE API so external tools can interact with Shannon
-//! over HTTP.
+//! Exposes REST, SSE, and WebSocket APIs so external tools and remote TUI
+//! instances can interact with Shannon over the network.
 
-use crate::api::{LlmClient, LlmClientConfig};
+use crate::api::{LlmClient, LlmClientConfig, Message};
 use crate::permissions::PermissionManager;
 use crate::query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata};
 use crate::state::StateManager;
 use crate::tools::ToolRegistry;
 use crate::VERSION;
+use axum::extract::ws::{Message as WsMsg, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -17,8 +18,10 @@ use axum::routing::{get, post};
 use axum::Json;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::Arc;
+use tokio::sync::{Mutex, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
 
@@ -115,6 +118,66 @@ pub struct AppState {
     pub client_config: LlmClientConfig,
     /// Tool registry shared read-only for listing available tools.
     pub tools: Arc<ToolRegistry>,
+    /// Active WebSocket sessions keyed by session ID.
+    pub ws_sessions: Arc<RwLock<HashMap<String, Arc<Mutex<WsSession>>>>>,
+}
+
+/// A single WebSocket session holding conversation history.
+pub struct WsSession {
+    /// Conversation messages accumulated across turns.
+    pub messages: Vec<Message>,
+    /// The model override for this session.
+    pub model: Option<String>,
+}
+
+// ── WebSocket protocol messages ─────────────────────────────────────────
+
+/// Incoming message from a WebSocket client.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum WsClientMessage {
+    /// Send a query to the LLM.
+    #[serde(rename = "query")]
+    Query { prompt: String, model: Option<String> },
+    /// Clear conversation history for this session.
+    #[serde(rename = "clear")]
+    Clear,
+    /// Request current session info.
+    #[serde(rename = "info")]
+    Info,
+    /// Cancel the current in-progress query.
+    #[serde(rename = "cancel")]
+    Cancel,
+}
+
+/// Outgoing message sent to a WebSocket client.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum WsServerMessage {
+    /// A text chunk from the LLM response.
+    #[serde(rename = "text")]
+    Text { content: String },
+    /// Tool use event.
+    #[serde(rename = "tool_use")]
+    ToolUse { name: String, input: serde_json::Value },
+    /// Tool result event.
+    #[serde(rename = "tool_result")]
+    ToolResult { name: String, output: String },
+    /// Token usage update.
+    #[serde(rename = "usage")]
+    Usage { input_tokens: u64, output_tokens: u64, cost_usd: f64 },
+    /// Query completed.
+    #[serde(rename = "completed")]
+    Completed { model: String },
+    /// Query failed.
+    #[serde(rename = "failed")]
+    Failed { error: String },
+    /// Session info response.
+    #[serde(rename = "session_info")]
+    SessionInfo { message_count: usize, model: Option<String> },
+    /// Error in protocol.
+    #[serde(rename = "error")]
+    Error { message: String },
 }
 
 // ── ShannonApiServer ───────────────────────────────────────────────────
@@ -171,10 +234,12 @@ impl ShannonApiServer {
             .route("/api/query", post(query_handler))
             .route("/api/query/stream", get(query_stream_handler))
             .route("/api/tools/list", post(tools_list_handler))
+            .route("/api/ws", get(ws_handler))
             .layer(cors)
             .with_state(AppState {
                 client_config: self.client_config.clone(),
                 tools: self.tools.clone(),
+                ws_sessions: Arc::new(RwLock::new(HashMap::new())),
             })
     }
 
@@ -405,6 +470,189 @@ async fn tools_list_handler(State(state): State<AppState>) -> Json<ToolsListResp
         .collect();
 
     Json(ToolsListResponse { tools })
+}
+
+// ── WebSocket handler ────────────────────────────────────────────────────
+
+/// HTTP upgrade handler for WebSocket connections.
+///
+/// Clients connect via `ws://host:port/api/ws` and send/receive JSON messages
+/// using the [`WsClientMessage`] / [`WsServerMessage`] protocol.
+async fn ws_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_ws_socket(socket, state))
+}
+
+async fn handle_ws_socket(mut socket: WebSocket, state: AppState) {
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let session = Arc::new(Mutex::new(WsSession {
+        messages: Vec::new(),
+        model: None,
+    }));
+
+    // Register session
+    {
+        let mut sessions = state.ws_sessions.write().await;
+        sessions.insert(session_id.clone(), session.clone());
+    }
+
+    // Send session greeting
+    let greeting = WsServerMessage::SessionInfo {
+        message_count: 0,
+        model: None,
+    };
+    if let Ok(json) = serde_json::to_string(&greeting) {
+        let _ = socket.send(WsMsg::Text(json.into())).await;
+    }
+
+    loop {
+        let msg = match socket.recv().await {
+            Some(Ok(WsMsg::Text(text))) => text,
+            Some(Ok(WsMsg::Close(_))) | None => break,
+            Some(Ok(_)) => continue,
+            Some(Err(_)) => break,
+        };
+
+        let client_msg: WsClientMessage = match serde_json::from_str(&msg) {
+            Ok(m) => m,
+            Err(e) => {
+                let err = WsServerMessage::Error {
+                    message: format!("Invalid message: {e}"),
+                };
+                if let Ok(json) = serde_json::to_string(&err) {
+                    let _ = socket.send(WsMsg::Text(json.into())).await;
+                }
+                continue;
+            }
+        };
+
+        match client_msg {
+            WsClientMessage::Query { prompt, model } => {
+                let mut config = state.client_config.clone();
+                if let Some(ref m) = model {
+                    config.model = m.clone();
+                }
+                // Update session model
+                {
+                    let mut s = session.lock().await;
+                    if model.is_some() {
+                        s.model = model.clone();
+                    }
+                }
+
+                let client = if config.provider.requires_auth() {
+                    LlmClient::new(config.clone())
+                } else {
+                    LlmClient::new_unauthenticated(config.clone())
+                };
+
+                let tools = ToolRegistry::new();
+                let permissions = PermissionManager::new();
+                let state_mgr = StateManager::new();
+                let mut engine = QueryEngine::with_defaults(client, tools, permissions, state_mgr);
+
+                // Restore conversation history
+                {
+                    let s = session.lock().await;
+                    engine.restore_messages(s.messages.clone());
+                }
+
+                let context = QueryContext {
+                    query_id: uuid::Uuid::new_v4(),
+                    session_id: uuid::Uuid::parse_str(&session_id).unwrap_or_default(),
+                    user_message: prompt,
+                    metadata: QueryMetadata {
+                        timestamp: chrono::Utc::now(),
+                        tools_allowed: true,
+                        max_tokens: None,
+                        model: config.model.clone(),
+                        temperature: None,
+                        top_p: None,
+                    },
+                };
+
+                let mut stream = engine.process_query(context, None).await;
+
+                while let Some(result) = stream.next().await {
+                    let server_msg = match result {
+                        Ok(QueryEvent::Text { content, .. }) => Some(WsServerMessage::Text { content }),
+                        Ok(QueryEvent::ToolUseRequest { tool_name, tool_input, .. }) => {
+                            Some(WsServerMessage::ToolUse {
+                                name: tool_name,
+                                input: tool_input,
+                            })
+                        }
+                        Ok(QueryEvent::ToolUseResult { tool_name, result, .. }) => {
+                            Some(WsServerMessage::ToolResult { name: tool_name, output: result })
+                        }
+                        Ok(QueryEvent::Usage { input_tokens, output_tokens, cost_usd, .. }) => {
+                            Some(WsServerMessage::Usage { input_tokens, output_tokens, cost_usd })
+                        }
+                        Ok(QueryEvent::Completed { .. }) => {
+                            Some(WsServerMessage::Completed { model: config.model.clone() })
+                        }
+                        Ok(QueryEvent::Failed { error, .. }) => {
+                            Some(WsServerMessage::Failed { error })
+                        }
+                        Ok(_) => None,
+                        Err(e) => Some(WsServerMessage::Failed { error: e.to_string() }),
+                    };
+
+                    if let Some(msg) = server_msg {
+                        if let Ok(json) = serde_json::to_string(&msg) {
+                            if socket.send(WsMsg::Text(json.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Persist conversation
+                {
+                    let mut s = session.lock().await;
+                    s.messages = engine.conversation_messages().to_vec();
+                }
+            }
+            WsClientMessage::Clear => {
+                let mut s = session.lock().await;
+                s.messages.clear();
+                let info = WsServerMessage::SessionInfo {
+                    message_count: 0,
+                    model: s.model.clone(),
+                };
+                if let Ok(json) = serde_json::to_string(&info) {
+                    let _ = socket.send(WsMsg::Text(json.into())).await;
+                }
+            }
+            WsClientMessage::Info => {
+                let s = session.lock().await;
+                let info = WsServerMessage::SessionInfo {
+                    message_count: s.messages.len(),
+                    model: s.model.clone(),
+                };
+                if let Ok(json) = serde_json::to_string(&info) {
+                    let _ = socket.send(WsMsg::Text(json.into())).await;
+                }
+            }
+            WsClientMessage::Cancel => {
+                // Future: wire up cancellation token
+                let err = WsServerMessage::Error {
+                    message: "Cancel not yet supported".to_string(),
+                };
+                if let Ok(json) = serde_json::to_string(&err) {
+                    let _ = socket.send(WsMsg::Text(json.into())).await;
+                }
+            }
+        }
+    }
+
+    // Cleanup session
+    {
+        let mut sessions = state.ws_sessions.write().await;
+        sessions.remove(&session_id);
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────

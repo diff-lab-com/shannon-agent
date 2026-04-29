@@ -24,10 +24,19 @@ pub fn serialize_request(request: &MessageRequest, provider: &LlmProvider) -> Va
         | LlmProvider::Mistral
         | LlmProvider::DeepSeek
         | LlmProvider::Groq
-        | LlmProvider::Together => serialize_openai_request(request),
+        | LlmProvider::Together
+        | LlmProvider::OpenRouter
+        | LlmProvider::Cohere
+        | LlmProvider::Fireworks
+        | LlmProvider::Perplexity
+        | LlmProvider::Xai
+        | LlmProvider::Ai21
+        | LlmProvider::SiliconFlow
+        | LlmProvider::Zhipu => serialize_openai_request(request),
         LlmProvider::Ollama => serialize_ollama_request(request),
         LlmProvider::Gemini => serialize_gemini_request(request),
         LlmProvider::Bedrock => serialize_bedrock_request(request),
+        LlmProvider::Cloudflare | LlmProvider::Replicate => serialize_openai_request(request),
     }
 }
 
@@ -336,7 +345,17 @@ pub fn normalize_sse_event(
         | LlmProvider::Mistral
         | LlmProvider::DeepSeek
         | LlmProvider::Groq
-        | LlmProvider::Together => normalize_openai_event(json_str, openai_state),
+        | LlmProvider::Together
+        | LlmProvider::OpenRouter
+        | LlmProvider::Cohere
+        | LlmProvider::Fireworks
+        | LlmProvider::Perplexity
+        | LlmProvider::Xai
+        | LlmProvider::Ai21
+        | LlmProvider::SiliconFlow
+        | LlmProvider::Zhipu
+        | LlmProvider::Cloudflare
+        | LlmProvider::Replicate => normalize_openai_event(json_str, openai_state),
         LlmProvider::Ollama => normalize_ollama_event(json_str),
         LlmProvider::Gemini => normalize_gemini_event(json_str, openai_state),
         LlmProvider::Bedrock => normalize_bedrock_event(json_str, openai_state),
@@ -424,7 +443,17 @@ pub fn normalize_response(
         | LlmProvider::Mistral
         | LlmProvider::DeepSeek
         | LlmProvider::Groq
-        | LlmProvider::Together => {
+        | LlmProvider::Together
+        | LlmProvider::OpenRouter
+        | LlmProvider::Cohere
+        | LlmProvider::Fireworks
+        | LlmProvider::Perplexity
+        | LlmProvider::Xai
+        | LlmProvider::Ai21
+        | LlmProvider::SiliconFlow
+        | LlmProvider::Zhipu
+        | LlmProvider::Cloudflare
+        | LlmProvider::Replicate => {
             let resp: OpenAiMessageResponse = serde_json::from_str(json_str).map_err(|e| {
                 ApiError::InvalidResponse(format!("Failed to parse OpenAI-compatible response: {e}"))
             })?;

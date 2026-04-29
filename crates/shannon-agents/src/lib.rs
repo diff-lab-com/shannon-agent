@@ -5,7 +5,7 @@
 //! and git worktree isolation for parallel development workflows.
 
 mod coordinator;
-mod custom_agent;
+pub mod custom_agent;
 mod teammate;
 mod task_board;
 mod worktree;
@@ -19,7 +19,7 @@ mod summary;
 mod context;
 mod task_tools;
 mod persistence;
-mod agent_defs;
+pub mod agent_defs;
 mod process_manager;
 mod protocol;
 mod remote_tools;

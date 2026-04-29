@@ -868,6 +868,10 @@ mod tests {
             context_window: 200_000,
             active_agents: vec![],
             diagnostics: vec![],
+            session_duration_secs: 120,
+            turn_count: 5,
+            commands_run: 3,
+            tokens_per_sec: Some(42.0),
         };
         assert_eq!(info.context_window, 200_000);
         assert_eq!(info.error_count, 1);
