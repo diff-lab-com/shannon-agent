@@ -134,6 +134,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "credentials" | "creds" | "cred" => handle_credentials(repl, args)?,
             "status" | "st" | "git-status" => handle_status(repl, args)?,
             "export" | "save" => handle_export(repl, args)?,
+            "import" | "load" => handle_import(repl, args)?,
             "diff" => handle_diff(repl, args)?,
             "search" | "?" | "hist" | "history-search" => handle_search(repl, args)?,
             "find" | "grep" | "conv-search" => handle_find(repl, args)?,
@@ -3719,6 +3720,120 @@ fn handle_export(repl: &mut Repl, args: &str) -> Result<()> {
         Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to export session: {e}")); }
     }
     Ok(())
+}
+
+fn handle_import(repl: &mut Repl, args: &str) -> Result<()> {
+    let filename = args.trim();
+    if filename.is_empty() {
+        repl.chat.add_message(ChatRole::System, "Usage: /import <filename>".to_string());
+        return Ok(());
+    }
+
+    let content = match std::fs::read_to_string(filename) {
+        Ok(c) => c,
+        Err(e) => {
+            repl.chat.add_message(ChatRole::System, format!("Failed to read file '{filename}': {e}"));
+            return Ok(());
+        }
+    };
+
+    let imported_count = if content.trim_start().starts_with('{') || content.trim_start().starts_with('[') {
+        // Try JSON import
+        import_from_json(repl, &content)?
+    } else {
+        // Try Markdown import
+        import_from_markdown(repl, &content)?
+    };
+
+    if imported_count > 0 {
+        repl.chat.add_message(ChatRole::System, format!("Imported {imported_count} messages from: {filename}"));
+    } else {
+        repl.chat.add_message(ChatRole::System, format!("No messages found in: {filename}"));
+    }
+
+    Ok(())
+}
+
+fn import_from_json(repl: &mut Repl, content: &str) -> Result<usize> {
+    let parsed: serde_json::Value = match serde_json::from_str(content) {
+        Ok(v) => v,
+        Err(e) => {
+            repl.chat.add_message(ChatRole::System, format!("Invalid JSON: {e}"));
+            return Ok(0);
+        }
+    };
+
+    let messages = match parsed.get("messages").and_then(|m| m.as_array()) {
+        Some(msgs) => msgs,
+        None => {
+            // Try as a bare array of messages
+            if let Some(arr) = parsed.as_array() {
+                arr
+            } else {
+                repl.chat.add_message(ChatRole::System, "JSON does not contain 'messages' array".to_string());
+                return Ok(0);
+            }
+        }
+    };
+
+    let mut count = 0;
+    for msg in messages {
+        let role_str = msg.get("role").and_then(|r| r.as_str()).unwrap_or("system");
+        let role = match role_str {
+            "user" => ChatRole::User,
+            "assistant" => ChatRole::Assistant,
+            "tool" => ChatRole::Tool,
+            _ => ChatRole::System,
+        };
+        let text = msg.get("content").and_then(|c| c.as_str()).unwrap_or("").to_string();
+        if !text.is_empty() {
+            repl.chat.add_message(role, text);
+            count += 1;
+        }
+    }
+
+    Ok(count)
+}
+
+fn import_from_markdown(repl: &mut Repl, content: &str) -> Result<usize> {
+    let mut count = 0;
+    for line in content.lines() {
+        // Markdown export uses "## role" or "**role**" headers
+        if line.starts_with("## user:") || line.starts_with("## User:") {
+            let text = line.trim_start_matches('#').trim()
+                .trim_start_matches("user:").trim_start_matches("User:")
+                .trim().to_string();
+            if !text.is_empty() {
+                repl.chat.add_message(ChatRole::User, text);
+                count += 1;
+            }
+        } else if line.starts_with("## assistant:") || line.starts_with("## Assistant:") {
+            let text = line.trim_start_matches('#').trim()
+                .trim_start_matches("assistant:").trim_start_matches("Assistant:")
+                .trim().to_string();
+            if !text.is_empty() {
+                repl.chat.add_message(ChatRole::Assistant, text);
+                count += 1;
+            }
+        } else if line.starts_with("**User**:") || line.starts_with("**user**:") {
+            let text = line.trim_start_matches('*').trim()
+                .trim_start_matches("User:").trim_start_matches("user:")
+                .trim().to_string();
+            if !text.is_empty() {
+                repl.chat.add_message(ChatRole::User, text);
+                count += 1;
+            }
+        } else if line.starts_with("**Assistant**:") || line.starts_with("**assistant**:") {
+            let text = line.trim_start_matches('*').trim()
+                .trim_start_matches("Assistant:").trim_start_matches("assistant:")
+                .trim().to_string();
+            if !text.is_empty() {
+                repl.chat.add_message(ChatRole::Assistant, text);
+                count += 1;
+            }
+        }
+    }
+    Ok(count)
 }
 
 fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {

@@ -350,7 +350,22 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
                 "/export md --no-metadata",
             ])
             .with_when_to_use("To save your current conversation or session data to a file")
-            .with_related(vec!["history", "config"])
+            .with_related(vec!["history", "import", "config"])
+        ),
+        "import" => Some(
+            CommandHelpEntry::new(
+                "import".to_string(),
+                "Import messages from a previously exported session file".to_string(),
+                HelpCategory::Files,
+            )
+            .with_aliases(vec!["load"])
+            .with_arg_hint("<filename>")
+            .with_examples(vec![
+                "/import session.json",
+                "/import session.md",
+            ])
+            .with_when_to_use("To restore a previously exported conversation into the current session")
+            .with_related(vec!["export", "history"])
         ),
         "config" => Some(
             CommandHelpEntry::new(

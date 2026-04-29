@@ -145,6 +145,32 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             repl.chat.collapsed_tools = !repl.chat.collapsed_tools;
             Ok(())
         }
+        // Ctrl+T: toggle session tab bar visibility
+        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            repl.state.session_tab.toggle_visibility();
+            Ok(())
+        }
+        // Ctrl+W: close current session tab
+        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if repl.state.session_tab.visible {
+                repl.state.session_tab.close_session();
+            }
+            Ok(())
+        }
+        // Alt+Left: previous session tab
+        KeyCode::Left if key.modifiers.contains(KeyModifiers::ALT) => {
+            if repl.state.session_tab.visible {
+                repl.state.session_tab.prev_session();
+            }
+            Ok(())
+        }
+        // Alt+Right: next session tab
+        KeyCode::Right if key.modifiers.contains(KeyModifiers::ALT) => {
+            if repl.state.session_tab.visible {
+                repl.state.session_tab.next_session();
+            }
+            Ok(())
+        }
         KeyCode::Char(c) => {
             repl.prompt.add_char(c);
             repl.state.completion_suggestions.clear();
