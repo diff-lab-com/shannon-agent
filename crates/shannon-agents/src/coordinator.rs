@@ -767,7 +767,7 @@ impl AgentCoordinator {
         let team_names = self.list_teams().await;
         if let Some(ref persist) = self.persistence {
             for team_name in &team_names {
-                if let Ok(messages) = persist.read_inbox(team_name, agent_name) {
+                if let Ok(messages) = persist.peek_inbox(team_name, agent_name) {
                     for msg in &messages {
                         summary.total += 1;
                         if !msg.read {
@@ -836,21 +836,7 @@ impl AgentCoordinator {
 
         let mut teams = self.teams.write().await;
         if let Some(team) = teams.get_mut(team_name) {
-            team.task_list.push(AgentTask {
-                id: task_id,
-                subject: String::new(), // Placeholder
-                description: String::new(),
-                status: TaskStatus::Pending,
-                priority: TaskPriority::Medium,
-                owner: None,
-                blocked_by: Vec::new(),
-                blocks: Vec::new(),
-                active_form: None,
-                required_capabilities: Vec::new(),
-                metadata: serde_json::Value::Null,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-            });
+            team.task_list.push(task.clone());
         }
         drop(teams);
 
@@ -890,6 +876,7 @@ impl AgentCoordinator {
             task.add_dependency(*dep_id);
         }
 
+        let task_clone = task.clone();
         self.task_board.add_task(task).await?;
 
         // Register dependencies on the task board for graph tracking
@@ -906,21 +893,7 @@ impl AgentCoordinator {
 
         let mut teams = self.teams.write().await;
         if let Some(team) = teams.get_mut(team_name) {
-            team.task_list.push(AgentTask {
-                id: task_id,
-                subject: String::new(),
-                description: String::new(),
-                status: TaskStatus::Pending,
-                priority: TaskPriority::Medium,
-                owner: None,
-                blocked_by: blocked_by.clone(),
-                blocks: Vec::new(),
-                active_form: None,
-                required_capabilities: Vec::new(),
-                metadata: serde_json::Value::Null,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-            });
+            team.task_list.push(task_clone);
         }
 
         tracing::info!(
@@ -1789,6 +1762,8 @@ impl AgentCoordinator {
                     // Also add to the shared task board
                     let _ = self.task_board.add_task(task.clone()).await;
                     task_list.push(task);
+                } else {
+                    tracing::warn!("Skipping malformed task file: {}", tf.id);
                 }
             }
 

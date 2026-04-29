@@ -602,13 +602,13 @@ fn render_pager_overlay(
 
 /// Truncate a string to fit within a visual width, appending "…" if truncated.
 fn truncate_visual(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
+    if s.chars().count() <= max_len {
         s.to_string()
     } else {
-        let mut end = max_len.saturating_sub(1);
-        while !s.is_char_boundary(end) {
-            end -= 1;
-        }
+        let end = s.char_indices()
+            .nth(max_len.saturating_sub(1))
+            .map(|(i, _)| i)
+            .unwrap_or(s.len());
         format!("{}…", &s[..end])
     }
 }

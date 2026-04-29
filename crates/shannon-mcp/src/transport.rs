@@ -382,75 +382,77 @@ impl Transport for SseTransport {
     }
 
     async fn receive(&mut self) -> Result<Option<String>, TransportError> {
-        // Take the stream out to avoid borrow conflicts when reconnecting
-        let mut stream = match self.stream.take() {
-            Some(s) => s,
-            None => {
-                // Not connected — try to connect
-                self.connect().await?;
-                return self.receive().await;
-            }
-        };
-
         loop {
-            match stream.next().await {
-                Some(Ok(bytes)) => {
-                    let chunk = String::from_utf8_lossy(&bytes);
-                    // Process lines and update buffer
-                    for line in chunk.lines() {
-                        let line = line.trim();
-                        if line.is_empty() {
-                            // End of event, return accumulated data
-                            if !self.buffer.is_empty() {
-                                let data = self.buffer.clone();
-                                self.buffer.clear();
-                                debug!("SSE received: {} bytes", data.len());
-                                // Put stream back
-                                self.stream = Some(stream);
-                                return Ok(Some(data));
-                            }
-                        } else if let Some(rest) = line.strip_prefix("data:") {
-                            // Accumulate data line
-                            let data = rest.trim();
-                            if !self.buffer.is_empty() {
-                                self.buffer.push('\n');
-                            }
-                            self.buffer.push_str(data);
-                        } else if let Some(rest) = line.strip_prefix("id:") {
-                            // Capture event ID for SSE resumability.
-                            let id = rest.trim().to_string();
-                            if !id.is_empty() {
-                                self.last_event_id = Some(id);
-                            }
-                        }
-                        // Ignore other SSE fields (event:, retry:)
-                    }
-                }
-                Some(Err(e)) => {
-                    // Stream error — attempt reconnection
-                    debug!(error = %e, "SSE stream error, attempting reconnection");
-                    // stream is consumed, don't put it back
-                    drop(stream);
-                    self.reconnect().await?;
-                    return self.receive().await;
-                }
+            // Take the stream out to avoid borrow conflicts when reconnecting
+            let mut stream = match self.stream.take() {
+                Some(s) => s,
                 None => {
-                    // Stream closed gracefully — return any accumulated data first
-                    if !self.buffer.is_empty() {
-                        let data = self.buffer.clone();
-                        self.buffer.clear();
-                        // stream is consumed
+                    // Not connected — try to connect
+                    self.connect().await?;
+                    continue;
+                }
+            };
+
+            loop {
+                match stream.next().await {
+                    Some(Ok(bytes)) => {
+                        let chunk = String::from_utf8_lossy(&bytes);
+                        // Process lines and update buffer
+                        for line in chunk.lines() {
+                            let line = line.trim();
+                            if line.is_empty() {
+                                // End of event, return accumulated data
+                                if !self.buffer.is_empty() {
+                                    let data = self.buffer.clone();
+                                    self.buffer.clear();
+                                    debug!("SSE received: {} bytes", data.len());
+                                    // Put stream back
+                                    self.stream = Some(stream);
+                                    return Ok(Some(data));
+                                }
+                            } else if let Some(rest) = line.strip_prefix("data:") {
+                                // Accumulate data line
+                                let data = rest.trim();
+                                if !self.buffer.is_empty() {
+                                    self.buffer.push('\n');
+                                }
+                                self.buffer.push_str(data);
+                            } else if let Some(rest) = line.strip_prefix("id:") {
+                                // Capture event ID for SSE resumability.
+                                let id = rest.trim().to_string();
+                                if !id.is_empty() {
+                                    self.last_event_id = Some(id);
+                                }
+                            }
+                            // Ignore other SSE fields (event:, retry:)
+                        }
+                    }
+                    Some(Err(e)) => {
+                        // Stream error — attempt reconnection
+                        debug!(error = %e, "SSE stream error, attempting reconnection");
+                        // stream is consumed, don't put it back
                         drop(stream);
-                        // Try reconnect in background for next receive
-                        let _ = self.reconnect().await;
-                        return Ok(Some(data));
+                        self.reconnect().await?;
+                        break; // back to outer loop to get new stream
                     }
-                    // Attempt reconnection for graceful close
-                    drop(stream);
-                    if self.reconnect().await.is_ok() {
-                        return self.receive().await;
+                    None => {
+                        // Stream closed gracefully — return any accumulated data first
+                        if !self.buffer.is_empty() {
+                            let data = self.buffer.clone();
+                            self.buffer.clear();
+                            // stream is consumed
+                            drop(stream);
+                            // Try reconnect in background for next receive
+                            let _ = self.reconnect().await;
+                            return Ok(Some(data));
+                        }
+                        // Attempt reconnection for graceful close
+                        drop(stream);
+                        if self.reconnect().await.is_ok() {
+                            break; // back to outer loop to get new stream
+                        }
+                        return Ok(None);
                     }
-                    return Ok(None);
                 }
             }
         }

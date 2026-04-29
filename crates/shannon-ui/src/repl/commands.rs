@@ -981,7 +981,7 @@ fn handle_mode(repl: &mut Repl, args: &str) -> Result<()> {
         // Show current mode and available options
         let current = {
             let query_engine = repl.query_engine.as_ref().expect("query engine missing");
-            let permissions = query_engine.permissions().read().expect("permissions rwlock poisoned");
+            let permissions = query_engine.permissions().read().unwrap_or_else(|e| e.into_inner());
             permissions.approval_mode()
         };
         let mut msg = format!("Current approval mode: {current}\n\nAvailable modes:\n");
@@ -999,7 +999,7 @@ fn handle_mode(repl: &mut Repl, args: &str) -> Result<()> {
     match ApprovalMode::from_str_ci(trimmed) {
         Some(mode) => {
             let query_engine = repl.query_engine.as_ref().expect("query engine missing");
-            query_engine.permissions().write().expect("permissions rwlock poisoned").set_approval_mode(mode);
+            query_engine.permissions().write().unwrap_or_else(|e| e.into_inner()).set_approval_mode(mode);
             repl.state.approval_mode_label = mode.short_label().to_string();
             {
                 repl.chat.add_message(
@@ -6160,7 +6160,7 @@ pub fn execute_pending_action(repl: &mut Repl, action: &str) -> Result<()> {
         }
         "set_bypass_mode" => {
             if let Some(ref query_engine) = repl.query_engine {
-                let mut perms = query_engine.permissions().write().expect("permissions rwlock poisoned");
+                let mut perms = query_engine.permissions().write().unwrap_or_else(|e| e.into_inner());
                 perms.set_approval_mode(shannon_core::permissions::ApprovalMode::BypassPermissions);
                 drop(perms);
                 repl.state.approval_mode_label = "BYPASS".to_string();

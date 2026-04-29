@@ -858,7 +858,7 @@ impl PermissionClassifier {
         // No dangerous patterns matched -- check user-defined rules directly
         // (without falling through to default_classification, which would
         // recurse back into this method).
-        let input_str = format!(r#"{{"command":"{command}"}}"#);
+        let input_str = serde_json::json!({"command": command}).to_string();
         let mut matches: Vec<&PermissionRule> = self
             .rules
             .iter()

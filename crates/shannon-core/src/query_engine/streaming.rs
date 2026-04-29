@@ -139,7 +139,8 @@ impl ConversationState {
                     let role = if msg.role == "user" { "User" } else { "Assistant" };
                     // Take first 100 chars of each message for the summary
                     let preview = if text.len() > 100 {
-                        format!("{}...", &text[..97])
+                        let end = text.char_indices().take_while(|(i, _)| *i <= 97).last().map(|(i, c)| i + c.len_utf8()).unwrap_or(text.len());
+                        format!("{}...", &text[..end.min(text.len())])
                     } else {
                         text.clone()
                     };
@@ -156,7 +157,8 @@ impl ConversationState {
                                 summary_parts.push(format!(
                                     "Tool result: {}",
                                     if result.len() > 80 {
-                                        format!("{}...", &result[..77])
+                                        let end = result.char_indices().take_while(|(i, _)| *i <= 77).last().map(|(i, c)| i + c.len_utf8()).unwrap_or(result.len());
+                                        format!("{}...", &result[..end.min(result.len())])
                                     } else {
                                         result.clone()
                                     }

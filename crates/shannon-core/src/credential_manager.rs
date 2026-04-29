@@ -459,7 +459,8 @@ impl CredentialManager {
     // --- Private helpers ---
 
     fn credential_file_path(&self, service: &str) -> PathBuf {
-        self.credentials_dir.join(format!("{service}.json"))
+        let safe_name = service.replace(['/', '\\', '\0'], "_");
+        self.credentials_dir.join(format!("{safe_name}.json"))
     }
 
     fn persist(&self) -> Result<(), CredentialError> {

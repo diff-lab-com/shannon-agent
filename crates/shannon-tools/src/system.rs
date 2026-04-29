@@ -467,7 +467,8 @@ impl DockerSandbox {
         let mut cmd = Command::new("docker");
         cmd.args(&docker_args)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
 
         let output = if let Some(timeout) = timeout_ms {
             let duration = std::time::Duration::from_millis(timeout);
@@ -671,6 +672,7 @@ impl BashTool {
 
         // Convert std::process::Command → tokio::process::Command
         let mut cmd = Command::from(cmd);
+        cmd.kill_on_drop(true);
 
         let output = if let Some(timeout) = timeout_ms {
             let duration = std::time::Duration::from_millis(timeout);
@@ -712,7 +714,8 @@ impl BashTool {
         cmd.arg("-c")
             .arg(command)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
 
         if let Some(dir) = cwd {
             cmd.current_dir(dir);

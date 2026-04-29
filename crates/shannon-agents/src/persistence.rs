@@ -522,6 +522,38 @@ impl FilePersistence {
         result
     }
 
+    /// Read inbox messages without clearing the file (non-destructive).
+    pub fn peek_inbox(
+        &self,
+        team_name: &str,
+        agent_name: &str,
+    ) -> Result<Vec<InboxMessage>, AgentError> {
+        let inbox_dir = self.team_dir(team_name).join("inboxes");
+        let inbox_path = inbox_dir.join(format!("{agent_name}.jsonl"));
+
+        if !inbox_path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let file = std::fs::File::open(&inbox_path)
+            .map_err(AgentError::Io)?;
+        let reader = std::io::BufReader::new(file);
+
+        let mut messages = Vec::new();
+        for line in reader.lines() {
+            let line = line.map_err(AgentError::Io)?;
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Ok(msg) = serde_json::from_str::<InboxMessage>(trimmed) {
+                messages.push(msg);
+            }
+        }
+
+        Ok(messages)
+    }
+
     // ── Claim conflict resolution via locking ─────────────────────────
 
     /// Attempt to atomically claim a task by ID.

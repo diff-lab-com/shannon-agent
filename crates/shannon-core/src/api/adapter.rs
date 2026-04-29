@@ -474,7 +474,10 @@ pub fn normalize_response(
             // Tool calls
             if let Some(tool_calls) = choice.message.tool_calls {
                 for tc in tool_calls {
-                    let input: Value = serde_json::from_str(&tc.function.arguments).unwrap_or(Value::Null);
+                    let input: Value = serde_json::from_str(&tc.function.arguments).unwrap_or_else(|e| {
+                        tracing::warn!("Malformed tool arguments for '{}': {e}", tc.function.name);
+                        Value::Null
+                    });
                     content.push(ContentBlock::ToolUse {
                         id: tc.id,
                         name: tc.function.name,

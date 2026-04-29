@@ -1578,7 +1578,7 @@ impl Repl {
     pub fn cycle_approval_mode(&mut self) {
         if let Some(ref query_engine) = self.query_engine {
             let current = {
-                let perms = query_engine.permissions().read().expect("permissions rwlock poisoned");
+                let perms = query_engine.permissions().read().unwrap_or_else(|e| e.into_inner());
                 perms.approval_mode()
             };
 
@@ -1591,7 +1591,7 @@ impl Repl {
                     "set_bypass_mode",
                 );
             } else {
-                let mut perms = query_engine.permissions().write().expect("permissions rwlock poisoned");
+                let mut perms = query_engine.permissions().write().unwrap_or_else(|e| e.into_inner());
                 perms.set_approval_mode(next);
                 let label = next.short_label().to_string();
                 drop(perms);
@@ -1606,7 +1606,7 @@ impl Repl {
     fn sync_approval_mode_label(&mut self) {
         if let Some(ref query_engine) = self.query_engine {
             let label = {
-                let perms = query_engine.permissions().read().expect("permissions rwlock poisoned");
+                let perms = query_engine.permissions().read().unwrap_or_else(|e| e.into_inner());
                 perms.approval_mode().short_label().to_string()
             };
             self.state.approval_mode_label = label;

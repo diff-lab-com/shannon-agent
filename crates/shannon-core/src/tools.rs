@@ -137,7 +137,9 @@ pub struct ToolRegistry {
     /// Cache for read-only tool results: (tool_name, input_hash) -> cached output.
     /// Wrapped in Mutex for interior mutability so `execute` can stay `&self`.
     result_cache: std::sync::Mutex<HashMap<(String, u64), CachedToolResult>>,
-    /// Maximum number of cached entries (LRU eviction when exceeded)
+    /// Insertion-order tracking for FIFO cache eviction.
+    cache_order: std::sync::Mutex<std::collections::VecDeque<(String, u64)>>,
+    /// Maximum number of cached entries (FIFO eviction when exceeded)
     max_cache_entries: usize,
     /// Cache TTL in seconds. Entries older than this are considered stale.
     cache_ttl_secs: u64,
@@ -157,6 +159,7 @@ impl ToolRegistry {
             deferred: std::sync::RwLock::new(HashSet::new()),
             tool_filter: None,
             result_cache: std::sync::Mutex::new(HashMap::new()),
+            cache_order: std::sync::Mutex::new(std::collections::VecDeque::new()),
             max_cache_entries: 256,
             cache_ttl_secs: DEFAULT_CACHE_TTL_SECS,
             schema_cache: std::sync::RwLock::new(None),
@@ -403,17 +406,19 @@ impl ToolRegistry {
                     let cache_key = (name.to_string(), hash);
                     let mut cache = self.result_cache.lock().unwrap();
 
-                    // Evict oldest entries if cache is full
+                    // Evict oldest entries if cache is full (FIFO)
                     if cache.len() >= self.max_cache_entries {
-                        if let Some(key) = cache.keys().next().cloned() {
-                            cache.remove(&key);
+                        let mut order = self.cache_order.lock().unwrap();
+                        if let Some(old_key) = order.pop_front() {
+                            cache.remove(&old_key);
                         }
                     }
 
-                    cache.insert(cache_key, CachedToolResult {
+                    cache.insert(cache_key.clone(), CachedToolResult {
                         output: output.clone(),
                         created_at: std::time::Instant::now(),
                     });
+                    self.cache_order.lock().unwrap().push_back(cache_key);
                 }
             }
         }
@@ -432,6 +437,7 @@ impl ToolRegistry {
     /// Clear the tool result cache.
     pub fn clear_cache(&self) {
         self.result_cache.lock().unwrap().clear();
+        self.cache_order.lock().unwrap().clear();
     }
 
     /// Get the number of cached results (including potentially expired ones).

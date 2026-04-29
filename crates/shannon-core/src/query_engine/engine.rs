@@ -882,7 +882,7 @@ impl QueryEngine {
 
                                                     // Pre-check with classifier and permission system
                                                     let permission_result = {
-                                                        let guard = permissions.read().expect("permissions rwlock poisoned");
+                                                        let guard = permissions.read().unwrap_or_else(|e| e.into_inner());
                                                         guard.classify_and_check(
                                                             session_id_for_permissions,
                                                             &tool_name,
@@ -1002,7 +1002,7 @@ impl QueryEngine {
                                                                     ) => {
                                                                         let _ = permissions
                                                                             .write()
-                                                                            .expect("permissions rwlock poisoned")
+                                                                            .unwrap_or_else(|e| e.into_inner())
                                                                             .process_permission_choice(
                                                                                 session_id_for_permissions,
                                                                                 &prompt_for_choice,
@@ -1015,7 +1015,7 @@ impl QueryEngine {
                                                                         // User edited the command; treat as allow-once
                                                                         let _ = permissions
                                                                             .write()
-                                                                            .expect("permissions rwlock poisoned")
+                                                                            .unwrap_or_else(|e| e.into_inner())
                                                                             .process_permission_choice(
                                                                                 session_id_for_permissions,
                                                                                 &prompt_for_choice,
@@ -1463,7 +1463,7 @@ impl QueryEngine {
     /// Token counts and cost are sourced from the cost tracker, which accumulates
     /// actual API-reported usage (not estimates).
     pub fn conversation_stats(&self) -> ConversationStats {
-        let tracker = self.cost_tracker.read().expect("cost_tracker rwlock poisoned");
+        let tracker = self.cost_tracker.read().unwrap_or_else(|e| e.into_inner());
         ConversationStats {
             message_count: self.conversation.messages.len(),
             turn_count: self.conversation.turn_count,
@@ -1477,7 +1477,7 @@ impl QueryEngine {
     /// Returns a formatted summary of accumulated API costs including
     /// input/output tokens and total USD cost.
     pub fn cost_summary(&self) -> String {
-        self.cost_tracker.read().expect("cost_tracker rwlock poisoned").summary()
+        self.cost_tracker.read().unwrap_or_else(|e| e.into_inner()).summary()
     }
 
     /// Get a reference to the cost tracker for reading cost details.

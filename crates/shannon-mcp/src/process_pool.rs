@@ -1089,7 +1089,7 @@ impl McpServerHandle {
                 self.pending.remove(&id);
                 Err(format!(
                     "MCP server '{}' request timed out after {:?}",
-                    self.name, self.request_timeout
+                    self.name, timeout
                 ))
             }
         }
