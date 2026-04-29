@@ -20,20 +20,16 @@ use super::Repl;
 pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &mut Repl) -> Result<()> {
     let chat = &repl.chat;
     let prompt = &repl.prompt;
-    let state = repl.state.clone();
-    let spinner = &repl.state.spinner;
-    let theme = repl.state.theme.clone();
+    // Borrow state instead of cloning — the closure only reads, never mutates.
+    let state = &repl.state;
+    let diff_data = &repl.diff_data;
 
     // Build sidebar info via Repl method (pub(crate) fields only accessible from mod.rs)
     let sidebar_info = repl.sidebar_info();
 
-    // Clone diff viewer state and data for rendering inside closure
-    let diff_viewer_state = repl.state.diff_viewer.clone();
-    let diff_data = repl.diff_data.clone();
-
     // Sync terminal window title with current state (OSC 0)
     {
-        let model_short = state.model.as_deref()
+        let model_short = state.model.as_ref()
             .map(|m| m.split('/').next_back().unwrap_or(m))
             .unwrap_or("shannon");
         crate::a11y::set_enabled(state.accessibility_mode);
@@ -121,7 +117,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
 
         // Determine which overlay to render
         if let Some(ref dialog) = state.permission_dialog {
-            render_permission_dialog(f, f.area(), dialog, &theme);
+            render_permission_dialog(f, f.area(), dialog, &state.theme);
         } else if state.active_dialog.is_some()
             || state.input_dialog.is_some()
             || state.fuzzy_picker.is_some()
@@ -133,7 +129,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             crate::widgets::MainLayoutWidget::render_complete_with_spinner(
                 f, chat, prompt, &display_status,
                 state.model.as_deref(), Some(state.tokens_used),
-                &state.working_directory, Some(spinner), pb, sidebar_ref, &theme, state.sidebar_tab,
+                &state.working_directory, Some(&state.spinner), pb, sidebar_ref, &state.theme, state.sidebar_tab,
                 Some(&state.approval_mode_label),
                 state.focus_mode, state.fullscreen_mode,
                 search_query.as_deref(), &search_matches, search_focused_idx,
@@ -157,7 +153,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             crate::widgets::MainLayoutWidget::render_complete_with_spinner(
                 f, chat, prompt, &display_status,
                 state.model.as_deref(), Some(state.tokens_used),
-                &state.working_directory, Some(spinner), pb, sidebar_ref, &theme, state.sidebar_tab,
+                &state.working_directory, Some(&state.spinner), pb, sidebar_ref, &state.theme, state.sidebar_tab,
                 Some(&state.approval_mode_label),
                 state.focus_mode, state.fullscreen_mode,
                 search_query.as_deref(), &search_matches, search_focused_idx,
@@ -178,17 +174,17 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         }
 
         // Overlay diff viewer if active
-        if let Some(ref viewer) = diff_viewer_state {
+        if let Some(viewer) = state.diff_viewer.as_ref() {
             if state.diff_interactive && !state.interactive_hunks.is_empty() {
-                viewer.render_interactive(f, f.area(), &diff_data, &theme, &state.interactive_hunks, state.interactive_selected);
+                viewer.render_interactive(f, f.area(), diff_data, &state.theme, &state.interactive_hunks, state.interactive_selected);
             } else {
-                viewer.render(f, f.area(), &diff_data, &theme);
+                viewer.render(f, f.area(), diff_data, &state.theme);
             }
         }
 
         // Overlay full keyboard shortcuts panel if toggled (F1)
         if state.show_key_hints {
-            crate::widgets::key_hint::KeyHintWidget::render_full(f, &theme);
+            crate::widgets::key_hint::KeyHintWidget::render_full(f, &state.theme);
         }
 
         // Overlay toast notification if active
@@ -205,18 +201,18 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
                 height: 1,
             };
             let toast = Paragraph::new(toast_text)
-                .style(ratatui::style::Style::default().fg(theme.text).bg(theme.accent));
+                .style(ratatui::style::Style::default().fg(state.theme.text).bg(state.theme.accent));
             f.render_widget(toast, toast_area);
         }
 
         // Overlay history search bar when Ctrl+R active
         if state.incremental_search_active {
-            render_history_search_overlay(f, f.area(), &state);
+            render_history_search_overlay(f, f.area(), state);
         }
 
         // Overlay plan review when plan is active and not yet approved
         if state.plan.active && !state.plan.approved {
-            render_plan_overlay(f, f.area(), &state.plan, &theme);
+            render_plan_overlay(f, f.area(), &state.plan, &state.theme);
         }
 
         // Overlay completion suggestions popup above the prompt
@@ -226,22 +222,22 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
 
         // Overlay pager when active
         if state.pager_active {
-            render_pager_overlay(f, f.area(), chat, &theme);
+            render_pager_overlay(f, f.area(), chat, &state.theme);
         }
 
         // Overlay onboarding dialog on first run
         if state.onboarding_active {
-            render_onboarding_overlay(f, f.area(), &theme);
+            render_onboarding_overlay(f, f.area(), &state.theme);
         }
 
         // Overlay tool approval widget when active
         if state.tool_approval.is_active() {
-            state.tool_approval.render(f, f.area(), &theme);
+            state.tool_approval.render(f, f.area(), &state.theme);
         }
 
         // Overlay command palette when visible
         if let Some(ref palette) = state.command_palette {
-            palette.render(f, f.area(), &theme);
+            palette.render(f, f.area(), &state.theme);
         }
 
         // Render attachment bar above prompt area
@@ -253,7 +249,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
                 width: f.area().width.saturating_sub(2),
                 height: bar_height,
             };
-            state.attachment_bar.render(f, bar_area, &theme);
+            state.attachment_bar.render(f, bar_area, &state.theme);
         }
 
         // Overlay fullscreen indicator in top-right corner
@@ -267,17 +263,17 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
                 height: 1,
             };
             let ind = Paragraph::new(indicator)
-                .style(ratatui::style::Style::default().fg(theme.primary).add_modifier(Modifier::BOLD));
+                .style(ratatui::style::Style::default().fg(state.theme.primary).add_modifier(Modifier::BOLD));
             f.render_widget(ind, indicator_area);
         }
 
         // Overlay chat search bar when active
         if state.chat_search_active {
-            render_chat_search_overlay(f, f.area(), &state, &theme);
+            render_chat_search_overlay(f, f.area(), state, &state.theme);
         }
 
         // Render session tab bar at the very top when visible
-        state.session_tab.render(f, f.area(), &theme);
+        state.session_tab.render(f, f.area(), &state.theme);
 
         // Render key hints at the very bottom line when no overlay is active
         if state.permission_dialog.is_none()
@@ -297,7 +293,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             } else {
                 crate::widgets::key_hint::HintContext::Input
             };
-            crate::widgets::KeyHintWidget::render(f, hint_area, &theme, &ctx);
+            crate::widgets::KeyHintWidget::render(f, hint_area, &state.theme, &ctx);
         }
     })?;
 

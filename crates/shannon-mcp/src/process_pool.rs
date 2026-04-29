@@ -1295,26 +1295,22 @@ impl McpServerHandle {
         self.pending.clear();
 
         // Graceful shutdown: give process 2s to exit, then SIGKILL + reap.
-        let child_arc = self.child.clone();
-        let name = self.name.clone();
-        tokio::spawn(async move {
-            let mut child_guard = child_arc.lock().await;
-            // Take the child out of the option — we now own it.
+        // Await directly so callers (shutdown_all, Drop) know the process is reaped.
+        {
+            let mut child_guard = self.child.lock().await;
             if let Some(mut child) = child_guard.take() {
-                // Try waiting for graceful exit first
                 match tokio::time::timeout(Duration::from_secs(2), child.wait()).await {
                     Ok(Ok(_status)) => {
-                        debug!(server = %name, "MCP server exited gracefully");
+                        debug!(server = %self.name, "MCP server exited gracefully");
                     }
                     _ => {
-                        // Force kill and reap to prevent zombie
                         let _ = child.kill().await;
                         let _ = child.wait().await;
-                        warn!(server = %name, "Force-killed MCP server process (zombie reaped)");
+                        warn!(server = %self.name, "Force-killed MCP server process (zombie reaped)");
                     }
                 }
             }
-        });
+        }
     }
 
     /// Get the current state.
