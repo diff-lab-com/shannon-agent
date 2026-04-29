@@ -144,6 +144,8 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "terminal-setup" => handle_terminal_setup(repl)?,
             "compact" => handle_compact(repl, args)?,
             "cost" => handle_cost(repl, args)?,
+            "billing" | "usage" => handle_billing(repl, args)?,
+            "suggest" => handle_suggest(repl, args)?,
             "permissions" | "perms" | "perm" => handle_permissions(repl, args)?,
             "plan" => handle_plan(repl, args)?,
             "team" => handle_team(repl, args)?,
@@ -3111,6 +3113,9 @@ fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
 /mcp deny <name>                 — Deny a server
 /mcp reset-approvals             — Clear all approval decisions
 /mcp reload                      — Reload MCP config and restart servers
+/mcp resources [server]          — List available MCP resources
+/mcp subscribe <server> <uri>    — Subscribe to resource updates
+/mcp unsubscribe <server> <uri>  — Unsubscribe from resource updates
 /mcp path                        — Show config file path".to_string());
         }
         "list" => {
@@ -3427,6 +3432,117 @@ fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
                 Err(e) => {
                     repl.chat.add_message(ChatRole::System, format!("Failed to discover MCP config: {e}"));
                 }
+            }
+        }
+        "resources" => {
+            let server = parts.get(1).copied().unwrap_or("");
+            let pool = repl.mcp_pool.clone();
+            if server.is_empty() {
+                // List resources from all servers that support them
+                let servers = repl.runtime.block_on(pool.list_servers());
+                let mut msg = String::new();
+                for (name, _) in &servers {
+                    let has_res = repl.runtime.block_on(pool.has_resources(name));
+                    if has_res {
+                        let result = repl.runtime.block_on(
+                            pool.send_batch_server_request(name, vec![("resources/list", serde_json::json!({}))])
+                        );
+                        match result {
+                            Ok(responses) => {
+                                if let Some((_, Ok(response))) = responses.first() {
+                                    if let Some(resources) = response.get("resources").and_then(|r| r.as_array()) {
+                                        if !resources.is_empty() {
+                                            msg.push_str(&format!("  {name}:\n"));
+                                            for res in resources {
+                                                let uri = res.get("uri").and_then(|u| u.as_str()).unwrap_or("?");
+                                                let name_field = res.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                                                msg.push_str(&format!("    {} ({})\n", uri, name_field));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => { msg.push_str(&format!("  {name}: error — {e}\n")); }
+                        }
+                    }
+                }
+                if msg.is_empty() {
+                    repl.chat.add_message(ChatRole::System, "No MCP servers with resource support found.".to_string());
+                } else {
+                    repl.chat.add_message(ChatRole::System, format!("MCP Resources:\n{msg}"));
+                }
+            } else {
+                let result = repl.runtime.block_on(
+                    pool.send_batch_server_request(server, vec![("resources/list", serde_json::json!({}))])
+                );
+                match result {
+                    Ok(responses) => {
+                        if let Some((_, Ok(response))) = responses.first() {
+                            if let Some(resources) = response.get("resources").and_then(|r| r.as_array()) {
+                                if resources.is_empty() {
+                                    repl.chat.add_message(ChatRole::System, format!("Server '{server}' has no resources."));
+                                } else {
+                                    let mut msg = format!("Resources from '{server}':\n");
+                                    for res in resources {
+                                        let uri = res.get("uri").and_then(|u| u.as_str()).unwrap_or("?");
+                                        let name_field = res.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                                        msg.push_str(&format!("  {} ({})\n", uri, name_field));
+                                    }
+                                    repl.chat.add_message(ChatRole::System, msg);
+                                }
+                            } else {
+                                repl.chat.add_message(ChatRole::System, format!("Server '{server}' returned no resource list."));
+                            }
+                        } else {
+                            repl.chat.add_message(ChatRole::System, format!("Failed to list resources from '{server}'."));
+                        }
+                    }
+                    Err(e) => { repl.chat.add_message(ChatRole::System, format!("Error: {e}")); }
+                }
+            }
+        }
+        "subscribe" => {
+            let server = parts.get(1).copied().unwrap_or("");
+            let uri = parts.get(2).copied().unwrap_or("");
+            if server.is_empty() || uri.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Usage: /mcp subscribe <server> <resource_uri>".to_string());
+                return Ok(());
+            }
+            let pool = repl.mcp_pool.clone();
+            let result = repl.runtime.block_on(
+                pool.send_batch_server_request(server, vec![("resources/subscribe", serde_json::json!({"uri": uri}))])
+            );
+            match result {
+                Ok(responses) => {
+                    if let Some((_, Ok(_))) = responses.first() {
+                        repl.chat.add_message(ChatRole::System, format!("Subscribed to '{uri}' on '{server}'."));
+                    } else {
+                        repl.chat.add_message(ChatRole::System, format!("Server '{server}' did not confirm subscription."));
+                    }
+                }
+                Err(e) => { repl.chat.add_message(ChatRole::System, format!("Subscribe failed: {e}")); }
+            }
+        }
+        "unsubscribe" => {
+            let server = parts.get(1).copied().unwrap_or("");
+            let uri = parts.get(2).copied().unwrap_or("");
+            if server.is_empty() || uri.is_empty() {
+                repl.chat.add_message(ChatRole::System, "Usage: /mcp unsubscribe <server> <resource_uri>".to_string());
+                return Ok(());
+            }
+            let pool = repl.mcp_pool.clone();
+            let result = repl.runtime.block_on(
+                pool.send_batch_server_request(server, vec![("resources/unsubscribe", serde_json::json!({"uri": uri}))])
+            );
+            match result {
+                Ok(responses) => {
+                    if let Some((_, Ok(_))) = responses.first() {
+                        repl.chat.add_message(ChatRole::System, format!("Unsubscribed from '{uri}' on '{server}'."));
+                    } else {
+                        repl.chat.add_message(ChatRole::System, format!("Server '{server}' did not confirm unsubscription."));
+                    }
+                }
+                Err(e) => { repl.chat.add_message(ChatRole::System, format!("Unsubscribe failed: {e}")); }
             }
         }
         _ => {
@@ -4389,6 +4505,157 @@ fn handle_cost(repl: &mut Repl, args: &str) -> Result<()> {
     }
 
     repl.chat.add_message(ChatRole::System, report);
+    Ok(())
+}
+
+fn handle_suggest(repl: &mut Repl, _args: &str) -> Result<()> {
+    let engine = shannon_core::ContextSuggestionEngine::new();
+
+    // Build context from session state
+    let mut recently_edited: Vec<String> = Vec::new();
+    let mut recently_created: Vec<String> = Vec::new();
+    // Collect from last 3 turns
+    for turn in repl.diff_data.turns.iter().rev().take(3) {
+        for fc in &turn.files_modified {
+            if !recently_edited.contains(&fc.path) {
+                recently_edited.push(fc.path.clone());
+            }
+        }
+        for f in &turn.files_created {
+            if !recently_created.contains(f) {
+                recently_created.push(f.clone());
+            }
+        }
+    }
+
+    let context = shannon_core::EnhancedSuggestionContext {
+        recently_edited_files: recently_edited,
+        recently_created_files: recently_created,
+        recently_used_tools: Vec::new(),
+        recently_run_commands: Vec::new(),
+        working_directory: Some(repl.state.working_directory.clone()),
+        open_files: Vec::new(),
+    };
+
+    let suggestions = engine.suggest_for_conversation_start(&context);
+
+    if suggestions.is_empty() {
+        repl.chat.add_message(ChatRole::System,
+            "No suggestions available for the current context.".to_string());
+        return Ok(());
+    }
+
+    let mut msg = "Suggestions:\n".to_string();
+    for (i, s) in suggestions.iter().enumerate() {
+        msg.push_str(&format!(
+            "  {}. {} (priority: {}, confidence: {:.0}%)\n",
+            i + 1, s.reason, s.priority, s.confidence * 100.0
+        ));
+        if let Some(tool) = &s.suggested_tool {
+            msg.push_str(&format!("     Tool: {tool}\n"));
+        }
+        if !s.suggested_files.is_empty() {
+            msg.push_str(&format!("     Files: {}\n", s.suggested_files.join(", ")));
+        }
+    }
+    repl.chat.add_message(ChatRole::System, msg);
+    Ok(())
+}
+
+fn handle_billing(repl: &mut Repl, args: &str) -> Result<()> {
+    let subcmd = args.trim();
+
+    match subcmd {
+        "" | "period" => {
+            let summary = repl.state.billing_manager.get_period_summary();
+            let mut msg = format!(
+                "Billing Period: {} to {}\n  Total cost: ${:.4}\n  Input tokens: {}\n  Output tokens: {}\n  Models used: {}",
+                summary.start.format("%Y-%m-%d"),
+                summary.end.format("%Y-%m-%d"),
+                summary.total_cost,
+                summary.total_input_tokens,
+                summary.total_output_tokens,
+                summary.usage_breakdown.len(),
+            );
+            for (model, usage) in &summary.usage_breakdown {
+                msg.push_str(&format!(
+                    "\n    {}: ${:.4} ({} req, {} in, {} out)",
+                    model, usage.total_cost, usage.request_count,
+                    usage.total_input_tokens, usage.total_output_tokens
+                ));
+            }
+            repl.chat.add_message(ChatRole::System, msg);
+        }
+        "model" => {
+            let breakdown = repl.state.billing_manager.get_model_breakdown();
+            if breakdown.is_empty() {
+                repl.chat.add_message(ChatRole::System, "No billing data recorded yet.".to_string());
+                return Ok(());
+            }
+            let mut msg = "Usage by Model:\n".to_string();
+            for (model, usage) in &breakdown {
+                msg.push_str(&format!(
+                    "  {}: ${:.4} ({} req, {}+{} tokens)\n",
+                    model, usage.total_cost, usage.request_count,
+                    usage.total_input_tokens, usage.total_output_tokens
+                ));
+            }
+            repl.chat.add_message(ChatRole::System, msg);
+        }
+        "daily" => {
+            let daily = repl.state.billing_manager.get_daily_totals();
+            if daily.is_empty() {
+                repl.chat.add_message(ChatRole::System, "No billing data recorded yet.".to_string());
+                return Ok(());
+            }
+            let mut msg = "Daily Usage:\n".to_string();
+            for d in &daily {
+                msg.push_str(&format!(
+                    "  {}: ${:.4} ({} req, {}+{} tokens)\n",
+                    d.date, d.total_cost, d.request_count,
+                    d.total_input_tokens, d.total_output_tokens
+                ));
+            }
+            repl.chat.add_message(ChatRole::System, msg);
+        }
+        _ if subcmd.starts_with("budget ") => {
+            let amount_str = subcmd.strip_prefix("budget ").unwrap().trim();
+            if amount_str == "off" || amount_str == "none" {
+                let mut cfg = repl.state.billing_manager.config().clone();
+                cfg.monthly_budget = None;
+                repl.state.billing_manager.set_config(cfg);
+                repl.chat.add_message(ChatRole::System, "Monthly budget limit removed.".to_string());
+            } else {
+                let limit: f64 = match amount_str.parse() {
+                    Ok(v) if v > 0.0 => v,
+                    _ => {
+                        repl.chat.add_message(ChatRole::System,
+                            "Usage: /billing budget <amount_usd|off>".to_string());
+                        return Ok(());
+                    }
+                };
+                let mut cfg = repl.state.billing_manager.config().clone();
+                cfg.monthly_budget = Some(limit);
+                repl.state.billing_manager.set_config(cfg);
+                repl.chat.add_message(ChatRole::System,
+                    format!("Monthly budget limit set to ${limit:.2}"));
+            }
+        }
+        _ => {
+            repl.chat.add_message(ChatRole::System,
+                "Usage: /billing [period|model|daily|budget <amount|off>]".to_string());
+        }
+    }
+
+    // Check for pending budget alerts
+    let alerts = repl.state.billing_manager.get_alerts().to_vec();
+    if !alerts.is_empty() {
+        for alert in &alerts {
+            repl.chat.add_message(ChatRole::System, format!("⚠️ {}", alert.message));
+        }
+        repl.state.billing_manager.clear_alerts();
+    }
+
     Ok(())
 }
 

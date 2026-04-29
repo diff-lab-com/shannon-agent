@@ -209,6 +209,8 @@ pub struct ReplState {
     pub streaming_state: StreamingState,
     /// Loop engine state for autonomous iteration
     pub loop_state: Option<LoopState>,
+    /// Billing manager for per-model cost tracking and budget alerts
+    pub billing_manager: shannon_core::billing::BillingManager,
 }
 
 /// State for the autonomous loop iteration engine.
@@ -362,6 +364,7 @@ impl Default for ReplState {
             session_tab: SessionTabWidget::new(),
             streaming_state: StreamingState::Idle,
             loop_state: None,
+            billing_manager: shannon_core::billing::BillingManager::new(),
         }
     }
 }

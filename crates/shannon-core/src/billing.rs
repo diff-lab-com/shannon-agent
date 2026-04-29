@@ -200,6 +200,7 @@ pub struct DailyUsage {
 }
 
 /// Manages billing records with aggregation and alerting.
+#[derive(Debug, Clone)]
 pub struct BillingManager {
     /// All recorded usage.
     records: Vec<UsageRecord>,

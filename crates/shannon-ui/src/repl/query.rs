@@ -136,6 +136,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
     // Save pre-stream values so we can show real-time totals during streaming
     let pre_stream_tokens = repl.state.tokens_used;
     let pre_stream_tools = repl.tools_invoked;
+    let pre_stream_cost = repl.state.total_cost_usd;
 
     // Spawn the query processing in a separate thread
     let query_handle = repl.runtime.spawn(async move {
@@ -504,6 +505,21 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
             repl.chat.update_message(assistant_msg_index, rendered);
             repl.state.tokens_used = pre_stream_tokens + tokens;
             repl.tools_invoked = pre_stream_tools + tools;
+
+            // Record billing for this turn
+            let turn_cost = repl.state.total_cost_usd - pre_stream_cost;
+            if turn_cost > 0.0 {
+                let model_name = repl.state.model.as_deref().unwrap_or("unknown");
+                let record = shannon_core::billing::UsageRecord::new(
+                    model_name,
+                    tokens,
+                    0, // output tokens not separately tracked per turn
+                    turn_cost,
+                );
+                if let Err(e) = repl.state.billing_manager.record_usage(record) {
+                    tracing::warn!("Billing recording failed: {e}");
+                }
+            }
 
             // Collect turn file info before move
             let turn_files: Vec<String> = turn.files_modified.iter()
