@@ -268,11 +268,13 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                 }
                 Ok(QueryEvent::ToolProgress { progress, tool_name, .. }) => {
                     let pct = (progress * 100.0) as u32;
-                    response_text.push_str(&format!("\n⏳ Tool progress: {pct}%"));
                     if let Ok(mut s) = ss.lock() {
                         s.progress = progress as f64;
-                        s.buffer = response_text.clone();
                         s.status = format!("{tool_name}: {pct}%");
+                        // Update the specific tool's progress bar
+                        if let Some(bar) = s.multi_progress.iter_mut().find(|(l, _, _)| l == &tool_name) {
+                            bar.1 = progress as f64;
+                        }
                     }
                 }
                 Ok(QueryEvent::Completed { .. }) => {

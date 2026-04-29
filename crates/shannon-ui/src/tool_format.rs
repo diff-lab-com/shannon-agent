@@ -243,9 +243,23 @@ pub fn format_tool_result(tool_name: &str, result: &str, is_error: bool) -> Stri
     if is_error {
         return format_error(tool_name, &truncate_result(result));
     }
-    match tool_category(tool_name) {
-        ToolCategory::Read | ToolCategory::Search => format_read_summary(tool_name, result),
-        ToolCategory::Write | ToolCategory::Bash | ToolCategory::Agent => format_write_result(tool_name, result, false),
+    let truncated = truncate_result(result);
+    // Content-aware formatting for all tool types
+    if looks_like_diff(&truncated) {
+        format_diff(&truncated)
+    } else if looks_like_json(&truncated) {
+        format_json(&truncated)
+    } else if looks_like_file_list(&truncated) {
+        format_file_tree(&truncated)
+    } else if looks_like_table(&truncated) {
+        format_table(&truncated)
+    } else if looks_like_code(&truncated) {
+        highlight_code_by_tool(&truncated, tool_name)
+    } else {
+        match tool_category(tool_name) {
+            ToolCategory::Read | ToolCategory::Search => format_read_summary(tool_name, result),
+            ToolCategory::Write | ToolCategory::Bash | ToolCategory::Agent => format_write_result(tool_name, result, false),
+        }
     }
 }
 
