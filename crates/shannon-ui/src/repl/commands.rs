@@ -4485,53 +4485,137 @@ fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
         return Ok(());
     }
 
-    let strategy = match subcmd {
-        "truncate" => CompactStrategy::TruncateOld,
-        "micro" => CompactStrategy::MicroCompress,
-        "group" => CompactStrategy::GroupCompress,
-        _ => CompactStrategy::SummarizeOld,
+    // /compact preview — show what will be compacted without doing it
+    if subcmd == "preview" {
+        let total = history.len();
+        let recent_keep = 6; // matches default keep_recent_count
+        let old_count = total.saturating_sub(recent_keep);
+        let mut preview = format!(
+            "Compact Preview:\n  Total messages: {total}\n  Keep recent: {recent_keep}\n  Compactible: {old_count}\n  Strategy: {}\n  Estimated tokens: {} ({:.1}% of context)",
+            analysis.recommended_strategy,
+            analysis.estimated_tokens,
+            analysis.context_usage_ratio * 100.0,
+        );
+        if old_count > 0 {
+            preview.push_str("\n\nMessages to compact:");
+            let preview_count = old_count.min(10);
+            for (i, msg) in history.iter().take(preview_count).enumerate() {
+                let role = &msg.role;
+                let preview_text: String = match &msg.content {
+                    shannon_core::api::MessageContent::Text(t) => t.chars().take(60).collect(),
+                    shannon_core::api::MessageContent::Blocks(blocks) => {
+                        blocks.iter().take(1).filter_map(|b| match b {
+                            shannon_core::api::ContentBlock::Text { text } => Some(text.chars().take(60).collect::<String>()),
+                            _ => None,
+                        }).next().unwrap_or_default()
+                    }
+                };
+                preview.push_str(&format!("\n  {}. [{role}] {preview_text}{}", i + 1, if preview_text.len() >= 60 { "..." } else { "" }));
+            }
+            if old_count > preview_count {
+                preview.push_str(&format!("\n  ... and {} more", old_count - preview_count));
+            }
+        }
+        preview.push_str("\n\nUse /compact to proceed, or /compact <strategy> to choose a strategy.");
+        repl.chat.add_message(ChatRole::System, preview);
+        return Ok(());
+    }
+
+    // /compact focus <topic> — compact but preserve messages about topic
+    let (strategy, focus_keywords) = if let Some(focus) = subcmd.strip_prefix("focus ") {
+        let keywords: Vec<&str> = focus.split_whitespace().collect();
+        let mut filtered: Vec<shannon_core::api::Message> = Vec::new();
+        let mut preserved = 0;
+        for msg in &history {
+            let text = match &msg.content {
+                shannon_core::api::MessageContent::Text(t) => t.to_lowercase(),
+                shannon_core::api::MessageContent::Blocks(blocks) => blocks.iter()
+                    .filter_map(|b| match b { shannon_core::api::ContentBlock::Text { text } => Some(text.clone()), _ => None })
+                    .collect::<Vec<_>>().join(" ").to_lowercase(),
+            };
+            let matches_focus = keywords.iter().any(|kw| text.contains(kw));
+            if matches_focus || msg.role == "system" {
+                preserved += 1;
+                filtered.push(msg.clone());
+            } else {
+                filtered.push(msg.clone());
+            }
+        }
+        repl.chat.add_message(ChatRole::System, format!(
+            "Focus compact: preserving {preserved} messages matching '{}'\nCompacting remaining messages...",
+            keywords.join("', '")
+        ));
+        (CompactStrategy::SummarizeOld, Some(keywords.into_iter().map(String::from).collect::<Vec<_>>()))
+    } else {
+        let strategy = match subcmd {
+            "truncate" => CompactStrategy::TruncateOld,
+            "micro" => CompactStrategy::MicroCompress,
+            "group" => CompactStrategy::GroupCompress,
+            _ => CompactStrategy::SummarizeOld,
+        };
+        (strategy, None)
     };
 
-    let mut messages = history;
-    let mut compact_engine = compact_engine;
-
-    let result = match strategy {
-        CompactStrategy::MicroCompress => compact_engine.micro_compact(&mut messages),
-        CompactStrategy::GroupCompress => compact_engine.group_compact(&mut messages),
-        _ => {
-            // Default: 3-tier compaction with re-injection of project context
-            compact_engine.compact(&mut messages)
+    let (messages, compact_result) = if let Some(ref keywords) = focus_keywords {
+        // For focus mode, compact only non-matching messages
+        let mut to_compact: Vec<shannon_core::api::Message> = Vec::new();
+        let mut to_keep: Vec<shannon_core::api::Message> = Vec::new();
+        for msg in history {
+            let text = match &msg.content {
+                shannon_core::api::MessageContent::Text(t) => t.to_lowercase(),
+                shannon_core::api::MessageContent::Blocks(blocks) => blocks.iter()
+                    .filter_map(|b| match b { shannon_core::api::ContentBlock::Text { text } => Some(text.clone()), _ => None })
+                    .collect::<Vec<_>>().join(" ").to_lowercase(),
+            };
+            let matches_focus = keywords.iter().any(|kw| text.contains(&kw.to_lowercase()));
+            if matches_focus || msg.role == "system" {
+                to_keep.push(msg);
+            } else {
+                to_compact.push(msg);
+            }
         }
+        let _original_count = to_compact.len();
+        if !to_compact.is_empty() {
+            let mut compact_engine = compact_engine;
+            let cr = compact_engine.compact(&mut to_compact);
+            to_keep.append(&mut to_compact);
+            (to_keep, cr.ok())
+        } else {
+            (to_keep, None)
+        }
+    } else {
+        let mut messages = history;
+        let mut compact_engine = compact_engine;
+        let result = match strategy {
+            CompactStrategy::MicroCompress => compact_engine.micro_compact(&mut messages),
+            CompactStrategy::GroupCompress => compact_engine.group_compact(&mut messages),
+            _ => compact_engine.compact(&mut messages),
+        };
+        (messages, result.ok())
     };
 
-    match result {
-        Ok(compact_result) => {
-            // Post-cleanup
-            let cleanup_removed = compact_engine.post_compact_cleanup(&mut messages);
+    // Update the query engine's conversation
+    if let Some(ref mut engine) = repl.query_engine {
+        engine.replace_conversation(messages);
+    }
 
-            // Update the query engine's conversation
-            if let Some(ref mut engine) = repl.query_engine {
-                engine.replace_conversation(messages);
-            }
-
-            let mut report = format!(
-                "Context compacted:\n  Strategy: {}\n  Tokens: {} → {} ({:.1}% reduction)\n  Messages removed: {}\n  Messages compacted: {}\n  Duration: {:.2}s",
-                compact_result.strategy,
-                compact_result.original_tokens,
-                compact_result.compacted_tokens,
-                compact_result.reduction_ratio * 100.0,
-                compact_result.messages_removed,
-                compact_result.messages_compacted,
-                compact_result.duration.as_secs_f64(),
-            );
-            if cleanup_removed > 0 {
-                report.push_str(&format!("\n  Cleanup removed {cleanup_removed} duplicate messages"));
-            }
-            repl.chat.add_message(ChatRole::System, report);
+    if let Some(compact_result) = compact_result {
+        let mut report = format!(
+            "Context compacted:\n  Strategy: {}\n  Tokens: {} → {} ({:.1}% reduction)\n  Messages removed: {}\n  Messages compacted: {}\n  Duration: {:.2}s",
+            compact_result.strategy,
+            compact_result.original_tokens,
+            compact_result.compacted_tokens,
+            compact_result.reduction_ratio * 100.0,
+            compact_result.messages_removed,
+            compact_result.messages_compacted,
+            compact_result.duration.as_secs_f64(),
+        );
+        if focus_keywords.is_some() {
+            report.push_str(&format!("\n  Focus: {}", focus_keywords.as_ref().unwrap().join(", ")));
         }
-        Err(e) => {
-            repl.chat.add_message(ChatRole::System, format!("Compact failed: {e}"));
-        }
+        repl.chat.add_message(ChatRole::System, report);
+    } else if focus_keywords.is_some() {
+        repl.chat.add_message(ChatRole::System, "Focus compact complete (no compaction needed for focused messages).".to_string());
     }
 
     Ok(())
