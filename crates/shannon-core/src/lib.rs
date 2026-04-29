@@ -103,7 +103,7 @@ pub mod i18n;
 pub use query_engine::{QueryEngine, QueryContext, QueryEvent};
 pub use tools::{Tool, ToolInfo, ToolRegistry, ToolOutput, ToolResult};
 pub use permissions::{PermissionManager, Permission, PermissionLevel, ApprovalMode};
-pub use checkpoint::{CheckpointManager, Checkpoint};
+pub use checkpoint::{CheckpointManager, Checkpoint, TurnCheckpoint, RestoreMode};
 pub use state::{
     StateManager, SessionState, SessionData, SessionInfo, SessionPersistMetadata,
 };

@@ -505,10 +505,47 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
             repl.state.tokens_used = pre_stream_tokens + tokens;
             repl.tools_invoked = pre_stream_tools + tools;
 
-            if turn.total_files_touched() > 0 {
+            // Collect turn file info before move
+            let turn_files: Vec<String> = turn.files_modified.iter()
+                .map(|f| f.path.clone())
+                .chain(turn.files_created.iter().cloned())
+                .chain(turn.files_deleted.iter().cloned())
+                .collect();
+            let files_touched = turn.total_files_touched();
+
+            if files_touched > 0 {
                 repl.diff_data.record_turn_diff(turn);
             }
             repl.current_turn += 1;
+
+            // Record per-turn checkpoint with file change tracking
+            let prompt_preview = if input.len() > 80 {
+                format!("{}...", &input[..80])
+            } else {
+                input.to_string()
+            };
+            let cp_list = repl.checkpoint_manager.list_checkpoints();
+            if let Some(latest_cp) = cp_list.last() {
+                repl.checkpoint_manager.record_turn(
+                    repl.current_turn - 1,
+                    latest_cp.checkpoint.clone(),
+                    turn_files,
+                    Some(prompt_preview),
+                );
+            } else if files_touched > 0 {
+                let synthetic_cp = shannon_core::Checkpoint {
+                    hash: String::new(),
+                    short_hash: String::new(),
+                    description: format!("turn {}", repl.current_turn),
+                    timestamp: chrono::Utc::now().timestamp(),
+                };
+                repl.checkpoint_manager.record_turn(
+                    repl.current_turn - 1,
+                    synthetic_cp,
+                    turn_files,
+                    Some(prompt_preview),
+                );
+            }
 
             // Auto-memory: if the assistant response contains memory-worthy
             // patterns, persist them to the memory store automatically.

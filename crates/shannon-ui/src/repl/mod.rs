@@ -767,8 +767,9 @@ impl Repl {
         let mut tool_registry = ToolRegistry::new();
         let agent_context_handle = register_default_tools_with_project_dir(&mut tool_registry, &project_dir).map_err(|e| anyhow::anyhow!("Failed to register tools: {e}"))?;
 
-        // Load and register skills from shannon-skills as tools
-        register_skills_as_tools(&mut tool_registry);
+        // Load and register skills from shannon-skills as tools.
+        // Also capture the formatted skills list for LLM context injection.
+        let (_, skills_for_llm) = register_skills_as_tools(&mut tool_registry);
 
         // Discover MCP server configurations and register their tools dynamically.
         // Servers are batched to avoid file descriptor exhaustion:
@@ -1202,7 +1203,12 @@ impl Repl {
                 query_engine.append_system_prompt(&git_ctx);
             }
 
-            // 5. Attach ContextInjector for hot-reload + compaction reinjection
+            // 5. Inject available skills list so the LLM knows what slash commands exist
+            if !skills_for_llm.is_empty() {
+                query_engine.append_system_prompt(&skills_for_llm);
+            }
+
+            // 6. Attach ContextInjector for hot-reload + compaction reinjection
             let storage_dir = dirs::home_dir()
                 .map(|h| h.join(".shannon"))
                 .unwrap_or_else(|| cwd.clone());
@@ -1470,6 +1476,97 @@ impl Repl {
             );
         }
         msg_count
+    }
+
+    /// Check for the most recent session and auto-restore it if it was
+    /// active within the last 2 hours. Shows a system message to inform
+    /// the user; they can start fresh with `/clear` if unwanted.
+    fn auto_restore_last_session(&mut self) {
+        let sessions = match self.state_manager.list_persisted_sessions() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        if sessions.is_empty() {
+            return;
+        }
+
+        // Find the most recently updated session
+        let most_recent = sessions
+            .iter()
+            .max_by_key(|s| s.updated_at)
+            .unwrap(); // safe: sessions is non-empty
+
+        // Only auto-restore if updated within the last 2 hours
+        let two_hours_ago = chrono::Utc::now() - chrono::Duration::hours(2);
+        if most_recent.updated_at < two_hours_ago {
+            return;
+        }
+
+        // Skip sessions with no turns (empty/stub sessions)
+        if most_recent.turn_count == 0 {
+            return;
+        }
+
+        let session_id = most_recent.session_id;
+        let title = most_recent.title.as_deref()
+            .or(most_recent.preview.as_deref())
+            .unwrap_or("Untitled");
+
+        match self.state_manager.load_session(&session_id) {
+            Ok(Some(data)) => {
+                let msg_count = data.messages.len();
+                if msg_count == 0 {
+                    return;
+                }
+
+                // Show notice before restoring messages
+                self.chat.add_message(ChatRole::System, format!(
+                    "Auto-restored session: \"{}\" ({} messages, {})\nType /clear to start fresh.",
+                    title, msg_count, most_recent.model,
+                ));
+
+                // Populate chat widget with restored messages
+                for msg in &data.messages {
+                    let role = match msg.role.as_str() {
+                        "user" => ChatRole::User,
+                        "assistant" => ChatRole::Assistant,
+                        "system" => ChatRole::System,
+                        _ => ChatRole::Tool,
+                    };
+                    let text = match &msg.content {
+                        MessageContent::Text(t) => t.clone(),
+                        MessageContent::Blocks(blocks) => blocks
+                            .iter()
+                            .filter_map(|b| match b {
+                                ContentBlock::Text { text } => Some(text.as_str()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    };
+                    self.chat.add_message(role, text);
+                }
+
+                // Restore in query engine
+                if let Some(ref mut engine) = self.query_engine {
+                    engine.replace_conversation(data.messages);
+                    if let Err(e) = engine.restore_session(session_id) {
+                        tracing::warn!("Auto-restore engine session failed: {e}");
+                    }
+                }
+
+                self.state.tokens_used = most_recent.total_input_tokens + most_recent.total_output_tokens;
+                if !most_recent.model.is_empty() {
+                    self.state.model = Some(most_recent.model.clone());
+                }
+
+                tracing::info!(
+                    "Auto-restored session {} (\"{}\", {} msgs)",
+                    session_id, title, msg_count,
+                );
+            }
+            Ok(None) | Err(_) => {}
+        }
     }
 
     /// Cycle the approval mode and sync UI state.
@@ -1787,6 +1884,9 @@ impl Repl {
         if let Some(update_msg) = self.check_for_updates() {
             self.chat.add_message(ChatRole::System, update_msg);
         }
+
+        // Auto-restore the most recent session if it was active within the last 2 hours.
+        self.auto_restore_last_session();
 
         // Main event loop
         while self.running {

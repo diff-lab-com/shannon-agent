@@ -154,12 +154,15 @@ fn default_skill_dirs() -> Vec<(PathBuf, SkillSource)> {
 ///
 /// Also registers the built-in bundled skills from `shannon-skills`.
 ///
-/// Returns the number of skills that were successfully registered.
+/// Returns `(count, skills_for_llm)` where `count` is the number of skills
+/// successfully registered as tools and `skills_for_llm` is a formatted
+/// string listing all available skills suitable for injecting into the
+/// LLM system prompt.
 ///
 /// Errors from missing directories or invalid skill files are logged and
 /// silently skipped -- the application must not crash because of a bad
 /// skill file.
-pub fn register_skills_as_tools(registry: &mut ToolRegistry) -> usize {
+pub fn register_skills_as_tools(registry: &mut ToolRegistry) -> (usize, String) {
     let mut count = 0usize;
 
     // --- Register bundled skills ---
@@ -204,6 +207,9 @@ pub fn register_skills_as_tools(registry: &mut ToolRegistry) -> usize {
         }
     }
 
+    // Format skills list for LLM context injection (before moving skills out)
+    let skills_for_llm = skill_registry.format_skills_for_llm();
+
     // Wrap each user-invocable skill as a Tool and register it.
     for skill in skill_registry.list() {
         if !skill.is_user_invocable() {
@@ -226,7 +232,7 @@ pub fn register_skills_as_tools(registry: &mut ToolRegistry) -> usize {
         info!("Registered {} skill(s) as tools", count);
     }
 
-    count
+    (count, skills_for_llm)
 }
 
 // ---------------------------------------------------------------------------
@@ -322,7 +328,7 @@ mod tests {
         // Calling register_skills_as_tools on a fresh registry should succeed
         // even when no skill directories exist.
         let mut registry = ToolRegistry::new();
-        let count = register_skills_as_tools(&mut registry);
+        let (count, _skills_for_llm) = register_skills_as_tools(&mut registry);
         // At minimum the bundled skills should be registered.
         assert!(count > 0, "Expected at least bundled skills to register");
     }

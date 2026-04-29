@@ -54,6 +54,7 @@ pub mod synthetic_output;
 pub mod repl_tool;
 pub mod mcp_auth;
 pub mod schedule_wakeup;
+pub mod pty;
 
 // Re-exports for convenience
 pub use file::{ReadTool, WriteTool, EditTool, GlobTool, FileOperation};

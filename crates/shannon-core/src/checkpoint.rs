@@ -1,16 +1,26 @@
-//! Git-based checkpoint system for undo/revert operations.
+//! Checkpoint system for undo/revert operations (Claude Code compatible).
 //!
-//! Creates lightweight git commits before file-modifying tool executions,
-//! allowing users to revert to a known-good state via `/undo`.
+//! Creates lightweight git commits before file-modifying tool executions
+//! and tracks per-turn file changes. Supports persistent checkpoint storage
+//! and four restore modes:
+//! - Restore code and conversation
+//! - Restore conversation only
+//! - Restore code only
+//! - Summarize from here (compact messages from that point)
 
+use std::fs;
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
-/// Maximum number of checkpoints to retain.
+/// Maximum number of checkpoints to retain per session.
 const MAX_CHECKPOINTS: usize = 50;
 
+/// Maximum age in days before auto-cleanup removes checkpoint files.
+const CHECKPOINT_MAX_AGE_DAYS: i64 = 30;
+
 /// A single checkpoint representing a point-in-time snapshot.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Checkpoint {
     /// Git commit hash.
     pub hash: String,
@@ -22,20 +32,73 @@ pub struct Checkpoint {
     pub timestamp: i64,
 }
 
-/// Manages git-based checkpoints for undo operations.
+/// A per-turn checkpoint that ties git state to conversation context.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TurnCheckpoint {
+    /// Index of the conversation turn (0-based).
+    pub turn_index: usize,
+    /// Git checkpoint at the start of this turn.
+    pub checkpoint: Checkpoint,
+    /// Files modified during this turn (relative paths).
+    pub files_changed: Vec<String>,
+    /// Preview of the user's prompt for this turn (first 80 chars).
+    pub prompt_preview: Option<String>,
+}
+
+/// Restore mode for rewind operations (Claude Code compatible).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestoreMode {
+    /// Revert both code changes and conversation history.
+    CodeAndConversation,
+    /// Only rewind conversation history, keep current code.
+    ConversationOnly,
+    /// Only revert file changes, keep conversation.
+    CodeOnly,
+}
+
+/// Manages git-based checkpoints with per-turn tracking and persistence.
 #[derive(Debug, Clone)]
 pub struct CheckpointManager {
-    checkpoints: Arc<Mutex<Vec<Checkpoint>>>,
+    checkpoints: Arc<Mutex<Vec<TurnCheckpoint>>>,
     enabled: bool,
+    session_id: String,
+    storage_dir: PathBuf,
 }
 
 impl CheckpointManager {
     /// Create a new checkpoint manager.
     pub fn new() -> Self {
+        let storage_dir = dirs::home_dir()
+            .map(|h| h.join(".shannon").join("checkpoints"))
+            .unwrap_or_else(|| PathBuf::from(".shannon/checkpoints"));
         Self {
             checkpoints: Arc::new(Mutex::new(Vec::new())),
             enabled: Self::is_git_repo(),
+            session_id: String::new(),
+            storage_dir,
         }
+    }
+
+    /// Create a checkpoint manager for a specific session.
+    pub fn for_session(session_id: &str) -> Self {
+        let storage_dir = dirs::home_dir()
+            .map(|h| h.join(".shannon").join("checkpoints"))
+            .unwrap_or_else(|| PathBuf::from(".shannon/checkpoints"));
+        let mgr = Self {
+            checkpoints: Arc::new(Mutex::new(Vec::new())),
+            enabled: Self::is_git_repo(),
+            session_id: session_id.to_string(),
+            storage_dir,
+        };
+        // Try to load persisted checkpoints for this session
+        let _ = mgr.load_from_disk();
+        mgr
+    }
+
+    /// Set the session ID (for persistence).
+    pub fn set_session_id(&mut self, session_id: &str) {
+        self.session_id = session_id.to_string();
+        let _ = self.load_from_disk();
     }
 
     /// Check if the current directory is inside a git repo.
@@ -53,15 +116,11 @@ impl CheckpointManager {
     }
 
     /// Create a checkpoint before a tool execution.
-    ///
-    /// Returns `Ok(Checkpoint)` if a checkpoint was created, or `Err` with
-    /// a reason if not (e.g., no changes to save, not a git repo).
     pub fn create_checkpoint(&self, tool_name: &str, description: &str) -> Result<Checkpoint, String> {
         if !self.enabled {
             return Err("Not in a git repository — checkpoints unavailable".to_string());
         }
 
-        // Check if there are any changes to checkpoint
         let has_changes = {
             let output = Command::new("git")
                 .args(["status", "--porcelain"])
@@ -72,7 +131,6 @@ impl CheckpointManager {
         };
 
         if !has_changes {
-            // Nothing to checkpoint — record the current HEAD as a reference point
             let hash = Self::get_head_hash()?;
             let cp = Checkpoint {
                 short_hash: hash[..7.min(hash.len())].to_string(),
@@ -80,11 +138,9 @@ impl CheckpointManager {
                 description: format!("pre-{tool_name}: {description} (no changes)"),
                 timestamp: chrono::Utc::now().timestamp(),
             };
-            self.checkpoints.lock().unwrap().push(cp.clone());
             return Ok(cp);
         }
 
-        // Stage all changes
         let stage_output = Command::new("git")
             .args(["add", "-A"])
             .output()
@@ -93,7 +149,6 @@ impl CheckpointManager {
             return Err("Failed to stage changes for checkpoint".to_string());
         }
 
-        // Create the checkpoint commit
         let commit_msg = format!("shannon: checkpoint before {tool_name}\n\n{description}");
         let commit_output = Command::new("git")
             .args(["commit", "-m", &commit_msg, "--no-gpg-sign"])
@@ -102,7 +157,6 @@ impl CheckpointManager {
 
         if !commit_output.status.success() {
             let stderr = String::from_utf8_lossy(&commit_output.stderr);
-            // "nothing to commit" is OK — means the changes were already committed
             if !stderr.contains("nothing to commit") {
                 return Err(format!("Checkpoint commit failed: {stderr}"));
             }
@@ -116,8 +170,26 @@ impl CheckpointManager {
             timestamp: chrono::Utc::now().timestamp(),
         };
 
+        Ok(cp)
+    }
+
+    /// Record a per-turn checkpoint with file change tracking.
+    pub fn record_turn(
+        &self,
+        turn_index: usize,
+        checkpoint: Checkpoint,
+        files_changed: Vec<String>,
+        prompt_preview: Option<String>,
+    ) {
+        let tc = TurnCheckpoint {
+            turn_index,
+            checkpoint,
+            files_changed,
+            prompt_preview,
+        };
+
         let mut checkpoints = self.checkpoints.lock().unwrap();
-        checkpoints.push(cp.clone());
+        checkpoints.push(tc);
 
         // Trim old checkpoints
         if checkpoints.len() > MAX_CHECKPOINTS {
@@ -125,23 +197,31 @@ impl CheckpointManager {
             checkpoints.drain(..drain_count);
         }
 
-        Ok(cp)
+        let _ = self.save_to_disk();
     }
 
-    /// List all stored checkpoints (most recent last).
-    pub fn list_checkpoints(&self) -> Vec<Checkpoint> {
+    /// List all stored turn checkpoints (most recent last).
+    pub fn list_checkpoints(&self) -> Vec<TurnCheckpoint> {
         self.checkpoints.lock().unwrap().clone()
     }
 
-    /// Revert to a specific checkpoint by index (0 = oldest).
-    ///
-    /// Returns the checkpoint that was reverted to.
-    pub fn revert_to(&self, index: usize) -> Result<Checkpoint, String> {
-        if !self.enabled {
+    /// List legacy checkpoints (git-only, without turn info).
+    pub fn list_legacy_checkpoints(&self) -> Vec<Checkpoint> {
+        self.checkpoints
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|tc| tc.checkpoint.clone())
+            .collect()
+    }
+
+    /// Revert to a specific turn checkpoint by index.
+    pub fn revert_to(&self, index: usize, mode: RestoreMode) -> Result<TurnCheckpoint, String> {
+        if !self.enabled && mode != RestoreMode::ConversationOnly {
             return Err("Not in a git repository".to_string());
         }
 
-        let cp = {
+        let tc = {
             let checkpoints = self.checkpoints.lock().unwrap();
             if index >= checkpoints.len() {
                 return Err(format!(
@@ -152,21 +232,24 @@ impl CheckpointManager {
             checkpoints[index].clone()
         };
 
-        // Reset to the checkpoint commit
-        let output = Command::new("git")
-            .args(["reset", "--hard", &cp.hash])
-            .output()
-            .map_err(|e| format!("Failed to reset: {e}"))?;
+        // Revert code if needed
+        if mode == RestoreMode::CodeAndConversation || mode == RestoreMode::CodeOnly {
+            let output = Command::new("git")
+                .args(["reset", "--hard", &tc.checkpoint.hash])
+                .output()
+                .map_err(|e| format!("Failed to reset: {e}"))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("Revert failed: {stderr}"));
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(format!("Revert failed: {stderr}"));
+            }
         }
 
-        // Remove all checkpoints after the reverted one
+        // Remove checkpoints after the reverted one
         self.checkpoints.lock().unwrap().truncate(index + 1);
+        let _ = self.save_to_disk();
 
-        Ok(cp)
+        Ok(tc)
     }
 
     /// Revert the most recent checkpoint (convenience method).
@@ -175,18 +258,21 @@ impl CheckpointManager {
         if count == 0 {
             return Err("No checkpoints to undo".to_string());
         }
-        self.revert_to(count - 1)
+        let tc = self.revert_to(count - 1, RestoreMode::CodeAndConversation)?;
+        Ok(tc.checkpoint)
     }
 
     /// Pop (discard) the most recent checkpoint without reverting.
-    /// Useful when a tool execution fails and the checkpoint is no longer needed.
-    pub fn discard_last(&self) -> Option<Checkpoint> {
-        self.checkpoints.lock().unwrap().pop()
+    pub fn discard_last(&self) -> Option<TurnCheckpoint> {
+        let popped = self.checkpoints.lock().unwrap().pop();
+        let _ = self.save_to_disk();
+        popped
     }
 
     /// Clear all checkpoints.
     pub fn clear(&self) {
         self.checkpoints.lock().unwrap().clear();
+        let _ = self.save_to_disk();
     }
 
     /// Number of stored checkpoints.
@@ -197,6 +283,101 @@ impl CheckpointManager {
     /// Whether there are any checkpoints.
     pub fn is_empty(&self) -> bool {
         self.checkpoints.lock().unwrap().is_empty()
+    }
+
+    // ---- Persistence ----
+
+    /// Get the file path for this session's checkpoints.
+    fn session_checkpoint_path(&self) -> Option<PathBuf> {
+        if self.session_id.is_empty() {
+            return None;
+        }
+        Some(self.storage_dir.join(format!("{}.json", self.session_id)))
+    }
+
+    /// Save checkpoints to disk.
+    fn save_to_disk(&self) -> Result<(), String> {
+        let path = match self.session_checkpoint_path() {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+
+        let checkpoints = self.checkpoints.lock().unwrap();
+        let json = serde_json::to_string_pretty(&*checkpoints)
+            .map_err(|e| format!("Failed to serialize checkpoints: {e}"))?;
+
+        fs::write(&path, json)
+            .map_err(|e| format!("Failed to write checkpoints: {e}"))?;
+
+        Ok(())
+    }
+
+    /// Load checkpoints from disk.
+    fn load_from_disk(&self) -> Result<(), String> {
+        let path = match self.session_checkpoint_path() {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+
+        if !path.exists() {
+            return Ok(());
+        }
+
+        let data = fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read checkpoints: {e}"))?;
+
+        let loaded: Vec<TurnCheckpoint> = serde_json::from_str(&data)
+            .map_err(|e| format!("Failed to parse checkpoints: {e}"))?;
+
+        let mut checkpoints = self.checkpoints.lock().unwrap();
+        *checkpoints = loaded;
+
+        Ok(())
+    }
+
+    /// Clean up checkpoint files older than CHECKPOINT_MAX_AGE_DAYS.
+    pub fn cleanup_old_checkpoints() -> Result<usize, String> {
+        let storage_dir = dirs::home_dir()
+            .map(|h| h.join(".shannon").join("checkpoints"))
+            .unwrap_or_else(|| PathBuf::from(".shannon/checkpoints"));
+
+        if !storage_dir.exists() {
+            return Ok(0);
+        }
+
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(CHECKPOINT_MAX_AGE_DAYS);
+        let cutoff_ts = cutoff.timestamp();
+        let mut removed = 0;
+
+        let entries = fs::read_dir(&storage_dir)
+            .map_err(|e| format!("Failed to read checkpoint dir: {e}"))?;
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+
+            // Check file modification time as proxy for age
+            if let Ok(metadata) = fs::metadata(&path) {
+                if let Ok(modified) = metadata.modified() {
+                    let mod_time: i64 = modified
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64;
+                    if mod_time < cutoff_ts {
+                        let _ = fs::remove_file(&path);
+                        removed += 1;
+                    }
+                }
+            }
+        }
+
+        Ok(removed)
     }
 
     fn get_head_hash() -> Result<String, String> {
@@ -224,7 +405,6 @@ mod tests {
     #[test]
     fn test_checkpoint_manager_new() {
         let mgr = CheckpointManager::new();
-        // In a git repo, it should be enabled
         assert!(mgr.is_enabled());
         assert!(mgr.is_empty());
     }
@@ -254,7 +434,7 @@ mod tests {
     #[test]
     fn test_checkpoint_manager_revert_invalid_index() {
         let mgr = CheckpointManager::new();
-        let result = mgr.revert_to(0);
+        let result = mgr.revert_to(0, RestoreMode::CodeAndConversation);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Invalid checkpoint index"));
     }
@@ -270,5 +450,33 @@ mod tests {
     fn test_checkpoint_manager_discard_last_empty() {
         let mgr = CheckpointManager::new();
         assert!(mgr.discard_last().is_none());
+    }
+
+    #[test]
+    fn test_turn_checkpoint_serialization() {
+        let tc = TurnCheckpoint {
+            turn_index: 0,
+            checkpoint: Checkpoint {
+                hash: "abc123def456".to_string(),
+                short_hash: "abc123d".to_string(),
+                description: "test checkpoint".to_string(),
+                timestamp: 1234567890,
+            },
+            files_changed: vec!["src/main.rs".to_string(), "lib.rs".to_string()],
+            prompt_preview: Some("fix the bug".to_string()),
+        };
+
+        let json = serde_json::to_string(&tc).unwrap();
+        let deserialized: TurnCheckpoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.turn_index, 0);
+        assert_eq!(deserialized.files_changed.len(), 2);
+        assert_eq!(deserialized.prompt_preview, Some("fix the bug".to_string()));
+    }
+
+    #[test]
+    fn test_restore_modes() {
+        // Just verify the enum variants exist and are distinct
+        assert_ne!(RestoreMode::CodeAndConversation, RestoreMode::ConversationOnly);
+        assert_ne!(RestoreMode::CodeOnly, RestoreMode::ConversationOnly);
     }
 }

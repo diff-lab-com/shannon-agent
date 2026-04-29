@@ -561,7 +561,7 @@ fn run_noninteractive_query(
             .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
 
         // Load and register skills from shannon-skills as tools
-        shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
+        let _ = shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
 
         // Discover MCP server configurations and register their tools dynamically
         {
@@ -801,7 +801,7 @@ fn run_headless_query(
             .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
 
         // Load and register skills
-        shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
+        let _ = shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
 
         // Discover MCP servers
         {
@@ -1077,7 +1077,7 @@ fn run_serve_command(port: u16, host: Option<String>, config: &CliConfig) -> Res
             .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
 
         // Load and register skills.
-        shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
+        let _ = shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
 
         // Build LLM client config via the shared ConfigBuilder pipeline.
         let client_config = build_llm_config_from_builder(config);
@@ -1187,7 +1187,7 @@ fn run_team_agent_mode(
         let agent_context_handle = register_default_tools_with_project_dir(&mut tools, &project_dir)
             .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
 
-        shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
+        let _ = shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
 
         // Discover MCP servers and register their tools dynamically
         {

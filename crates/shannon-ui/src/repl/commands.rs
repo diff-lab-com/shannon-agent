@@ -1401,11 +1401,22 @@ fn handle_undo(repl: &mut Repl, args: &str) -> Result<()> {
             return Ok(());
         }
         let mut msg = String::from("Checkpoints:\n\n");
-        for (i, cp) in checkpoints.iter().enumerate() {
-            let time = chrono::DateTime::from_timestamp(cp.timestamp, 0)
+        for (i, tc) in checkpoints.iter().enumerate() {
+            let time = chrono::DateTime::from_timestamp(tc.checkpoint.timestamp, 0)
                 .map(|t| t.format("%H:%M:%S").to_string())
                 .unwrap_or_else(|| "unknown".to_string());
-            msg.push_str(&format!("  [{}] {} {} — {}\n", i, cp.short_hash, time, cp.description));
+            let files = if tc.files_changed.is_empty() {
+                String::new()
+            } else if tc.files_changed.len() <= 3 {
+                format!(" [{}]", tc.files_changed.join(", "))
+            } else {
+                format!(" [{} files]", tc.files_changed.len())
+            };
+            let preview = tc.prompt_preview.as_deref().map(|p| format!(" — {p}")).unwrap_or_default();
+            msg.push_str(&format!(
+                "  [{}] {} {}{}{} — {}\n",
+                i, tc.checkpoint.short_hash, time, files, preview, tc.checkpoint.description
+            ));
         }
         msg.push_str("\nUse /undo <number> to revert to a specific checkpoint.");
         msg.push_str("\nUse /undo (no args) to revert the last checkpoint.");
@@ -1415,11 +1426,11 @@ fn handle_undo(repl: &mut Repl, args: &str) -> Result<()> {
 
     // /undo <number> — revert to specific checkpoint
     if let Ok(index) = trimmed.parse::<usize>() {
-        match mgr.revert_to(index) {
-            Ok(cp) => {
+        match mgr.revert_to(index, shannon_core::RestoreMode::CodeAndConversation) {
+            Ok(tc) => {
                 repl.chat.add_message(
                     ChatRole::System,
-                    format!("Reverted to checkpoint [{}] ({})\n{}", index, cp.short_hash, cp.description),
+                    format!("Reverted to checkpoint [{}] ({})\n{}", index, tc.checkpoint.short_hash, tc.checkpoint.description),
                 );
             }
             Err(e) => {
@@ -1461,36 +1472,130 @@ fn handle_undo(repl: &mut Repl, args: &str) -> Result<()> {
 fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
     let trimmed = args.trim();
 
-    // Parse number of turns (default: 1)
+    // /rewind history — show checkpoint history with turn info
+    if trimmed == "history" || trimmed == "list" || trimmed == "ls" {
+        let checkpoints = repl.checkpoint_manager.list_checkpoints();
+        if checkpoints.is_empty() {
+            repl.chat.add_message(
+                ChatRole::System,
+                "No turn checkpoints available.".to_string(),
+            );
+            return Ok(());
+        }
+        let mut msg = String::from("Turn history:\n\n");
+        for (i, tc) in checkpoints.iter().enumerate() {
+            let time = chrono::DateTime::from_timestamp(tc.checkpoint.timestamp, 0)
+                .map(|t| t.format("%H:%M:%S").to_string())
+                .unwrap_or_else(|| "??:??:??".to_string());
+            let files = if tc.files_changed.is_empty() {
+                String::new()
+            } else if tc.files_changed.len() <= 3 {
+                format!(" [{}]", tc.files_changed.join(", "))
+            } else {
+                format!(" [{} files]", tc.files_changed.len())
+            };
+            let preview = tc.prompt_preview.as_deref()
+                .map(|p| if p.len() > 60 { format!("{}...", &p[..60]) } else { p.to_string() })
+                .unwrap_or_default();
+            msg.push_str(&format!(
+                "  [{}] turn {} {}{} — {}\n",
+                i, tc.turn_index, time, files, preview,
+            ));
+        }
+        msg.push_str("\n/rewind <n> — rewind conversation by n turns");
+        msg.push_str("\n/rewind code <n> — revert code to checkpoint [n]");
+        msg.push_str("\n/rewind both <n> — revert code + rewind conversation to checkpoint [n]");
+        repl.chat.add_message(ChatRole::System, msg);
+        return Ok(());
+    }
+
+    // /rewind code <n> — revert file changes to checkpoint index n
+    if let Some(rest) = trimmed.strip_prefix("code ") {
+        if let Ok(index) = rest.trim().parse::<usize>() {
+            match repl.checkpoint_manager.revert_to(index, shannon_core::RestoreMode::CodeOnly) {
+                Ok(tc) => {
+                    let files = if tc.files_changed.is_empty() {
+                        "no files".to_string()
+                    } else {
+                        tc.files_changed.join(", ")
+                    };
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        format!(
+                            "Reverted code to checkpoint [{}] (turn {}).\nFiles affected: {}",
+                            index, tc.turn_index, files
+                        ),
+                    );
+                }
+                Err(e) => {
+                    repl.chat.add_message(ChatRole::System, format!("Code revert failed: {e}"));
+                }
+            }
+            return Ok(());
+        }
+    }
+
+    // /rewind both <n> — revert code + rewind conversation to checkpoint index n
+    if let Some(rest) = trimmed.strip_prefix("both ") {
+        if let Ok(index) = rest.trim().parse::<usize>() {
+            match repl.checkpoint_manager.revert_to(index, shannon_core::RestoreMode::CodeAndConversation) {
+                Ok(tc) => {
+                    // Remove the "/rewind both" command message
+                    repl.chat.pop_last();
+                    // Calculate turns to rewind from conversation
+                    let turns_to_rewind = repl.checkpoint_manager.list_checkpoints().len().saturating_sub(index);
+                    if turns_to_rewind > 0 {
+                        repl.chat.rewind(turns_to_rewind);
+                        if let Some(ref mut engine) = repl.query_engine {
+                            engine.rewind_conversation(turns_to_rewind);
+                        }
+                    }
+                    let files = if tc.files_changed.is_empty() {
+                        "no files".to_string()
+                    } else {
+                        tc.files_changed.join(", ")
+                    };
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        format!(
+                            "Rewound to checkpoint [{}] (turn {}): reverted code + conversation.\nFiles: {}",
+                            index, tc.turn_index, files
+                        ),
+                    );
+                }
+                Err(e) => {
+                    repl.chat.add_message(ChatRole::System, format!("Rewind failed: {e}"));
+                }
+            }
+            return Ok(());
+        }
+    }
+
+    // /rewind <n> — rewind conversation by n turns (existing behavior)
     let turns = if trimmed.is_empty() {
         1
     } else if let Ok(n) = trimmed.parse::<usize>() {
         if n == 0 {
-            // Remove the "/rewind 0" command message added by submit_input
             repl.chat.pop_last();
-            repl.chat.add_message(ChatRole::System, "Usage: /rewind [number-of-turns]".to_string());
+            repl.chat.add_message(ChatRole::System,
+                "Usage: /rewind [n | history | code <n> | both <n>]".to_string());
             return Ok(());
         }
         n
     } else {
-        // Remove the "/rewind <invalid>" command message added by submit_input
         repl.chat.pop_last();
-        repl.chat.add_message(ChatRole::System, "Usage: /rewind [number-of-turns]".to_string());
+        repl.chat.add_message(ChatRole::System,
+            "Usage: /rewind [n | history | code <n> | both <n>]".to_string());
         return Ok(());
     };
 
-    // Remove the "/rewind" command message added by submit_input
-    // so it doesn't interfere with turn counting
+    // Remove the "/rewind" command message
     repl.chat.pop_last();
 
-    // Show what we're about to rewind
     let before_count = repl.chat.len();
-
-    // Rewind the UI chat
     let removed = repl.chat.rewind(turns);
     let after_count = repl.chat.len();
 
-    // Rewind the engine conversation history to keep them in sync
     if let Some(ref mut engine) = repl.query_engine {
         engine.rewind_conversation(turns);
     }
@@ -1499,7 +1604,7 @@ fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
         repl.chat.add_message(
             ChatRole::System,
             format!(
-                "Rewound {turns} turn(s): removed {removed} messages ({before_count} → {after_count} remaining)."
+                "Rewound {turns} turn(s): removed {removed} messages ({before_count} → {after_count} remaining).\nUse /rewind code <n> to also revert file changes."
             ),
         );
     } else {

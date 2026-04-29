@@ -531,6 +531,10 @@ pub struct BashInput {
 
     /// Optional environment variables
     pub env: Option<std::collections::HashMap<String, String>>,
+
+    /// Use PTY (pseudo-terminal) for interactive command support
+    #[serde(default)]
+    pub use_pty: bool,
 }
 
 /// PowerShell command input
@@ -828,8 +832,31 @@ impl Tool for BashTool {
             String::new()
         };
 
-        // Execute the command (Docker sandbox > process sandbox > direct)
-        let output_result = if let Some(ref sandbox) = self.sandbox {
+        // Execute the command (PTY mode for interactive, otherwise sandboxed/direct)
+        let output_result = if bash_input.use_pty {
+            let cmd = bash_input.command.clone();
+            let cwd = bash_input.cwd.clone();
+            let env = bash_input.env.clone();
+            let timeout = bash_input.timeout;
+            tokio::task::spawn_blocking(move || {
+                match crate::pty::execute_in_pty(
+                    &cmd,
+                    cwd.as_deref(),
+                    env.as_ref(),
+                    timeout,
+                ) {
+                    Ok(pty_out) => Ok(CommandOutput {
+                        stdout: pty_out.stdout,
+                        stderr: String::new(),
+                        exit_code: pty_out.exit_code,
+                        success: pty_out.exit_code == 0,
+                    }),
+                    Err(e) => Err(std::io::Error::other(e)),
+                }
+            })
+            .await
+            .unwrap_or_else(|e| Err(std::io::Error::other(e.to_string())))
+        } else if let Some(ref sandbox) = self.sandbox {
             sandbox.execute(
                 &bash_input.command,
                 bash_input.cwd.as_deref(),

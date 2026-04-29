@@ -57,6 +57,9 @@ sha2 = "0.10"
 # Shell command parsing for security
 shell-words = "1.1"
 
+# PTY support for interactive commands
+portable-pty = "0.8"
+
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3"
