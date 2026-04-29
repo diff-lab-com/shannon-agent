@@ -19,6 +19,12 @@ pub struct PaletteCommand {
     pub description: String,
     pub shortcut: Option<String>,
     pub category: CommandCategory,
+    /// Argument template shown when selected (e.g., "<file>", "<query>")
+    pub args_template: Option<String>,
+    /// Subcommands for multi-level commands
+    pub subcommands: Vec<String>,
+    /// Number of times this command has been used (for MRU sorting)
+    pub use_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -104,9 +110,9 @@ impl CommandPaletteWidget {
         self.query.clear();
     }
 
-    /// Return filtered commands matching the current query
+    /// Return filtered commands matching the current query, sorted by MRU
     pub fn filter_commands(&self) -> Vec<&PaletteCommand> {
-        if self.query.is_empty() {
+        let mut results: Vec<&PaletteCommand> = if self.query.is_empty() {
             self.commands.iter().collect()
         } else {
             let q = self.query.to_lowercase();
@@ -115,10 +121,14 @@ impl CommandPaletteWidget {
                 .filter(|cmd| {
                     let name_match = fuzzy_match_cmd(&q, &cmd.name.to_lowercase());
                     let desc_match = fuzzy_match_cmd(&q, &cmd.description.to_lowercase());
-                    name_match || desc_match
+                    let subcmd_match = cmd.subcommands.iter().any(|s| s.to_lowercase().contains(&q));
+                    name_match || desc_match || subcmd_match
                 })
                 .collect()
-        }
+        };
+        // Sort by use_count descending (MRU first), stable sort preserves order for ties
+        results.sort_by(|a, b| b.use_count.cmp(&a.use_count));
+        results
     }
 
     /// Move selection up
@@ -235,9 +245,15 @@ impl CommandPaletteWidget {
                     .as_deref()
                     .map(|s| format!(" [{s}]"))
                     .unwrap_or_default();
+                let args_text = cmd
+                    .args_template
+                    .as_deref()
+                    .map(|a| format!(" {a}"))
+                    .unwrap_or_default();
                 let desc_text = format!(
-                    " {}{}",
+                    " {}{}{}",
                     cmd.description,
+                    args_text,
                     shortcut_text
                 );
 
@@ -288,6 +304,13 @@ impl CommandPaletteWidget {
         frame.render_stateful_widget(list, popup_area, &mut state);
     }
 
+    /// Record that a command was used (for MRU sorting)
+    pub fn record_use(&mut self, command_name: &str) {
+        if let Some(cmd) = self.commands.iter_mut().find(|c| c.name == command_name) {
+            cmd.use_count += 1;
+        }
+    }
+
     // -- Built-in commands --
 
     fn default_commands() -> Vec<PaletteCommand> {
@@ -298,24 +321,36 @@ impl CommandPaletteWidget {
                 description: "Search through chat history".into(),
                 shortcut: Some("Ctrl+H".into()),
                 category: CommandCategory::Navigation,
+                args_template: None,
+                subcommands: vec![],
+                use_count: 0,
             },
             PaletteCommand {
                 name: "Toggle Sidebar".into(),
                 description: "Show or hide sidebar".into(),
                 shortcut: Some("Ctrl+S".into()),
                 category: CommandCategory::Navigation,
+                args_template: None,
+                subcommands: vec![],
+                use_count: 0,
             },
             PaletteCommand {
                 name: "Go to Top".into(),
                 description: "Scroll to top of chat".into(),
                 shortcut: None,
                 category: CommandCategory::Navigation,
+                args_template: None,
+                subcommands: vec![],
+                use_count: 0,
             },
             PaletteCommand {
                 name: "Go to Bottom".into(),
                 description: "Scroll to bottom of chat".into(),
                 shortcut: None,
                 category: CommandCategory::Navigation,
+                args_template: None,
+                subcommands: vec![],
+                use_count: 0,
             },
             // Editing
             PaletteCommand {
@@ -323,18 +358,27 @@ impl CommandPaletteWidget {
                 description: "Open input in external editor".into(),
                 shortcut: Some("Ctrl+E".into()),
                 category: CommandCategory::Editing,
+                args_template: None,
+                subcommands: vec![],
+                use_count: 0,
             },
             PaletteCommand {
                 name: "Multiline Mode".into(),
                 description: "Toggle multiline input".into(),
                 shortcut: None,
                 category: CommandCategory::Editing,
+                args_template: None,
+                subcommands: vec![],
+                use_count: 0,
             },
             PaletteCommand {
                 name: "Undo".into(),
                 description: "Undo last action".into(),
                 shortcut: None,
                 category: CommandCategory::Editing,
+                args_template: Some("<list|number>".into()),
+                subcommands: vec!["list".into()],
+                use_count: 0,
             },
             // Session
             PaletteCommand {
@@ -342,18 +386,27 @@ impl CommandPaletteWidget {
                 description: "Start a new session".into(),
                 shortcut: None,
                 category: CommandCategory::Session,
+                args_template: None,
+                subcommands: vec![],
+                use_count: 0,
             },
             PaletteCommand {
                 name: "Close Session".into(),
                 description: "Close current session".into(),
                 shortcut: None,
                 category: CommandCategory::Session,
+                args_template: None,
+                subcommands: vec![],
+                use_count: 0,
             },
             PaletteCommand {
                 name: "Switch Session".into(),
                 description: "Switch between sessions".into(),
                 shortcut: Some("Ctrl+Tab".into()),
                 category: CommandCategory::Session,
+                args_template: None,
+                subcommands: vec![],
+                use_count: 0,
             },
             // Tools
             PaletteCommand {
@@ -361,18 +414,54 @@ impl CommandPaletteWidget {
                 description: "Run a shell command".into(),
                 shortcut: None,
                 category: CommandCategory::Tools,
+                args_template: Some("<command>".into()),
+                subcommands: vec![],
+                use_count: 0,
             },
             PaletteCommand {
                 name: "View Diff".into(),
                 description: "View pending changes".into(),
                 shortcut: Some("Ctrl+D".into()),
                 category: CommandCategory::Tools,
+                args_template: Some("[ref]".into()),
+                subcommands: vec!["review".into(), "accept".into(), "reject".into(), "accept-all".into(), "reject-all".into(), "interactive".into()],
+                use_count: 0,
             },
             PaletteCommand {
                 name: "Compact Context".into(),
                 description: "Compact conversation context".into(),
                 shortcut: None,
                 category: CommandCategory::Tools,
+                args_template: Some("[strategy|preview|focus <topic>]".into()),
+                subcommands: vec!["status".into(), "preview".into(), "truncate".into(), "micro".into(), "group".into(), "focus".into()],
+                use_count: 0,
+            },
+            PaletteCommand {
+                name: "Image".into(),
+                description: "Attach an image to conversation".into(),
+                shortcut: None,
+                category: CommandCategory::Tools,
+                args_template: Some("<path|paste|url> [prompt]".into()),
+                subcommands: vec!["paste".into(), "url".into()],
+                use_count: 0,
+            },
+            PaletteCommand {
+                name: "Find".into(),
+                description: "Search through conversation messages".into(),
+                shortcut: None,
+                category: CommandCategory::Tools,
+                args_template: Some("<query>".into()),
+                subcommands: vec![],
+                use_count: 0,
+            },
+            PaletteCommand {
+                name: "Grep".into(),
+                description: "Search command history with regex".into(),
+                shortcut: None,
+                category: CommandCategory::Tools,
+                args_template: Some("<pattern>".into()),
+                subcommands: vec![],
+                use_count: 0,
             },
             // Settings
             PaletteCommand {
@@ -380,18 +469,36 @@ impl CommandPaletteWidget {
                 description: "Switch active LLM model".into(),
                 shortcut: Some("Ctrl+M".into()),
                 category: CommandCategory::Settings,
+                args_template: Some("[model-name]".into()),
+                subcommands: vec![],
+                use_count: 0,
             },
             PaletteCommand {
                 name: "Change Theme".into(),
                 description: "Switch UI theme".into(),
                 shortcut: None,
                 category: CommandCategory::Settings,
+                args_template: Some("[theme]".into()),
+                subcommands: vec!["dark".into(), "light".into()],
+                use_count: 0,
             },
             PaletteCommand {
                 name: "Toggle Vim Mode".into(),
                 description: "Enable or disable vim keybindings".into(),
                 shortcut: None,
                 category: CommandCategory::Settings,
+                args_template: None,
+                subcommands: vec![],
+                use_count: 0,
+            },
+            PaletteCommand {
+                name: "Keybindings".into(),
+                description: "Show or customize keybindings".into(),
+                shortcut: Some("F1".into()),
+                category: CommandCategory::Settings,
+                args_template: Some("[list|save|load]".into()),
+                subcommands: vec!["list".into(), "save".into(), "load".into()],
+                use_count: 0,
             },
         ]
     }
@@ -432,7 +539,7 @@ mod tests {
     fn test_new_palette_has_commands() {
         let palette = CommandPaletteWidget::new();
         assert!(!palette.commands.is_empty());
-        assert_eq!(palette.commands.len(), 16);
+        assert_eq!(palette.commands.len(), 20);
         assert!(!palette.is_visible);
     }
 
@@ -476,8 +583,8 @@ mod tests {
         let mut palette = CommandPaletteWidget::new();
         palette.query = "vim".to_string();
         let filtered = palette.filter_commands();
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].name, "Toggle Vim Mode");
+        let names: Vec<&str> = filtered.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains(&"Toggle Vim Mode"));
     }
 
     #[test]
@@ -567,6 +674,9 @@ mod tests {
             description: "desc".into(),
             shortcut: Some("Ctrl+T".into()),
             category: CommandCategory::Navigation,
+            args_template: None,
+            subcommands: vec![],
+            use_count: 0,
         };
         let cloned = cmd.clone();
         assert_eq!(cloned.name, "test");
@@ -577,6 +687,6 @@ mod tests {
     fn test_default_impl() {
         let palette = CommandPaletteWidget::default();
         assert!(!palette.is_visible);
-        assert_eq!(palette.commands.len(), 16);
+        assert_eq!(palette.commands.len(), 20);
     }
 }

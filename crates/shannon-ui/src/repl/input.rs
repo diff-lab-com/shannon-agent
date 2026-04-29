@@ -654,6 +654,9 @@ fn open_command_palette(repl: &mut Repl) {
             description: String::new(),
             shortcut: None,
             category: crate::widgets::command_palette::CommandCategory::Tools,
+            args_template: None,
+            subcommands: vec![],
+            use_count: 0,
         };
         palette.commands.push(cmd);
     }
