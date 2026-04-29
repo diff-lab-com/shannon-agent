@@ -659,12 +659,12 @@ pub(crate) fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
 
     // Handle /image paste subcommand
     if input.starts_with("paste") {
-        return handle_image_paste(repl, input.strip_prefix("paste").unwrap().trim());
+        return handle_image_paste(repl, input.strip_prefix("paste").expect("checked starts_with").trim());
     }
 
     // Handle /image url <url> subcommand
     if input.starts_with("url ") {
-        return handle_image_url(repl, input.strip_prefix("url ").unwrap().trim());
+        return handle_image_url(repl, input.strip_prefix("url ").expect("checked starts_with").trim());
     }
 
     // Auto-detect URL (starts with http:// or https://)
@@ -675,7 +675,7 @@ pub(crate) fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
     // Split path from optional prompt
     let (path, prompt) = if input.starts_with('"') {
         // Quoted path: "path with spaces" prompt
-        if let Some(end) = input.strip_prefix('"').unwrap().find('"') {
+        if let Some(end) = input.strip_prefix('"').expect("checked starts_with").find('"') {
             let path = &input[1..end + 1];
             let prompt = input[end + 2..].trim();
             (path.to_string(), if prompt.is_empty() { "Describe this image.".to_string() } else { prompt.to_string() })
@@ -693,7 +693,7 @@ pub(crate) fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
     // Expand ~ to home dir
     let expanded_path = if path.starts_with("~/") {
         if let Some(home) = dirs::home_dir() {
-            home.join(path.strip_prefix("~/").unwrap()).to_string_lossy().to_string()
+            home.join(path.strip_prefix("~/").expect("checked starts_with")).to_string_lossy().to_string()
         } else {
             path.clone()
         }
@@ -4817,7 +4817,7 @@ fn handle_billing(repl: &mut Repl, args: &str) -> Result<()> {
             repl.chat.add_message(ChatRole::System, msg);
         }
         _ if subcmd.starts_with("budget ") => {
-            let amount_str = subcmd.strip_prefix("budget ").unwrap().trim();
+            let amount_str = subcmd.strip_prefix("budget ").expect("checked starts_with").trim();
             if amount_str == "off" || amount_str == "none" {
                 let mut cfg = repl.state.billing_manager.config().clone();
                 cfg.monthly_budget = None;
@@ -6548,7 +6548,7 @@ fn handle_watch(repl: &mut Repl, args: &str) -> Result<()> {
         }
         _ => {
             if trimmed.starts_with("track ") {
-                let file = trimmed.strip_prefix("track ").unwrap().trim();
+                let file = trimmed.strip_prefix("track ").expect("checked starts_with").trim();
                 repl.chat.add_message(ChatRole::System,
                     format!("Tracking '{file}'. Use /watch check to scan for changes."));
             } else {
@@ -6809,7 +6809,7 @@ mode = \"suggest\"    # suggest | auto-edit | full-auto | readonly\n\
     }
 
     if trimmed.starts_with("model ") {
-        let model = trimmed.strip_prefix("model ").unwrap().trim();
+        let model = trimmed.strip_prefix("model ").expect("checked starts_with").trim();
         if model.is_empty() {
             repl.chat.add_message(ChatRole::System,
                 format!("Current model: {}", repl.state.model.as_deref().unwrap_or("none")));
@@ -6827,7 +6827,7 @@ mode = \"suggest\"    # suggest | auto-edit | full-auto | readonly\n\
     }
 
     if trimmed.starts_with("set ") {
-        let rest = trimmed.strip_prefix("set ").unwrap().trim();
+        let rest = trimmed.strip_prefix("set ").expect("checked starts_with").trim();
         let parts: Vec<&str> = rest.splitn(2, ' ').collect();
         if parts.len() < 2 {
             repl.chat.add_message(ChatRole::System,

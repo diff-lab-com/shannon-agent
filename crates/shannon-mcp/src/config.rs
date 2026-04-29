@@ -388,7 +388,7 @@ pub fn expand_env_vars(input: &str) -> String {
                     Err(_) => {
                         if modifier.starts_with('?') {
                             let err_msg = if modifier.len() > 1 {
-                                modifier.strip_prefix('?').unwrap()
+                                modifier.strip_prefix('?').expect("checked starts_with '?'")
                             } else {
                                 "required env var not set"
                             };

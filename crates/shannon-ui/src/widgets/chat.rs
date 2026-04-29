@@ -4,7 +4,8 @@ use crate::tool_format::{strip_ansi, tool_category, ToolCategory};
 use crate::theme::Theme;
 use crate::render::Renderer;
 use std::collections::{HashMap, VecDeque};
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
+use parking_lot::Mutex;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
@@ -41,7 +42,7 @@ fn syntect_to_ratatui(c: syntect::highlighting::Color) -> ratatui::style::Color 
 struct SyntaxCache {
     cache: HashMap<u64, Vec<Line<'static>>>,
     capacity: usize,
-    order: Vec<u64>,
+    order: std::collections::VecDeque<u64>,
 }
 
 impl SyntaxCache {
@@ -49,7 +50,7 @@ impl SyntaxCache {
         Self {
             cache: HashMap::new(),
             capacity,
-            order: Vec::new(),
+            order: std::collections::VecDeque::new(),
         }
     }
 
@@ -68,13 +69,12 @@ impl SyntaxCache {
 
     fn insert(&mut self, key: u64, lines: Vec<Line<'static>>) {
         if self.cache.len() >= self.capacity {
-            if let Some(old_key) = self.order.first().copied() {
+            if let Some(old_key) = self.order.pop_front() {
                 self.cache.remove(&old_key);
-                self.order.remove(0);
             }
         }
         self.cache.insert(key, lines);
-        self.order.push(key);
+        self.order.push_back(key);
     }
 }
 
@@ -87,7 +87,8 @@ static SYNTAX_CACHE: LazyLock<Mutex<SyntaxCache>> = LazyLock::new(|| {
 fn highlight_code_cached(code: &str, lang: &str) -> Vec<Line<'static>> {
     let key = SyntaxCache::compute_key(lang, code);
 
-    if let Ok(cache) = SYNTAX_CACHE.lock() {
+    {
+        let cache = SYNTAX_CACHE.lock();
         if let Some(lines) = cache.get(key) {
             return lines.clone();
         }
@@ -95,7 +96,8 @@ fn highlight_code_cached(code: &str, lang: &str) -> Vec<Line<'static>> {
 
     let lines = CODE_RENDERER.highlight_code(code, lang);
 
-    if let Ok(mut cache) = SYNTAX_CACHE.lock() {
+    {
+        let mut cache = SYNTAX_CACHE.lock();
         cache.insert(key, lines.clone());
     }
 
@@ -715,7 +717,7 @@ impl ChatWidget {
             let should_cache = search_query.is_none();
             if should_cache {
                 let hash = super::content_hash(&msg.content);
-                if let Some(cached) = self.render_cache.lock().unwrap().get(msg_idx, hash, area.width) {
+                if let Some(cached) = self.render_cache.lock().get(msg_idx, hash, area.width) {
                     list_items.extend(cached.iter().cloned().map(ListItem::new));
                     if let Some(ref img_lines) = msg.image_lines {
                         for img_line in img_lines {
@@ -913,7 +915,7 @@ impl ChatWidget {
             // Cache and push rendered lines
             if should_cache {
                 let hash = super::content_hash(&msg.content);
-                self.render_cache.lock().unwrap().insert(msg_idx, hash, area.width, msg_lines.clone());
+                self.render_cache.lock().insert(msg_idx, hash, area.width, msg_lines.clone());
             }
             list_items.extend(msg_lines.into_iter().map(ListItem::new));
         }

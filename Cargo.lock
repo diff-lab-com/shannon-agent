@@ -3023,6 +3023,7 @@ dependencies = [
  "futures",
  "image",
  "notify",
+ "parking_lot",
  "pulldown-cmark",
  "ratatui",
  "reqwest",

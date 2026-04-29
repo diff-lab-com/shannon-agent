@@ -5,12 +5,25 @@
 
 use async_trait::async_trait;
 use futures_util::{StreamExt, SinkExt};
-use std::io::{self, BufRead, BufReader, Write};
+use std::io;
 use std::pin::Pin;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use thiserror::Error;
 use tokio_tungstenite::tungstenite::protocol::{Message, CloseFrame};
 use tracing::{debug, info};
+
+/// Validate a URL string has the expected scheme.
+fn validate_url(url: &str, expected_scheme: &str) -> Result<(), TransportError> {
+    if url.is_empty() {
+        return Err(TransportError::Http(format!("empty URL for {expected_scheme} transport")));
+    }
+    if !url.starts_with(expected_scheme) {
+        return Err(TransportError::Http(format!(
+            "expected {expected_scheme} URL, got: {url}"
+        )));
+    }
+    Ok(())
+}
 
 /// Transport error types
 #[derive(Error, Debug)]
@@ -59,9 +72,9 @@ pub trait Transport: Send {
 
 /// Standard input/output transport for local MCP servers
 pub struct StdioTransport {
-    child: Option<std::process::Child>,
-    stdin: Option<std::process::ChildStdin>,
-    stdout_reader: Option<BufReader<std::process::ChildStdout>>,
+    child: Option<tokio::process::Child>,
+    stdin: Option<tokio::process::ChildStdin>,
+    stdout_reader: Option<tokio::io::BufReader<tokio::process::ChildStdout>>,
 }
 
 impl StdioTransport {
@@ -69,11 +82,12 @@ impl StdioTransport {
     pub fn new(command: &str, args: &[&str]) -> Result<Self, TransportError> {
         info!("Spawning stdio process: {} {:?}", command, args);
 
-        let mut child = Command::new(command)
+        let mut child = tokio::process::Command::new(command)
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
+            .kill_on_drop(true)
             .spawn()
             .map_err(|e| TransportError::Process(format!("Failed to spawn process: {e}")))?;
 
@@ -85,7 +99,7 @@ impl StdioTransport {
             TransportError::Process("Failed to open stdout".to_string())
         })?;
 
-        let stdout_reader = BufReader::new(stdout);
+        let stdout_reader = tokio::io::BufReader::new(stdout);
 
         Ok(Self {
             child: Some(child),
@@ -95,7 +109,7 @@ impl StdioTransport {
     }
 
     /// Create from an already spawned child process
-    pub fn from_child(mut child: std::process::Child) -> Result<Self, TransportError> {
+    pub fn from_child(mut child: tokio::process::Child) -> Result<Self, TransportError> {
         let stdin = child.stdin.take().ok_or_else(|| {
             TransportError::Process("Failed to open stdin".to_string())
         })?;
@@ -104,7 +118,7 @@ impl StdioTransport {
             TransportError::Process("Failed to open stdout".to_string())
         })?;
 
-        let stdout_reader = BufReader::new(stdout);
+        let stdout_reader = tokio::io::BufReader::new(stdout);
 
         Ok(Self {
             child: Some(child),
@@ -118,8 +132,10 @@ impl StdioTransport {
 impl Transport for StdioTransport {
     async fn send(&mut self, message: &str) -> Result<(), TransportError> {
         if let Some(ref mut stdin) = self.stdin {
-            writeln!(stdin, "{message}")?;
-            stdin.flush()?;
+            use tokio::io::AsyncWriteExt;
+            stdin.write_all(message.as_bytes()).await?;
+            stdin.write_all(b"\n").await?;
+            stdin.flush().await?;
             debug!("Sent stdio message: {} bytes", message.len());
             Ok(())
         } else {
@@ -130,7 +146,8 @@ impl Transport for StdioTransport {
     async fn receive(&mut self) -> Result<Option<String>, TransportError> {
         if let Some(ref mut reader) = self.stdout_reader {
             let mut line = String::new();
-            match reader.read_line(&mut line) {
+            use tokio::io::AsyncBufReadExt;
+            match reader.read_line(&mut line).await {
                 Ok(0) => Ok(None),
                 Ok(_) => {
                     let message = line.trim().to_string();
@@ -147,11 +164,11 @@ impl Transport for StdioTransport {
     async fn close(&mut self) -> Result<(), TransportError> {
         if let Some(mut child) = self.child.take() {
             // Try to kill the child process gracefully
-            if let Err(e) = child.kill() {
+            if let Err(e) = child.kill().await {
                 debug!("Failed to kill child process: {}", e);
             }
             // Wait for the process to exit to prevent zombie processes
-            match child.wait() {
+            match child.wait().await {
                 Ok(status) => {
                     debug!("Child process exited with status: {}", status);
                 }
@@ -169,13 +186,10 @@ impl Transport for StdioTransport {
 impl Drop for StdioTransport {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
-            // Clean up the child process to prevent resource leaks
-            if let Err(e) = child.kill() {
-                debug!("Failed to kill child process during drop: {}", e);
-            }
-            // Wait for the process to exit to prevent zombie processes
-            // Note: In Drop, we can't do much if wait() fails, but we try anyway
-            let _ = child.wait();
+            // Clean up the child process to prevent resource leaks.
+            // kill_on_drop(true) is set, so the child will be killed when dropped.
+            // Best-effort synchronous kill — start_kill is non-async.
+            let _ = child.start_kill();
         }
     }
 }
@@ -215,9 +229,13 @@ pub struct SseTransport {
 impl SseTransport {
     /// Create a new SSE transport
     pub fn new(endpoint: impl Into<String>) -> Self {
+        let endpoint = endpoint.into();
+        if let Err(e) = validate_url(&endpoint, "http") {
+            tracing::warn!("SSE transport URL validation: {e}");
+        }
         Self {
             client: reqwest::Client::new(),
-            endpoint: endpoint.into(),
+            endpoint,
             stream: None,
             buffer: String::new(),
             max_reconnects: 3,
@@ -467,9 +485,13 @@ pub struct HttpTransport {
 impl HttpTransport {
     /// Create a new HTTP transport
     pub fn new(endpoint: impl Into<String>) -> Self {
+        let endpoint = endpoint.into();
+        if let Err(e) = validate_url(&endpoint, "http") {
+            tracing::warn!("HTTP transport URL validation: {e}");
+        }
         Self {
             client: reqwest::Client::new(),
-            endpoint: endpoint.into(),
+            endpoint,
             pending_response: None,
             session_id: None,
         }
@@ -615,8 +637,12 @@ pub struct WebSocketTransport {
 impl WebSocketTransport {
     /// Create a new WebSocket transport
     pub fn new(endpoint: impl Into<String>) -> Self {
+        let endpoint = endpoint.into();
+        if let Err(e) = validate_url(&endpoint, "ws") {
+            tracing::warn!("WebSocket transport URL validation: {e}");
+        }
         Self {
-            endpoint: endpoint.into(),
+            endpoint,
             stream: None,
         }
     }

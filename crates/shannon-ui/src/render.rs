@@ -81,7 +81,7 @@ pub struct Renderer {
     /// Name of the syntect theme to use (synced with UI theme)
     syntect_theme_name: String,
     /// Markdown rendering cache (Mutex for interior mutability in &self methods)
-    markdown_cache: std::sync::Mutex<MarkdownCache>,
+    markdown_cache: parking_lot::Mutex<MarkdownCache>,
 }
 
 impl Renderer {
@@ -94,7 +94,7 @@ impl Renderer {
             syntax_set,
             theme_set,
             syntect_theme_name: "base16-eighties.dark".to_string(),
-            markdown_cache: std::sync::Mutex::new(MarkdownCache::new(128)),
+            markdown_cache: parking_lot::Mutex::new(MarkdownCache::new(128)),
         }
     }
 
@@ -203,7 +203,8 @@ impl Renderer {
     pub fn render_markdown(&self, text: &str) -> Vec<Line<'static>> {
         // Check render cache first
         let hash = MarkdownCache::compute_hash(text);
-        if let Ok(cache) = self.markdown_cache.lock() {
+        {
+            let cache = self.markdown_cache.lock();
             if let Some(cached) = cache.get(hash) {
                 return cached.to_vec();
             }
@@ -468,7 +469,8 @@ impl Renderer {
         }
 
         // Cache the rendered output
-        if let Ok(mut cache) = self.markdown_cache.lock() {
+        {
+            let mut cache = self.markdown_cache.lock();
             cache.insert(hash, output.clone());
         }
 

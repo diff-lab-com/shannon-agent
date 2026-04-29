@@ -7,6 +7,29 @@
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::Read;
+use tracing::warn;
+
+/// Audit a command for potentially dangerous patterns and log warnings.
+/// Does NOT block execution — the permission system gates tool calls upstream.
+fn audit_command(command: &str) {
+    let dangerous = [
+        ("command substitution", "$("),
+        ("backtick substitution", "`"),
+        ("pipe to shell", "| bash"),
+        ("pipe to sh", "| sh"),
+        ("background process", "& "),
+        ("redirect to file", "> "),
+        ("append redirect", ">> "),
+        ("network download", "curl "),
+        ("network download", "wget "),
+    ];
+
+    for (label, pattern) in dangerous {
+        if command.contains(pattern) {
+            warn!(label, pattern, "PTY command contains potentially dangerous pattern");
+        }
+    }
+}
 
 /// Result of a PTY command execution.
 #[derive(Debug, Clone)]
@@ -25,6 +48,8 @@ pub fn execute_in_pty(
     env: Option<&std::collections::HashMap<String, String>>,
     timeout_ms: Option<u64>,
 ) -> Result<PtyOutput, String> {
+    audit_command(command);
+
     let pty_system = native_pty_system();
 
     let pair = pty_system

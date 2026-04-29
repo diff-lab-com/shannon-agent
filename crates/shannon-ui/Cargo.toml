@@ -34,6 +34,7 @@ base64 = "0.22"
 image = { workspace = true }
 reqwest = { workspace = true }
 textwrap = "0.16"
+parking_lot = "0.12"
 
 [dev-dependencies]
 tempfile = "3"
