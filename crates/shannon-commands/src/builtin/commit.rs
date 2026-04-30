@@ -96,33 +96,17 @@ You have the capability to call multiple tools in a single response. Stage and c
     )
 }
 
-/// Get default git branch by detecting from remote HEAD or falling back to common defaults
+/// Get default git branch using local-only checks (no network calls).
 pub fn get_default_branch() -> String {
-    // Try to detect from remote HEAD symbolic ref
+    // Try to detect from cached remote HEAD symbolic ref (local file read, no network)
     if let Ok(output) = std::process::Command::new("git")
         .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
         .output()
     {
         if output.status.success() {
             let ref_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            // refs/remotes/origin/HEAD -> refs/remotes/origin/main
             if let Some(branch) = ref_str.strip_prefix("refs/remotes/origin/") {
                 return branch.to_string();
-            }
-        }
-    }
-
-    // Try to detect from remote show
-    if let Ok(output) = std::process::Command::new("git")
-        .args(["remote", "show", "origin"])
-        .output()
-    {
-        if output.status.success() {
-            let show_str = String::from_utf8_lossy(&output.stdout);
-            for line in show_str.lines() {
-                if let Some(branch) = line.strip_prefix("  HEAD branch: ") {
-                    return branch.trim().to_string();
-                }
             }
         }
     }
@@ -147,7 +131,6 @@ pub fn get_default_branch() -> String {
         }
     }
 
-    // Default fallback
     "main".to_string()
 }
 
