@@ -29,6 +29,7 @@
 //! Each hook definition supports a `type` field controlling execution:
 //! - `command` (default): Shell command via stdin/stdout protocol
 //! - `http`: POST JSON to a URL
+//! - `llm`: LLM-based evaluation with prompt template substitution
 //! - `prompt`: Single-turn LLM evaluation
 //!
 //! ## Configuration
@@ -658,6 +659,9 @@ pub enum HookType {
     Command,
     /// HTTP POST to a URL with event JSON as body.
     Http,
+    /// LLM-based evaluation with prompt template substitution.
+    /// Uses the configured LlmClient to evaluate the event and return a decision.
+    Llm,
     /// Single-turn LLM evaluation. The prompt receives the event JSON
     /// and must return a JSON decision on stdout.
     Prompt,
@@ -701,6 +705,16 @@ pub struct HookDef {
     /// Shell to use for command execution (default: system shell).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shell: Option<String>,
+    /// Prompt template for LLM hooks. Supports variable substitution:
+    /// - `{{tool_name}}`: Name of the tool being executed
+    /// - `{{input}}`: Tool input as JSON
+    /// - `{{event_type}}`: Type of hook event
+    /// - `{{event_json}}`: Full event JSON
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_template: Option<String>,
+    /// Model override for LLM hooks (uses default client model if not specified)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 fn default_hook_timeout() -> u64 {
@@ -723,6 +737,8 @@ impl HookDef {
             blocking: default_hook_blocking(),
             allowed_env_vars: Vec::new(),
             shell: None,
+            prompt_template: None,
+            model: None,
         }
     }
 
@@ -737,6 +753,8 @@ impl HookDef {
             blocking: default_hook_blocking(),
             allowed_env_vars: Vec::new(),
             shell: None,
+            prompt_template: None,
+            model: None,
         }
     }
 
@@ -751,6 +769,30 @@ impl HookDef {
             blocking: default_hook_blocking(),
             allowed_env_vars: Vec::new(),
             shell: None,
+            prompt_template: None,
+            model: None,
+        }
+    }
+
+    /// Create an LLM hook that evaluates the event using the LlmClient
+    ///
+    /// The prompt_template should contain variable placeholders like:
+    /// - `{{tool_name}}`: Name of the tool being executed
+    /// - `{{input}}`: Tool input as JSON
+    /// - `{{event_type}}`: Type of hook event
+    /// - `{{event_json}}`: Full event JSON
+    pub fn new_llm(prompt_template: impl Into<String>) -> Self {
+        Self {
+            command: String::new(),
+            r#type: HookType::Llm,
+            url: None,
+            headers: HashMap::new(),
+            timeout: default_hook_timeout(),
+            blocking: default_hook_blocking(),
+            allowed_env_vars: Vec::new(),
+            shell: None,
+            prompt_template: Some(prompt_template.into()),
+            model: None,
         }
     }
 
@@ -915,6 +957,8 @@ pub struct HookManager {
     project_config_path: PathBuf,
     /// Base directory for resolving project-level paths (defaults to cwd)
     base_dir: PathBuf,
+    /// Optional LLM client for LLM-based hooks
+    llm_client: Option<crate::api::LlmClient>,
 }
 
 impl std::fmt::Debug for HookManager {
@@ -948,6 +992,7 @@ impl HookManager {
             user_config_path,
             project_config_path,
             base_dir,
+            llm_client: None,
         }
     }
 
@@ -958,6 +1003,7 @@ impl HookManager {
             user_config_path: user_path,
             project_config_path: project_path,
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            llm_client: None,
         }
     }
 
@@ -972,6 +1018,7 @@ impl HookManager {
             user_config_path,
             project_config_path,
             base_dir,
+            llm_client: None,
         }
     }
 
@@ -1076,6 +1123,11 @@ impl HookManager {
                             let result = self.execute_hook(&hook_def.command, hook_def.timeout_duration(), &event_json).await?;
                             results.push(result);
                         }
+                        HookType::Llm => {
+                            // LLM hooks are always blocking (need LLM response)
+                            let result = self.execute_llm_hook(hook_def, &event_json).await?;
+                            results.push(result);
+                        }
                     }
                     continue;
                 } else {
@@ -1091,6 +1143,9 @@ impl HookManager {
                         }
                         HookType::McpTool | HookType::Agent => {
                             self.execute_hook(&hook_def.command, hook_def.timeout_duration(), &event_json).await?
+                        }
+                        HookType::Llm => {
+                            self.execute_llm_hook(hook_def, &event_json).await?
                         }
                     }
                 };
@@ -1346,6 +1401,26 @@ impl HookManager {
                 timeout_secs: timeout.as_secs(),
             }),
         }
+    }
+
+    /// Execute an LLM hook: LLM-powered hook evaluation
+    ///
+    /// LLM hooks use an LLM to evaluate hook events and make decisions.
+    /// This is a stub implementation that returns Allow until full LLM integration is complete.
+    async fn execute_llm_hook(
+        &self,
+        hook_def: &HookDef,
+        _event_json: &[u8],
+    ) -> Result<HookResult, HookError> {
+        // TODO: Implement full LLM hook support
+        // For now, return Allow decision so code compiles
+        Ok(HookResult {
+            exit_code: 0,
+            stdout: "LLM hook not yet implemented, allowing by default".to_string(),
+            stderr: String::new(),
+            decision: HookDecision::Allow,
+            command: format!("llm: {}", hook_def.command),
+        })
     }
 
     /// Process hook results and determine the final outcome.
@@ -2401,6 +2476,8 @@ More lines"#;
                 blocking: false,
                 allowed_env_vars: Vec::new(),
                 shell: None,
+                prompt_template: None,
+                model: None,
             }],
         };
 

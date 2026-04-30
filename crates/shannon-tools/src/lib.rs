@@ -27,6 +27,7 @@ use std::sync::Arc;
 pub mod file;
 pub mod system;
 pub mod git;
+pub mod github;
 pub mod web;
 pub mod agent;
 pub mod task;
@@ -60,6 +61,7 @@ pub mod pty;
 pub use file::{ReadTool, WriteTool, EditTool, GlobTool, FileOperation};
 pub use system::{SystemTool, ShellCommand, SleepTool, BashTool, PowerShellTool, DockerSandbox, DockerSandboxConfig, SandboxMode};
 pub use git::{GitBranchTool, GitDiffTool, GitLogTool, GitStashTool, GitSafetyTool, AutoCommitTool};
+pub use github::{GhIssueListTool, GhIssueViewTool, GhPrCreateTool, GhPrListTool, GhPrViewTool};
 pub use web::{WebFetchTool, WebSearchTool, WebOperation};
 pub use agent::{AgentTool, AgentOperation, AgentToolContext};
 pub use task::{TaskTool, TaskOperation};
@@ -165,6 +167,13 @@ pub fn register_default_tools(registry: &mut ToolRegistry) -> Result<std::sync::
     registry.register(Box::new(GitStashTool::new()))?;
     registry.register(Box::new(GitSafetyTool::new()))?;
     registry.register(Box::new(AutoCommitTool::new()))?;
+
+    // ── GitHub operations ───────────────────────────────────────────────
+    registry.register(Box::new(GhIssueListTool::new()))?;
+    registry.register(Box::new(GhIssueViewTool::new()))?;
+    registry.register(Box::new(GhPrCreateTool::new()))?;
+    registry.register(Box::new(GhPrListTool::new()))?;
+    registry.register(Box::new(GhPrViewTool::new()))?;
 
     // ── Web operations ─────────────────────────────────────────────────
     registry.register(Box::new(WebFetchTool::new()))?;
@@ -285,6 +294,13 @@ pub fn register_default_tools_with_project_dir(
     registry.register(Box::new(GitStashTool::new()))?;
     registry.register(Box::new(GitSafetyTool::new()))?;
     registry.register(Box::new(AutoCommitTool::new()))?;
+
+    // ── GitHub operations ───────────────────────────────────────────────
+    registry.register(Box::new(GhIssueListTool::new()))?;
+    registry.register(Box::new(GhIssueViewTool::new()))?;
+    registry.register(Box::new(GhPrCreateTool::new()))?;
+    registry.register(Box::new(GhPrListTool::new()))?;
+    registry.register(Box::new(GhPrViewTool::new()))?;
 
     // ── Web operations ─────────────────────────────────────────────────
     registry.register(Box::new(WebFetchTool::new()))?;
@@ -416,6 +432,13 @@ pub fn register_default_tools_with_project_dir_ex(
     registry.register(Box::new(GitStashTool::new()))?;
     registry.register(Box::new(GitSafetyTool::new()))?;
     registry.register(Box::new(AutoCommitTool::new()))?;
+
+    // ── GitHub operations ───────────────────────────────────────────────
+    registry.register(Box::new(GhIssueListTool::new()))?;
+    registry.register(Box::new(GhIssueViewTool::new()))?;
+    registry.register(Box::new(GhPrCreateTool::new()))?;
+    registry.register(Box::new(GhPrListTool::new()))?;
+    registry.register(Box::new(GhPrViewTool::new()))?;
 
     // ── Web operations ─────────────────────────────────────────────────
     registry.register(Box::new(WebFetchTool::new()))?;

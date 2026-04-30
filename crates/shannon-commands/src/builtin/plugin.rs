@@ -1,6 +1,9 @@
 //! /plugin command - Plugin management
 
 use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use shannon_core::plugin::{PluginRegistry, PluginIndex};
+use std::path::{Path, PathBuf};
+use std::io;
 
 /// Plugin prompt template
 const PLUGIN_PROMPT: &str = r##"
@@ -249,6 +252,258 @@ pub fn format_plugin_info(info: &PluginInfoDisplay) -> String {
     }
 
     output
+}
+
+/// Get the default plugins directory
+pub fn default_plugins_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".shannon")
+        .join("plugins")
+}
+
+/// Create a plugin registry with default settings
+pub fn create_registry() -> PluginRegistry {
+    PluginRegistry::new(default_plugins_dir())
+}
+
+/// Create a plugin index with default URL
+pub fn create_index() -> PluginIndex {
+    PluginIndex::new(
+        "https://raw.githubusercontent.com/shannon-code/plugins-index/main/index.json".to_string()
+    )
+}
+
+/// Install a plugin from a source (index name, git URL, or local path)
+pub async fn install_from_source(source: &str) -> Result<String, String> {
+    let mut registry = create_registry();
+    registry.ensure_dir().await
+        .map_err(|e| format!("Failed to create plugins directory: {}", e))?;
+
+    // Determine the source type
+    if source.starts_with("http://") || source.starts_with("https://") || source.starts_with("git@") {
+        // Git URL
+        registry.install_from_git(source).await
+            .map_err(|e| format!("Failed to install from git: {}", e))
+    } else if Path::new(source).exists() {
+        // Local path
+        registry.install_from_path(Path::new(source)).await
+            .map_err(|e| format!("Failed to install from path: {}", e))
+    } else {
+        // Try to find in index
+        let mut index = create_index();
+        if let Err(refresh_err) = index.refresh().await {
+            return Err(format!("Failed to refresh index: {}. The plugin '{}' was not found as a local path or git URL.", refresh_err, source));
+        }
+
+        if let Some(entry) = index.get(source) {
+            // Found in index, install from git
+            registry.install_from_git(&entry.repository).await
+                .map_err(|e| format!("Failed to install from index: {}", e))
+        } else {
+            Err(format!("Plugin '{}' not found in index. Try:\n  - A valid git URL\n  - A local path\n  - A name from: /plugin search <query>", source))
+        }
+    }
+}
+
+/// List all installed plugins
+pub async fn list_installed() -> Result<Vec<PluginDisplayInfo>, String> {
+    let mut registry = create_registry();
+    registry.load_all().await
+        .map_err(|e| format!("Failed to load plugins: {}", e))?;
+
+    let plugins: Vec<PluginDisplayInfo> = registry.list()
+        .into_iter()
+        .map(|p| PluginDisplayInfo {
+            name: p.manifest.name.clone(),
+            version: p.manifest.version.clone(),
+            plugin_type: p.manifest.type_display_name().to_string(),
+            description: p.manifest.description.clone(),
+            enabled: p.enabled,
+            author: p.manifest.author.clone(),
+        })
+        .collect();
+
+    Ok(plugins)
+}
+
+/// Search the plugin index
+pub async fn search_index(query: &str) -> Result<Vec<(f64, String, String, String, u64)>, String> {
+    let mut index = create_index();
+    index.refresh().await
+        .map_err(|e| format!("Failed to refresh index: {}", e))?;
+
+    let results = index.search_ranked(query);
+    Ok(results.into_iter().map(|(score, entry)| {
+        (score, entry.name.clone(), entry.description.clone(), entry.author.clone(), entry.downloads)
+    }).collect())
+}
+
+/// Update plugins (specific or all)
+pub async fn update_plugins(name: Option<&str>) -> Result<Vec<String>, String> {
+    let mut registry = create_registry();
+    registry.load_all().await
+        .map_err(|e| format!("Failed to load plugins: {}", e))?;
+
+    let updated = if let Some(plugin_name) = name {
+        registry.update(plugin_name).await
+            .map_err(|e| format!("Failed to update '{}': {}", plugin_name, e))?;
+        vec![plugin_name.to_string()]
+    } else {
+        registry.update_all().await
+            .map_err(|e| format!("Failed to update plugins: {}", e))?
+    };
+
+    Ok(updated)
+}
+
+/// Get detailed info about a plugin from the index
+pub async fn get_info(name: &str) -> Result<PluginInfoDisplay, String> {
+    let mut index = create_index();
+    index.refresh().await
+        .map_err(|e| format!("Failed to refresh index: {}", e))?;
+
+    let entry = index.info(name)
+        .ok_or_else(|| format!("Plugin '{}' not found in index", name))?;
+
+    Ok(PluginInfoDisplay {
+        name: entry.name.clone(),
+        description: entry.description.clone(),
+        author: entry.author.clone(),
+        repository: entry.repository.clone(),
+        latest_version: entry.latest_version.clone(),
+        plugin_type: entry.plugin_type.clone(),
+        downloads: entry.downloads,
+        keywords: entry.keywords.clone(),
+    })
+}
+
+/// Enable or disable a plugin
+pub async fn enable_disable(name: &str, enable: bool) -> Result<String, String> {
+    let mut registry = create_registry();
+    registry.load_all().await
+        .map_err(|e| format!("Failed to load plugins: {}", e))?;
+
+    if enable {
+        registry.enable(name)
+            .map_err(|e| format!("Failed to enable '{}': {}", name, e))?;
+        Ok(format!("Plugin '{}' enabled", name))
+    } else {
+        registry.disable(name)
+            .map_err(|e| format!("Failed to disable '{}': {}", name, e))?;
+        Ok(format!("Plugin '{}' disabled", name))
+    }
+}
+
+/// Uninstall a plugin
+pub async fn uninstall(name: &str) -> Result<String, String> {
+    let mut registry = create_registry();
+    registry.load_all().await
+        .map_err(|e| format!("Failed to load plugins: {}", e))?;
+
+    registry.uninstall(name).await
+        .map_err(|e| format!("Failed to uninstall '{}': {}", name, e))?;
+
+    Ok(format!("Plugin '{}' uninstalled successfully", name))
+}
+
+/// Execute a plugin subcommand with actual I/O
+pub async fn execute_plugin_subcommand(arg: &str) -> io::Result<()> {
+    let (cmd, argument) = parse_plugin_subcommand(arg);
+
+    match cmd {
+        PluginSubcommand::Install => {
+            let source = argument.ok_or_else(|| io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "install requires a plugin name, URL, or path"
+            ))?;
+
+            print!("Installing plugin from '{}'...\n", source);
+            match install_from_source(&source).await {
+                Ok(name) => print!("✓ Plugin '{}' installed successfully\n", name),
+                Err(e) => print!("✗ Installation failed: {}\n", e),
+            }
+        }
+        PluginSubcommand::Uninstall => {
+            let name = argument.ok_or_else(|| io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "uninstall requires a plugin name"
+            ))?;
+
+            print!("Uninstalling plugin '{}'...\n", name);
+            match uninstall(&name).await {
+                Ok(msg) => print!("✓ {}\n", msg),
+                Err(e) => print!("✗ Uninstallation failed: {}\n", e),
+            }
+        }
+        PluginSubcommand::List => {
+            match list_installed().await {
+                Ok(plugins) => print!("{}", format_plugin_list(&plugins)),
+                Err(e) => print!("✗ Failed to list plugins: {}\n", e),
+            }
+        }
+        PluginSubcommand::Search => {
+            let query = argument.ok_or_else(|| io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "search requires a query string"
+            ))?;
+
+            match search_index(&query).await {
+                Ok(results) => print!("{}", format_ranked_search_results(&results)),
+                Err(e) => print!("✗ Search failed: {}\n", e),
+            }
+        }
+        PluginSubcommand::Update => {
+            match update_plugins(argument.as_deref()).await {
+                Ok(updated) => {
+                    if updated.is_empty() {
+                        print!("No plugins were updated (all may be up-to-date or not git repositories)\n");
+                    } else {
+                        print!("✓ Updated plugins: {}\n", updated.join(", "));
+                    }
+                }
+                Err(e) => print!("✗ Update failed: {}\n", e),
+            }
+        }
+        PluginSubcommand::Enable => {
+            let name = argument.ok_or_else(|| io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "enable requires a plugin name"
+            ))?;
+
+            match enable_disable(&name, true).await {
+                Ok(msg) => print!("✓ {}\n", msg),
+                Err(e) => print!("✗ {}\n", e),
+            }
+        }
+        PluginSubcommand::Disable => {
+            let name = argument.ok_or_else(|| io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "disable requires a plugin name"
+            ))?;
+
+            match enable_disable(&name, false).await {
+                Ok(msg) => print!("✓ {}\n", msg),
+                Err(e) => print!("✗ {}\n", e),
+            }
+        }
+        PluginSubcommand::Info => {
+            let name = argument.ok_or_else(|| io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "info requires a plugin name"
+            ))?;
+
+            match get_info(&name).await {
+                Ok(info) => print!("{}", format_plugin_info(&info)),
+                Err(e) => print!("✗ {}\n", e),
+            }
+        }
+        PluginSubcommand::Help => {
+            print!("{}", format_plugin_help());
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

@@ -197,3 +197,18 @@ pub mod lsp_utils {
         get_default_server_command, is_valid_language,
     };
 }
+
+/// Re-export plugin command utilities for REPL integration
+#[allow(unused_imports)]
+pub mod plugin_utils {
+    pub use super::plugin::{
+        PluginSubcommand, parse_plugin_subcommand,
+        format_plugin_help, format_plugin_list, format_search_results,
+        format_ranked_search_results, format_plugin_info,
+        PluginDisplayInfo, PluginInfoDisplay,
+        default_plugins_dir, create_registry, create_index,
+        install_from_source, list_installed, search_index,
+        update_plugins, get_info, enable_disable, uninstall,
+        execute_plugin_subcommand,
+    };
+}

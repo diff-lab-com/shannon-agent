@@ -53,8 +53,20 @@ impl SkillExecutor {
             content = prefix + &content;
         }
 
-        // Substitute arguments
+        // Substitute positional arguments
         content = self.substitute_arguments(&content, &context.arguments)?;
+
+        // Substitute named arguments (if the skill defines argument names)
+        if let Some(ref arg_config) = skill.arguments {
+            // ArgumentConfig::Single may contain space-separated names (e.g. "issue branch")
+            let names: Vec<String> = match arg_config {
+                crate::frontmatter::ArgumentConfig::Single(s) => {
+                    s.split_whitespace().map(String::from).collect()
+                }
+                crate::frontmatter::ArgumentConfig::Multiple(names) => names.clone(),
+            };
+            content = self.substitute_named_arguments(&content, &names, &context.arguments)?;
+        }
 
         // Substitute environment variables
         content = self.substitute_variables(&content, context)?;
@@ -114,6 +126,33 @@ impl SkillExecutor {
             .collect::<Vec<_>>()
             .join(" ");
         result = result.replace("${args:quote}", &quoted_args);
+
+        Ok(result)
+    }
+
+    /// Substitute named argument placeholders in content.
+    ///
+    /// For each `(name, value)` pair, replaces occurrences of `$name` in the
+    /// content with the corresponding value. For example, if `names` is
+    /// `["issue", "branch"]` and `values` is `["42", "main"]`, then `$issue`
+    /// becomes `42` and `$branch` becomes `main`.
+    ///
+    /// Values that are shorter than names are simply missing — unmatched names
+    /// are left as-is.
+    fn substitute_named_arguments(
+        &self,
+        content: &str,
+        names: &[String],
+        values: &[String],
+    ) -> SkillResult<String> {
+        let mut result = content.to_string();
+
+        for (i, name) in names.iter().enumerate() {
+            if let Some(value) = values.get(i) {
+                let placeholder = format!("${name}");
+                result = result.replace(&placeholder, value);
+            }
+        }
 
         Ok(result)
     }
@@ -359,5 +398,106 @@ mod tests {
     #[test]
     fn test_validate_shell_command_rejects_newlines() {
         assert!(validate_shell_command("echo hello\nrm -rf /").is_err());
+    }
+
+    // --- Named argument substitution tests ---
+
+    #[test]
+    fn test_substitute_named_arguments_basic() {
+        let executor = SkillExecutor::new();
+        let names = vec!["issue".to_string(), "branch".to_string()];
+        let values = vec!["42".to_string(), "fix-login".to_string()];
+        let result = executor
+            .substitute_named_arguments("Fix $issue on branch $branch", &names, &values)
+            .unwrap();
+        assert_eq!(result, "Fix 42 on branch fix-login");
+    }
+
+    #[test]
+    fn test_substitute_named_arguments_fewer_values_than_names() {
+        let executor = SkillExecutor::new();
+        let names = vec!["issue".to_string(), "branch".to_string()];
+        let values = vec!["42".to_string()];
+        // $branch has no corresponding value, so it stays as-is
+        let result = executor
+            .substitute_named_arguments("Fix $issue on $branch", &names, &values)
+            .unwrap();
+        assert_eq!(result, "Fix 42 on $branch");
+    }
+
+    #[test]
+    fn test_substitute_named_arguments_no_placeholders() {
+        let executor = SkillExecutor::new();
+        let names = vec!["issue".to_string()];
+        let values = vec!["42".to_string()];
+        let result = executor
+            .substitute_named_arguments("No placeholders here", &names, &values)
+            .unwrap();
+        assert_eq!(result, "No placeholders here");
+    }
+
+    #[test]
+    fn test_substitute_named_arguments_empty() {
+        let executor = SkillExecutor::new();
+        let names: Vec<String> = vec![];
+        let values: Vec<String> = vec![];
+        let result = executor
+            .substitute_named_arguments("Hello $issue", &names, &values)
+            .unwrap();
+        assert_eq!(result, "Hello $issue");
+    }
+
+    #[test]
+    fn test_named_arguments_via_execute_with_single_config() {
+        use crate::frontmatter::ArgumentConfig;
+
+        let executor = SkillExecutor::new();
+        let mut skill = Skill::new(
+            "checkout".to_string(),
+            "Checkout".to_string(),
+            "Checkout branch".to_string(),
+            "Fix $issue on branch $branch".to_string(),
+        );
+        // Single variant with space-separated names
+        skill.arguments = Some(ArgumentConfig::Single("issue branch".to_string()));
+
+        let context = SkillContext {
+            arguments: vec!["42".to_string(), "fix-login".to_string()],
+            cwd: PathBuf::from("/tmp"),
+            session_id: "test-session".to_string(),
+            effort_level: "medium".to_string(),
+            permissions: SkillPermissions::default(),
+        };
+
+        let result = executor.execute(&skill, &context).unwrap();
+        assert_eq!(result.prompt_content, "Fix 42 on branch fix-login");
+    }
+
+    #[test]
+    fn test_named_arguments_via_execute_with_multiple_config() {
+        use crate::frontmatter::ArgumentConfig;
+
+        let executor = SkillExecutor::new();
+        let mut skill = Skill::new(
+            "deploy".to_string(),
+            "Deploy".to_string(),
+            "Deploy service".to_string(),
+            "Deploy $env with tag $tag".to_string(),
+        );
+        skill.arguments = Some(ArgumentConfig::Multiple(vec![
+            "env".to_string(),
+            "tag".to_string(),
+        ]));
+
+        let context = SkillContext {
+            arguments: vec!["production".to_string(), "v2.1.0".to_string()],
+            cwd: PathBuf::from("/tmp"),
+            session_id: "test-session".to_string(),
+            effort_level: "medium".to_string(),
+            permissions: SkillPermissions::default(),
+        };
+
+        let result = executor.execute(&skill, &context).unwrap();
+        assert_eq!(result.prompt_content, "Deploy production with tag v2.1.0");
     }
 }

@@ -222,6 +222,9 @@ pub fn discover_skill_directories(
     // Skill directory names to search (Claude Code compat + Shannon + Agent Skills Standard)
     let skill_dir_names = [".claude/skills", ".shannon/skills", ".agents/skills"];
 
+    // Flat command directory names (Claude Code "simple command" skills)
+    let command_dir_names = [".claude/commands", ".shannon/commands"];
+
     for file_path in file_paths {
         let mut current = file_path.parent()
             .unwrap_or_else(|| Path::new("."));
@@ -231,6 +234,13 @@ pub fn discover_skill_directories(
                 let skill_dir = current.join(dir_name);
                 if skill_dir.exists() && skill_dir.is_dir() {
                     discovered.insert(skill_dir);
+                }
+            }
+
+            for dir_name in &command_dir_names {
+                let cmd_dir = current.join(dir_name);
+                if cmd_dir.exists() && cmd_dir.is_dir() {
+                    discovered.insert(cmd_dir);
                 }
             }
 
@@ -248,6 +258,12 @@ pub fn discover_skill_directories(
             discovered.insert(cwd_skills);
         }
     }
+    for dir_name in &command_dir_names {
+        let cwd_cmds = cwd.join(dir_name);
+        if cwd_cmds.exists() && cwd_cmds.is_dir() {
+            discovered.insert(cwd_cmds);
+        }
+    }
 
     // User-level skills (home directory)
     if let Some(home) = dirs::home_dir() {
@@ -255,6 +271,12 @@ pub fn discover_skill_directories(
             let user_skills = home.join(dir_name);
             if user_skills.exists() && user_skills.is_dir() {
                 discovered.insert(user_skills);
+            }
+        }
+        for dir_name in &command_dir_names {
+            let user_cmds = home.join(dir_name);
+            if user_cmds.exists() && user_cmds.is_dir() {
+                discovered.insert(user_cmds);
             }
         }
     }
@@ -274,6 +296,120 @@ pub fn discover_skill_directories(
     let mut result: Vec<_> = discovered.into_iter().collect();
     result.sort_by_key(|p| std::cmp::Reverse(p.components().count()));
     result
+}
+
+/// Load skills from a flat `commands/` directory (Claude Code "simple command" format).
+///
+/// Unlike the subdirectory-based skill layout (`skill-name/SKILL.md`), this
+/// treats each `*.md` file in *commands_dir* as a standalone skill. The
+/// filename (without `.md`) becomes the skill ID and default name.
+///
+/// The source is always set to [`SkillSource::CommandsDeprecated`].
+pub fn load_commands_from_directory(
+    commands_dir: &Path,
+    source: SkillSource,
+) -> SkillResult<Vec<Skill>> {
+    if !commands_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut skills = Vec::new();
+
+    for entry in std::fs::read_dir(commands_dir)
+        .map_err(SkillError::Io)?
+    {
+        let entry = entry.map_err(SkillError::Io)?;
+        let path = entry.path();
+
+        // Only process .md files (skip directories, hidden files, etc.)
+        if !path.is_file() {
+            continue;
+        }
+
+        let extension = path.extension().and_then(|e| e.to_str());
+        if extension != Some("md") {
+            continue;
+        }
+
+        let stem = path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown");
+
+        // Skip hidden files (e.g. .gitkeep.md)
+        if stem.starts_with('.') {
+            continue;
+        }
+
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("Failed to read command file {:?}: {}", path, e);
+                continue;
+            }
+        };
+
+        let parsed = match parse_skill_frontmatter(&content, &stem) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("Failed to parse command file {:?}: {}", path, e);
+                continue;
+            }
+        };
+
+        let name = parsed.frontmatter.name
+            .clone()
+            .unwrap_or_else(|| stem.to_string());
+
+        let id = stem.to_string();
+
+        let description = parsed.frontmatter.description
+            .clone()
+            .unwrap_or_else(|| extract_description_from_body(&parsed.body));
+
+        let user_invocable = parsed.frontmatter.user_invocable.unwrap_or(true);
+
+        let body = parsed.body;
+        let content_length = body.len();
+
+        let skill = Skill {
+            id,
+            name,
+            description,
+            aliases: parsed.frontmatter.aliases.unwrap_or_default(),
+            when_to_use: parsed.frontmatter.when_to_use,
+            argument_hint: parsed.frontmatter.argument_hint,
+            allowed_tools: parsed.frontmatter.allowed_tools.unwrap_or_default(),
+            model: parsed.frontmatter.model,
+            disable_model_invocation: parsed.frontmatter.disable_model_invocation.unwrap_or(false),
+            user_invocable,
+            hooks: parsed.frontmatter.hooks,
+            context: parsed.frontmatter.context,
+            agent: parsed.frontmatter.agent,
+            paths: parsed.frontmatter.paths,
+            version: parsed.frontmatter.version,
+            source: source.clone(),
+            skill_root: Some(commands_dir.to_path_buf()),
+            file_path: Some(path),
+            content: body,
+            content_length,
+            is_hidden: !user_invocable,
+            effort: parsed.frontmatter.effort,
+            arguments: parsed.frontmatter.arguments,
+            created_at: chrono::Utc::now(),
+            updated_at: None,
+        };
+
+        debug!("Loaded command skill: {} from {:?}", skill.name, skill.file_path);
+        skills.push(skill);
+    }
+
+    trace!(
+        "Loaded {} command skills from directory: {:?}",
+        skills.len(),
+        commands_dir
+    );
+
+    Ok(skills)
 }
 
 /// Validate that a path doesn't escape the base directory
@@ -434,5 +570,132 @@ Detailed instructions go here.
         assert_eq!(meta.description, "Short desc");
         // Full skill should contain the body
         assert_eq!(full.content.len(), 10_000);
+    }
+
+    // --- Flat command loading tests ---
+
+    #[test]
+    fn test_load_commands_from_directory_basic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cmds = tmp.path().join("commands");
+        std::fs::create_dir_all(&cmds).unwrap();
+
+        // Create a flat .md command file
+        std::fs::write(
+            cmds.join("deploy.md"),
+            "---\ndescription: Deploy the app\n---\n# Deploy\n\nDeploy to production.\n",
+        )
+        .unwrap();
+
+        let skills =
+            load_commands_from_directory(&cmds, SkillSource::CommandsDeprecated).unwrap();
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].id, "deploy");
+        assert_eq!(skills[0].name, "deploy");
+        assert_eq!(skills[0].description, "Deploy the app");
+        assert!(skills[0].content.contains("Deploy to production"));
+        assert_eq!(skills[0].source, SkillSource::CommandsDeprecated);
+    }
+
+    #[test]
+    fn test_load_commands_from_directory_with_name_override() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cmds = tmp.path().join("commands");
+        std::fs::create_dir_all(&cmds).unwrap();
+
+        std::fs::write(
+            cmds.join("my-cmd.md"),
+            "---\nname: My Custom Command\ndescription: Custom\n---\nBody here.\n",
+        )
+        .unwrap();
+
+        let skills =
+            load_commands_from_directory(&cmds, SkillSource::CommandsDeprecated).unwrap();
+
+        assert_eq!(skills[0].id, "my-cmd");
+        assert_eq!(skills[0].name, "My Custom Command");
+    }
+
+    #[test]
+    fn test_load_commands_from_directory_ignores_non_md() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cmds = tmp.path().join("commands");
+        std::fs::create_dir_all(&cmds).unwrap();
+
+        std::fs::write(cmds.join("valid.md"), "# Valid\nBody.\n").unwrap();
+        std::fs::write(cmds.join("ignore.txt"), "Not a command.\n").unwrap();
+        std::fs::write(cmds.join("ignore.json"), "{}\n").unwrap();
+
+        let skills =
+            load_commands_from_directory(&cmds, SkillSource::CommandsDeprecated).unwrap();
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].id, "valid");
+    }
+
+    #[test]
+    fn test_load_commands_from_directory_ignores_hidden_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cmds = tmp.path().join("commands");
+        std::fs::create_dir_all(&cmds).unwrap();
+
+        std::fs::write(cmds.join("visible.md"), "# Visible\nBody.\n").unwrap();
+        std::fs::write(cmds.join(".hidden.md"), "# Hidden\nBody.\n").unwrap();
+
+        let skills =
+            load_commands_from_directory(&cmds, SkillSource::CommandsDeprecated).unwrap();
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].id, "visible");
+    }
+
+    #[test]
+    fn test_load_commands_from_nonexistent_directory() {
+        let skills = load_commands_from_directory(
+            Path::new("/nonexistent/commands"),
+            SkillSource::CommandsDeprecated,
+        )
+        .unwrap();
+        assert!(skills.is_empty());
+    }
+
+    #[test]
+    fn test_load_commands_from_directory_no_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cmds = tmp.path().join("commands");
+        std::fs::create_dir_all(&cmds).unwrap();
+
+        std::fs::write(cmds.join("simple.md"), "# Simple Command\n\nJust a body.\n").unwrap();
+
+        let skills =
+            load_commands_from_directory(&cmds, SkillSource::CommandsDeprecated).unwrap();
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].id, "simple");
+        assert_eq!(skills[0].name, "simple");
+        // Description extracted from body heading
+        assert_eq!(skills[0].description, "Simple Command");
+    }
+
+    #[test]
+    fn test_load_commands_from_directory_multiple_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cmds = tmp.path().join("commands");
+        std::fs::create_dir_all(&cmds).unwrap();
+
+        std::fs::write(cmds.join("alpha.md"), "---\n---\nAlpha body.\n").unwrap();
+        std::fs::write(cmds.join("beta.md"), "---\n---\nBeta body.\n").unwrap();
+        std::fs::write(cmds.join("gamma.md"), "---\n---\nGamma body.\n").unwrap();
+
+        let skills =
+            load_commands_from_directory(&cmds, SkillSource::CommandsDeprecated).unwrap();
+
+        assert_eq!(skills.len(), 3);
+
+        let ids: std::collections::HashSet<_> = skills.iter().map(|s| s.id.clone()).collect();
+        assert!(ids.contains("alpha"));
+        assert!(ids.contains("beta"));
+        assert!(ids.contains("gamma"));
     }
 }
