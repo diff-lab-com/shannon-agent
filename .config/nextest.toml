@@ -2,10 +2,11 @@
 # https://nexte.st/book/configuration.html
 
 [profile.default]
-# Default: use all cores for test execution within each binary.
-# Overrides the old --test-threads=1 restriction which was needed
-# because cargo test runs all binaries serially in one process.
-test-threads = "num-cpus"
+# Limit concurrent test processes to avoid over-subscription.
+# Each test creates a tokio multi-threaded runtime (num-cpus workers),
+# so num-cpus processes × num-cpus threads = 400 threads on 20 CPUs.
+# 8 processes × 20 threads = 160 threads on 20 CPUs = 8:1, manageable.
+test-threads = 8
 
 # Each test runs in its own process (nextest default), so env var
 # contention between tests is already isolated. But some crates
@@ -22,6 +23,6 @@ test-threads = 1
 
 # CI profile: stricter timeouts, retries for flaky tests.
 [profile.ci]
-test-threads = "num-cpus"
+test-threads = 4
 failure-output = "immediate-final"
 fail-fast = false
