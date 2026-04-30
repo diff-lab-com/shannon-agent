@@ -790,7 +790,7 @@ impl Repl {
         //   - Remote (http/sse) servers: batches of 20
         let mut discovered_mcp_prompts: Vec<(String, PromptInfo)> = Vec::new(); // populated during pooled discovery
         let mcp_pool = Arc::new(McpProcessPool::new()); // persistent pool for all MCP servers
-        {
+        if !cfg!(test) {
             let mut mcp_registry = shannon_core::mcp_advanced::McpServerRegistry::new();
             let mcp_count = mcp_registry.load_from_default_paths();
             if mcp_count > 0 {
