@@ -1711,9 +1711,11 @@ mod tests {
     fn test_format_tool_result_file_list() {
         let list = "src/main.rs\nsrc/lib.rs\nCargo.toml\n";
         let result = format_tool_result("glob", list, false);
-        // format_read_summary shows "Found N files" + preview
+        // File lists are rendered as a tree by format_file_tree
         let plain = strip_ansi(&result);
-        assert!(plain.contains("Found 3 files"));
+        assert!(plain.contains("src/main.rs"));
+        assert!(plain.contains("src/lib.rs"));
+        assert!(plain.contains("Cargo.toml"));
     }
 
     #[test]

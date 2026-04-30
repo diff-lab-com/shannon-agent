@@ -916,6 +916,8 @@ mod tests {
         tab = tab.next();
         assert_eq!(tab, crate::repl::SidebarTab::Agents);
         tab = tab.next();
+        assert_eq!(tab, crate::repl::SidebarTab::Perf);
+        tab = tab.next();
         assert_eq!(tab, crate::repl::SidebarTab::Context);
     }
 

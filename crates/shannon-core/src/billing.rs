@@ -593,7 +593,7 @@ mod tests {
 
         let estimate = mgr.estimate_monthly_cost();
         // Should extrapolate to a full month
-        assert!(estimate > 0.005, "Estimate should be >= today's cost");
+        assert!(estimate >= 0.005, "Estimate should be >= today's cost");
     }
 
     #[test]
