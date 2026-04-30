@@ -373,15 +373,21 @@ impl DockerSandbox {
 
     /// Check if Docker is available on the system
     pub async fn is_available() -> bool {
-        let output = Command::new("docker")
-            .arg("info")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await;
-        match output {
-            Ok(o) => o.status.success(),
-            Err(_) => false,
+        if cfg!(test) {
+            return false;
+        }
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            Command::new("docker")
+                .arg("info")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output(),
+        )
+        .await;
+        match result {
+            Ok(Ok(o)) => o.status.success(),
+            _ => false,
         }
     }
 

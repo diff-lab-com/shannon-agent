@@ -549,10 +549,12 @@ async fn test_tool_metadata_includes_read_only_flag() {
 #[tokio::test]
 async fn test_tool_metadata_includes_warnings() {
     let tool = BashTool::new();
+    // Use a destructive pattern (Critical) so the command is rejected early
+    // with warnings in metadata — avoids actually executing anything.
     let input = serde_json::json!({
-        "command": "sudo ls"
+        "command": "rm -rf / --no-preserve-root"
     });
-    
+
     let result = tool.execute(input).await.unwrap();
     assert!(result.metadata.get("warnings").is_some());
 }

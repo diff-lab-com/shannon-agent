@@ -770,10 +770,89 @@ fn load_permission_rules(pm: &mut PermissionManager) {
 }
 
 impl Repl {
+    /// Minimal REPL for test mode — skips MCP, skills, memory, project instructions,
+    /// but includes a lightweight query_engine with an unauthenticated LLM client.
+    fn new_minimal(runtime: Runtime) -> Result<Self> {
+        let _rt_guard = runtime.enter();
+
+        let tool_registry = Arc::new(ToolRegistry::new());
+        let mcp_pool = Arc::new(McpProcessPool::new());
+        let (permission_req_tx, permission_req_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let command_registry = {
+            let registry = CommandRegistry::new();
+            builtin_commands::register_all(&registry);
+            registry
+        };
+
+        let shared_executor = {
+            use shannon_commands::CommandExecutor;
+            SharedExecutor::new(CommandExecutor::new(command_registry.clone()))
+        };
+
+        let client_config = LlmClientConfig::default();
+        let client = shannon_core::api::LlmClient::new_unauthenticated(client_config);
+        let permission_manager = PermissionManager::new();
+        let state_manager = StateManager::new();
+        let query_engine = QueryEngine::with_defaults_arc(
+            client, tool_registry.clone(), permission_manager, state_manager,
+        );
+
+        let mut repl = Self {
+            events: EventHandler::new(50)?,
+            renderer: Renderer::new(),
+            chat: ChatWidget::new(1000),
+            prompt: PromptWidget::new(),
+            state: ReplState::default(),
+            running: false,
+            query_engine: Some(query_engine),
+            state_manager: StateManager::new(),
+            command_registry,
+            command_parser: CommandParser::new(),
+            shared_executor,
+            runtime,
+            permission_req_rx,
+            permission_req_tx,
+            last_session_list: Vec::new(),
+            command_history: ReplHistory::new(1000),
+            saved_input: String::new(),
+            diff_data: DiffData::new(),
+            current_turn: 0,
+            session_started_at: Some(chrono::Utc::now()),
+            output_renderer: ReplRenderer::new(),
+            commands_run: 0,
+            tools_invoked: 0,
+            tab_completion_state: TabCompletionState::default(),
+            vim_handler: VimHandler::new(),
+            team_coordinator: None,
+            agent_registry: None,
+            mcp_pool,
+            tool_registry,
+            mcp_progress_rx: None,
+            model_routes: Vec::new(),
+            checkpoint_manager: shannon_core::CheckpointManager::new(),
+            notifier: shannon_core::notifier::Notifier::new(),
+            notifications_enabled: false,
+            webhook_receiver: None,
+            instruction_watcher: None,
+            command_watcher: None,
+        };
+
+        repl.sync_approval_mode_label();
+        repl.renderer.set_theme(&repl.state.theme);
+        Ok(repl)
+    }
+
     /// Create a new REPL instance
     pub fn new() -> Result<Self> {
         let runtime = Runtime::new()?;
         let _rt_guard = runtime.enter();
+
+        // In test mode, use lightweight init (no tools, MCP, skills, memory).
+        // The DockerSandbox::is_available() and MCP discovery are also skipped.
+        if cfg!(test) {
+            return Self::new_minimal(runtime);
+        }
 
         // Create tool registry and register all tools (sandboxed to project dir)
         let project_dir = std::env::current_dir().unwrap_or_default();
