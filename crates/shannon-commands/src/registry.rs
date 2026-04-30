@@ -111,6 +111,16 @@ impl CommandRegistry {
             .collect()
     }
 
+    /// List all command names including aliases
+    pub async fn list_names_with_aliases(&self) -> Vec<String> {
+        let commands = self.commands.read().await;
+        let aliases = self.aliases.read().await;
+        let mut names: Vec<String> = commands.keys().cloned().chain(aliases.keys().cloned()).collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+
     /// List all enabled commands
     pub async fn list_enabled(&self) -> Vec<Arc<Command>> {
         self.commands

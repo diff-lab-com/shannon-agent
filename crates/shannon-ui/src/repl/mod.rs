@@ -198,6 +198,8 @@ pub struct ReplState {
     pub pending_notifications: Vec<(String, std::time::Instant)>,
     /// Whether the first-run onboarding dialog is active
     pub onboarding_active: bool,
+    /// Whether mouse capture is enabled (F8 toggles; when off, terminal handles text selection)
+    pub mouse_capture_enabled: bool,
     /// Tool approval overlay widget (shows when tool needs confirmation)
     pub tool_approval: ToolApprovalWidget,
     /// Attachment bar widget (shows attached files/images above prompt)
@@ -360,6 +362,7 @@ impl Default for ReplState {
             turn_count: 0,
             pending_notifications: Vec::new(),
             onboarding_active: false,
+            mouse_capture_enabled: true,
             tool_approval: ToolApprovalWidget::new(),
             attachment_bar: AttachmentBarWidget::new(5),
             command_palette: None,
@@ -2161,15 +2164,17 @@ impl Repl {
             }
             crate::events::Event::Mouse(mouse) => {
                 use crossterm::event::{MouseEventKind, MouseButton};
-                match mouse.kind {
-                    MouseEventKind::ScrollUp => {
-                        for _ in 0..3 { self.chat.scroll_up(); }
+                if self.state.mouse_capture_enabled {
+                    match mouse.kind {
+                        MouseEventKind::ScrollUp => {
+                            for _ in 0..3 { self.chat.scroll_up(); }
+                        }
+                        MouseEventKind::ScrollDown => {
+                            for _ in 0..3 { self.chat.scroll_down(); }
+                        }
+                        MouseEventKind::Down(MouseButton::Left) => {}
+                        _ => {}
                     }
-                    MouseEventKind::ScrollDown => {
-                        for _ in 0..3 { self.chat.scroll_down(); }
-                    }
-                    MouseEventKind::Down(MouseButton::Left) => {}
-                    _ => {}
                 }
             }
             crate::events::Event::Tick => {

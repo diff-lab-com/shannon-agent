@@ -6,6 +6,7 @@ use crate::{
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::vim::{Direction, VimAction};
+use rust_i18n::t;
 
 use super::Repl;
 
@@ -34,6 +35,21 @@ fn open_external_editor(content: &str) -> std::result::Result<String, Box<dyn st
 
 /// Handle keyboard input — dispatches to the appropriate sub-handler.
 pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
+    // Dismiss onboarding overlay on user interaction
+    if repl.state.onboarding_active {
+        match key.code {
+            KeyCode::Enter | KeyCode::Esc => {
+                repl.state.onboarding_active = false;
+                return Ok(());
+            }
+            KeyCode::Char(_) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                repl.state.onboarding_active = false;
+                // Fall through to let the character be typed into the prompt
+            }
+            _ => return Ok(()),
+        }
+    }
+
     // If permission dialog is active, handle dialog-specific keys
     if repl.state.permission_dialog.is_some() {
         return handle_permission_dialog_input(repl, key);
@@ -57,6 +73,11 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
     // If file selector is active, handle file selector input
     if repl.state.file_selector.is_some() {
         return handle_file_selector_input(repl, key);
+    }
+
+    // If model picker is active, handle model picker input
+    if repl.state.model_picker.is_some() {
+        return handle_model_picker_input(repl, key);
     }
 
     // If multi-select is active, handle multi-select input
@@ -94,6 +115,17 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         // F1: show full keyboard shortcuts overlay
         KeyCode::F(1) => {
             repl.state.show_key_hints = true;
+            Ok(())
+        }
+        // F8: toggle mouse capture (when off, terminal handles text selection/copy)
+        KeyCode::F(8) => {
+            repl.state.mouse_capture_enabled = !repl.state.mouse_capture_enabled;
+            let label = if repl.state.mouse_capture_enabled {
+                "Mouse scroll ON (Shift+drag to copy)"
+            } else {
+                "Mouse scroll OFF — text selection enabled"
+            };
+            repl.state.toast = Some((format!("  {label}  "), std::time::Instant::now()));
             Ok(())
         }
         // Ctrl+V: paste image from system clipboard
@@ -308,7 +340,7 @@ fn handle_tab_completion(repl: &mut Repl) -> Result<()> {
     let input = repl.prompt.input().to_string();
 
     let command_names = repl.runtime.block_on(async {
-        repl.shared_executor.registry().await.list_names().await
+        repl.shared_executor.registry().await.list_names_with_aliases().await
     });
 
     // Plugin commands are included via shared_executor registry above
@@ -907,6 +939,56 @@ fn handle_file_selector_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Esc => {
             repl.state.file_selector = None;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_model_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Up => {
+            if let Some(ref mut mp) = repl.state.model_picker {
+                mp.move_up();
+            }
+        }
+        KeyCode::Down => {
+            if let Some(ref mut mp) = repl.state.model_picker {
+                mp.move_down();
+            }
+        }
+        KeyCode::Left | KeyCode::Char('h') => {
+            if let Some(ref mut mp) = repl.state.model_picker {
+                mp.prev_provider();
+            }
+        }
+        KeyCode::Right | KeyCode::Char('l') => {
+            if let Some(ref mut mp) = repl.state.model_picker {
+                mp.next_provider();
+            }
+        }
+        KeyCode::Enter => {
+            let model_id = repl.state.model_picker.as_ref()
+                .and_then(|mp| mp.selected_model().map(|m| m.id.to_string()));
+            repl.state.model_picker = None;
+
+            if let Some(id) = model_id {
+                repl.state.model = Some(id);
+                crate::repl::preferences::save_preferences(
+                    &crate::repl::preferences::Preferences {
+                        model: repl.state.model.clone(),
+                        provider: repl.state.selected_provider.clone(),
+                        theme: Some(repl.state.theme.name.to_string()),
+                    },
+                );
+                repl.chat.add_message(
+                    ChatRole::System,
+                    t!("commands.model.set", name = repl.state.model.as_deref().unwrap_or("")).to_string(),
+                );
+            }
+        }
+        KeyCode::Esc => {
+            repl.state.model_picker = None;
         }
         _ => {}
     }

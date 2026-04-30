@@ -225,8 +225,14 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             render_pager_overlay(f, f.area(), chat, &state.theme);
         }
 
-        // Overlay onboarding dialog on first run
-        if state.onboarding_active {
+        // Overlay onboarding dialog on first run (skip when other overlays are active)
+        if state.onboarding_active
+            && state.model_picker.is_none()
+            && state.fuzzy_picker.is_none()
+            && state.file_selector.is_none()
+            && state.multi_select.is_none()
+            && !state.tool_approval.is_active()
+        {
             render_onboarding_overlay(f, f.area(), &state.theme);
         }
 
@@ -780,7 +786,11 @@ fn render_onboarding_overlay(
         Line::from(vec![Span::styled("  /vim            ", accent_style), Span::styled("Toggle vim mode", text_style)]),
         Line::from(vec![Span::styled("  /sessions       ", accent_style), Span::styled("List saved sessions", text_style)]),
         Line::from(""),
+        Line::from(Span::styled(" Tips", Style::default().fg(theme.text_dim))),
         Line::from("─".repeat(sep_width)),
+        Line::from(vec![Span::styled("  Shift+Drag      ", accent_style), Span::styled("Select & copy text", text_style)]),
+        Line::from(vec![Span::styled("  F8              ", accent_style), Span::styled("Toggle mouse scroll/selection", text_style)]),
+        Line::from(""),
         Line::from(vec![
             Span::styled(" [Enter] ", Style::default().fg(theme.success)),
             Span::styled("Get started", Style::default().fg(theme.text)),
