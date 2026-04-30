@@ -66,6 +66,19 @@ hex = "0.4"
 # Testing utilities
 tempfile = "3.16"
 
+# LSP integration
+lsp-types = "0.95"
+
+# Plugin manifest parsing
+toml = "0.8"
+
+# Landlock support (Linux-only, optional)
+landlock = { version = "0.4", optional = true }
+
+[features]
+default = []
+landlock = ["dep:landlock"]
+
 [dev-dependencies]
 tokio-test = "0.4"
 criterion = "0.5"

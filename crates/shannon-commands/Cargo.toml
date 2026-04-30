@@ -17,6 +17,7 @@ tracing = { workspace = true }
 # Local crates
 shannon-types = { path = "../shannon-types" }
 shannon-core = { path = "../shannon-core" }
+shannon-codegen = { path = "../shannon-codegen", default-features = false, features = ["rust", "python", "javascript", "typescript", "go"] }
 
 # Command parsing
 nom = "7.1"

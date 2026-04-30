@@ -1,0 +1,44 @@
+[package]
+name = "shannon-codegen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Workspace dependencies
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# Tree-sitter core
+tree-sitter = "0.24"
+
+# Language grammars (optional features)
+tree-sitter-rust = { version = "0.23", optional = true }
+tree-sitter-python = { version = "0.23", optional = true }
+tree-sitter-javascript = { version = "0.23", optional = true }
+tree-sitter-typescript = { version = "0.23", optional = true }
+tree-sitter-go = { version = "0.23", optional = true }
+tree-sitter-java = { version = "0.23", optional = true }
+tree-sitter-c = { version = "0.23", optional = true }
+tree-sitter-cpp = { version = "0.23", optional = true }
+
+# File system utilities
+ignore = "0.4"
+walkdir = "2.5"
+
+# Testing
+tempfile = "3.16"
+
+[features]
+default = ["rust", "python", "javascript", "typescript", "go"]
+rust = ["tree-sitter-rust"]
+python = ["tree-sitter-python"]
+javascript = ["tree-sitter-javascript"]
+typescript = ["tree-sitter-typescript"]
+go = ["tree-sitter-go"]
+java = ["tree-sitter-java"]
+c = ["tree-sitter-c"]
+cpp = ["tree-sitter-cpp"]
+all = ["rust", "python", "javascript", "typescript", "go", "java", "c", "cpp"]

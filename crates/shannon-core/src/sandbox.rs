@@ -30,8 +30,12 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
+
+#[cfg(feature = "landlock")]
+use landlock::{Access, AccessFs, Bitflags, Compatible, RulesetCreated, RulesetStatus};
 
 // ============================================================================
 // Error Types
@@ -982,6 +986,385 @@ pub fn check_command_protected_paths(command: &str, extras: &[String]) -> Vec<St
 }
 
 // ============================================================================
+// SandboxProfile
+// ============================================================================
+
+/// High-level sandbox profile for controlling command execution.
+///
+/// This profile defines what resources a sandboxed command can access:
+/// - Filesystem paths (allowed and writable)
+/// - Network access
+/// - Allowed commands (optional whitelist)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SandboxProfile {
+    /// Directories the sandbox can access (read-only by default).
+    pub allowed_paths: Vec<PathBuf>,
+    /// Optional whitelist of allowed commands.
+    ///
+    /// If empty, all commands are allowed (subject to other restrictions).
+    pub allowed_commands: Vec<String>,
+    /// Whether network access is allowed.
+    pub network: bool,
+    /// Paths with write access (subset of allowed_paths).
+    pub writable_paths: Vec<PathBuf>,
+}
+
+impl Default for SandboxProfile {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SandboxProfile {
+    /// Create a new empty sandbox profile (no access).
+    pub fn new() -> Self {
+        Self {
+            allowed_paths: Vec::new(),
+            allowed_commands: Vec::new(),
+            network: false,
+            writable_paths: Vec::new(),
+        }
+    }
+
+    /// Create the default Shannon sandbox profile.
+    ///
+    /// Allows:
+    /// - Project directory (read/write)
+    /// - /tmp (read/write)
+    /// - ~/.ssh (read-only)
+    ///
+    /// Denies everything else by default.
+    pub fn shannon_default(project_dir: &Path) -> Self {
+        let mut profile = Self::new();
+
+        // Project directory (read/write)
+        profile.allowed_paths.push(project_dir.to_path_buf());
+        profile.writable_paths.push(project_dir.to_path_buf());
+
+        // /tmp for temporary files (read/write)
+        if let Ok(tmp) = std::env::var("TMPDIR") {
+            profile.allowed_paths.push(PathBuf::from(&tmp));
+            profile.writable_paths.push(PathBuf::from(&tmp));
+        } else {
+            profile.allowed_paths.push(PathBuf::from("/tmp"));
+            profile.writable_paths.push(PathBuf::from("/tmp"));
+        }
+
+        // ~/.ssh for Git operations (read-only)
+        if let Some(home) = dirs::home_dir() {
+            let ssh_dir = home.join(".ssh");
+            if ssh_dir.exists() {
+                profile.allowed_paths.push(ssh_dir);
+            }
+        }
+
+        profile
+    }
+
+    /// Add an allowed path (read-only).
+    pub fn allow_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.allowed_paths.push(path.into());
+        self
+    }
+
+    /// Add a writable path.
+    pub fn allow_write(mut self, path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        self.writable_paths.push(path.clone());
+        // Also add to allowed_paths if not already present
+        if !self.allowed_paths.contains(&path) {
+            self.allowed_paths.push(path);
+        }
+        self
+    }
+
+    /// Set network access.
+    pub fn with_network(mut self, allow: bool) -> Self {
+        self.network = allow;
+        self
+    }
+
+    /// Add an allowed command to the whitelist.
+    pub fn allow_command(mut self, command: impl Into<String>) -> Self {
+        self.allowed_commands.push(command.into());
+        self
+    }
+
+    /// Check if a command is allowed (when whitelist is enabled).
+    pub fn is_command_allowed(&self, command: &str) -> bool {
+        if self.allowed_commands.is_empty() {
+            return true; // No whitelist = all commands allowed
+        }
+
+        // Extract base command (first word)
+        let base_cmd = command.split_whitespace().next().unwrap_or(command);
+
+        self.allowed_commands.iter().any(|allowed| {
+            allowed == base_cmd || command.starts_with(&format!("{allowed} "))
+        })
+    }
+
+    /// Check if a path is allowed for read access.
+    pub fn is_path_allowed(&self, path: &Path) -> bool {
+        self.allowed_paths.iter().any(|allowed| {
+            path.starts_with(allowed) || path == allowed
+        })
+    }
+
+    /// Check if a path is allowed for write access.
+    pub fn is_path_writable(&self, path: &Path) -> bool {
+        self.writable_paths.iter().any(|allowed| {
+            path.starts_with(allowed) || path == allowed
+        })
+    }
+
+    /// Convert to SandboxConfig for use with SandboxExecutor.
+    pub fn to_config(&self, project_dir: &Path) -> SandboxConfig {
+        let mut config = SandboxConfig::new(project_dir);
+
+        // Set network access
+        config.network = if self.network {
+            NetworkAccess::Full
+        } else {
+            NetworkAccess::None
+        };
+
+        // Add read-only mounts (allowed_paths that aren't writable)
+        for path in &self.allowed_paths {
+            if !self.writable_paths.contains(path) {
+                config.readonly_mounts.push(path.clone());
+            }
+        }
+
+        // Add read-write mounts
+        for path in &self.writable_paths {
+            config.readwrite_mounts.push(path.clone());
+        }
+
+        config
+    }
+}
+
+// ============================================================================
+// Landlock Support (Linux, optional feature)
+// ============================================================================
+
+#[cfg(feature = "landlock")]
+/// Landlock sandbox provider for Linux kernel-level access control.
+pub struct LandlockSandbox {
+    profile: SandboxProfile,
+    ruleset: Option<RulesetCreated>,
+}
+
+#[cfg(feature = "landlock")]
+impl LandlockSandbox {
+    /// Create a new Landlock sandbox with the given profile.
+    pub fn new(profile: SandboxProfile) -> Result<Self, SandboxError> {
+        use landlock::{Ruleset, AccessFs};
+
+        // Build the ruleset based on the profile
+        let mut ruleset = Ruleset::new()
+            .handle_access(AccessFs::from_bitflags(
+                Access::from_read(|access| {
+                    // Allow read access to allowed paths
+                    for path in &profile.allowed_paths {
+                        if let Ok(path_str) = path.to_str().ok_or_else(|| {
+                            SandboxError::InvalidConfig("Invalid path in profile".to_string())
+                        }) {
+                            let _ = access.path_add_beneath(path_str, Access::FS_READ);
+                        }
+                    }
+                })
+            ))
+            .handle_access(AccessFs::from_bitflags(
+                Access::from_write(|access| {
+                    // Allow write access to writable paths
+                    for path in &profile.writable_paths {
+                        if let Ok(path_str) = path.to_str().ok_or_else(|| {
+                            SandboxError::InvalidConfig("Invalid path in profile".to_string())
+                        }) {
+                            let _ = access.path_add_beneath(path_str, Access::FS_WRITE);
+                        }
+                    }
+                })
+            ));
+
+        // Try to create the ruleset
+        let ruleset = match ruleset.create() {
+            Ok(r) => Some(r),
+            Err(_) => {
+                // Landlock might not be supported, fall back to no enforcement
+                tracing::warn!("Landlock not supported by kernel, running unsandboxed");
+                None
+            }
+        };
+
+        Ok(Self { profile, ruleset })
+    }
+
+    /// Try to create a Landlock sandbox, returns None if not available.
+    pub fn try_new(profile: SandboxProfile) -> Option<Self> {
+        Self::new(profile).ok()
+    }
+
+    /// Apply the Landlock restrictions to the current thread.
+    pub fn apply_restrictions(&self) -> Result<(), SandboxError> {
+        if let Some(ref ruleset) = self.ruleset {
+            ruleset
+                .restrict()
+                .map_err(|e| SandboxError::ExecutionFailed(format!("Failed to apply Landlock: {e}")))?;
+        }
+        Ok(())
+    }
+
+    /// Check if Landlock is available on this system.
+    pub fn is_available() -> bool {
+        Ruleset::new().create().is_ok()
+    }
+
+    /// Get the sandbox profile.
+    pub fn profile(&self) -> &SandboxProfile {
+        &self.profile
+    }
+
+    /// Get the program being executed.
+    pub fn program(&self) -> &str {
+        &self.program
+    }
+
+    /// Get the arguments for the command.
+    pub fn args(&self) -> &[String] {
+        &self.args
+    }
+}
+
+// ============================================================================
+// SandboxedCommand Builder
+// ============================================================================
+
+/// Builder for creating sandboxed tokio processes.
+///
+/// Wraps a `tokio::process::Command` with appropriate sandbox restrictions
+/// based on the platform and provided profile.
+pub struct SandboxedCommand {
+    profile: SandboxProfile,
+    program: String,
+    args: Vec<String>,
+    current_dir: Option<PathBuf>,
+    envs: Vec<(String, Option<String>)>,
+    #[cfg(feature = "landlock")]
+    landlock: Option<LandlockSandbox>,
+}
+
+impl SandboxedCommand {
+    /// Create a new sandboxed command builder.
+    ///
+    /// # Arguments
+    /// - `profile`: Sandbox profile defining access restrictions
+    /// - `program`: Command to execute
+    /// - `args`: Arguments for the command
+    pub fn new(profile: SandboxProfile, program: &str, args: &[&str]) -> Self {
+        #[cfg(feature = "landlock")]
+        let landlock = LandlockSandbox::try_new(profile.clone());
+
+        Self {
+            profile,
+            program: program.to_string(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            current_dir: None,
+            envs: Vec::new(),
+            #[cfg(feature = "landlock")]
+            landlock,
+        }
+    }
+
+    /// Set the working directory for the command.
+    pub fn current_dir(&mut self, dir: impl AsRef<Path>) -> &mut Self {
+        self.current_dir = Some(dir.as_ref().to_path_buf());
+        self
+    }
+
+    /// Set an environment variable for the command.
+    pub fn env(&mut self, key: impl AsRef<OsStr>, val: impl AsRef<OsStr>) -> &mut Self {
+        self.envs.push((
+            key.as_ref().to_string_lossy().to_string(),
+            Some(val.as_ref().to_string_lossy().to_string()),
+        ));
+        self
+    }
+
+    /// Remove an environment variable.
+    pub fn env_remove(&mut self, key: impl AsRef<OsStr>) -> &mut Self {
+        self.envs.push((
+            key.as_ref().to_string_lossy().to_string(),
+            None,
+        ));
+        self
+    }
+
+    /// Set environment variables from a map.
+    pub fn envs(&mut self, vars: impl IntoIterator<Item = (impl AsRef<OsStr>, impl AsRef<OsStr>)>) -> &mut Self {
+        for (key, val) in vars {
+            self.envs.push((
+                key.as_ref().to_string_lossy().to_string(),
+                Some(val.as_ref().to_string_lossy().to_string()),
+            ));
+        }
+        self
+    }
+
+    /// Spawn the sandboxed command.
+    ///
+    /// This applies sandbox restrictions before spawning the process.
+    pub async fn spawn(&mut self) -> Result<tokio::process::Child, SandboxError> {
+        // Validate command is allowed
+        if !self.profile.is_command_allowed(&self.program) {
+            return Err(SandboxError::ExecutionFailed(format!(
+                "Command not allowed by sandbox profile: {}",
+                self.program
+            )));
+        }
+
+        // Apply Landlock restrictions if available
+        #[cfg(feature = "landlock")]
+        if let Some(ref landlock) = self.landlock {
+            landlock.apply_restrictions()?;
+        }
+
+        // Build and spawn the process
+        let mut cmd = tokio::process::Command::new(&self.program);
+        cmd.args(&self.args);
+        if let Some(ref dir) = self.current_dir {
+            cmd.current_dir(dir);
+        }
+        for (k, v) in &self.envs {
+            if let Some(val) = v {
+                cmd.env(k, val);
+            } else {
+                cmd.env_remove(k);
+            }
+        }
+        cmd.spawn()
+            .map_err(|e| SandboxError::ExecutionFailed(format!("Failed to spawn: {e}")))
+    }
+
+    /// Get the sandbox profile.
+    pub fn profile(&self) -> &SandboxProfile {
+        &self.profile
+    }
+
+    /// Get the program being executed.
+    pub fn program(&self) -> &str {
+        &self.program
+    }
+
+    /// Get the arguments for the command.
+    pub fn args(&self) -> &[String] {
+        &self.args
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -1452,5 +1835,143 @@ mod tests {
     fn test_check_command_protected_paths_redirect_to_git() {
         let warnings = check_command_protected_paths("echo foo > .git/config", &[]);
         assert!(!warnings.is_empty(), "Should warn about redirect to .git/");
+    }
+
+    // ------------------------------------------------------------------
+    // SandboxProfile tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_sandbox_profile_new() {
+        let profile = SandboxProfile::new();
+        assert!(profile.allowed_paths.is_empty());
+        assert!(profile.allowed_commands.is_empty());
+        assert!(!profile.network);
+        assert!(profile.writable_paths.is_empty());
+    }
+
+    #[test]
+    fn test_sandbox_profile_default() {
+        let profile = SandboxProfile::default();
+        assert!(profile.allowed_paths.is_empty());
+        assert!(!profile.network);
+    }
+
+    #[test]
+    fn test_sandbox_profile_builder() {
+        let profile = SandboxProfile::new()
+            .allow_path("/usr/bin")
+            .allow_write("/tmp")
+            .with_network(true)
+            .allow_command("ls")
+            .allow_command("cat");
+
+        assert_eq!(profile.allowed_paths.len(), 2);
+        assert_eq!(profile.writable_paths.len(), 1);
+        assert!(profile.network);
+        assert_eq!(profile.allowed_commands.len(), 2);
+    }
+
+    #[test]
+    fn test_sandbox_profile_allow_write_adds_to_allowed() {
+        let profile = SandboxProfile::new()
+            .allow_write("/tmp");
+
+        assert_eq!(profile.allowed_paths.len(), 1);
+        assert_eq!(profile.writable_paths.len(), 1);
+        assert!(profile.allowed_paths.contains(&PathBuf::from("/tmp")));
+    }
+
+    #[test]
+    fn test_sandbox_profile_is_command_allowed_empty_whitelist() {
+        let profile = SandboxProfile::new();
+        assert!(profile.is_command_allowed("ls"));
+        assert!(profile.is_command_allowed("rm -rf /"));
+    }
+
+    #[test]
+    fn test_sandbox_profile_is_command_allowed_with_whitelist() {
+        let profile = SandboxProfile::new()
+            .allow_command("ls")
+            .allow_command("cat");
+
+        assert!(profile.is_command_allowed("ls"));
+        assert!(profile.is_command_allowed("ls -la"));
+        assert!(profile.is_command_allowed("cat file.txt"));
+        assert!(!profile.is_command_allowed("rm file.txt"));
+    }
+
+    #[test]
+    fn test_sandbox_profile_is_path_allowed() {
+        let profile = SandboxProfile::new()
+            .allow_path("/tmp")
+            .allow_path("/home/user/project");
+
+        assert!(profile.is_path_allowed(Path::new("/tmp/file.txt")));
+        assert!(profile.is_path_allowed(Path::new("/home/user/project/src/main.rs")));
+        assert!(!profile.is_path_allowed(Path::new("/etc/passwd")));
+    }
+
+    #[test]
+    fn test_sandbox_profile_is_path_writable() {
+        let profile = SandboxProfile::new()
+            .allow_path("/tmp")
+            .allow_write("/home/user/project");
+
+        assert!(profile.is_path_writable(Path::new("/home/user/project/src/main.rs")));
+        assert!(!profile.is_path_writable(Path::new("/tmp/file.txt")));
+    }
+
+    #[test]
+    fn test_sandbox_profile_shannon_default() {
+        let project_dir = PathBuf::from("/home/user/project");
+        let profile = SandboxProfile::shannon_default(&project_dir);
+
+        assert!(!profile.allowed_paths.is_empty());
+        assert!(!profile.writable_paths.is_empty());
+        assert!(!profile.network);
+        assert!(profile.is_path_allowed(&project_dir));
+        assert!(profile.is_path_writable(&project_dir));
+    }
+
+    #[test]
+    fn test_sandbox_profile_to_config() {
+        let profile = SandboxProfile::new()
+            .allow_path("/usr/share")
+            .allow_write("/tmp")
+            .with_network(true);
+
+        let config = profile.to_config(Path::new("/project"));
+        assert!(matches!(config.network, NetworkAccess::Full));
+        assert_eq!(config.readonly_mounts.len(), 1);
+        assert_eq!(config.readwrite_mounts.len(), 1);
+    }
+
+    // ------------------------------------------------------------------
+    // SandboxedCommand tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_sandboxed_command_new() {
+        let profile = SandboxProfile::new()
+            .allow_command("echo")
+            .allow_write("/tmp");
+
+        let cmd = SandboxedCommand::new(profile, "echo", &["hello"]);
+        assert!(cmd.profile().allowed_commands.contains(&"echo".to_string()));
+    }
+
+    #[test]
+    fn test_sandboxed_command_builder_methods() {
+        let profile = SandboxProfile::new()
+            .allow_command("ls")
+            .allow_path("/tmp");
+
+        let mut cmd = SandboxedCommand::new(profile, "ls", &["-la"]);
+        cmd.current_dir("/tmp")
+            .env("TEST_VAR", "value")
+            .env_remove("PATH");
+
+        assert_eq!(cmd.program(), "ls");
     }
 }

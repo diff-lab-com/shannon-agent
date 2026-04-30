@@ -87,6 +87,7 @@ pub mod housekeeping;
 pub mod credential_manager;
 pub mod billing;
 pub mod enhanced_suggestions;
+pub mod lsp;
 pub mod ui_adapter;
 pub mod sandbox;
 pub mod plugin;
@@ -239,6 +240,10 @@ pub use credential_manager::{
 pub use billing::{
     BillingManager, BillingPeriod, UsageRecord, BillingConfig,
     BillingError, ModelUsageSummary, BudgetAlert, BudgetAlertType, DailyUsage,
+};
+pub use lsp::{
+    LspManager, LspClient, LspConfig, ServerConfig,
+    DiscoveredServer, ServerDiscovery, ServerSource, LspClientError, LspResult,
 };
 
 pub use enhanced_suggestions::{

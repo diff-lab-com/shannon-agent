@@ -30,7 +30,10 @@ mod debug;
 mod doctor;
 mod mcp;
 mod lsp;
+mod plugin;
 mod repl;
+mod repomap;
+mod outline;
 
 /// Register all built-in commands
 pub fn register_all(registry: &CommandRegistry) {
@@ -57,6 +60,9 @@ pub fn all_commands() -> Vec<Command> {
         doctor::command(),
         mcp::command(),
         lsp::command(),
+        plugin::command(),
+        repomap::command(),
+        outline::command(),
     ];
     cmds.extend(repl::all_commands());
     cmds

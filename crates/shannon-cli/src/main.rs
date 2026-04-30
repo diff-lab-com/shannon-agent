@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::Parser;
 use clap::Subcommand;
 use futures::StreamExt;
+use similar::{ChangeTag, TextDiff};
 use shannon_core::{
     api::LlmClientConfig,
     i18n,
@@ -25,8 +26,10 @@ use uuid::Uuid;
 enum OutputFormat {
     /// Plain text response to stdout.
     Text,
-    /// Full structured JSON output with tool calls and metadata.
+    /// Full structured JSON output with tool calls and metadata (at end).
     Json,
+    /// Streaming JSON events (NDJSON format).
+    JsonStream,
 }
 
 impl std::fmt::Display for OutputFormat {
@@ -34,11 +37,12 @@ impl std::fmt::Display for OutputFormat {
         match self {
             OutputFormat::Text => write!(f, "text"),
             OutputFormat::Json => write!(f, "json"),
+            OutputFormat::JsonStream => write!(f, "json-stream"),
         }
     }
 }
 
-/// Exit codes for headless CI/CD mode.
+/// Exit codes for non-interactive CI mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 enum HeadlessExitCode {
@@ -46,10 +50,12 @@ enum HeadlessExitCode {
     Success = 0,
     /// 1 - query engine error or API error.
     Error = 1,
-    /// 2 - tried to use a tool not in the allowed list.
-    ToolDenied = 2,
-    /// 3 - maximum turns reached before completion.
-    MaxTurnsReached = 3,
+    /// 2 - maximum turns reached before completion.
+    TurnLimit = 2,
+    /// 3 - timeout occurred (request took too long).
+    Timeout = 3,
+    /// 4 - rate limited by API provider.
+    RateLimited = 4,
 }
 
 impl From<HeadlessExitCode> for i32 {
@@ -86,6 +92,34 @@ struct HeadlessOutput {
     duration_ms: u64,
     /// Whether execution succeeded and why.
     exit_code: HeadlessExitCode,
+}
+
+/// CI/CD event types for NDJSON streaming output.
+/// Each event is serialized as a single JSON object per line (newline-delimited).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "type")]
+enum CiEvent {
+    /// Session started.
+    #[serde(rename = "start")]
+    Start { prompt: String, model: String },
+    /// Tool was invoked.
+    #[serde(rename = "tool_call")]
+    ToolCall { name: String, input: serde_json::Value },
+    /// Tool execution completed.
+    #[serde(rename = "tool_result")]
+    ToolResult { name: String, output: String, success: bool },
+    /// Message/response content.
+    #[serde(rename = "message")]
+    Message { content: String },
+    /// File diff (unified format).
+    #[serde(rename = "diff")]
+    Diff { path: String, content: String },
+    /// Error occurred.
+    #[serde(rename = "error")]
+    Error { message: String },
+    /// Session completed.
+    #[serde(rename = "done")]
+    Done { exit_code: i32, turns_used: u32, tokens_used: u64 },
 }
 
 /// CLI configuration passed explicitly instead of via environment variables.
@@ -317,9 +351,21 @@ struct Cli {
     #[arg(long = "output-format", default_value = "text")]
     output_format: OutputFormat,
 
-    /// Maximum turns in headless mode before exiting with code 3.
+    /// Maximum turns in headless mode before exiting with code 2.
     #[arg(long = "max-turns")]
     max_turns: Option<u32>,
+
+    /// Exit with error code on first tool failure.
+    #[arg(long)]
+    exit_on_error: bool,
+
+    /// Suppress progress indicators and toasts.
+    #[arg(short = 'q', long)]
+    quiet: bool,
+
+    /// Only output file changes as unified diff (implies --quiet).
+    #[arg(long)]
+    diff_only: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -618,6 +664,59 @@ fn run_noninteractive_query(
             }
         }
 
+        // Load plugins from ~/.shannon/plugins/ and register their tools
+        {
+            let plugins_dir = dirs::home_dir()
+                .unwrap_or_default()
+                .join(".shannon")
+                .join("plugins");
+            let mut plugin_registry = shannon_core::plugin::PluginRegistry::new(plugins_dir);
+            if let Ok(()) = plugin_registry.load_all().await {
+                let enabled = plugin_registry.list_enabled();
+                if !enabled.is_empty() {
+                    eprintln!("Loaded {} plugin(s)", enabled.len());
+                    for plugin in &enabled {
+                        match plugin.manifest.kind() {
+                            Ok(shannon_core::plugin::PluginKind::Tool { transport }) => {
+                                if let Some(command) = transport.command() {
+                                    let args = transport.args().to_vec();
+                                    match shannon_core::discover_tools(
+                                        &plugin.manifest.name,
+                                        command,
+                                        &args,
+                                        &std::collections::HashMap::new(),
+                                        None,
+                                    )
+                                    .await
+                                    {
+                                        Ok(result) => {
+                                            let tool_count = result.tools.len();
+                                            let boxed: Vec<Box<dyn shannon_core::tools::Tool>> = result
+                                                .tools
+                                                .into_iter()
+                                                .map(|t| Box::new(t) as Box<dyn shannon_core::tools::Tool>)
+                                                .collect();
+                                            tools.register_batch(boxed).unwrap_or(0);
+                                            eprintln!("  Registered {} tool(s) from plugin '{}'", tool_count, plugin.manifest.name);
+                                        }
+                                        Err(e) => {
+                                            eprintln!("  Warning: Plugin '{}' tool discovery failed: {e}", plugin.manifest.name);
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(_) => {
+                                eprintln!("  Plugin '{}' ({}) loaded", plugin.manifest.name, plugin.manifest.type_display_name());
+                            }
+                            Err(e) => {
+                                eprintln!("  Warning: Plugin '{}' has invalid config: {e}", plugin.manifest.name);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Build LLM client from the merged ConfigBuilder pipeline
         let client_config = build_llm_config_from_builder(config);
 
@@ -770,6 +869,14 @@ fn run_noninteractive_query(
     })
 }
 
+/// Emit an NDJSON event to stdout (newline-delimited JSON).
+fn emit_ci_event(event: &CiEvent) {
+    match serde_json::to_string(event) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("Warning: failed to serialize CI event: {e}"),
+    }
+}
+
 /// Run a CI/CD headless query.
 ///
 /// When `--prompt` is provided (the `--prompt` long flag, not the positional arg),
@@ -788,6 +895,9 @@ fn run_headless_query(
     allowed_tools: Option<&[String]>,
     output_format: OutputFormat,
     max_turns: Option<u32>,
+    exit_on_error: bool,
+    quiet: bool,
+    diff_only: bool,
     resume_session: Option<shannon_core::state::SessionData>,
 ) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
@@ -931,8 +1041,18 @@ fn run_headless_query(
         let mut _pending_tool_name: Option<String> = None;
         let mut exit_code = HeadlessExitCode::Success;
         let mut _turn_count: usize = 0;
+        let mut changed_files: Vec<(String, String, String)> = Vec::new(); // (path, old, new)
         let allowed_set: Option<std::collections::HashSet<String>> =
             allowed_tools.map(|v| v.iter().cloned().collect());
+
+        // Emit start event for JsonStream format
+        if output_format == OutputFormat::JsonStream {
+            let model_name = config.model().unwrap_or_else(|| "default".to_string());
+            emit_ci_event(&CiEvent::Start {
+                prompt: prompt.to_string(),
+                model: model_name,
+            });
+        }
 
         while let Some(event_result) = event_stream.next().await {
             match event_result {
@@ -952,7 +1072,7 @@ fn run_headless_query(
                                 tool_name,
                                 allowed.iter().cloned().collect::<Vec<_>>().join(",")
                             );
-                            exit_code = HeadlessExitCode::ToolDenied;
+                            exit_code = HeadlessExitCode::Error; // ToolDenied is now Error
                             break;
                         }
                     }
@@ -962,7 +1082,18 @@ fn run_headless_query(
                         Err(_) => "(invalid json)".to_string(),
                     };
                     _pending_tool_name = Some(tool_name.clone());
-                    eprintln!("[headless: invoking {tool_name}]");
+                    if !quiet {
+                        eprintln!("[headless: invoking {tool_name}]");
+                    }
+                    // Emit NDJSON event
+                    if output_format == OutputFormat::JsonStream {
+                        if let Ok(input_value) = serde_json::from_str::<serde_json::Value>(&input_summary) {
+                            emit_ci_event(&CiEvent::ToolCall {
+                                name: tool_name.clone(),
+                                input: input_value,
+                            });
+                        }
+                    }
                     // Store a placeholder; will be updated on ToolUseResult
                     tool_calls.push(ToolCallSummary {
                         tool: tool_name,
@@ -979,14 +1110,51 @@ fn run_headless_query(
                     };
                     // Update the last matching tool call
                     if let Some(tc) = tool_calls.iter_mut().rev().find(|tc| tc.tool == tool_name && !tc.success && tc.output_summary.is_empty()) {
-                        tc.output_summary = output_summary;
+                        tc.output_summary = output_summary.clone();
                         tc.success = !is_error;
                     }
                     _pending_tool_name = None;
-                    if is_error {
-                        eprintln!("[headless: tool-error {tool_name}]");
-                    } else {
-                        eprintln!("[headless: tool-done {tool_name}]");
+
+                    // Track file changes for diff-only mode
+                    if tool_name == "Edit" || tool_name == "Write" {
+                        if let Ok(tool_result) = serde_json::from_str::<serde_json::Value>(&result) {
+                            if let Some(path) = tool_result.get("path").and_then(|p| p.as_str()) {
+                                // Read current file content for diff
+                                let old_content = std::fs::read_to_string(path).unwrap_or_default();
+                                changed_files.push((path.to_string(), old_content, String::new()));
+                            }
+                        }
+                    }
+
+                    // Emit NDJSON event
+                    if output_format == OutputFormat::JsonStream {
+                        emit_ci_event(&CiEvent::ToolResult {
+                            name: tool_name.clone(),
+                            output: output_summary.clone(),
+                            success: !is_error,
+                        });
+                    }
+
+                    // Handle exit-on-error
+                    if is_error && exit_on_error {
+                        if !quiet {
+                            eprintln!("[headless: tool-error {tool_name} - exiting due to --exit-on-error]");
+                        }
+                        exit_code = HeadlessExitCode::Error;
+                        if output_format == OutputFormat::JsonStream {
+                            emit_ci_event(&CiEvent::Error {
+                                message: format!("Tool {tool_name} failed: {output_summary}"),
+                            });
+                        }
+                        break;
+                    }
+
+                    if !quiet {
+                        if is_error {
+                            eprintln!("[headless: tool-error {tool_name}]");
+                        } else {
+                            eprintln!("[headless: tool-done {tool_name}]");
+                        }
                     }
                 }
                 Ok(QueryEvent::TurnCompleted { turn_number, tokens_used, .. }) => {
@@ -996,8 +1164,10 @@ fn run_headless_query(
                     // Check max turns
                     if let Some(max) = max_turns {
                         if turn_number >= max as usize {
-                            eprintln!("Max turns ({max}) reached");
-                            exit_code = HeadlessExitCode::MaxTurnsReached;
+                            if !quiet {
+                                eprintln!("Max turns ({max}) reached");
+                            }
+                            exit_code = HeadlessExitCode::TurnLimit;
                             break;
                         }
                     }
@@ -1042,6 +1212,36 @@ fn run_headless_query(
                 println!("{}", serde_json::to_string_pretty(&output).unwrap_or_else(|e| {
                     format!(r#"{{"error": "serialization failed: {e}"}}"#)
                 }));
+            }
+            OutputFormat::JsonStream => {
+                // Emit final done event
+                emit_ci_event(&CiEvent::Done {
+                    exit_code: i32::from(exit_code),
+                    turns_used: _turn_count as u32,
+                    tokens_used: total_tokens,
+                });
+            }
+        }
+
+        // Diff-only mode: output unified diffs of changed files
+        if diff_only && !changed_files.is_empty() {
+            for (path, old_content, _new) in changed_files {
+                let new_content = std::fs::read_to_string(&path).unwrap_or_default();
+                if old_content != new_content {
+                    println!("--- a/{}", path);
+                    println!("+++ b/{}", path);
+                    let diff = TextDiff::from_lines(&old_content, &new_content);
+                    for op in diff.ops() {
+                        for change in diff.iter_changes(op) {
+                            let prefix = match change.tag() {
+                                ChangeTag::Delete => "-",
+                                ChangeTag::Insert => "+",
+                                ChangeTag::Equal => " ",
+                            };
+                            println!("{}{}", prefix, change);
+                        }
+                    }
+                }
             }
         }
 
@@ -1586,6 +1786,9 @@ fn main() -> Result<()> {
             allowed_vec.as_deref(),
             cli.output_format,
             cli.max_turns,
+            cli.exit_on_error,
+            cli.quiet || cli.diff_only,
+            cli.diff_only,
             resume_data,
         );
     }
@@ -1631,6 +1834,26 @@ fn main() -> Result<()> {
             None
         };
         return run_noninteractive_query(&prompt, true, &config, cli.yes, resume_data);
+    }
+
+    // No prompt argument: check stdin for piped input
+    let stdin_content = read_stdin();
+    if !stdin_content.is_empty() {
+        let config = build_cli_config(
+            cli.model.as_deref(),
+            cli.provider.as_deref(),
+            None,
+            None,
+            None,
+            false,
+            HashMap::new(),
+        );
+        let resume_data = if should_resume {
+            load_resume_session(cli.session.as_deref()).ok()
+        } else {
+            None
+        };
+        return run_noninteractive_query(&stdin_content, true, &config, cli.yes, resume_data);
     }
 
     // Build configuration from CLI options (no more unsafe set_var calls)

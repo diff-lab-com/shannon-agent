@@ -1096,6 +1096,64 @@ impl Repl {
             }
         }
 
+        // Load plugins from ~/.shannon/plugins/
+        if !cfg!(test) {
+            let plugins_dir = dirs::home_dir()
+                .unwrap_or_default()
+                .join(".shannon")
+                .join("plugins");
+            let mut plugin_registry = shannon_core::plugin::PluginRegistry::new(plugins_dir);
+            if runtime.block_on(plugin_registry.load_all()).is_ok() {
+                let enabled = plugin_registry.list_enabled();
+                if !enabled.is_empty() {
+                    tracing::info!("Loaded {} plugin(s)", enabled.len());
+                    for plugin in &enabled {
+                        match plugin.manifest.kind() {
+                            Ok(shannon_core::plugin::PluginKind::Tool { transport }) => {
+                                if let Some(command) = transport.command() {
+                                    let args = transport.args().to_vec();
+                                    match runtime.block_on(shannon_core::discover_tools(
+                                        &plugin.manifest.name,
+                                        command,
+                                        &args,
+                                        &std::collections::HashMap::new(),
+                                        None,
+                                    )) {
+                                        Ok(result) => {
+                                            let tool_count = result.tools.len();
+                                            for tool in result.tools {
+                                                if let Err(e) = tool_registry.register(Box::new(tool)) {
+                                                    tracing::debug!("Plugin tool registration skipped: {}", e);
+                                                }
+                                            }
+                                            tracing::info!(
+                                                "Registered {} tool(s) from plugin '{}'",
+                                                tool_count,
+                                                plugin.manifest.name
+                                            );
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!("Plugin '{}' tool discovery failed: {e}", plugin.manifest.name);
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(_) => {
+                                tracing::info!(
+                                    "Plugin '{}' ({}) loaded",
+                                    plugin.manifest.name,
+                                    plugin.manifest.type_display_name()
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!("Plugin '{}' has invalid config: {e}", plugin.manifest.name);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Create LLM client
         let client_config = LlmClientConfig::default();
 
