@@ -362,6 +362,140 @@ pub fn register_default_tools_with_project_dir(
     Ok(agent_context_handle)
 }
 
+/// Result of registering tools with project-specific sandbox configuration.
+///
+/// Contains handles that callers need to wire up cross-cutting features.
+pub struct ToolRegistrationResult {
+    /// Handle for injecting LLM client config into the AgentTool.
+    pub agent_context_handle: std::sync::Arc<std::sync::Mutex<Option<AgentToolContext>>>,
+    /// The `PlanManager` shared by `EnterPlanMode`/`ExitPlanMode`/`GetPlanStatus`.
+    /// Use `plan_manager.plan_mode_flag()` to obtain the flag for the query engine.
+    pub plan_manager: PlanManager,
+}
+
+/// Register all standard tools with project-specific sandbox configuration.
+///
+/// This is the extended variant of [`register_default_tools_with_project_dir`] that
+/// also returns the [`PlanManager`] so callers can wire up plan-mode write-blocking
+/// in the query engine via [`PlanManager::plan_mode_flag`].
+///
+/// ```ignore
+/// let result = register_default_tools_with_project_dir_ex(&mut registry, &project_dir)?;
+/// let engine = QueryEngine::with_defaults_arc(client, Arc::new(registry), perms, state)
+///     .with_plan_mode_active(result.plan_manager.plan_mode_flag());
+/// ```
+pub fn register_default_tools_with_project_dir_ex(
+    registry: &mut ToolRegistry,
+    project_dir: &std::path::Path,
+) -> Result<ToolRegistrationResult, Box<dyn std::error::Error>> {
+    use crate::file::sandbox::{PathSandbox, SandboxConfig as PathSandboxConfig};
+
+    let sandbox = PathSandbox::with_config(PathSandboxConfig {
+        allowed_roots: vec![project_dir.to_path_buf()],
+        denied_patterns: PathSandboxConfig::default_denied_patterns(),
+        strict_mode: true,
+    });
+
+    // ── File operations (project-scoped sandbox) ───────────────────────
+    registry.register(Box::new(ReadTool::with_sandbox(sandbox.clone())))?;
+    registry.register(Box::new(WriteTool::with_sandbox(sandbox.clone())))?;
+    registry.register(Box::new(EditTool::with_sandbox(sandbox.clone())))?;
+    registry.register(Box::new(GlobTool::with_sandbox(sandbox.clone())))?;
+    registry.register(Box::new(GrepTool::with_sandbox(sandbox)))?;
+
+    // ── System operations (process sandbox for Bash) ───────────────────
+    registry.register(Box::new(BashTool::with_process_sandbox(project_dir)))?;
+    registry.register(Box::new(SleepTool::new()))?;
+    registry.register(Box::new(PowerShellTool::new()))?;
+    registry.register(Box::new(ReplTool::new()))?;
+
+    // ── Git operations ─────────────────────────────────────────────────
+    registry.register(Box::new(GitBranchTool::new()))?;
+    registry.register(Box::new(GitDiffTool::new()))?;
+    registry.register(Box::new(GitLogTool::new()))?;
+    registry.register(Box::new(GitStashTool::new()))?;
+    registry.register(Box::new(GitSafetyTool::new()))?;
+    registry.register(Box::new(AutoCommitTool::new()))?;
+
+    // ── Web operations ─────────────────────────────────────────────────
+    registry.register(Box::new(WebFetchTool::new()))?;
+    registry.register(Box::new(WebSearchTool::new()))?;
+
+    // ── Agent & team ───────────────────────────────────────────────────
+    let agent_tool = AgentTool::new();
+    let agent_context_handle = agent_tool.context_handle();
+    registry.register(Box::new(agent_tool))?;
+    registry.register(Box::new(SendMessageTool::new()))?;
+    registry.register(Box::new(TeamDeleteTool::new()))?;
+
+    // ── Task management ────────────────────────────────────────────────
+    registry.register(Box::new(TodoWriteTool::new()))?;
+    registry.register(Box::new(TaskCreateTool::new()))?;
+    registry.register(Box::new(TaskListTool::new()))?;
+    registry.register(Box::new(TaskUpdateTool::new()))?;
+    registry.register(Box::new(TaskGetTool::new()))?;
+    registry.register(Box::new(TaskTool::new()))?;
+    registry.register(Box::new(TaskOutputTool::new()))?;
+    registry.register(Box::new(TaskStopTool::new()))?;
+
+    // ── Notebook ───────────────────────────────────────────────────────
+    registry.register(Box::new(NotebookEditTool::new()))?;
+
+    // ── Worktree ───────────────────────────────────────────────────────
+    registry.register(Box::new(WorktreeTool::new()))?;
+
+    // ── Plan mode (shared state + PlanManager) ──────────────────────────
+    let plan_manager = PlanManager::new();
+    registry.register(Box::new(EnterPlanModeTool::with_manager(plan_manager.clone())))?;
+    registry.register(Box::new(ExitPlanModeTool::with_manager(plan_manager.clone())))?;
+    registry.register(Box::new(GetPlanStatusTool::new(plan_manager.clone())))?;
+
+    // ── LSP ────────────────────────────────────────────────────────────
+    registry.register(Box::new(GoToDefinitionTool::new()))?;
+    registry.register(Box::new(FindReferencesTool::new()))?;
+    registry.register(Box::new(HoverTool::new()))?;
+    registry.register(Box::new(DocumentSymbolTool::new()))?;
+    registry.register(Box::new(WorkspaceSymbolTool::new()))?;
+    registry.register(Box::new(RenameSymbolTool::new()))?;
+    registry.register(Box::new(CodeActionsTool::new()))?;
+
+    // ── Interactive ────────────────────────────────────────────────────
+    registry.register(Box::new(AskUserQuestionTool::with_terminal_handler()))?;
+
+    // ── Skill & discovery ──────────────────────────────────────────────
+    registry.register(Box::new(SkillTool::new()))?;
+
+    // ── Cron ───────────────────────────────────────────────────────────
+    registry.register(Box::new(CronTool::with_persistence()))?;
+
+    // ── ScheduleWakeup (/loop dynamic pacing) ──────────────────────────
+    registry.register(Box::new(ScheduleWakeupTool::new()))?;
+
+    // ── Config ─────────────────────────────────────────────────────────
+    registry.register(Box::new(ConfigTool::new()))?;
+
+    // ── Utility tools ──────────────────────────────────────────────────
+    registry.register(Box::new(BriefTool::new()))?;
+    registry.register(Box::new(StructuredOutputTool::new()))?;
+    registry.register(Box::new(McpAuthTool::new()))?;
+
+    // ── MCP resource tools ─────────────────────────────────────────────
+    registry.register(Box::new(McpResourceTool::new()))?;
+    let mcp_manager = Arc::new(shannon_mcp::McpResourceManager::new());
+    registry.register(Box::new(ListMcpResourcesTool::new(mcp_manager.clone())))?;
+    registry.register(Box::new(ReadMcpResourceTool::new(mcp_manager)))?;
+
+    // ── MCP prompt tools ───────────────────────────────────────────────
+    let mcp_pool = Arc::new(shannon_mcp::McpProcessPool::new());
+    registry.register(Box::new(ListPromptsTool::new(mcp_pool.clone())))?;
+    registry.register(Box::new(GetPromptTool::new(mcp_pool)))?;
+
+    Ok(ToolRegistrationResult {
+        agent_context_handle,
+        plan_manager,
+    })
+}
+
 /// Register team coordination tools that require an AgentCoordinator.
 ///
 /// Call this after `register_default_tools` when a team context is available.

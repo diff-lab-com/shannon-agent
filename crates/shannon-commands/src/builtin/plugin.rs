@@ -12,8 +12,9 @@ Subcommands:
 - **install <name-or-url>** — Install a plugin from the registry or git URL
 - **uninstall <name>** — Remove an installed plugin
 - **list** — List all installed plugins
-- **search <query>** — Search the plugin registry
+- **search <query>** — Search the plugin registry (ranked by relevance)
 - **update [name]** — Update plugins (all or specific)
+- **info <name>** — Show detailed info about a plugin from the index
 - **enable <name>** — Enable a plugin
 - **disable <name>** — Disable a plugin
 - **help** — Show this help
@@ -34,7 +35,8 @@ Plugin Permissions:
 When performing operations:
 - For `install`, show download progress and confirm installation
 - For `list`, show: name, version, type, status (enabled/disabled), description
-- For `search`, show: name, description, author, downloads
+- For `search`, show: name, description, author, downloads (ranked by relevance)
+- For `info`, show: name, version, description, author, repository, type, keywords
 - For `uninstall`, confirm before removing
 "##;
 
@@ -44,13 +46,13 @@ pub fn command() -> Command {
         base: CommandBase {
             name: "plugin".to_string(),
             aliases: vec!["plugins".to_string()],
-            description: "Manage plugins: install, uninstall, list, search, update".to_string(),
+            description: "Manage plugins: install, uninstall, list, search, update, info".to_string(),
             has_user_specified_description: false,
             availability: vec![CommandAvailability::All],
             source: CommandSource::Builtin,
             is_enabled: true,
             is_hidden: false,
-            argument_hint: Some("[install|uninstall|list|search|update|enable|disable] [args]".to_string()),
+            argument_hint: Some("[install|uninstall|list|search|update|info|enable|disable] [args]".to_string()),
             when_to_use: Some(
                 "To install, manage, or discover plugins for Shannon Code".to_string(),
             ),
@@ -92,6 +94,8 @@ pub enum PluginSubcommand {
     Enable,
     /// Disable a plugin
     Disable,
+    /// Show plugin info from the index
+    Info,
     /// Show help
     Help,
 }
@@ -110,6 +114,7 @@ pub fn parse_plugin_subcommand(arg: &str) -> (PluginSubcommand, Option<String>) 
         "update" | "upgrade" => PluginSubcommand::Update,
         "enable" | "on" => PluginSubcommand::Enable,
         "disable" | "off" => PluginSubcommand::Disable,
+        "info" => PluginSubcommand::Info,
         "help" | "?" => PluginSubcommand::Help,
         _ => PluginSubcommand::Help,
     };
@@ -123,6 +128,7 @@ pub fn format_plugin_help() -> String {
 
     output.push_str("  /plugin list                    - List installed plugins\n");
     output.push_str("  /plugin search <query>          - Search plugin registry\n");
+    output.push_str("  /plugin info <name>             - Show plugin details from index\n");
     output.push_str("  /plugin install <name-or-url>   - Install a plugin\n");
     output.push_str("  /plugin uninstall <name>        - Remove a plugin\n");
     output.push_str("  /plugin update [name]           - Update plugins\n");
@@ -162,19 +168,16 @@ pub fn format_plugin_list(plugins: &[PluginDisplayInfo]) -> String {
         .max(4);
 
     for plugin in plugins {
-        let status = if plugin.enabled { "✓" } else { "✗" };
+        let status = if plugin.enabled { "enabled" } else { "disabled" };
         output.push_str(&format!(
-            "  {} {:<name_width$}  {:<6}  {} — {}\n",
-            status,
+            "  {:<name_width$}  {:<8}  {} — {}\n",
             plugin.name,
-            plugin.plugin_type,
+            status,
             plugin.version,
             plugin.description,
             name_width = name_width,
         ));
     }
-
-    output.push_str("\nStatus: ✓ = enabled, ✗ = disabled\n");
 
     output
 }
@@ -193,6 +196,56 @@ pub fn format_search_results(results: &[(String, String, String, u64)]) -> Strin
             "  **{}** — {}\n    by {} — {} downloads\n\n",
             name, description, author, downloads
         ));
+    }
+
+    output
+}
+
+/// Format ranked search results with scores
+pub fn format_ranked_search_results(results: &[(f64, String, String, String, u64)]) -> String {
+    // (score, name, description, author, downloads)
+    if results.is_empty() {
+        return "No plugins found. Try a different search query.".to_string();
+    }
+
+    let mut output = String::from("Search Results (ranked by relevance):\n\n");
+
+    for (score, name, description, author, downloads) in results {
+        output.push_str(&format!(
+            "  **{}** (relevance: {:.0}) — {}\n    by {} — {} downloads\n\n",
+            name, score, description, author, downloads
+        ));
+    }
+
+    output
+}
+
+/// Detailed plugin info for display
+#[derive(Debug, Clone)]
+pub struct PluginInfoDisplay {
+    pub name: String,
+    pub description: String,
+    pub author: String,
+    pub repository: String,
+    pub latest_version: String,
+    pub plugin_type: String,
+    pub downloads: u64,
+    pub keywords: Vec<String>,
+}
+
+/// Format detailed plugin info
+pub fn format_plugin_info(info: &PluginInfoDisplay) -> String {
+    let mut output = String::new();
+
+    output.push_str(&format!("**{}** v{}\n", info.name, info.latest_version));
+    output.push_str(&format!("  {}\n\n", info.description));
+    output.push_str(&format!("  Author:       {}\n", info.author));
+    output.push_str(&format!("  Type:         {}\n", info.plugin_type));
+    output.push_str(&format!("  Repository:   {}\n", info.repository));
+    output.push_str(&format!("  Downloads:    {}\n", info.downloads));
+
+    if !info.keywords.is_empty() {
+        output.push_str(&format!("  Keywords:     {}\n", info.keywords.join(", ")));
     }
 
     output
@@ -235,6 +288,7 @@ mod tests {
         assert!(help.contains("/plugin install"));
         assert!(help.contains("/plugin uninstall"));
         assert!(help.contains("/plugin list"));
+        assert!(help.contains("/plugin info"));
     }
 
     #[test]
@@ -267,8 +321,8 @@ mod tests {
         let output = format_plugin_list(&plugins);
         assert!(output.contains("example-plugin"));
         assert!(output.contains("disabled-plugin"));
-        assert!(output.contains("✓"));
-        assert!(output.contains("✗"));
+        assert!(output.contains("enabled"));
+        assert!(output.contains("disabled"));
     }
 
     #[test]
@@ -286,6 +340,78 @@ mod tests {
     #[test]
     fn test_format_empty_search() {
         let output = format_search_results(&[]);
+        assert!(output.contains("No plugins found"));
+    }
+
+    #[test]
+    fn test_parse_info_subcommand() {
+        let (cmd, arg) = parse_plugin_subcommand("info my-plugin");
+        assert_eq!(cmd, PluginSubcommand::Info);
+        assert_eq!(arg, Some("my-plugin".to_string()));
+    }
+
+    #[test]
+    fn test_parse_info_no_arg() {
+        let (cmd, arg) = parse_plugin_subcommand("info");
+        assert_eq!(cmd, PluginSubcommand::Info);
+        assert!(arg.is_none());
+    }
+
+    #[test]
+    fn test_format_plugin_info() {
+        let info = PluginInfoDisplay {
+            name: "example-plugin".to_string(),
+            description: "An example plugin for Shannon Code".to_string(),
+            author: "Shannon Team".to_string(),
+            repository: "https://github.com/shannon-code/example-plugin".to_string(),
+            latest_version: "1.0.0".to_string(),
+            plugin_type: "tool".to_string(),
+            downloads: 1500,
+            keywords: vec!["example".to_string(), "demo".to_string()],
+        };
+
+        let output = format_plugin_info(&info);
+        assert!(output.contains("example-plugin"));
+        assert!(output.contains("1.0.0"));
+        assert!(output.contains("Shannon Team"));
+        assert!(output.contains("1500"));
+        assert!(output.contains("example, demo"));
+    }
+
+    #[test]
+    fn test_format_plugin_info_no_keywords() {
+        let info = PluginInfoDisplay {
+            name: "minimal".to_string(),
+            description: "Minimal".to_string(),
+            author: "Author".to_string(),
+            repository: "https://github.com/test/min".to_string(),
+            latest_version: "0.1.0".to_string(),
+            plugin_type: "skill".to_string(),
+            downloads: 0,
+            keywords: vec![],
+        };
+
+        let output = format_plugin_info(&info);
+        assert!(output.contains("minimal"));
+        assert!(!output.contains("Keywords"));
+    }
+
+    #[test]
+    fn test_format_ranked_search_results() {
+        let results = vec![
+            (30.0, "exact-match".to_string(), "Perfect match".to_string(), "Author".to_string(), 100),
+            (4.0, "partial-match".to_string(), "Partial match".to_string(), "Author2".to_string(), 50),
+        ];
+
+        let output = format_ranked_search_results(&results);
+        assert!(output.contains("exact-match"));
+        assert!(output.contains("relevance"));
+        assert!(output.contains("100 downloads"));
+    }
+
+    #[test]
+    fn test_format_ranked_search_empty() {
+        let output = format_ranked_search_results(&[]);
         assert!(output.contains("No plugins found"));
     }
 }

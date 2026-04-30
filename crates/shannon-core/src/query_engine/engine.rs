@@ -76,6 +76,10 @@ pub struct QueryEngine {
     pub(crate) hook_manager: Arc<tokio::sync::RwLock<crate::hooks::HookManager>>,
     /// Context injector for project instructions and preference memory.
     pub(crate) context_injector: Option<Arc<ContextInjector>>,
+    /// Shared flag set by `PlanManager` (in `shannon-tools`) to signal that
+    /// plan mode is active. When `true`, the engine blocks write tools before
+    /// the permission check.
+    pub(crate) plan_mode_active: Arc<RwLock<bool>>,
 }
 
 /// Helper to create a loaded HookManager
@@ -158,6 +162,7 @@ impl QueryEngine {
             session_id,
             hook_manager: Arc::new(tokio::sync::RwLock::new(hook_mgr())),
             context_injector: None,
+            plan_mode_active: Arc::new(RwLock::new(false)),
         }
     }
 
@@ -195,6 +200,7 @@ impl QueryEngine {
             session_id,
             hook_manager: Arc::new(tokio::sync::RwLock::new(hook_mgr())),
             context_injector: None,
+            plan_mode_active: Arc::new(RwLock::new(false)),
         }
     }
 
@@ -223,6 +229,7 @@ impl QueryEngine {
             session_id,
             hook_manager: Arc::new(tokio::sync::RwLock::new(hook_mgr())),
             context_injector: None,
+            plan_mode_active: Arc::new(RwLock::new(false)),
         }
     }
 
@@ -270,6 +277,29 @@ impl QueryEngine {
     /// Access the context injector, if configured.
     pub fn context_injector(&self) -> Option<&Arc<ContextInjector>> {
         self.context_injector.as_ref()
+    }
+
+    /// Set the shared plan-mode flag so the engine can block write tools when
+    /// plan mode is active.
+    ///
+    /// The flag is typically obtained from [`PlanManager::plan_mode_flag()`] in
+    /// `shannon-tools` and cloned into the engine before the first query.
+    pub fn with_plan_mode_active(mut self, flag: Arc<RwLock<bool>>) -> Self {
+        self.plan_mode_active = flag;
+        self
+    }
+
+    /// Check whether plan mode is currently active.
+    pub fn is_plan_mode_active(&self) -> bool {
+        self.plan_mode_active
+            .read()
+            .map(|g| *g)
+            .unwrap_or(false)
+    }
+
+    /// Obtain a cloneable handle to the plan-mode flag.
+    pub fn plan_mode_active_handle(&self) -> Arc<RwLock<bool>> {
+        Arc::clone(&self.plan_mode_active)
     }
 
     /// Set the maximum number of turns for a conversation
@@ -444,6 +474,7 @@ impl QueryEngine {
         let cost_tracker = self.cost_tracker.clone();
         let hook_manager = self.hook_manager.clone();
         let _context_injector = self.context_injector.clone();
+        let plan_mode_active = self.plan_mode_active.clone();
 
         // Search for relevant memories to augment the system prompt
         let memory_entries = if let Some(ref mem_store) = self.memory {
@@ -879,6 +910,31 @@ impl QueryEngine {
                                                             "Executing tool: {tool_name}"
                                                         ),
                                                     }));
+
+                                                    // Plan mode gate: block write tools when plan mode is active.
+                                                    let is_plan_active = plan_mode_active
+                                                        .read()
+                                                        .map(|g| *g)
+                                                        .unwrap_or(false);
+                                                    if is_plan_active {
+                                                        let is_write_tool = crate::tool_execution::is_file_modifying_tool(&tool_name);
+                                                        if is_write_tool {
+                                                            let error_msg = format!(
+                                                                "Plan mode: write operations blocked. \
+                                                                 Use exit_plan_mode to resume editing. \
+                                                                 Blocked tool: {tool_name}"
+                                                            );
+                                                            let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                query_id,
+                                                                tool_use_id: tool_id.clone(),
+                                                                tool_name,
+                                                                result: error_msg.clone(),
+                                                                is_error: true,
+                                                            }));
+                                                            tool_results.push((tool_id, error_msg, true));
+                                                            continue;
+                                                        }
+                                                    }
 
                                                     // Pre-check with classifier and permission system
                                                     let permission_result = {
@@ -1950,5 +2006,69 @@ mod tests {
         // Cleanup
         let _ = std::fs::remove_dir_all(project_dir);
         let _ = std::fs::remove_dir_all(storage_dir);
+    }
+
+    // ── Plan Mode Integration Tests ──────────────────────────────────────
+
+    #[test]
+    fn test_plan_mode_flag_default_false() {
+        let engine = create_test_engine();
+        assert!(!engine.is_plan_mode_active());
+    }
+
+    #[test]
+    fn test_plan_mode_flag_can_be_set() {
+        let flag = Arc::new(RwLock::new(true));
+        let engine = create_test_engine().with_plan_mode_active(flag);
+        assert!(engine.is_plan_mode_active());
+    }
+
+    #[test]
+    fn test_plan_mode_flag_shared_reflection() {
+        let flag = Arc::new(RwLock::new(false));
+        let engine = create_test_engine().with_plan_mode_active(flag.clone());
+
+        // Initially inactive
+        assert!(!engine.is_plan_mode_active());
+
+        // Setting the flag externally is reflected in the engine
+        *flag.write().unwrap() = true;
+        assert!(engine.is_plan_mode_active());
+
+        // Resetting the flag
+        *flag.write().unwrap() = false;
+        assert!(!engine.is_plan_mode_active());
+    }
+
+    #[test]
+    fn test_plan_mode_active_handle_clones() {
+        let engine = create_test_engine();
+        let handle = engine.plan_mode_active_handle();
+
+        // Modify via handle
+        *handle.write().unwrap() = true;
+        assert!(engine.is_plan_mode_active());
+    }
+
+    #[test]
+    fn test_is_file_modifying_tool_covers_write_tools() {
+        // Verify the helper used by the engine gate recognizes write tools
+        assert!(crate::tool_execution::is_file_modifying_tool("Write"));
+        assert!(crate::tool_execution::is_file_modifying_tool("write"));
+        assert!(crate::tool_execution::is_file_modifying_tool("Edit"));
+        assert!(crate::tool_execution::is_file_modifying_tool("edit"));
+        assert!(crate::tool_execution::is_file_modifying_tool("MultiEdit"));
+        assert!(crate::tool_execution::is_file_modifying_tool("multi_edit"));
+        assert!(crate::tool_execution::is_file_modifying_tool("Bash"));
+        assert!(crate::tool_execution::is_file_modifying_tool("bash"));
+    }
+
+    #[test]
+    fn test_is_file_modifying_tool_excludes_read_tools() {
+        // Verify read-only tools are not flagged as modifying
+        assert!(!crate::tool_execution::is_file_modifying_tool("Read"));
+        assert!(!crate::tool_execution::is_file_modifying_tool("Glob"));
+        assert!(!crate::tool_execution::is_file_modifying_tool("Grep"));
+        assert!(!crate::tool_execution::is_file_modifying_tool("LSP"));
     }
 }

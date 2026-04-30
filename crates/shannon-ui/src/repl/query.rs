@@ -586,6 +586,50 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                 if let Err(e) = repl.state_manager.save_session(&engine.session_id(), &messages, &metadata) {
                     tracing::debug!("Auto-save session error: {e}");
                 }
+
+                // Crash-safe JSONL append: log the latest user message + assistant
+                // response so that on crash only the in-flight turn is lost.
+                {
+                    let project_dir = std::env::current_dir().unwrap_or_default();
+                    let session_id_str = engine.session_id().to_string();
+                    let model = repl.state.model.clone().unwrap_or_default();
+                    let sr = &repl.session_recovery;
+
+                    // Ensure a recovery session exists for this engine session.
+                    let log_path = sr.session_log_path(
+                        &sr.project_session_dir(&project_dir),
+                        &session_id_str,
+                    );
+                    if !log_path.exists() {
+                        if let Err(e) = sr.create_session_with_id(&project_dir, &session_id_str, &model) {
+                            tracing::debug!("Recovery session create error: {e}");
+                        }
+                    }
+
+                    // Append the last two messages (user + assistant) if available.
+                    let seq = (repl.current_turn.saturating_sub(1)) as u64 * 2;
+                    if messages.len() >= 2 {
+                        let user_msg = &messages[messages.len() - 2];
+                        let asst_msg = &messages[messages.len() - 1];
+                        if let Err(e) = sr.append_messages(
+                            &project_dir,
+                            &session_id_str,
+                            seq,
+                            &[user_msg.clone(), asst_msg.clone()],
+                        ) {
+                            tracing::debug!("Recovery append error: {e}");
+                        }
+                    } else if messages.len() == 1 {
+                        if let Err(e) = sr.append_message(
+                            &project_dir,
+                            &session_id_str,
+                            seq,
+                            &messages[0],
+                        ) {
+                            tracing::debug!("Recovery append error: {e}");
+                        }
+                    }
+                }
             }
 
             // Check context pressure and auto-compact if needed

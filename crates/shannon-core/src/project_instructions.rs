@@ -54,7 +54,7 @@ impl InstructionScope {
             Self::Managed => "Managed/remote instructions (highest priority)",
             Self::Project | Self::ProjectRoot => "Project root instructions (repository root)",
             Self::User | Self::Global => "User instructions (~/.claude/)",
-            Self::Local => "Local project (.claude/, gitignored)",
+            Self::Local => "Local project (.claude/, .shannon/, gitignored)",
             Self::Directory => "Directory-specific instructions (cwd-relative)",
         }
     }
@@ -534,8 +534,8 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
     let mut instruction_files: Vec<InstructionFile> = Vec::new();
 
     // 1. Load managed instructions (highest priority)
-    // TODO: Integrate with RemoteManagedSettings for organization-level instructions
-    // For now, this is a placeholder for future integration
+    // Integrated with RemoteManagedSettings for organization-level instructions.
+    // Gracefully skipped when no managed instructions are configured.
     if let Ok(Some(managed_content)) = load_managed_instructions(dir) {
         all_content.push_str(&format!(
             "## {} Scope: managed ---\n\n{}\n\n",
@@ -588,29 +588,82 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
         }
     }
 
-    // 4. Load local project instructions (.claude/CLAUDE.md, gitignored, lowest priority)
-    let local_claude_dir = dir.join(".claude");
-    for filename in INSTRUCTION_FILES {
-        let local_file = local_claude_dir.join(filename);
+    // 4. Load local project instructions (gitignored, personal instructions)
+    //    Checks: .claude/CLAUDE.md, .shannon/CLAUDE.md, CLAUDE.local.md
+    //    (and equivalent AGENTS.md / GEMINI.md variants)
+    let local_dirs: Vec<(&str, PathBuf)> = vec![
+        (".claude", dir.join(".claude")),
+        (".shannon", dir.join(".shannon")),
+    ];
+    let mut seen_local_paths = std::collections::HashSet::<PathBuf>::new();
+
+    for (dir_name, local_dir) in &local_dirs {
+        for filename in INSTRUCTION_FILES {
+            let local_file = local_dir.join(filename);
+            if local_file.is_file() {
+                if let Ok(content) = std::fs::read_to_string(&local_file) {
+                    if !content.trim().is_empty() {
+                        let canonical = local_file.canonicalize().unwrap_or_else(|_| local_file.clone());
+                        if seen_local_paths.contains(&canonical) {
+                            continue;
+                        }
+                        seen_local_paths.insert(canonical);
+
+                        let (resolved, imported) = resolve_content_imports(
+                            &content,
+                            local_dir,
+                            dir,
+                            DEFAULT_MAX_IMPORT_DEPTH,
+                            DEFAULT_MAX_IMPORT_SIZE,
+                        );
+                        all_imported.extend(imported);
+                        let rel_path = format!("{dir_name}/{filename}");
+                        all_content.push_str(&format!(
+                            "## {} Scope: {} ---\n\n{}\n\n",
+                            InstructionScope::Local.name(),
+                            rel_path,
+                            resolved
+                        ));
+                        all_files.push(rel_path);
+                        instruction_files.push(InstructionFile {
+                            path: local_file,
+                            content,
+                            scope: InstructionScope::Local,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // Also load CLAUDE.local.md / AGENTS.local.md / GEMINI.local.md from project root
+    for base_filename in INSTRUCTION_FILES {
+        let local_filename = base_filename.replace(".md", ".local.md");
+        let local_file = dir.join(&local_filename);
         if local_file.is_file() {
             if let Ok(content) = std::fs::read_to_string(&local_file) {
                 if !content.trim().is_empty() {
+                    let canonical = local_file.canonicalize().unwrap_or_else(|_| local_file.clone());
+                    if seen_local_paths.contains(&canonical) {
+                        continue;
+                    }
+                    seen_local_paths.insert(canonical);
+
                     let (resolved, imported) = resolve_content_imports(
                         &content,
-                        &local_claude_dir,
+                        dir,
                         dir,
                         DEFAULT_MAX_IMPORT_DEPTH,
                         DEFAULT_MAX_IMPORT_SIZE,
                     );
                     all_imported.extend(imported);
-                    let rel_path = format!(".claude/{filename}");
                     all_content.push_str(&format!(
                         "## {} Scope: {} ---\n\n{}\n\n",
                         InstructionScope::Local.name(),
-                        rel_path,
+                        local_filename,
                         resolved
                     ));
-                    all_files.push(rel_path);
+                    all_files.push(local_filename.clone());
                     instruction_files.push(InstructionFile {
                         path: local_file,
                         content,
@@ -639,16 +692,25 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
     }
 }
 
-/// Placeholder for loading managed/organization instructions.
+/// Load managed/organization instructions from `RemoteManagedSettings`.
 ///
-/// In the future, this will integrate with RemoteManagedSettings to fetch
-/// organization-level instructions from remote sources.
+/// Checks the remote managed settings store for a `"project_instructions"` key
+/// (sourced from organization or remote overrides). If present and non-empty,
+/// returns the content. Returns `Ok(None)` if no managed instructions are
+/// configured or if the remote settings subsystem is unavailable.
 fn load_managed_instructions(_dir: &Path) -> Result<Option<String>, Box<dyn std::error::Error>> {
-    // TODO: Integrate with RemoteManagedSettings
-    // This will fetch instructions from:
-    // - Remote organization settings
-    // - Managed configuration providers
-    // - Organization-level CLAUDE.md templates
+    use crate::remote_settings::RemoteManagedSettings;
+
+    let settings = RemoteManagedSettings::new();
+
+    // The "project_instructions" key holds org/remote-level instruction content.
+    if let Some(content) = settings.get("project_instructions") {
+        let trimmed = content.trim();
+        if !trimmed.is_empty() {
+            return Ok(Some(trimmed.to_string()));
+        }
+    }
+
     Ok(None)
 }
 
@@ -669,12 +731,30 @@ pub fn get_active_scopes(dir: &Path) -> Vec<InstructionScope> {
         }
     }
 
-    // Check local scope (.claude/)
-    let local_claude_dir = dir.join(".claude");
-    for filename in INSTRUCTION_FILES {
-        if local_claude_dir.join(filename).is_file() {
-            scopes.push(InstructionScope::Local);
+    // Check local scope (.claude/ and .shannon/)
+    let mut found_local = false;
+    for local_dir_name in &[".claude", ".shannon"] {
+        let local_dir = dir.join(local_dir_name);
+        for filename in INSTRUCTION_FILES {
+            if local_dir.join(filename).is_file() {
+                scopes.push(InstructionScope::Local);
+                found_local = true;
+                break;
+            }
+        }
+        if found_local {
             break;
+        }
+    }
+
+    // Check *.local.md files in project root
+    if !found_local {
+        for base_filename in INSTRUCTION_FILES {
+            let local_filename = base_filename.replace(".md", ".local.md");
+            if dir.join(&local_filename).is_file() {
+                scopes.push(InstructionScope::Local);
+                break;
+            }
         }
     }
 
@@ -788,10 +868,25 @@ impl InstructionWatcher {
             }
         }
 
-        // Check local project instructions (.claude/ in current directory)
-        let local_claude_dir = self.watch_dir.join(".claude");
-        for filename in INSTRUCTION_FILES {
-            let path = local_claude_dir.join(filename);
+        // Check local project instructions (.claude/ and .shannon/ in current directory)
+        for local_dir_name in &[".claude", ".shannon"] {
+            let local_dir = self.watch_dir.join(local_dir_name);
+            for filename in INSTRUCTION_FILES {
+                let path = local_dir.join(filename);
+                if path.is_file() {
+                    if let Ok(meta) = std::fs::metadata(&path) {
+                        if let Ok(mtime) = meta.modified() {
+                            current_mtimes.insert(path, mtime);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check *.local.md files in project root (CLAUDE.local.md, AGENTS.local.md, etc.)
+        for base_filename in INSTRUCTION_FILES {
+            let local_filename = base_filename.replace(".md", ".local.md");
+            let path = self.watch_dir.join(&local_filename);
             if path.is_file() {
                 if let Ok(meta) = std::fs::metadata(&path) {
                     if let Ok(mtime) = meta.modified() {
@@ -1310,6 +1405,198 @@ mod tests {
             "Should contain A"
         );
         // The key is that we don't infinite loop and don't panic
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_instruction_cascade_order() {
+        // Verify the instruction cascade priority: Managed > Project > User > Local
+        // We test the scopes of loaded instruction_files to confirm the order.
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+
+        // Write project-level CLAUDE.md
+        fs::write(tmp.join("CLAUDE.md"), "# Project instructions").unwrap();
+
+        // Write local .claude/CLAUDE.md
+        fs::create_dir_all(tmp.join(".claude")).unwrap();
+        fs::write(tmp.join(".claude/CLAUDE.md"), "# Local claude instructions").unwrap();
+
+        // Write local .shannon/CLAUDE.md
+        fs::create_dir_all(tmp.join(".shannon")).unwrap();
+        fs::write(tmp.join(".shannon/CLAUDE.md"), "# Local shannon instructions").unwrap();
+
+        // Write CLAUDE.local.md at project root
+        fs::write(tmp.join("CLAUDE.local.md"), "# Local file instructions").unwrap();
+
+        let result = load_full_context(&tmp);
+        assert!(result.is_some(), "Should load full context");
+        let instr = result.unwrap();
+
+        // Collect scopes of all instruction files
+        let scopes: Vec<InstructionScope> = instr.instruction_files.iter().map(|f| f.scope).collect();
+
+        // Verify that Project scope exists (from CLAUDE.md at root)
+        assert!(
+            scopes.contains(&InstructionScope::Project),
+            "Should have Project scope: {:?}",
+            scopes
+        );
+
+        // Verify that Local scope exists (from .claude/, .shannon/, and CLAUDE.local.md)
+        let local_count = scopes.iter().filter(|s| **s == InstructionScope::Local).count();
+        assert!(
+            local_count >= 1,
+            "Should have at least one Local scope entry: {:?}",
+            scopes
+        );
+
+        // Verify priority ordering: Managed > Project > User > Local
+        // The instruction_files should have higher-priority scopes first
+        let project_idx = instr
+            .instruction_files
+            .iter()
+            .position(|f| f.scope == InstructionScope::Project);
+        let local_idx = instr
+            .instruction_files
+            .iter()
+            .position(|f| f.scope == InstructionScope::Local);
+
+        if let (Some(pi), Some(li)) = (project_idx, local_idx) {
+            assert!(
+                pi < li,
+                "Project scope (idx {}) should come before Local scope (idx {})",
+                pi,
+                li
+            );
+        }
+
+        // Verify scope value ordering (higher = higher priority)
+        for window in instr.instruction_files.windows(2) {
+            assert!(
+                window[0].scope >= window[1].scope,
+                "Scopes should be in descending priority order: {:?} >= {:?}",
+                window[0].scope,
+                window[1].scope
+            );
+        }
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_scope_priority_values() {
+        // Verify the scope priority values match the expected ordering
+        assert!(InstructionScope::Managed > InstructionScope::Project);
+        assert!(InstructionScope::Project > InstructionScope::User);
+        assert!(InstructionScope::User > InstructionScope::Local);
+        assert!(InstructionScope::Local > InstructionScope::Directory);
+    }
+
+    #[test]
+    fn test_shannon_dir_loaded_as_local() {
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(tmp.join(".shannon")).unwrap();
+        fs::write(
+            tmp.join(".shannon/CLAUDE.md"),
+            "# Shannon local instructions",
+        )
+        .unwrap();
+
+        let result = load_full_context(&tmp);
+        assert!(result.is_some(), "Should load instructions from .shannon/");
+        let instr = result.unwrap();
+
+        // Content should include the .shannon instructions
+        assert!(
+            instr.content.contains("Shannon local instructions"),
+            "Should contain .shannon content: {:?}",
+            instr.content
+        );
+
+        // Should have at least one Local scope entry from .shannon/
+        let has_shannon_local = instr
+            .instruction_files
+            .iter()
+            .any(|f| f.scope == InstructionScope::Local && f.path.ends_with(".shannon/CLAUDE.md"));
+        assert!(
+            has_shannon_local,
+            "Should have .shannon/CLAUDE.md as Local scope: {:?}",
+            instr
+                .instruction_files
+                .iter()
+                .map(|f| (&f.path, f.scope))
+                .collect::<Vec<_>>()
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_claude_local_md_loaded_as_local() {
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(
+            tmp.join("CLAUDE.local.md"),
+            "# Personal gitignored instructions",
+        )
+        .unwrap();
+
+        let result = load_full_context(&tmp);
+        assert!(
+            result.is_some(),
+            "Should load instructions from CLAUDE.local.md"
+        );
+        let instr = result.unwrap();
+
+        assert!(
+            instr.content.contains("Personal gitignored instructions"),
+            "Should contain CLAUDE.local.md content: {:?}",
+            instr.content
+        );
+
+        let has_local = instr
+            .instruction_files
+            .iter()
+            .any(|f| f.scope == InstructionScope::Local && f.path.ends_with("CLAUDE.local.md"));
+        assert!(
+            has_local,
+            "Should have CLAUDE.local.md as Local scope: {:?}",
+            instr
+                .instruction_files
+                .iter()
+                .map(|f| (&f.path, f.scope))
+                .collect::<Vec<_>>()
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_managed_instructions_graceful_skip() {
+        // When no RemoteManagedSettings are configured, managed instructions should be skipped gracefully
+        let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(tmp.join("CLAUDE.md"), "# Only project instructions").unwrap();
+
+        let result = load_full_context(&tmp);
+        assert!(result.is_some());
+        let instr = result.unwrap();
+
+        // Should NOT contain managed scope header (since no managed instructions configured)
+        assert!(
+            !instr.content.contains("managed Scope"),
+            "Should not have managed scope when no remote settings are configured: {:?}",
+            instr.content
+        );
+
+        // But project instructions should still load fine
+        assert!(
+            instr.content.contains("Only project instructions"),
+            "Should still load project instructions: {:?}",
+            instr.content
+        );
+
         let _ = fs::remove_dir_all(&tmp);
     }
 }

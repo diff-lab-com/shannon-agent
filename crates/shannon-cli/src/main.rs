@@ -11,7 +11,7 @@ use shannon_core::{
     tools::ToolRegistry,
     unified_config::{ConfigBuilder, ShannonConfig},
 };
-use shannon_tools::register_default_tools_with_project_dir;
+use shannon_tools::register_default_tools_with_project_dir_ex;
 use shannon_ui::Repl;
 use std::collections::HashMap;
 use std::io::Write;
@@ -56,6 +56,10 @@ enum HeadlessExitCode {
     Timeout = 3,
     /// 4 - rate limited by API provider.
     RateLimited = 4,
+    /// 5 - conversation exceeded the model's context window.
+    ContextOverflow = 5,
+    /// 6 - a required permission was denied in non-interactive mode.
+    PermissionDenied = 6,
 }
 
 impl From<HeadlessExitCode> for i32 {
@@ -603,8 +607,10 @@ fn run_noninteractive_query(
         // Build tool registry with all standard tools (sandboxed to project dir)
         let project_dir = std::env::current_dir().unwrap_or_default();
         let mut tools = ToolRegistry::new();
-        let agent_context_handle = register_default_tools_with_project_dir(&mut tools, &project_dir)
+        let reg_result = register_default_tools_with_project_dir_ex(&mut tools, &project_dir)
             .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
+        let agent_context_handle = reg_result.agent_context_handle;
+        let plan_mode_flag = reg_result.plan_manager.plan_mode_flag();
 
         // Load and register skills from shannon-skills as tools
         let _ = shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
@@ -756,7 +762,8 @@ fn run_noninteractive_query(
         }
         let state = StateManager::new();
 
-        let base_engine = QueryEngine::with_defaults(client, tools, permissions, state);
+        let base_engine = QueryEngine::with_defaults(client, tools, permissions, state)
+            .with_plan_mode_active(plan_mode_flag);
 
         // Initialize memory store at ~/.shannon/memories/
         let mut engine = {
@@ -877,6 +884,42 @@ fn emit_ci_event(event: &CiEvent) {
     }
 }
 
+/// NDJSON event type for structured streaming output.
+/// Mirrors the type defined in `shannon_core::output_format` but kept local
+/// to avoid a dependency that some build environments strip during linting.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "type")]
+enum OutputEvent {
+    #[serde(rename = "text_delta")]
+    TextDelta { content: String },
+    #[serde(rename = "tool_use")]
+    ToolUse { name: String, input: serde_json::Value },
+    #[serde(rename = "tool_result")]
+    ToolResult { name: String, output: String, is_error: bool },
+    #[serde(rename = "error")]
+    Error { message: String },
+    #[serde(rename = "done")]
+    Done { exit_code: i32 },
+}
+
+impl OutputEvent {
+    fn to_ndjson(&self) -> String {
+        match serde_json::to_string(self) {
+            Ok(json) => format!("{json}\n"),
+            Err(_) => String::new(),
+        }
+    }
+}
+
+/// Emit an [`OutputEvent`] as an NDJSON line to stdout, flushing immediately.
+fn emit_output_event(event: &OutputEvent) {
+    let line = event.to_ndjson();
+    if !line.is_empty() {
+        print!("{line}");
+        std::io::stdout().flush().ok();
+    }
+}
+
 /// Run a CI/CD headless query.
 ///
 /// When `--prompt` is provided (the `--prompt` long flag, not the positional arg),
@@ -907,8 +950,10 @@ fn run_headless_query(
         // Build tool registry with all standard tools (sandboxed to project dir)
         let project_dir = std::env::current_dir().unwrap_or_default();
         let mut tools = ToolRegistry::new();
-        let agent_context_handle = register_default_tools_with_project_dir(&mut tools, &project_dir)
+        let reg_result = register_default_tools_with_project_dir_ex(&mut tools, &project_dir)
             .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
+        let agent_context_handle = reg_result.agent_context_handle;
+        let plan_mode_flag = reg_result.plan_manager.plan_mode_flag();
 
         // Load and register skills
         let _ = shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
@@ -989,7 +1034,8 @@ fn run_headless_query(
         permissions.set_approval_mode(shannon_core::permissions::ApprovalMode::BypassPermissions);
         let state = StateManager::new();
 
-        let mut engine = QueryEngine::with_defaults(client, tools, permissions, state);
+        let mut engine = QueryEngine::with_defaults(client, tools, permissions, state)
+            .with_plan_mode_active(plan_mode_flag);
 
         // Apply max_turns if specified
         if let Some(turns) = max_turns {
@@ -1060,6 +1106,8 @@ fn run_headless_query(
                     if output_format == OutputFormat::Text {
                         print!("{content}");
                         std::io::stdout().flush().ok();
+                    } else if output_format == OutputFormat::JsonStream {
+                        emit_output_event(&OutputEvent::TextDelta { content: content.clone() });
                     }
                     response_text.push_str(&content);
                 }
@@ -1072,7 +1120,7 @@ fn run_headless_query(
                                 tool_name,
                                 allowed.iter().cloned().collect::<Vec<_>>().join(",")
                             );
-                            exit_code = HeadlessExitCode::Error; // ToolDenied is now Error
+                            exit_code = HeadlessExitCode::PermissionDenied;
                             break;
                         }
                     }
@@ -1089,6 +1137,10 @@ fn run_headless_query(
                     if output_format == OutputFormat::JsonStream {
                         if let Ok(input_value) = serde_json::from_str::<serde_json::Value>(&input_summary) {
                             emit_ci_event(&CiEvent::ToolCall {
+                                name: tool_name.clone(),
+                                input: input_value.clone(),
+                            });
+                            emit_output_event(&OutputEvent::ToolUse {
                                 name: tool_name.clone(),
                                 input: input_value,
                             });
@@ -1133,6 +1185,11 @@ fn run_headless_query(
                             output: output_summary.clone(),
                             success: !is_error,
                         });
+                        emit_output_event(&OutputEvent::ToolResult {
+                            name: tool_name.clone(),
+                            output: output_summary.clone(),
+                            is_error,
+                        });
                     }
 
                     // Handle exit-on-error
@@ -1143,6 +1200,9 @@ fn run_headless_query(
                         exit_code = HeadlessExitCode::Error;
                         if output_format == OutputFormat::JsonStream {
                             emit_ci_event(&CiEvent::Error {
+                                message: format!("Tool {tool_name} failed: {output_summary}"),
+                            });
+                            emit_output_event(&OutputEvent::Error {
                                 message: format!("Tool {tool_name} failed: {output_summary}"),
                             });
                         }
@@ -1183,7 +1243,25 @@ fn run_headless_query(
                 }
                 Ok(QueryEvent::Failed { error, .. }) => {
                     eprintln!("Error: {error}");
-                    exit_code = HeadlessExitCode::Error;
+                    let err_lower = error.to_lowercase();
+                    if err_lower.contains("context")
+                        || err_lower.contains("token limit")
+                        || err_lower.contains("max_tokens")
+                        || err_lower.contains("context_length")
+                    {
+                        exit_code = HeadlessExitCode::ContextOverflow;
+                    } else if err_lower.contains("rate limit") || err_lower.contains("429") {
+                        exit_code = HeadlessExitCode::RateLimited;
+                    } else if err_lower.contains("permission") || err_lower.contains("denied") {
+                        exit_code = HeadlessExitCode::PermissionDenied;
+                    } else {
+                        exit_code = HeadlessExitCode::Error;
+                    }
+                    if output_format == OutputFormat::JsonStream {
+                        emit_output_event(&OutputEvent::Error {
+                            message: error.clone(),
+                        });
+                    }
                 }
                 Ok(_) => {}
                 Err(e) => {
@@ -1219,6 +1297,9 @@ fn run_headless_query(
                     exit_code: i32::from(exit_code),
                     turns_used: _turn_count as u32,
                     tokens_used: total_tokens,
+                });
+                emit_output_event(&OutputEvent::Done {
+                    exit_code: i32::from(exit_code),
                 });
             }
         }
@@ -1273,8 +1354,10 @@ fn run_serve_command(port: u16, host: Option<String>, config: &CliConfig) -> Res
         // Build tool registry with default tools (sandboxed to project dir).
         let project_dir = std::env::current_dir().unwrap_or_default();
         let mut tools = shannon_core::ToolRegistry::new();
-        let agent_context_handle = register_default_tools_with_project_dir(&mut tools, &project_dir)
+        let reg_result = register_default_tools_with_project_dir_ex(&mut tools, &project_dir)
             .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
+        let agent_context_handle = reg_result.agent_context_handle;
+        let plan_mode_flag = reg_result.plan_manager.plan_mode_flag();
 
         // Load and register skills.
         let _ = shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
@@ -1384,8 +1467,10 @@ fn run_team_agent_mode(
         // ── Build full tool registry (sandboxed to project dir) ──
         let project_dir = std::env::current_dir().unwrap_or_default();
         let mut tools = ToolRegistry::new();
-        let agent_context_handle = register_default_tools_with_project_dir(&mut tools, &project_dir)
+        let reg_result = register_default_tools_with_project_dir_ex(&mut tools, &project_dir)
             .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
+        let agent_context_handle = reg_result.agent_context_handle;
+        let plan_mode_flag = reg_result.plan_manager.plan_mode_flag();
 
         let _ = shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
 
@@ -1529,7 +1614,8 @@ fn run_team_agent_mode(
         permissions.set_approval_mode(approval_mode);
         let state = StateManager::new();
 
-        let base_engine = QueryEngine::with_defaults(client, tools, permissions, state);
+        let base_engine = QueryEngine::with_defaults(client, tools, permissions, state)
+            .with_plan_mode_active(plan_mode_flag);
 
         // Memory store
         let mut engine = {
@@ -3050,5 +3136,146 @@ mod tests {
         assert!(cli.name.is_none());
         assert!(cli.system_prompt.is_none());
         assert!(cli.workdir.is_none());
+    }
+
+    // ── HeadlessExitCode tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_headless_exit_code_values() {
+        assert_eq!(HeadlessExitCode::Success as i32, 0);
+        assert_eq!(HeadlessExitCode::Error as i32, 1);
+        assert_eq!(HeadlessExitCode::TurnLimit as i32, 2);
+        assert_eq!(HeadlessExitCode::Timeout as i32, 3);
+        assert_eq!(HeadlessExitCode::RateLimited as i32, 4);
+        assert_eq!(HeadlessExitCode::ContextOverflow as i32, 5);
+        assert_eq!(HeadlessExitCode::PermissionDenied as i32, 6);
+    }
+
+    #[test]
+    fn test_headless_exit_code_from_conversion() {
+        assert_eq!(i32::from(HeadlessExitCode::Success), 0);
+        assert_eq!(i32::from(HeadlessExitCode::Error), 1);
+        assert_eq!(i32::from(HeadlessExitCode::ContextOverflow), 5);
+        assert_eq!(i32::from(HeadlessExitCode::PermissionDenied), 6);
+    }
+
+    #[test]
+    fn test_headless_exit_code_serialization() {
+        let code = HeadlessExitCode::ContextOverflow;
+        let json = serde_json::to_string(&code).unwrap();
+        assert!(json.contains("context_overflow"));
+
+        let code = HeadlessExitCode::PermissionDenied;
+        let json = serde_json::to_string(&code).unwrap();
+        assert!(json.contains("permission_denied"));
+    }
+
+    #[test]
+    fn test_headless_exit_codes_are_distinct() {
+        let codes = [
+            HeadlessExitCode::Success as i32,
+            HeadlessExitCode::Error as i32,
+            HeadlessExitCode::TurnLimit as i32,
+            HeadlessExitCode::Timeout as i32,
+            HeadlessExitCode::RateLimited as i32,
+            HeadlessExitCode::ContextOverflow as i32,
+            HeadlessExitCode::PermissionDenied as i32,
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for code in codes {
+            assert!(seen.insert(code), "duplicate exit code: {code}");
+        }
+    }
+
+    // ── OutputEvent (local) tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_output_event_text_delta_ndjson() {
+        let event = OutputEvent::TextDelta { content: "hello".into() };
+        let line = event.to_ndjson();
+        assert!(line.ends_with('\n'));
+        let parsed: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(parsed["type"], "text_delta");
+        assert_eq!(parsed["content"], "hello");
+    }
+
+    #[test]
+    fn test_output_event_tool_use_ndjson() {
+        let event = OutputEvent::ToolUse {
+            name: "Bash".into(),
+            input: serde_json::json!({"command": "ls"}),
+        };
+        let line = event.to_ndjson();
+        let parsed: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(parsed["type"], "tool_use");
+        assert_eq!(parsed["name"], "Bash");
+    }
+
+    #[test]
+    fn test_output_event_tool_result_ndjson() {
+        let event = OutputEvent::ToolResult {
+            name: "Read".into(),
+            output: "contents".into(),
+            is_error: false,
+        };
+        let line = event.to_ndjson();
+        let parsed: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(parsed["type"], "tool_result");
+        assert_eq!(parsed["is_error"], false);
+    }
+
+    #[test]
+    fn test_output_event_error_ndjson() {
+        let event = OutputEvent::Error {
+            message: "something failed".into(),
+        };
+        let line = event.to_ndjson();
+        let parsed: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(parsed["type"], "error");
+    }
+
+    #[test]
+    fn test_output_event_done_ndjson() {
+        let event = OutputEvent::Done { exit_code: 0 };
+        let line = event.to_ndjson();
+        let parsed: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(parsed["type"], "done");
+        assert_eq!(parsed["exit_code"], 0);
+    }
+
+    #[test]
+    fn test_output_event_done_with_error_codes() {
+        for code in [1, 2, 3, 4, 5, 6] {
+            let event = OutputEvent::Done { exit_code: code };
+            let line = event.to_ndjson();
+            let parsed: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+            assert_eq!(parsed["exit_code"], code);
+        }
+    }
+
+    #[test]
+    fn test_ndjson_stream_multiple_events() {
+        let events = vec![
+            OutputEvent::TextDelta { content: "line1".into() },
+            OutputEvent::TextDelta { content: "line2".into() },
+            OutputEvent::Done { exit_code: 0 },
+        ];
+        let output: String = events.iter().map(|e| e.to_ndjson()).collect();
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(lines.len(), 3);
+        for line in &lines {
+            let _: serde_json::Value = serde_json::from_str(line).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_output_event_ndjson_one_json_per_line() {
+        let event = OutputEvent::ToolUse {
+            name: "Edit".into(),
+            input: serde_json::json!({"path": "/tmp/f.rs"}),
+        };
+        let line = event.to_ndjson();
+        assert!(line.ends_with('\n'));
+        assert_eq!(line.matches('\n').count(), 1);
     }
 }

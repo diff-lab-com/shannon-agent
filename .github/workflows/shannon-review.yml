@@ -1,0 +1,52 @@
+name: Shannon Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build Shannon
+        run: cargo build --release -p shannon-cli
+
+      - name: Run Review
+        env:
+          SHANNON_API_KEY: ${{ secrets.SHANNON_API_KEY }}
+        run: |
+          target/release/shannon --prompt "Review this PR for bugs, security issues, and code quality. Be concise. Focus on the diff." \
+            --output-format json-stream \
+            --exit-on-error \
+            --max-turns 5 \
+            --allowed-tools Read,Grep,Glob,Bash \
+            | tee review-output.jsonl
+
+      - name: Upload review output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-output
+          path: review-output.jsonl
+          retention-days: 7

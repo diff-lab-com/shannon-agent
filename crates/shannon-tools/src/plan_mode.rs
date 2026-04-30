@@ -62,9 +62,15 @@ struct PlanState {
 ///
 /// Wraps `Arc<RwLock<PlanState>>` to provide safe concurrent access to plan
 /// mode state, plan content tracking, approval flow, and file persistence.
+///
+/// A secondary `plan_mode_flag` (`Arc<RwLock<bool>>`) is kept in sync with the
+/// active state and can be shared with the query engine across crate boundaries
+/// without creating a circular dependency.
 #[derive(Debug, Clone)]
 pub struct PlanManager {
     state: Arc<RwLock<PlanState>>,
+    /// Shared flag for query-engine write-blocking. Kept in sync with `state.active`.
+    plan_mode_flag: Arc<RwLock<bool>>,
 }
 
 impl PlanManager {
@@ -72,6 +78,7 @@ impl PlanManager {
     pub fn new() -> Self {
         Self {
             state: Arc::new(RwLock::new(PlanState::default())),
+            plan_mode_flag: Arc::new(RwLock::new(false)),
         }
     }
 
@@ -81,6 +88,10 @@ impl PlanManager {
             ToolError::ExecutionFailed(format!("Failed to acquire plan mode lock: {e}"))
         })?;
         state.active = true;
+        // Keep the cross-crate flag in sync (best-effort).
+        if let Ok(mut flag) = self.plan_mode_flag.write() {
+            *flag = true;
+        }
         Ok(())
     }
 
@@ -90,7 +101,18 @@ impl PlanManager {
             ToolError::ExecutionFailed(format!("Failed to acquire plan mode lock: {e}"))
         })?;
         state.active = false;
+        // Keep the cross-crate flag in sync (best-effort).
+        if let Ok(mut flag) = self.plan_mode_flag.write() {
+            *flag = false;
+        }
         Ok(())
+    }
+
+    /// Return a cloneable handle to the plan-mode flag for sharing with the
+    /// query engine. The flag mirrors `state.active` and is updated on every
+    /// `enter_plan_mode` / `exit_plan_mode` call.
+    pub fn plan_mode_flag(&self) -> Arc<RwLock<bool>> {
+        Arc::clone(&self.plan_mode_flag)
     }
 
     /// Check whether plan mode is currently active.
@@ -1423,5 +1445,42 @@ mod tests {
         let state = new_plan_mode_state();
         let tool = ExitPlanModeTool::new(state);
         assert!(tool.is_read_only());
+    }
+
+    #[test]
+    fn test_plan_mode_flag_syncs_with_state() {
+        let manager = PlanManager::new();
+        let flag = manager.plan_mode_flag();
+
+        // Initially false
+        assert!(!flag.read().unwrap().clone());
+        assert!(!manager.is_active().unwrap());
+
+        // Enter plan mode — flag should become true
+        manager.enter_plan_mode().unwrap();
+        assert!(flag.read().unwrap().clone());
+        assert!(manager.is_active().unwrap());
+
+        // Exit plan mode — flag should become false
+        manager.exit_plan_mode().unwrap();
+        assert!(!flag.read().unwrap().clone());
+        assert!(!manager.is_active().unwrap());
+    }
+
+    #[test]
+    fn test_plan_mode_flag_independent_clone() {
+        let manager = PlanManager::new();
+        let flag1 = manager.plan_mode_flag();
+        let flag2 = manager.plan_mode_flag();
+
+        // Both share the same underlying flag
+        assert!(!flag1.read().unwrap().clone());
+        assert!(!flag2.read().unwrap().clone());
+
+        manager.enter_plan_mode().unwrap();
+
+        // Both should reflect the change
+        assert!(flag1.read().unwrap().clone());
+        assert!(flag2.read().unwrap().clone());
     }
 }

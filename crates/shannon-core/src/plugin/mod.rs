@@ -9,9 +9,11 @@ pub mod manifest;
 pub mod registry;
 pub mod config;
 pub mod index;
+pub mod index_builder;
 
 pub use error::{PluginError, PluginResult};
 pub use manifest::{PluginManifest, PluginKind, TransportConfig, PluginPermission};
 pub use registry::{PluginRegistry, InstalledPlugin};
 pub use config::{PluginsConfig, PluginState};
 pub use index::{PluginIndex, IndexEntry};
+pub use index_builder::{IndexBuilder, BuiltIndexEntry, IndexFile, IndexMetadata};

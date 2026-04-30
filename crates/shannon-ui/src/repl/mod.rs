@@ -55,7 +55,7 @@ use shannon_core::{
 use shannon_commands::{Command, CommandBase, CommandRegistry, CommandParser, ExecutionContext, PromptCommand, builtin_commands, SharedExecutor};
 
 // Tool registration
-use shannon_tools::register_default_tools_with_project_dir;
+use shannon_tools::register_default_tools_with_project_dir_ex;
 use crate::skill_bridge::register_skills_as_tools;
 use shannon_mcp::{McpProcessPool, discover_pooled_tools, discover_pooled_remote_tools, HeaderSource};
 
@@ -685,6 +685,8 @@ pub struct Repl {
     pub(crate) instruction_watcher: Option<shannon_core::project_instructions::InstructionWatcher>,
     /// Custom command file watcher for hot-reloading .claude/commands/ and .shannon/commands/
     pub(crate) command_watcher: Option<CustomCommandWatcher>,
+    /// Crash-safe JSONL session recovery log (appends each turn with fsync)
+    pub(crate) session_recovery: shannon_core::SessionRecovery,
 }
 
 /// State for tab completion cycling
@@ -839,6 +841,7 @@ impl Repl {
             webhook_receiver: None,
             instruction_watcher: None,
             command_watcher: None,
+            session_recovery: shannon_core::SessionRecovery::new().unwrap_or_default(),
         };
 
         repl.sync_approval_mode_label();
@@ -860,7 +863,9 @@ impl Repl {
         // Create tool registry and register all tools (sandboxed to project dir)
         let project_dir = std::env::current_dir().unwrap_or_default();
         let mut tool_registry = ToolRegistry::new();
-        let agent_context_handle = register_default_tools_with_project_dir(&mut tool_registry, &project_dir).map_err(|e| anyhow::anyhow!("Failed to register tools: {e}"))?;
+        let reg_result = register_default_tools_with_project_dir_ex(&mut tool_registry, &project_dir).map_err(|e| anyhow::anyhow!("Failed to register tools: {e}"))?;
+        let agent_context_handle = reg_result.agent_context_handle;
+        let plan_mode_flag = reg_result.plan_manager.plan_mode_flag();
 
         // Load and register skills from shannon-skills as tools.
         // Also capture the formatted skills list for LLM context injection.
@@ -1310,7 +1315,8 @@ impl Repl {
             tool_registry.clone(),
             permission_manager,
             state_manager,
-        );
+        )
+        .with_plan_mode_active(plan_mode_flag.clone());
 
         // Initialize memory store at ~/.shannon/memories/
         let mut query_engine = {
@@ -1577,6 +1583,7 @@ impl Repl {
                 }
             },
             command_watcher: Some(CustomCommandWatcher::new()),
+            session_recovery: shannon_core::SessionRecovery::new().unwrap_or_default(),
         };
 
         repl.sync_approval_mode_label();

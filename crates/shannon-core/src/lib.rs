@@ -75,6 +75,7 @@ pub mod model_registry;
 pub mod project_instructions;
 pub mod streaming_tool_executor;
 pub mod tool_execution;
+pub mod output_format;
 
 pub mod doctor;
 pub mod permission_classifier;
@@ -95,6 +96,7 @@ pub mod api_server;
 pub mod preference_memory;
 pub mod feature_flags;
 pub mod session_persist;
+pub mod session_recovery;
 pub mod webhook;
 pub mod scheduled_routines;
 
@@ -197,6 +199,7 @@ pub use session_history::{
 };
 pub use streaming_tool_executor::{StreamingToolExecutor, TrackedTool, ToolStatus};
 pub use tool_execution::{ToolExecutionService, ToolExecutionResult, ToolProgress, ToolProgressStatus};
+pub use session_recovery::{SessionRecovery, SessionRecoveryError, RecoveryMetadata, SessionLogEntry};
 pub use compact::{CompactEngine, CompactConfig, CompactResult, CompactStrategy, MessageGroup, CompactError, RuleBasedSummarizer, Summarizer};
 pub use context_pressure::{
     ContextPressureMonitor, PressureLevel, PressureMetrics, PressureRecommendation,
@@ -302,6 +305,7 @@ pub mod error {
     pub use crate::auto_dream_consolidation::ConsolidationError;
     pub use crate::mcp_server_approval::McpApprovalError;
     pub use crate::session_transcript::TranscriptError;
+    pub use crate::session_recovery::SessionRecoveryError;
     pub use crate::activity_manager::ActivityError;
     pub use crate::housekeeping::HousekeepingError;
     pub use crate::enhanced_suggestions::SuggestionError;

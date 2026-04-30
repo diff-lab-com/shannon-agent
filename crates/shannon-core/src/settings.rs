@@ -4,9 +4,12 @@
 //!
 //! ## Architecture
 //!
-//! Settings are loaded from two locations (project-level overrides user-level):
-//! - **User-level**: `~/.shannon/settings.json`
-//! - **Project-level**: `.shannon/settings.json` (in current directory)
+//! Settings are loaded from three locations (later overrides earlier):
+//! 1. **User-level**: `~/.shannon/settings.json` (shared across all projects)
+//! 2. **Project-level**: `.shannon/settings.json` (committed to VCS, shared with team)
+//! 3. **Local-level**: `.shannon/settings.local.json` (personal, gitignored, highest priority)
+//!
+//! Permission rules follow **deny > ask > allow** priority across all layers.
 //!
 //! ## Example
 //!
@@ -36,6 +39,42 @@ use thiserror::Error;
 
 /// Current version of the settings schema
 const SETTINGS_VERSION: &str = "1.0";
+
+/// Permission rules for tool access control.
+///
+/// Rules are evaluated in **deny > ask > allow** priority order.
+/// When merging across settings layers (user -> project -> local),
+/// deny rules from any layer take highest precedence.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct PermissionRules {
+    /// Tool patterns that are always denied (highest priority).
+    #[serde(default)]
+    pub deny: Vec<String>,
+    /// Tool patterns that require explicit approval.
+    #[serde(default)]
+    pub ask: Vec<String>,
+    /// Tool patterns that are always allowed.
+    #[serde(default)]
+    pub allow: Vec<String>,
+}
+
+impl PermissionRules {
+    /// Create empty permission rules.
+    pub fn new() -> Self { Self::default() }
+
+    /// Check if these rules are empty.
+    pub fn is_empty(&self) -> bool {
+        self.deny.is_empty() && self.ask.is_empty() && self.allow.is_empty()
+    }
+
+    /// Merge another set of permission rules into this one.
+    pub fn merge(&mut self, other: PermissionRules) {
+        self.deny.extend(other.deny);
+        self.ask.extend(other.ask);
+        self.allow.extend(other.allow);
+    }
+}
+
 
 /// Error type for settings operations
 #[derive(Error, Debug)]
@@ -93,6 +132,10 @@ pub struct Settings {
     /// UI theme: "dark", "light", "auto"
     #[serde(default = "default_theme")]
     pub theme: String,
+
+    /// Permission rules for tool access control (deny > ask > allow).
+    #[serde(default)]
+    pub permissions: PermissionRules,
 }
 
 impl Default for Settings {
@@ -106,6 +149,7 @@ impl Default for Settings {
             permissions_mode: default_permissions_mode(),
             auto_memory: default_auto_memory(),
             theme: default_theme(),
+            permissions: PermissionRules::default(),
         }
     }
 }
@@ -294,6 +338,7 @@ impl Settings {
         self.permissions_mode = other.permissions_mode;
         self.auto_memory = other.auto_memory;
         self.theme = other.theme;
+        self.permissions.merge(other.permissions);
     }
 }
 
@@ -303,6 +348,7 @@ pub struct SettingsManager {
     settings: Settings,
     user_config_path: PathBuf,
     project_config_path: PathBuf,
+    local_config_path: PathBuf,
 }
 
 /// Try multiple environment variable names in priority order.
@@ -335,11 +381,13 @@ impl SettingsManager {
             .join("settings.json");
 
         let project_config_path = PathBuf::from(".shannon/settings.json");
+        let local_config_path = PathBuf::from(".shannon/settings.local.json");
 
         Self {
             settings: Settings::new(),
             user_config_path,
             project_config_path,
+            local_config_path,
         }
     }
 
@@ -354,9 +402,14 @@ impl SettingsManager {
         Ok(())
     }
 
-    /// Load settings from JSON files only (user + project).
+    /// Load settings from JSON files only (user + project + local).
     /// Skips .env and environment variable overrides.
     /// Useful for testing file I/O round-trips in isolation.
+    ///
+    /// Priority order (later overrides earlier):
+    /// 1. User settings (`~/.shannon/settings.json`)
+    /// 2. Project settings (`.shannon/settings.json`)
+    /// 3. Local settings (`.shannon/settings.local.json`)
     pub fn load_from_files(&mut self) -> Result<(), SettingsError> {
         // Start with user settings
         if self.user_config_path.exists() {
@@ -390,6 +443,22 @@ impl SettingsManager {
 
             project_settings.validate()?;
             self.settings.merge(project_settings);
+        }
+
+        // Merge local settings if they exist (highest file priority)
+        if self.local_config_path.exists() {
+            let content = std::fs::read_to_string(&self.local_config_path)?;
+            let local_settings: Settings = serde_json::from_str(&content)?;
+
+            if local_settings.version != SETTINGS_VERSION {
+                return Err(SettingsError::InvalidVersion {
+                    expected: SETTINGS_VERSION.to_string(),
+                    got: local_settings.version,
+                });
+            }
+
+            local_settings.validate()?;
+            self.settings.merge(local_settings);
         }
 
         Ok(())
@@ -614,6 +683,11 @@ impl SettingsManager {
         &self.project_config_path
     }
 
+    /// Get the local config path
+    pub fn local_config_path(&self) -> &Path {
+        &self.local_config_path
+    }
+
     /// Load settings from a specific path
     pub fn load_from_path(&mut self, path: &Path) -> Result<(), SettingsError> {
         if path.exists() {
@@ -658,11 +732,13 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let user_path = temp_dir.path().join("user_settings.json");
         let project_path = temp_dir.path().join("project_settings.json");
+        let local_path = temp_dir.path().join("local_settings.json");
 
         let mut manager = SettingsManager::new();
         // Override paths for testing
         manager.user_config_path = user_path.clone();
         manager.project_config_path = project_path.clone();
+        manager.local_config_path = local_path.clone();
 
         (manager, temp_dir)
     }
@@ -679,6 +755,7 @@ mod tests {
         assert_eq!(settings.permissions_mode, "ask");
         assert!(settings.auto_memory);
         assert_eq!(settings.theme, "dark");
+        assert!(settings.permissions.is_empty());
     }
 
     #[test]
@@ -723,7 +800,7 @@ mod tests {
             permissions_mode: "auto".to_string(),
             auto_memory: false,
             theme: "light".to_string(),
-            ..Default::default()
+            permissions: PermissionRules::default(),
         };
 
         assert_eq!(
@@ -802,7 +879,10 @@ mod tests {
             permissions_mode: "ask".to_string(),
             auto_memory: true,
             theme: "dark".to_string(),
-            ..Default::default()
+            permissions: PermissionRules {
+                allow: vec!["Read(*)".to_string()],
+                ..Default::default()
+            },
         };
 
         let override_settings = Settings {
@@ -814,7 +894,11 @@ mod tests {
             permissions_mode: "auto".to_string(),
             auto_memory: false,
             theme: "light".to_string(),
-            ..Default::default()
+            permissions: PermissionRules {
+                deny: vec!["Bash(rm -rf /)".to_string()],
+                allow: vec!["Bash(git *)".to_string()],
+                ..Default::default()
+            },
         };
 
         base.merge(override_settings);
@@ -826,6 +910,9 @@ mod tests {
         assert_eq!(base.permissions_mode, "auto");
         assert!(!base.auto_memory);
         assert_eq!(base.theme, "light");
+        assert!(base.permissions.allow.contains(&"Read(*)".to_string()));
+        assert!(base.permissions.allow.contains(&"Bash(git *)".to_string()));
+        assert!(base.permissions.deny.contains(&"Bash(rm -rf /)".to_string()));
     }
 
     #[test]
@@ -857,6 +944,7 @@ mod tests {
         let mut manager2 = SettingsManager::new();
         manager2.user_config_path = manager.user_config_path.clone();
         manager2.project_config_path = manager.project_config_path.clone();
+        manager2.local_config_path = manager.local_config_path.clone();
         manager2.load_from_files().unwrap();
 
         // Verify loaded settings
@@ -918,7 +1006,7 @@ mod tests {
             permissions_mode: "readonly".to_string(),
             auto_memory: false,
             theme: "light".to_string(),
-            ..Default::default()
+            permissions: PermissionRules::default(),
         };
 
         manager.merge(project_settings);
@@ -1002,7 +1090,7 @@ mod tests {
             permissions_mode: "ask".to_string(),
             auto_memory: true,
             theme: "dark".to_string(),
-            ..Default::default()
+            permissions: PermissionRules::default(),
         };
 
         // Clear optional fields with null
@@ -1185,5 +1273,102 @@ SHANNON_THEME='dark'"#;
             std::env::remove_var("ANTHROPIC_MODEL_TEST");
             std::env::remove_var("OPENAI_MODEL_TEST");
         }
+    }
+
+    // ── Three-layer settings merge tests ────────────────────────────────
+
+    #[test]
+    fn test_three_layer_settings_merge() {
+        let (mut manager, _temp_dir) = create_temp_manager();
+
+        let user_json = r#"{"version": "1.0", "model": "claude-sonnet-4", "theme": "dark", "permissions": {"allow": ["Read(*)"]}}"#;
+        fs::write(&manager.user_config_path, user_json).unwrap();
+
+        let project_json = r#"{"version": "1.0", "model": "claude-opus-4", "theme": "light", "permissions": {"allow": ["Bash(git *)"], "ask": ["Bash(rm *)"]}}"#;
+        fs::write(&manager.project_config_path, project_json).unwrap();
+
+        let local_json = r#"{"version": "1.0", "theme": "auto", "permissions": {"deny": ["Bash(rm -rf /)"]}}"#;
+        fs::write(&manager.local_config_path, local_json).unwrap();
+
+        manager.load_from_files().unwrap();
+
+        assert_eq!(manager.settings.theme, "auto");
+        assert_eq!(manager.settings.model, Some("claude-opus-4".to_string()));
+        assert!(manager.settings.permissions.allow.contains(&"Read(*)".to_string()));
+        assert!(manager.settings.permissions.allow.contains(&"Bash(git *)".to_string()));
+        assert!(manager.settings.permissions.ask.contains(&"Bash(rm *)".to_string()));
+        assert!(manager.settings.permissions.deny.contains(&"Bash(rm -rf /)".to_string()));
+    }
+
+    #[test]
+    fn test_local_settings_override_project_settings() {
+        let (mut manager, _temp_dir) = create_temp_manager();
+
+        let project_json = r#"{"version": "1.0", "model": "claude-opus-4", "toolsEnabled": false}"#;
+        fs::write(&manager.project_config_path, project_json).unwrap();
+
+        let local_json = r#"{"version": "1.0", "toolsEnabled": true}"#;
+        fs::write(&manager.local_config_path, local_json).unwrap();
+
+        manager.load_from_files().unwrap();
+        assert_eq!(manager.settings.model, Some("claude-opus-4".to_string()));
+        assert!(manager.settings.tools_enabled);
+    }
+
+    #[test]
+    fn test_permission_rules_default_empty() {
+        let rules = PermissionRules::default();
+        assert!(rules.is_empty());
+        assert!(rules.deny.is_empty());
+        assert!(rules.ask.is_empty());
+        assert!(rules.allow.is_empty());
+    }
+
+    #[test]
+    fn test_permission_rules_merge() {
+        let mut rules = PermissionRules::new();
+        rules.deny.push("Bash(rm -rf /)".to_string());
+        rules.allow.push("Read(*)".to_string());
+
+        let other = PermissionRules {
+            deny: vec!["Bash(dd *)".to_string()],
+            ask: vec!["Bash(sudo *)".to_string()],
+            allow: vec!["Bash(git *)".to_string()],
+        };
+        rules.merge(other);
+
+        assert_eq!(rules.deny, vec!["Bash(rm -rf /)", "Bash(dd *)"]);
+        assert_eq!(rules.ask, vec!["Bash(sudo *)"]);
+        assert_eq!(rules.allow, vec!["Read(*)", "Bash(git *)"]);
+    }
+
+    #[test]
+    fn test_settings_without_permissions_field() {
+        let (mut manager, _temp_dir) = create_temp_manager();
+
+        let user_json = r#"{"version": "1.0", "model": "claude-sonnet-4"}"#;
+        fs::write(&manager.user_config_path, user_json).unwrap();
+
+        manager.load_from_files().unwrap();
+        assert_eq!(manager.settings.model, Some("claude-sonnet-4".to_string()));
+        assert!(manager.settings.permissions.is_empty());
+    }
+
+    #[test]
+    fn test_local_settings_only() {
+        let (mut manager, _temp_dir) = create_temp_manager();
+
+        let local_json = r#"{"version": "1.0", "model": "local-model", "permissions": {"deny": ["Bash(*)"]}}"#;
+        fs::write(&manager.local_config_path, local_json).unwrap();
+
+        manager.load_from_files().unwrap();
+        assert_eq!(manager.settings.model, Some("local-model".to_string()));
+        assert_eq!(manager.settings.permissions.deny, vec!["Bash(*)"]);
+    }
+
+    #[test]
+    fn test_local_config_path_is_set() {
+        let manager = SettingsManager::new();
+        assert!(manager.local_config_path.to_string_lossy().contains("settings.local.json"));
     }
 }

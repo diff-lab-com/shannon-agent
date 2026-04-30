@@ -238,6 +238,8 @@ pub enum PermissionRuleSource {
     User,
     /// Project-configured rule
     Project,
+    /// Local/personal rule (from settings.local.json, highest file priority)
+    Local,
     /// Managed/system rule
     Managed,
 }
@@ -368,6 +370,142 @@ impl PermissionRuleSet {
     /// Remove rules by source
     pub fn remove_by_source(&mut self, source: &PermissionRuleSource) {
         self.rules.retain(|r| &r.source != source);
+    }
+}
+
+
+/// Decision from evaluating permission rules against a tool/command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleCheckDecision {
+    /// The tool/command is denied — do not execute.
+    Denied,
+    /// The tool/command requires explicit user approval.
+    Ask,
+    /// The tool/command is auto-approved.
+    Allowed,
+    /// No rule matched — fall through to approval mode logic.
+    NoMatch,
+}
+
+/// Checks tool/command access using deny > ask > allow priority rules.
+///
+/// Rules are loaded from settings (`PermissionRules`) and compiled into
+/// glob-based matchers. The evaluation order guarantees:
+/// 1. If any **deny** pattern matches, the result is `Denied`.
+/// 2. If any **ask** pattern matches (and no deny matched), the result is `Ask`.
+/// 3. If any **allow** pattern matches (and no deny/ask matched), the result is `Allowed`.
+/// 4. Otherwise, `NoMatch` is returned.
+///
+/// This ordering means a deny rule in *any* layer (user, project, or local)
+/// cannot be overridden by an allow rule in a higher-priority layer.
+#[derive(Debug, Clone)]
+pub struct PermissionRuleChecker {
+    deny_globset: Option<GlobSet>,
+    ask_globset: Option<GlobSet>,
+    allow_globset: Option<GlobSet>,
+    deny_raw: Vec<String>,
+    ask_raw: Vec<String>,
+    allow_raw: Vec<String>,
+}
+
+impl PermissionRuleChecker {
+    /// Build a checker from `PermissionRules` (from settings).
+    pub fn from_rules(rules: &crate::settings::PermissionRules) -> Self {
+        Self {
+            deny_globset: build_globset(&rules.deny),
+            ask_globset: build_globset(&rules.ask),
+            allow_globset: build_globset(&rules.allow),
+            deny_raw: rules.deny.clone(),
+            ask_raw: rules.ask.clone(),
+            allow_raw: rules.allow.clone(),
+        }
+    }
+
+    /// Check a tool name and optional command against the rules.
+    pub fn check(&self, tool_name: &str, command: &str) -> RuleCheckDecision {
+        // 1. Deny has highest priority
+        if self.matches_pattern(tool_name, command, &self.deny_raw, &self.deny_globset) {
+            return RuleCheckDecision::Denied;
+        }
+        // 2. Ask is next
+        if self.matches_pattern(tool_name, command, &self.ask_raw, &self.ask_globset) {
+            return RuleCheckDecision::Ask;
+        }
+        // 3. Allow
+        if self.matches_pattern(tool_name, command, &self.allow_raw, &self.allow_globset) {
+            return RuleCheckDecision::Allowed;
+        }
+        // 4. No rule matched
+        RuleCheckDecision::NoMatch
+    }
+
+    /// Check if the raw rules are all empty (nothing to check).
+    pub fn is_empty(&self) -> bool {
+        self.deny_raw.is_empty() && self.ask_raw.is_empty() && self.allow_raw.is_empty()
+    }
+
+    /// Test a tool/command against a set of patterns.
+    fn matches_pattern(
+        &self,
+        tool_name: &str,
+        command: &str,
+        raw_patterns: &[String],
+        globset: &Option<GlobSet>,
+    ) -> bool {
+        // First check structured patterns (ToolName(cmd_pattern) form)
+        for pattern in raw_patterns {
+            if let Some((tool_pat, cmd_pat)) = pattern.split_once('(') {
+                let cmd_pat = cmd_pat.strip_suffix(')').unwrap_or(cmd_pat);
+                // Check tool name
+                if tool_pat != "*" && !tool_name.eq_ignore_ascii_case(tool_pat) {
+                    continue;
+                }
+                // Check command pattern
+                if cmd_pat == "*" || cmd_pat == "**" || self.command_matches(command, cmd_pat) {
+                    return true;
+                }
+            }
+            // Bare tool name or glob-only pattern
+            else if pattern.eq_ignore_ascii_case(tool_name) || pattern == "*" {
+                return true;
+            }
+        }
+
+        // Then check globset for plain glob patterns (e.g., "mcp__server__*")
+        if let Some(gs) = globset {
+            if gs.is_match(tool_name) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Simple glob matching for command strings.
+    fn command_matches(&self, command: &str, pattern: &str) -> bool {
+        if !pattern.contains('*') {
+            return command.contains(pattern);
+        }
+        // Convert glob to regex
+        let regex_pattern = pattern.replace('*', ".*");
+        if let Ok(re) = regex::Regex::new(&format!("(?i)^{regex_pattern}$")) {
+            re.is_match(command)
+        } else {
+            command.contains(&pattern.replace('*', ""))
+        }
+    }
+}
+
+impl Default for PermissionRuleChecker {
+    fn default() -> Self {
+        Self {
+            deny_globset: None,
+            ask_globset: None,
+            allow_globset: None,
+            deny_raw: Vec::new(),
+            ask_raw: Vec::new(),
+            allow_raw: Vec::new(),
+        }
     }
 }
 
@@ -771,6 +909,9 @@ pub struct PermissionManager {
     /// Tools flagged as destructive via MCP `annotations.destructiveHint`.
     /// These always require user confirmation, even in auto-approve modes.
     destructive_tools: HashSet<String>,
+
+    /// Rule checker for deny > ask > allow priority from settings.
+    rule_checker: PermissionRuleChecker,
 }
 
 impl PermissionManager {
@@ -786,6 +927,7 @@ impl PermissionManager {
             approval_mode: ApprovalMode::default(),
             plan_approved_sessions: HashSet::new(),
             destructive_tools: HashSet::new(),
+            rule_checker: PermissionRuleChecker::default(),
         };
 
         // Register default tool policies for common tools
@@ -998,6 +1140,16 @@ impl PermissionManager {
         self.approval_mode = mode;
     }
 
+    /// Set the permission rule checker (built from settings PermissionRules).
+    pub fn set_rule_checker(&mut self, checker: PermissionRuleChecker) {
+        self.rule_checker = checker;
+    }
+
+    /// Get a reference to the permission rule checker.
+    pub fn rule_checker(&self) -> &PermissionRuleChecker {
+        &self.rule_checker
+    }
+
     /// Approve the plan for a session (enables auto-approve in Plan mode).
     pub fn approve_plan(&mut self, session_id: uuid::Uuid) {
         self.plan_approved_sessions.insert(session_id);
@@ -1162,6 +1314,35 @@ impl PermissionManager {
         tool_name: &str,
         tool_input: &serde_json::Value,
     ) -> Result<Option<PermissionPrompt>, PermissionError> {
+        // --- Permission rule checker (deny > ask > allow from settings) ---
+        if !self.rule_checker.is_empty() {
+            let command = tool_input.get("command")
+                .or_else(|| tool_input.get("path"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match self.rule_checker.check(tool_name, command) {
+                RuleCheckDecision::Denied => {
+                    return Err(PermissionError::Denied(format!(
+                        "Denied by permission rule: {tool_name}"
+                    )));
+                }
+                RuleCheckDecision::Ask => {
+                    return self.create_permission_prompt_with_risk(
+                        tool_name,
+                        tool_input,
+                        session_id,
+                        RiskLevel::Medium,
+                    );
+                }
+                RuleCheckDecision::Allowed => {
+                    return Ok(None); // auto-approved by rule
+                }
+                RuleCheckDecision::NoMatch => {
+                    // Fall through to normal approval mode logic
+                }
+            }
+        }
+
         // --- Approval mode overrides ---
         match self.approval_mode {
             // BypassPermissions / DontAsk: skip all permission checks
@@ -2609,5 +2790,153 @@ mod tests {
             let parsed: PermissionRuleSource = serde_json::from_str(&json).unwrap();
             assert_eq!(source, parsed);
         }
+    }
+
+    // ── PermissionRuleChecker tests ─────────────────────────────────────
+
+    #[test]
+    fn test_rule_checker_deny_overrides_allow() {
+        use crate::settings::PermissionRules;
+        let rules = PermissionRules {
+            deny: vec!["Bash(rm -rf /)".to_string()],
+            allow: vec!["Bash(*)".to_string()],
+            ..Default::default()
+        };
+        let checker = PermissionRuleChecker::from_rules(&rules);
+        // deny wins even though allow matches too
+        assert_eq!(checker.check("Bash", "rm -rf /"), RuleCheckDecision::Denied);
+        // non-denied bash command is allowed
+        assert_eq!(checker.check("Bash", "ls -la"), RuleCheckDecision::Allowed);
+    }
+
+    #[test]
+    fn test_rule_checker_deny_overrides_ask() {
+        use crate::settings::PermissionRules;
+        let rules = PermissionRules {
+            deny: vec!["Bash(rm *)".to_string()],
+            ask: vec!["Bash(*)".to_string()],
+            ..Default::default()
+        };
+        let checker = PermissionRuleChecker::from_rules(&rules);
+        // deny wins
+        assert_eq!(checker.check("Bash", "rm file.txt"), RuleCheckDecision::Denied);
+        // non-denied falls to ask
+        assert_eq!(checker.check("Bash", "ls"), RuleCheckDecision::Ask);
+    }
+
+    #[test]
+    fn test_rule_checker_ask_overrides_allow() {
+        use crate::settings::PermissionRules;
+        let rules = PermissionRules {
+            ask: vec!["Bash(*)".to_string()],
+            allow: vec!["Bash(git *)".to_string()],
+            ..Default::default()
+        };
+        let checker = PermissionRuleChecker::from_rules(&rules);
+        // ask wins
+        assert_eq!(checker.check("Bash", "git status"), RuleCheckDecision::Ask);
+    }
+
+    #[test]
+    fn test_rule_checker_no_match_returns_no_match() {
+        use crate::settings::PermissionRules;
+        let rules = PermissionRules {
+            allow: vec!["Read(*)".to_string()],
+            ..Default::default()
+        };
+        let checker = PermissionRuleChecker::from_rules(&rules);
+        assert_eq!(checker.check("Bash", "ls"), RuleCheckDecision::NoMatch);
+    }
+
+    #[test]
+    fn test_rule_checker_empty_rules_is_empty() {
+        let checker = PermissionRuleChecker::default();
+        assert!(checker.is_empty());
+    }
+
+    #[test]
+    fn test_rule_checker_non_empty_is_not_empty() {
+        use crate::settings::PermissionRules;
+        let rules = PermissionRules {
+            deny: vec!["Bash(*)".to_string()],
+            ..Default::default()
+        };
+        let checker = PermissionRuleChecker::from_rules(&rules);
+        assert!(!checker.is_empty());
+    }
+
+    #[test]
+    fn test_rule_checker_glob_pattern_matching() {
+        use crate::settings::PermissionRules;
+        let rules = PermissionRules {
+            allow: vec!["mcp__github__*".to_string()],
+            deny: vec!["mcp__*__delete_*".to_string()],
+            ..Default::default()
+        };
+        let checker = PermissionRuleChecker::from_rules(&rules);
+        // glob allow
+        assert_eq!(checker.check("mcp__github__list_prs", ""), RuleCheckDecision::Allowed);
+        // glob deny overrides glob allow
+        assert_eq!(checker.check("mcp__github__delete_repo", ""), RuleCheckDecision::Denied);
+        // no match
+        assert_eq!(checker.check("Bash", "ls"), RuleCheckDecision::NoMatch);
+    }
+
+    #[test]
+    fn test_rule_checker_tool_name_pattern() {
+        use crate::settings::PermissionRules;
+        let rules = PermissionRules {
+            allow: vec!["Read".to_string()],
+            ..Default::default()
+        };
+        let checker = PermissionRuleChecker::from_rules(&rules);
+        assert_eq!(checker.check("Read", "any file"), RuleCheckDecision::Allowed);
+        assert_eq!(checker.check("Write", "any file"), RuleCheckDecision::NoMatch);
+    }
+
+    #[test]
+    fn test_rule_checker_bare_star_allows_all() {
+        use crate::settings::PermissionRules;
+        let rules = PermissionRules {
+            allow: vec!["*".to_string()],
+            ..Default::default()
+        };
+        let checker = PermissionRuleChecker::from_rules(&rules);
+        assert_eq!(checker.check("Bash", "anything"), RuleCheckDecision::Allowed);
+        assert_eq!(checker.check("Read", "anything"), RuleCheckDecision::Allowed);
+    }
+
+    #[test]
+    fn test_rule_checker_integration_with_manager() {
+        use crate::settings::PermissionRules;
+        let mut mgr = PermissionManager::new();
+        let rules = PermissionRules {
+            deny: vec!["Bash(rm -rf /)".to_string()],
+            allow: vec!["Bash(git *)".to_string()],
+            ..Default::default()
+        };
+        mgr.set_rule_checker(PermissionRuleChecker::from_rules(&rules));
+
+        let sid = Uuid::new_v4();
+        // denied command
+        let result = mgr.classify_and_check(
+            sid, "Bash", &serde_json::json!({"command": "rm -rf /"}),
+        );
+        assert!(result.is_err());
+
+        // allowed command
+        let result = mgr.classify_and_check(
+            sid, "Bash", &serde_json::json!({"command": "git status"}),
+        );
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none()); // auto-approved
+    }
+
+    #[test]
+    fn test_permission_rule_source_local_serialization() {
+        let source = PermissionRuleSource::Local;
+        let json = serde_json::to_string(&source).unwrap();
+        let parsed: PermissionRuleSource = serde_json::from_str(&json).unwrap();
+        assert_eq!(source, parsed);
     }
 }
