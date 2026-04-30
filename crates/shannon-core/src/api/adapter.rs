@@ -759,9 +759,10 @@ fn normalize_ollama_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> 
     let chunk: OllamaChunk = match serde_json::from_str(json_str) {
         Ok(c) => c,
         Err(e) => {
-            return vec![Err(ApiError::InvalidResponse(format!(
-                "Failed to parse Ollama chunk: {e} (data: {json_str})"
-            )))];
+            // Ollama sometimes sends incomplete JSON chunks during streaming.
+            // Log and skip rather than killing the entire query.
+            tracing::warn!("Skipping malformed Ollama chunk: {e} (data: {} bytes)", json_str.len());
+            return vec![];
         }
     };
 
@@ -1435,8 +1436,9 @@ mod tests {
         let result = normalize_sse_event("not json", &LlmProvider::OpenAI, &mut fresh_state());
         assert!(result[0].is_err());
 
+        // Ollama gracefully skips malformed chunks (logs warning, continues stream)
         let result = normalize_sse_event("not json", &LlmProvider::Ollama, &mut fresh_state());
-        assert!(result[0].is_err());
+        assert!(result.is_empty());
 
         // Anthropic also returns error for invalid JSON
         let result = normalize_sse_event("not json", &LlmProvider::Anthropic, &mut fresh_state());

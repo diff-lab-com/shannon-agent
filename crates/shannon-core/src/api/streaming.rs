@@ -25,6 +25,40 @@ type ByteChunkStream = Pin<Box<dyn Stream<Item = Result<Vec<u8>, reqwest::Error>
 /// outer `ResumableSseStream` can read/update it.
 pub type LastEventId = Arc<Mutex<Option<String>>>;
 
+/// Quick check whether a string has balanced braces (ignoring strings).
+/// Used to avoid passing incomplete JSON to the parser after a TCP split.
+fn looks_like_complete_json(s: &str) -> bool {
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut escape = false;
+    for ch in s.chars() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if ch == '\\' && in_string {
+            escape = true;
+            continue;
+        }
+        if ch == '"' {
+            in_string = !in_string;
+            continue;
+        }
+        if in_string {
+            continue;
+        }
+        if ch == '{' {
+            depth += 1;
+        } else if ch == '}' {
+            depth -= 1;
+            if depth == 0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// SSE stream that properly handles chunk boundaries.
 ///
 /// Reads chunks from reqwest's byte stream, buffers partial lines,
@@ -66,10 +100,21 @@ impl SseStream {
 
     /// Parse all complete SSE lines from the buffer, queuing parsed events.
     /// Incomplete lines remain in the buffer for the next chunk.
+    /// For Ollama NDJSON, validates JSON brace balance before parsing to
+    /// handle chunks split across TCP packet boundaries.
     fn drain_buffer(&mut self) {
         while let Some(newline_pos) = self.buffer.find('\n') {
             let line = self.buffer[..newline_pos].to_string();
             self.buffer = self.buffer[newline_pos + 1..].to_string();
+
+            // For Ollama NDJSON: validate JSON completeness before parsing
+            if matches!(self.provider, LlmProvider::Ollama) && line.trim_start().starts_with('{') {
+                if !looks_like_complete_json(&line) {
+                    // Incomplete JSON — put back and wait for more data
+                    self.buffer = format!("{}\n{}", line, self.buffer);
+                    break;
+                }
+            }
 
             let events = self.parse_sse_line(&line);
             self.pending_events.extend(events);

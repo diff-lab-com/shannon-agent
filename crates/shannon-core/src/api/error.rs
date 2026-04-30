@@ -141,10 +141,20 @@ impl ApiError {
                 LlmProvider::Ollama => {
                     // Ollama: { "error": "..." }
                     if let Some(msg) = val.get("error").and_then(|v| v.as_str()) {
+                        let message = if msg.contains("can't find closing")
+                            || msg.contains("unexpected end")
+                        {
+                            format!(
+                                "{msg} — the model generated malformed output. \
+                                 Try a different model or simplify the prompt."
+                            )
+                        } else {
+                            msg.to_string()
+                        };
                         return ApiError::ProviderError {
                             provider: provider_name,
                             error_type: "ollama_error".to_string(),
-                            message: msg.to_string(),
+                            message,
                         };
                     }
                 }
