@@ -443,6 +443,262 @@ impl SandboxProvider for SeatbeltSandbox {
 }
 
 // ============================================================================
+// Docker Container Sandbox
+// ============================================================================
+
+/// Docker-specific sandbox configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DockerSandboxConfig {
+    /// Docker image to use for the sandbox container.
+    pub image: String,
+    /// Container name prefix (default: "shannon-sandbox").
+    #[serde(default = "default_docker_prefix")]
+    pub container_prefix: String,
+    /// CPU limit (e.g. "1.0" = 1 core). None = unlimited.
+    pub cpus: Option<String>,
+    /// Memory limit (e.g. "512m", "1g"). None = unlimited.
+    pub memory: Option<String>,
+    /// Timeout in seconds for container execution. None = no timeout.
+    pub timeout_secs: Option<u64>,
+    /// Whether to remove the container after execution (default: true).
+    #[serde(default = "default_true")]
+    pub auto_remove: bool,
+    /// Additional Docker capabilities to grant.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    /// Environment variables to pass into the container (KEY=VALUE format).
+    #[serde(default)]
+    pub env: Vec<String>,
+    /// Working directory inside the container.
+    pub workdir: Option<String>,
+    /// Docker host URL (e.g. "unix:///var/run/docker.sock"). None = default.
+    pub docker_host: Option<String>,
+}
+
+fn default_docker_prefix() -> String {
+    "shannon-sandbox".to_string()
+}
+
+impl Default for DockerSandboxConfig {
+    fn default() -> Self {
+        Self {
+            image: "ubuntu:22.04".to_string(),
+            container_prefix: default_docker_prefix(),
+            cpus: Some("1.0".to_string()),
+            memory: Some("512m".to_string()),
+            timeout_secs: Some(300),
+            auto_remove: true,
+            capabilities: Vec::new(),
+            env: Vec::new(),
+            workdir: Some("/workspace".to_string()),
+            docker_host: None,
+        }
+    }
+}
+
+impl DockerSandboxConfig {
+    /// Create a new Docker sandbox config with the specified image.
+    pub fn new(image: impl Into<String>) -> Self {
+        Self {
+            image: image.into(),
+            ..Default::default()
+        }
+    }
+
+    /// Set CPU limit.
+    pub fn with_cpus(mut self, cpus: impl Into<String>) -> Self {
+        self.cpus = Some(cpus.into());
+        self
+    }
+
+    /// Set memory limit.
+    pub fn with_memory(mut self, memory: impl Into<String>) -> Self {
+        self.memory = Some(memory.into());
+        self
+    }
+
+    /// Set timeout in seconds.
+    pub fn with_timeout(mut self, secs: u64) -> Self {
+        self.timeout_secs = Some(secs);
+        self
+    }
+
+    /// Add an environment variable.
+    pub fn env(mut self, kv: impl Into<String>) -> Self {
+        self.env.push(kv.into());
+        self
+    }
+}
+
+/// Docker container-based sandbox for isolated command execution.
+///
+/// Executes commands inside a Docker container with the project directory
+/// mounted read-write. Provides stronger isolation than namespace-based
+/// sandboxing (bwrap/seatbelt) at the cost of Docker dependency and
+/// container startup overhead.
+pub struct DockerSandbox {
+    config: DockerSandboxConfig,
+}
+
+impl DockerSandbox {
+    /// Create a new Docker sandbox provider.
+    pub fn new(config: DockerSandboxConfig) -> Self {
+        Self { config }
+    }
+
+    /// Try to create a Docker sandbox, returns None if Docker is not available.
+    pub fn try_new(config: DockerSandboxConfig) -> Option<Self> {
+        if Self::docker_available() {
+            Some(Self::new(config))
+        } else {
+            None
+        }
+    }
+
+    /// Check if Docker is available on this system.
+    pub fn docker_available() -> bool {
+        std::process::Command::new("docker")
+            .arg("info")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+}
+
+impl SandboxProvider for DockerSandbox {
+    fn is_available(&self) -> bool {
+        Self::docker_available()
+    }
+
+    fn wrap_command(&self, command: &str, config: &SandboxConfig) -> Result<String, SandboxError> {
+        let mut args = Vec::new();
+
+        // Run with limited privileges
+        args.push("run".to_string());
+
+        // Auto-remove container after execution
+        if self.config.auto_remove {
+            args.push("--rm".to_string());
+        }
+
+        // Network isolation
+        if matches!(config.network, NetworkAccess::None) {
+            args.push("--network".to_string());
+            args.push("none".to_string());
+        }
+
+        // CPU limits
+        if let Some(ref cpus) = self.config.cpus {
+            args.push("--cpus".to_string());
+            args.push(cpus.clone());
+        }
+
+        // Memory limits
+        if let Some(ref memory) = self.config.memory {
+            args.push("--memory".to_string());
+            args.push(memory.clone());
+        }
+
+        // Read-only system paths not needed in Docker (container has its own FS)
+        // Mount project directory
+        let project = config.project_dir.to_string_lossy().to_string();
+        let workdir = self.config.workdir.as_deref().unwrap_or("/workspace");
+        args.push("-v".to_string());
+        args.push(format!("{project}:{workdir}"));
+
+        // Deny writes to .git/ inside the project
+        let git_dir = config.project_dir.join(".git");
+        if git_dir.exists() {
+            let git_str = git_dir.to_string_lossy().to_string();
+            args.push("-v".to_string());
+            args.push(format!("{git_str}:{workdir}/.git:ro"));
+        }
+
+        // Additional read-only mounts
+        for mount in &config.readonly_mounts {
+            let m = mount.to_string_lossy().to_string();
+            if Path::new(&m).exists() {
+                args.push("-v".to_string());
+                args.push(format!("{m}:{m}:ro"));
+            }
+        }
+
+        // Additional read-write mounts
+        for mount in &config.readwrite_mounts {
+            let m = mount.to_string_lossy().to_string();
+            if Path::new(&m).exists() {
+                args.push("-v".to_string());
+                args.push(format!("{m}:{m}"));
+            }
+        }
+
+        // Working directory
+        args.push("-w".to_string());
+        args.push(workdir.to_string());
+
+        // Security options
+        args.push("--security-opt".to_string());
+        args.push("no-new-privileges".to_string());
+
+        // Capabilities
+        for cap in &self.config.capabilities {
+            args.push("--cap-add".to_string());
+            args.push(cap.clone());
+        }
+
+        // Environment variables from DockerSandboxConfig
+        for kv in &self.config.env {
+            args.push("-e".to_string());
+            args.push(kv.clone());
+        }
+
+        // Environment variables from SandboxConfig
+        for var in &config.env_vars {
+            if let Ok(val) = std::env::var(var) {
+                args.push("-e".to_string());
+                args.push(format!("{var}={val}"));
+            }
+        }
+
+        // Timeout handled inside the container via the timeout command (below)
+
+        // Container name for tracking
+        let container_name = format!(
+            "{}-{}",
+            self.config.container_prefix,
+            std::process::id()
+        );
+        args.push("--name".to_string());
+        args.push(container_name);
+
+        // Image
+        args.push(self.config.image.clone());
+
+        // The actual command: cd to workdir and execute
+        let wrapped = format!("cd {workdir} && {command}");
+
+        // If timeout is set, wrap with timeout command
+        let final_cmd = if let Some(timeout) = self.config.timeout_secs {
+            format!("timeout {timeout}s sh -c {}", shell_escape(&wrapped))
+        } else {
+            format!("sh -c {}", shell_escape(&wrapped))
+        };
+
+        args.push("sh".to_string());
+        args.push("-c".to_string());
+        args.push(final_cmd);
+
+        Ok(format!("docker {}", args.iter().map(|a| shell_escape(a)).collect::<Vec<_>>().join(" ")))
+    }
+
+    fn name(&self) -> &str {
+        "docker"
+    }
+}
+
+// ============================================================================
 // No-op Fallback
 // ============================================================================
 
@@ -471,6 +727,8 @@ impl SandboxProvider for NoSandbox {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SandboxType {
+    /// Docker container sandbox.
+    Docker,
     /// Linux bubblewrap (`bwrap`) namespace sandbox.
     Bubblewrap,
     /// macOS Seatbelt (`sandbox-exec`) sandbox.
@@ -482,6 +740,7 @@ pub enum SandboxType {
 impl std::fmt::Display for SandboxType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            SandboxType::Docker => write!(f, "docker"),
             SandboxType::Bubblewrap => write!(f, "bubblewrap"),
             SandboxType::Seatbelt => write!(f, "seatbelt"),
             SandboxType::None => write!(f, "none"),
@@ -566,6 +825,7 @@ impl SandboxMode {
 pub struct SandboxExecutor {
     config: SandboxConfig,
     sandbox_type: SandboxType,
+    docker_config: Option<DockerSandboxConfig>,
 }
 
 impl SandboxExecutor {
@@ -579,11 +839,30 @@ impl SandboxExecutor {
             project_dir = %config.project_dir.display(),
             "SandboxExecutor created"
         );
-        Self { config, sandbox_type }
+        Self { config, sandbox_type, docker_config: None }
+    }
+
+    /// Create a new executor with Docker sandbox backend.
+    pub fn with_docker(config: SandboxConfig, docker_config: DockerSandboxConfig) -> Self {
+        tracing::debug!(
+            sandbox_type = "docker",
+            image = %docker_config.image,
+            project_dir = %config.project_dir.display(),
+            "SandboxExecutor created with Docker backend"
+        );
+        Self {
+            config,
+            sandbox_type: SandboxType::Docker,
+            docker_config: Some(docker_config),
+        }
     }
 
     /// Detect which sandbox backend is available on this system.
     pub fn detect_sandboxer() -> SandboxType {
+        if DockerSandbox::docker_available() {
+            tracing::debug!("Detected sandbox backend: docker");
+            return SandboxType::Docker;
+        }
         if cfg!(target_os = "linux") {
             if BwrapSandbox::try_new().is_some() {
                 tracing::debug!("Detected sandbox backend: bubblewrap");
@@ -631,6 +910,7 @@ impl SandboxExecutor {
         }
 
         match self.sandbox_type {
+            SandboxType::Docker => self.wrap_command_docker(command),
             SandboxType::Bubblewrap => self.wrap_command_bwrap(command),
             SandboxType::Seatbelt => self.wrap_command_seatbelt(command),
             SandboxType::None => {
@@ -640,6 +920,52 @@ impl SandboxExecutor {
                 Ok(())
             }
         }
+    }
+
+    // -- Docker implementation -------------------------------------------
+
+    fn wrap_command_docker(&self, command: &mut std::process::Command) -> Result<(), SandboxError> {
+        let docker_config = self.docker_config.as_ref().cloned().unwrap_or_default();
+        let docker = DockerSandbox::new(docker_config);
+
+        // Collect original program and args
+        let original_program = command.get_program().to_string_lossy().to_string();
+        let original_args: Vec<String> = command
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+
+        // Build the full command string
+        let full_cmd = if original_args.is_empty() {
+            original_program
+        } else {
+            format!("{} {}", original_program, original_args.join(" "))
+        };
+
+        let wrapped = docker.wrap_command(&full_cmd, &self.config)?;
+
+        // Preserve env and working directory
+        let working_dir = command.get_current_dir().map(|p| p.to_path_buf());
+        let env_pairs: Vec<(String, Option<String>)> = command
+            .get_envs()
+            .map(|(k, v)| (k.to_string_lossy().to_string(), v.map(|v| v.to_string_lossy().to_string())))
+            .collect();
+
+        *command = std::process::Command::new("sh");
+        command.arg("-c").arg(&wrapped);
+
+        for (key, val) in &env_pairs {
+            match val {
+                Some(v) => { command.env(key, v); }
+                None => { command.env_remove(key); }
+            }
+        }
+        if let Some(dir) = working_dir {
+            command.current_dir(dir);
+        }
+
+        tracing::debug!("Wrapped command with Docker sandbox");
+        Ok(())
     }
 
     // -- Linux (bwrap) implementation ------------------------------------
@@ -833,6 +1159,10 @@ impl SandboxExecutor {
 
 /// Detect the best available sandbox provider for the current platform.
 pub fn detect_sandbox_provider() -> Box<dyn SandboxProvider> {
+    if DockerSandbox::docker_available() {
+        tracing::info!("Sandbox: using Docker");
+        return Box::new(DockerSandbox::new(DockerSandboxConfig::default()));
+    }
     if cfg!(target_os = "linux") {
         if let Some(bwrap) = BwrapSandbox::try_new() {
             tracing::info!("Sandbox: using bubblewrap ({:?})", bwrap.bwrap_path);
@@ -1414,6 +1744,7 @@ mod tests {
 
     #[test]
     fn test_sandbox_type_display() {
+        assert_eq!(SandboxType::Docker.to_string(), "docker");
         assert_eq!(SandboxType::Bubblewrap.to_string(), "bubblewrap");
         assert_eq!(SandboxType::Seatbelt.to_string(), "seatbelt");
         assert_eq!(SandboxType::None.to_string(), "none");
@@ -1421,6 +1752,8 @@ mod tests {
 
     #[test]
     fn test_sandbox_type_serde() {
+        let dk: SandboxType = serde_json::from_str("\"docker\"").unwrap();
+        assert_eq!(dk, SandboxType::Docker);
         let bw: SandboxType = serde_json::from_str("\"bubblewrap\"").unwrap();
         assert_eq!(bw, SandboxType::Bubblewrap);
         let sb: SandboxType = serde_json::from_str("\"seatbelt\"").unwrap();
@@ -1434,7 +1767,7 @@ mod tests {
         let st = SandboxExecutor::detect_sandboxer();
         assert!(matches!(
             st,
-            SandboxType::Bubblewrap | SandboxType::Seatbelt | SandboxType::None
+            SandboxType::Docker | SandboxType::Bubblewrap | SandboxType::Seatbelt | SandboxType::None
         ));
     }
 
@@ -1561,7 +1894,7 @@ mod tests {
         let provider = detect_sandbox_provider();
         assert!(provider.is_available());
         let name = provider.name();
-        assert!(["bubblewrap", "seatbelt", "none"].contains(&name));
+        assert!(["docker", "bubblewrap", "seatbelt", "none"].contains(&name));
     }
 
     // ------------------------------------------------------------------
@@ -1574,7 +1907,7 @@ mod tests {
         let executor = SandboxExecutor::new(config);
         assert!(matches!(
             executor.sandbox_type(),
-            SandboxType::Bubblewrap | SandboxType::Seatbelt | SandboxType::None
+            SandboxType::Docker | SandboxType::Bubblewrap | SandboxType::Seatbelt | SandboxType::None
         ));
         assert_eq!(executor.config().project_dir, PathBuf::from("/tmp/project"));
     }
@@ -1973,5 +2306,97 @@ mod tests {
             .env_remove("PATH");
 
         assert_eq!(cmd.program(), "ls");
+    }
+
+    // ------------------------------------------------------------------
+    // DockerSandboxConfig tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_docker_config_default() {
+        let config = DockerSandboxConfig::default();
+        assert_eq!(config.image, "ubuntu:22.04");
+        assert_eq!(config.memory.as_deref(), Some("512m"));
+        assert!(config.auto_remove);
+        assert_eq!(config.timeout_secs, Some(300));
+    }
+
+    #[test]
+    fn test_docker_config_builder() {
+        let config = DockerSandboxConfig::new("rust:1.77")
+            .with_cpus("2.0")
+            .with_memory("1g")
+            .with_timeout(600)
+            .env("RUST_BACKTRACE=1");
+
+        assert_eq!(config.image, "rust:1.77");
+        assert_eq!(config.cpus.as_deref(), Some("2.0"));
+        assert_eq!(config.memory.as_deref(), Some("1g"));
+        assert_eq!(config.timeout_secs, Some(600));
+        assert!(config.env.contains(&"RUST_BACKTRACE=1".to_string()));
+    }
+
+    #[test]
+    fn test_docker_sandbox_wrap_command_no_network() {
+        if !DockerSandbox::docker_available() {
+            return;
+        }
+        let docker_config = DockerSandboxConfig::new("ubuntu:22.04");
+        let docker = DockerSandbox::new(docker_config);
+        let sandbox_config = SandboxConfig::new("/tmp/project");
+
+        let result = docker.wrap_command("cargo test", &sandbox_config).unwrap();
+        assert!(result.contains("docker run"));
+        assert!(result.contains("--network none"));
+        assert!(result.contains("ubuntu:22.04"));
+        assert!(result.contains("cargo test"));
+    }
+
+    #[test]
+    fn test_docker_sandbox_wrap_command_with_network() {
+        if !DockerSandbox::docker_available() {
+            return;
+        }
+        let docker_config = DockerSandboxConfig::new("ubuntu:22.04");
+        let docker = DockerSandbox::new(docker_config);
+        let sandbox_config = SandboxConfig::new("/tmp/project").with_network(NetworkAccess::Full);
+
+        let result = docker.wrap_command("curl https://example.com", &sandbox_config).unwrap();
+        assert!(result.contains("docker run"));
+        assert!(!result.contains("--network none"));
+    }
+
+    #[test]
+    fn test_docker_sandbox_wrap_command_resource_limits() {
+        if !DockerSandbox::docker_available() {
+            return;
+        }
+        let docker_config = DockerSandboxConfig::new("node:20")
+            .with_cpus("0.5")
+            .with_memory("256m");
+        let docker = DockerSandbox::new(docker_config);
+        let sandbox_config = SandboxConfig::new("/home/user/project");
+
+        let result = docker.wrap_command("npm test", &sandbox_config).unwrap();
+        assert!(result.contains("--cpus 0.5"));
+        assert!(result.contains("--memory 256m"));
+        assert!(result.contains("node:20"));
+    }
+
+    #[test]
+    fn test_docker_sandbox_is_available() {
+        // Just verify it doesn't panic
+        let docker_config = DockerSandboxConfig::default();
+        let docker = DockerSandbox::new(docker_config);
+        assert_eq!(docker.name(), "docker");
+    }
+
+    #[test]
+    fn test_executor_with_docker() {
+        let sandbox_config = SandboxConfig::new("/tmp/project");
+        let docker_config = DockerSandboxConfig::new("ubuntu:22.04");
+        let executor = SandboxExecutor::with_docker(sandbox_config, docker_config);
+        assert_eq!(executor.sandbox_type(), SandboxType::Docker);
+        assert!(executor.docker_config.is_some());
     }
 }
