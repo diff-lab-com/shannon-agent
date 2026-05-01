@@ -13,6 +13,7 @@ Export the current session conversation to a file.
 Arguments: {args}
 - If args contains "json": output as structured JSON with title, messages, and metadata
 - If args contains "md" or is empty: output as formatted markdown
+- If args contains "--sanitize" or subcommand is "share": redact API keys, tokens, and home directory paths
 - If a filename is provided (e.g., "session.md" or "output.json"), write to that file
 - If no filename is provided, generate one like "shannon_session_YYYYMMDD_HHMMSS.md"
 
@@ -41,8 +42,12 @@ pub fn command() -> Command {
     Command::Prompt(Box::new(PromptCommand {
         base: CommandBase {
             name: "export".to_string(),
-            aliases: vec!["save".to_string(), "export-session".to_string()],
-            description: "Export current session to markdown or JSON format".to_string(),
+            aliases: vec![
+                "save".to_string(),
+                "export-session".to_string(),
+                "share".to_string(),
+            ],
+            description: "Export or share current session to markdown or JSON format".to_string(),
             has_user_specified_description: false,
             availability: vec![CommandAvailability::All],
             source: CommandSource::Builtin,
@@ -349,6 +354,37 @@ pub fn write_export(content: &str, filename: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to write export to '{filename}': {e}"))
 }
 
+/// Sanitize sensitive content from text (API keys, tokens, private paths).
+pub fn sanitize_content(content: &str, home_dir: &str) -> String {
+    let mut sanitized = content.to_string();
+
+    // Replace common API key patterns
+    let patterns = [
+        (r"sk-[a-zA-Z0-9]{20,}", "<REDACTED_API_KEY>"),
+        (r"sk-ant-api03-[a-zA-Z0-9\-]{20,}", "<REDACTED_ANTHROPIC_KEY>"),
+        (r"ghp_[a-zA-Z0-9]{36}", "<REDACTED_GITHUB_TOKEN>"),
+        (r"gho_[a-zA-Z0-9]{36}", "<REDACTED_GITHUB_OAUTH>"),
+        (r"glpat-[a-zA-Z0-9\-]{20,}", "<REDACTED_GITLAB_TOKEN>"),
+        (
+            r#"(?i)(api[_-]?key|token|secret|password|credential)\s*[:=]\s*["']?[a-zA-Z0-9\-_.]{8,}"#,
+            "$1: <REDACTED>",
+        ),
+    ];
+
+    for (pattern, replacement) in &patterns {
+        if let Ok(re) = regex::Regex::new(pattern) {
+            sanitized = re.replace_all(&sanitized, *replacement).to_string();
+        }
+    }
+
+    // Replace home directory paths
+    if !home_dir.is_empty() {
+        sanitized = sanitized.replace(home_dir, "~");
+    }
+
+    sanitized
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -479,5 +515,21 @@ mod tests {
         assert!(json.contains("\"messages\""));
         assert!(json.contains("\"role\""));
         assert!(json.contains("\"user\""));
+    }
+
+    #[test]
+    fn test_sanitize_removes_api_keys() {
+        let content = "My key is sk-ant-api03-abcdefghijklmnopqrstuvwx and token ghp_123456789012345678901234567890123456";
+        let sanitized = sanitize_content(content, "/home/user");
+        assert!(!sanitized.contains("sk-ant-api03-"));
+        assert!(!sanitized.contains("ghp_"));
+        assert!(sanitized.contains("<REDACTED"));
+    }
+
+    #[test]
+    fn test_sanitize_replaces_home_dir() {
+        let content = "File at /home/user/project/src/main.rs";
+        let sanitized = sanitize_content(content, "/home/user");
+        assert_eq!(sanitized, "File at ~/project/src/main.rs");
     }
 }
