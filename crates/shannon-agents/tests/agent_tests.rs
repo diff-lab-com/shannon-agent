@@ -775,6 +775,7 @@ mod teammate_extended_tests {
             is_lead: false,
             allowed_tools: vec![],
             permission_mode: None,
+            isolation: None,
         };
 
         let teammate = Teammate::new("expert".to_string(), config);

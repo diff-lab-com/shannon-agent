@@ -42,6 +42,10 @@ pub struct TeammateConfig {
     /// When None, the agent uses whatever default the session provides.
     #[serde(default)]
     pub permission_mode: Option<String>,
+    /// Per-agent isolation mode. "worktree" creates a git worktree for this agent,
+    /// overriding the global `enable_worktree_isolation` flag.
+    #[serde(default)]
+    pub isolation: Option<String>,
 }
 
 impl Default for TeammateConfig {
@@ -57,6 +61,7 @@ impl Default for TeammateConfig {
             is_lead: false,
             allowed_tools: Vec::new(),
             permission_mode: None,
+            isolation: None,
         }
     }
 }

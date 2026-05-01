@@ -486,13 +486,18 @@ impl AgentCoordinator {
         } else {
             Some(config.allowed_tools.clone())
         };
+        let config_isolation = config.isolation.clone();
 
         let teammate = Teammate::new(agent_name.clone(), config);
         teammate.set_team_name(team_name.to_string());
         team.members.insert(agent_name.clone(), teammate);
 
         // Create isolated worktree for this agent if worktree isolation is enabled
-        if self.config.enable_worktree_isolation {
+        // (either globally via config or per-agent via the `isolation` field)
+        let needs_worktree = self.config.enable_worktree_isolation
+            || config_isolation.as_deref() == Some("worktree");
+        if needs_worktree {
+            // Lazily initialize worktree manager if needed for per-agent isolation
             if let Some(ref wm) = self.worktree_manager {
                 match wm.create_agent_session(&agent_name, None).await {
                     Ok(session) => {
@@ -2021,6 +2026,37 @@ impl AgentCoordinator {
         });
 
         self._delivery_handle = Some(handle);
+    }
+
+    /// Add a teammate to a team from a custom agent definition.
+    ///
+    /// Converts the `CustomAgentDef` to a `TeammateConfig` and delegates
+    /// to [`add_teammate`]. If the agent definition specifies worktree
+    /// isolation, the worktree is created automatically.
+    pub async fn add_agent_from_def(
+        &self,
+        team_name: &str,
+        def: &CustomAgentDef,
+    ) -> Result<(), AgentError> {
+        let config = def.to_teammate_config();
+        self.add_teammate(team_name, def.name.clone(), config).await
+    }
+
+    /// Discover and cache agent definitions from `.claude/agents/` directories.
+    ///
+    /// Call this once during initialization. Discovered definitions can then
+    /// be looked up by name via [`get_custom_agent`].
+    pub async fn discover_custom_agents(&mut self) -> Result<(), AgentError> {
+        let loader = CustomAgentLoader::new();
+        let agents = loader.discover().map_err(|e| {
+            AgentError::Worktree(format!("Failed to discover agents: {e}"))
+        })?;
+
+        let count = agents.len();
+        self.custom_agents.extend(agents);
+
+        tracing::info!(count, "Discovered custom agent definitions");
+        Ok(())
     }
 
     /// Disband a specific team: shutdown all agents, remove from memory, delete persisted files.

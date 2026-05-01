@@ -169,6 +169,7 @@ impl AgentDefinition {
             is_lead: false,
             allowed_tools: self.allowed_tools.clone(),
             permission_mode: None,
+            isolation: None,
         }
     }
 

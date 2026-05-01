@@ -231,6 +231,7 @@ impl SubAgentRegistry {
             is_lead: false,
             allowed_tools: vec![],
             permission_mode: None,
+            isolation: None,
         };
 
         self.coordinator

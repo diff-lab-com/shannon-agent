@@ -250,6 +250,23 @@ impl Default for CustomAgentLoader {
 }
 
 impl CustomAgentDef {
+    /// Convert to a TeammateConfig for use with the coordinator.
+    pub fn to_teammate_config(&self) -> crate::teammate::TeammateConfig {
+        crate::teammate::TeammateConfig {
+            agent_type: self.name.clone(),
+            capabilities: Vec::new(),
+            max_concurrent_tasks: 3,
+            plan_mode_required: false,
+            model: self.model.clone(),
+            system_prompt: Some(self.body_instructions.clone()),
+            temperature: None,
+            is_lead: false,
+            allowed_tools: self.allowed_tools.clone().unwrap_or_default(),
+            permission_mode: None,
+            isolation: None,
+        }
+    }
+
     /// Validate the agent definition for correctness.
     ///
     /// Checks:
