@@ -17,6 +17,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+rand = { workspace = true }
 
 # Tool interface
 shannon-tool-interface = { path = "../shannon-tool-interface" }

@@ -212,6 +212,8 @@ pub struct ReplState {
     pub streaming_state: StreamingState,
     /// Loop engine state for autonomous iteration
     pub loop_state: Option<LoopState>,
+    /// Ralph Wiggum completion-based loop state
+    pub ralph_state: Option<RalphState>,
     /// Billing manager for per-model cost tracking and budget alerts
     pub billing_manager: shannon_core::billing::BillingManager,
 }
@@ -222,6 +224,25 @@ pub struct LoopState {
     /// The task to iterate on
     pub task: String,
     /// Maximum iterations (0 = unlimited until stopped)
+    pub max_iterations: usize,
+    /// Current iteration count
+    pub iteration: usize,
+    /// Whether the loop is active
+    pub active: bool,
+}
+
+/// State for the Ralph Wiggum completion-based loop.
+///
+/// Unlike [`LoopState`] which iterates on a timer, Ralph re-injects the
+/// task prompt every time the model stops without emitting one of the
+/// configured completion keywords.
+#[derive(Debug, Clone)]
+pub struct RalphState {
+    /// The task description
+    pub task: String,
+    /// Keywords that signal task completion (case-insensitive)
+    pub completion_keywords: Vec<String>,
+    /// Maximum iterations before forced stop
     pub max_iterations: usize,
     /// Current iteration count
     pub iteration: usize,
@@ -369,6 +390,7 @@ impl Default for ReplState {
             session_tab: SessionTabWidget::new(),
             streaming_state: StreamingState::Idle,
             loop_state: None,
+            ralph_state: None,
             billing_manager: shannon_core::billing::BillingManager::new(),
         }
     }

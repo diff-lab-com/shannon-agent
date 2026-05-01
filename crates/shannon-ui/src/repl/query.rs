@@ -652,8 +652,11 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                 &repl.state.status,
             );
 
-            // Check if loop iteration should continue
-            super::commands::check_loop_iteration(repl);
+            // Check if loop/ralph iteration should continue
+            let loop_continued = super::commands::check_loop_iteration(repl);
+            if !loop_continued {
+                super::commands::check_ralph_iteration(repl);
+            }
         }
         Err(e) => {
             let is_cancelled = e == "cancelled";

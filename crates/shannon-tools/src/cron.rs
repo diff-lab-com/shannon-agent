@@ -951,11 +951,13 @@ impl CronTool {
                 job.fired = true;
                 true
             } else {
-                // Recurring: update next_run
+                // Recurring: update next_run with jitter
                 let now = Local::now();
                 if let Some(next) = calculate_next_fire(&job.cron, now.naive_local()) {
+                    let jitter_secs = shannon_core::scheduled_routines::apply_jitter(300, 900);
                     let local = Local.from_local_datetime(&next).single().unwrap_or(now);
-                    job.next_run = Some(local.to_rfc3339());
+                    let jittered = local + chrono::Duration::seconds(jitter_secs as i64);
+                    job.next_run = Some(jittered.to_rfc3339());
                 }
                 false
             }

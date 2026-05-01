@@ -160,6 +160,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "stage" => handle_stage(repl, args)?,
             "stats" | "perf" => handle_stats(repl)?,
             "loop" => handle_loop(repl, args)?,
+            "ralph" => handle_ralph(repl, args)?,
             "sandbox" => handle_sandbox(repl, args)?,
             "local-models" | "local" => handle_local_models(repl)?,
             "ci" | "gh-actions" => handle_ci(repl, args)?,
@@ -7028,6 +7029,171 @@ pub(crate) fn check_loop_iteration(repl: &mut Repl) -> bool {
     // Submit next iteration
     if submit_input(repl).is_err() {
         repl.state.loop_state = None;
+        return false;
+    }
+
+    true
+}
+
+/// Handle the `/ralph` command — completion-based loop that re-injects
+/// the task prompt until the model emits a completion keyword.
+///
+/// Usage:
+///   /ralph <task>                  — start with defaults (max 10, keywords: DONE, FIXED, COMPLETE, RESOLVED, ALL TESTS PASS)
+///   /ralph --max N <task>          — limit to N iterations
+///   /ralph --done KEYWORD <task>   — custom completion keyword (can be repeated)
+///   /ralph stop                    — stop the current ralph loop
+///   /ralph status                  — show current ralph state
+fn handle_ralph(repl: &mut Repl, args: &str) -> Result<()> {
+    let input = args.trim();
+
+    if input == "stop" || input == "cancel" {
+        if let Some(ref rs) = repl.state.ralph_state {
+            let iter = rs.iteration;
+            repl.chat.add_message(ChatRole::System, format!(
+                "Ralph stopped after {iter} iteration(s)."
+            ));
+        } else {
+            repl.chat.add_message(ChatRole::System, "No active ralph loop to stop.".to_string());
+        }
+        repl.state.ralph_state = None;
+        return Ok(());
+    }
+
+    if input == "status" {
+        if let Some(ref rs) = repl.state.ralph_state {
+            repl.chat.add_message(ChatRole::System, format!(
+                "Ralph active: iteration {}/{}\nKeywords: {}\nTask: {}",
+                rs.iteration,
+                rs.max_iterations,
+                rs.completion_keywords.join(", "),
+                rs.task,
+            ));
+        } else {
+            repl.chat.add_message(ChatRole::System, "No active ralph loop.".to_string());
+        }
+        return Ok(());
+    }
+
+    if input.is_empty() {
+        repl.chat.add_message(ChatRole::System,
+            "Usage:\n  /ralph <task>              — start completion-based loop\n  /ralph --max N <task>      — limit to N iterations\n  /ralph --done KEYWORD <task> — custom completion keyword\n  /ralph stop                 — stop current loop\n  /ralph status               — show loop state".to_string()
+        );
+        return Ok(());
+    }
+
+    // Parse flags
+    let mut max_iter: usize = 10;
+    let mut keywords: Vec<String> = vec![
+        "DONE".into(), "FIXED".into(), "COMPLETE".into(),
+        "RESOLVED".into(), "ALL TESTS PASS".into(),
+    ];
+    let mut remaining = input;
+
+    // Parse --max N
+    if let Some(rest) = remaining.strip_prefix("--max ") {
+        let parts: Vec<&str> = rest.splitn(2, ' ').collect();
+        max_iter = parts.first().unwrap_or(&"10").parse().unwrap_or(10);
+        remaining = parts.get(1).copied().unwrap_or("").trim();
+    }
+
+    // Parse --done KEYWORD (possibly multiple)
+    while let Some(rest) = remaining.strip_prefix("--done ") {
+        let parts: Vec<&str> = rest.splitn(2, ' ').collect();
+        if let Some(kw) = parts.first() {
+            keywords = vec![kw.to_uppercase()]; // custom replaces defaults
+        }
+        remaining = parts.get(1).copied().unwrap_or("").trim();
+    }
+
+    let task = remaining.trim().to_string();
+    if task.is_empty() {
+        repl.chat.add_message(ChatRole::System, "Error: no task description provided.".to_string());
+        return Ok(());
+    }
+
+    // Set up ralph state
+    repl.state.ralph_state = Some(super::RalphState {
+        task: task.clone(),
+        completion_keywords: keywords.clone(),
+        max_iterations: max_iter,
+        iteration: 0,
+        active: true,
+    });
+
+    repl.chat.add_message(ChatRole::System, format!(
+        "Ralph started (max {max_iter} iterations).\nKeywords: {}\nTask: {task}\nType /ralph stop to cancel.",
+        keywords.join(", ")
+    ));
+
+    // Trigger first iteration
+    let prompt = format!(
+        "[Ralph iteration 1] Task: {task}\n\n\
+         Work on this task. When you are truly done, output one of these keywords on its own line: {}\n\
+         If you are not done, keep working. Do NOT output a completion keyword unless the task is fully complete.",
+        keywords.join(", ")
+    );
+    repl.prompt.set_input(prompt);
+    submit_input(repl)?;
+
+    Ok(())
+}
+
+/// Called after a query completes. If a ralph loop is active, checks the
+/// last assistant message for completion keywords and either stops or
+/// re-injects the task prompt.
+///
+/// Returns true if a new ralph iteration was started.
+pub(crate) fn check_ralph_iteration(repl: &mut Repl) -> bool {
+    let should_continue = repl.state.ralph_state.as_ref().is_some_and(|rs| rs.active);
+    if !should_continue {
+        return false;
+    }
+
+    let rs = repl.state.ralph_state.as_mut().unwrap();
+    rs.iteration += 1;
+
+    // Get last assistant message to check for completion keywords
+    let last_msg = repl.chat.last_message().map(|m| m.content.to_uppercase());
+    let keywords = rs.completion_keywords.clone();
+
+    if let Some(ref msg) = last_msg {
+        let found = keywords.iter().any(|kw| msg.contains(&kw.to_uppercase()));
+        if found {
+            let iter = rs.iteration;
+            let matched_kw = keywords.iter().find(|kw| msg.contains(&kw.to_uppercase())).unwrap();
+            repl.chat.add_message(ChatRole::System, format!(
+                "Ralph complete: detected \"{matched_kw}\" after {iter} iteration(s)."
+            ));
+            repl.state.ralph_state = None;
+            return false;
+        }
+    }
+
+    // Check max iterations
+    if rs.iteration >= rs.max_iterations {
+        let iter = rs.iteration;
+        repl.chat.add_message(ChatRole::System, format!(
+            "Ralph stopped: reached max {iter} iteration(s) without completion keyword."
+        ));
+        repl.state.ralph_state = None;
+        return false;
+    }
+
+    let task = rs.task.clone();
+    let iter = rs.iteration + 1;
+
+    let prompt = format!(
+        "[Ralph iteration {iter}] Continuing task: {task}\n\n\
+         The task is NOT yet complete — no completion keyword was detected.\n\
+         Keep working. When truly done, output one of these on its own line: {}\n\
+         Summarize what was done and what remains.",
+        keywords.join(", ")
+    );
+    repl.prompt.set_input(prompt);
+
+    if submit_input(repl).is_err() {
+        repl.state.ralph_state = None;
         return false;
     }
 

@@ -7,6 +7,20 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Maximum jitter cap in seconds (15 minutes, matching Claude Code).
+const JITTER_CAP_SECS: u64 = 900;
+
+/// Compute a random jitter delay (up to 10% of period, capped at `max_cap_secs`).
+///
+/// Returns 0 if the period is too small for meaningful jitter.
+pub fn apply_jitter(period_secs: u64, max_cap_secs: u64) -> u64 {
+    let max_jitter = ((period_secs as f64 * 0.10).min(max_cap_secs as f64)) as u64;
+    if max_jitter == 0 {
+        return 0;
+    }
+    rand::random::<u64>() % (max_jitter + 1)
+}
+
 /// A single scheduled routine.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduledRoutine {
@@ -49,6 +63,11 @@ impl ScheduledRoutine {
     }
 
     /// Check if the routine should fire now.
+    ///
+    /// After the interval has elapsed, an additional random jitter delay
+    /// (up to 10% of the interval, capped at 15 min) may be applied to
+    /// prevent thundering-herd effects when many routines share the same
+    /// interval.
     pub fn should_fire(&self) -> bool {
         if !self.enabled {
             return false;
@@ -65,7 +84,8 @@ impl ScheduledRoutine {
                     .signed_duration_since(last)
                     .num_seconds()
                     .max(0) as u64;
-                elapsed >= self.interval_secs
+                let jitter = apply_jitter(self.interval_secs, JITTER_CAP_SECS);
+                elapsed >= self.interval_secs + jitter
             }
         }
     }
@@ -235,5 +255,31 @@ mod tests {
         let json = serde_json::to_string(&mgr).unwrap();
         let back: RoutineManager = serde_json::from_str(&json).unwrap();
         assert_eq!(back.routines.len(), 1);
+    }
+
+    #[test]
+    fn test_apply_jitter_within_bounds() {
+        // Jitter for 3600s period should be <= 360s (10%) and <= 900s (cap)
+        for _ in 0..100 {
+            let jitter = apply_jitter(3600, 900);
+            assert!(jitter <= 360, "jitter {jitter} exceeds 10% of 3600");
+            assert!(jitter <= 900, "jitter {jitter} exceeds cap");
+        }
+    }
+
+    #[test]
+    fn test_apply_jitter_small_period() {
+        // Very small period should produce 0 jitter
+        let jitter = apply_jitter(1, 900);
+        assert!(jitter <= 1, "jitter {jitter} should be 0 or 1 for 1s period");
+    }
+
+    #[test]
+    fn test_apply_jitter_cap_applied() {
+        // For a huge period, jitter should be capped at max_cap_secs
+        for _ in 0..100 {
+            let jitter = apply_jitter(u64::MAX, 900);
+            assert!(jitter <= 900, "jitter {jitter} exceeds cap of 900s");
+        }
     }
 }

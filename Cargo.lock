@@ -2967,6 +2967,7 @@ dependencies = [
  "lsp-types",
  "mockito",
  "once_cell",
+ "rand 0.8.5",
  "regex",
  "reqwest",
  "rust-i18n",

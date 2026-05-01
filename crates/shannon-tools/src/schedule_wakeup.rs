@@ -69,6 +69,23 @@ pub const AUTONOMOUS_LOOP_SENTINEL: &str = "<<autonomous-loop-dynamic>>";
 const MIN_DELAY_SECS: u64 = 60;
 const MAX_DELAY_SECS: u64 = 3600;
 
+/// Approximate prompt cache TTL (5 minutes, matching Anthropic).
+#[allow(dead_code)]
+const CACHE_TTL_SECS: u64 = 300;
+
+/// Return a human-readable cache hint for the given delay.
+fn cache_hint(delay_secs: u64) -> &'static str {
+    if delay_secs <= 270 {
+        "cache warm (within TTL window)"
+    } else if delay_secs <= 300 {
+        "cache boundary — consider 270s to stay cached"
+    } else if delay_secs <= 600 {
+        "cache miss — consider 270s to stay cached or 600s+ to amortize"
+    } else {
+        "cache miss — pay cold read cost"
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ScheduleWakeup tool
 // ---------------------------------------------------------------------------
@@ -103,15 +120,16 @@ impl ScheduleWakeupTool {
     /// Schedule a new wakeup.
     async fn schedule(&self, input: ScheduleWakeupInput) -> Result<WakeupRequest, ToolError> {
         let delay = Self::clamp_delay(input.delay_seconds);
+        let jitter = shannon_core::scheduled_routines::apply_jitter(delay, 900);
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
-        let fire_at = now + chrono::Duration::seconds(delay as i64);
+        let fire_at = now + chrono::Duration::seconds((delay + jitter) as i64);
 
         let is_autonomous = input.prompt == AUTONOMOUS_LOOP_SENTINEL;
 
         let req = WakeupRequest {
             id: id.clone(),
-            delay_seconds: delay,
+            delay_seconds: delay + jitter,
             prompt: input.prompt,
             created_at: now.to_rfc3339(),
             fire_at: fire_at.to_rfc3339(),
@@ -196,11 +214,12 @@ impl Tool for ScheduleWakeupTool {
                     })?;
 
                 let req = self.schedule(sched_input).await?;
+                let hint = cache_hint(req.delay_seconds);
 
                 Ok(ToolOutput {
                     content: format!(
-                        "Scheduled wakeup in {}s (fires at {})",
-                        req.delay_seconds, req.fire_at
+                        "Scheduled wakeup in {}s (fires at {}). Cache: {}",
+                        req.delay_seconds, req.fire_at, hint
                     ),
                     is_error: false,
                     metadata: {
@@ -209,6 +228,7 @@ impl Tool for ScheduleWakeupTool {
                         map.insert("delay_seconds".to_string(), json!(req.delay_seconds));
                         map.insert("fire_at".to_string(), json!(req.fire_at));
                         map.insert("is_autonomous".to_string(), json!(req.is_autonomous));
+                        map.insert("cache_ttl_hint".to_string(), json!(hint));
                         map
                     },
                 })
@@ -249,7 +269,9 @@ impl Tool for ScheduleWakeupTool {
 
     fn description(&self) -> &str {
         "Schedule a prompt to be enqueued after a delay (for /loop dynamic pacing). \
-         Call with delaySeconds and prompt to schedule; omit or call without arguments to end the loop."
+         Call with delaySeconds and prompt to schedule; omit or call without arguments to end the loop. \
+         Cache optimization: delays <= 270s keep the prompt cache warm; 270-300s risks cache expiry; \
+         > 300s pays cold read cost. Prefer 270s for active work, 600s+ for idle waits."
     }
 
     fn input_schema(&self) -> serde_json::Value {
@@ -328,24 +350,23 @@ mod tests {
             .unwrap();
 
         assert!(!result.is_error);
-        assert!(result.content.contains("120s"));
-        assert_eq!(
-            result.metadata.get("delay_seconds").unwrap(),
-            &json!(120)
-        );
+        assert!(result.content.contains("Cache:"));
+        let delay = result.metadata.get("delay_seconds").unwrap().as_u64().unwrap();
+        assert!((120..=132).contains(&delay), "delay {delay} should be ~120 + jitter");
         assert_eq!(
             result.metadata.get("is_autonomous").unwrap(),
             &json!(false)
         );
         assert!(result.metadata.get("id").is_some());
         assert!(result.metadata.get("fire_at").is_some());
+        assert!(result.metadata.get("cache_ttl_hint").is_some());
     }
 
     #[tokio::test]
     async fn test_schedule_clamps_delay() {
         let tool = ScheduleWakeupTool::new();
 
-        // Below minimum → clamped to 60
+        // Below minimum → clamped to 60 + jitter
         let result = tool
             .execute(json!({
                 "operation": "Schedule",
@@ -354,12 +375,10 @@ mod tests {
             }))
             .await
             .unwrap();
-        assert_eq!(
-            result.metadata.get("delay_seconds").unwrap(),
-            &json!(60)
-        );
+        let delay = result.metadata.get("delay_seconds").unwrap().as_u64().unwrap();
+        assert!((60..=66).contains(&delay), "delay {delay} should be ~60 + jitter");
 
-        // Above maximum → clamped to 3600
+        // Above maximum → clamped to 3600 + jitter
         let result = tool
             .execute(json!({
                 "operation": "Schedule",
@@ -368,10 +387,8 @@ mod tests {
             }))
             .await
             .unwrap();
-        assert_eq!(
-            result.metadata.get("delay_seconds").unwrap(),
-            &json!(3600)
-        );
+        let delay = result.metadata.get("delay_seconds").unwrap().as_u64().unwrap();
+        assert!((3600..=3600 + 360).contains(&delay), "delay {delay} should be ~3600 + jitter");
     }
 
     #[tokio::test]
@@ -488,6 +505,40 @@ mod tests {
         // Nothing scheduled, nothing due
         let due = tool.poll_due();
         assert!(due.is_empty());
+    }
+
+    #[test]
+    fn test_cache_hint_warm() {
+        assert!(cache_hint(120).contains("cache warm"));
+        assert!(cache_hint(270).contains("cache warm"));
+    }
+
+    #[test]
+    fn test_cache_hint_boundary() {
+        assert!(cache_hint(280).contains("cache boundary"));
+        assert!(cache_hint(300).contains("cache boundary"));
+    }
+
+    #[test]
+    fn test_cache_hint_miss() {
+        assert!(cache_hint(310).contains("cache miss"));
+        assert!(cache_hint(600).contains("cache miss"));
+        assert!(cache_hint(3600).contains("cache miss"));
+    }
+
+    #[tokio::test]
+    async fn test_schedule_includes_cache_hint() {
+        let tool = ScheduleWakeupTool::new();
+        let result = tool
+            .execute(json!({
+                "operation": "Schedule",
+                "delay_seconds": 120,
+                "prompt": "test"
+            }))
+            .await
+            .unwrap();
+        assert!(result.content.contains("Cache:"));
+        assert!(result.metadata.get("cache_ttl_hint").is_some());
     }
 
     #[tokio::test]
