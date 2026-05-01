@@ -749,6 +749,224 @@ fn jaccard_similarity(a: &str, b: &str) -> f64 {
 }
 
 // ============================================================================
+// LLM-Based Memory Extractor
+// ============================================================================
+
+/// AI-powered memory extractor that uses the configured LLM to extract
+/// structured memories from conversations. Falls back to pattern-based
+/// extraction on any API error.
+///
+/// Uses a dedicated tokio runtime to bridge sync calling code with the
+/// async `LlmClient`, avoiding nested-runtime panics.
+pub struct LlmMemoryExtractor {
+    client: crate::api::LlmClient,
+    inner: MemoryExtractor,
+}
+
+impl LlmMemoryExtractor {
+    /// Create a new LLM-backed extractor wrapping the given client and config.
+    pub fn new(client: crate::api::LlmClient, config: ExtractionConfig) -> Self {
+        let inner = MemoryExtractor::new(config);
+        Self { client, inner }
+    }
+
+    /// Check whether extraction should be triggered (delegates to inner).
+    pub fn should_extract(&self, messages: &[MessageSummary]) -> bool {
+        self.inner.should_extract(messages)
+    }
+
+    /// Run LLM-powered extraction, falling back to pattern-based on error.
+    ///
+    /// First sends the conversation to the LLM with structured extraction
+    /// instructions. If the LLM call fails or returns unparseable output,
+    /// falls back to keyword pattern matching.
+    pub fn extract(
+        &self,
+        messages: &[MessageSummary],
+        existing_memories: &[MemoryEntry],
+    ) -> Result<ExtractionResult, ExtractionError> {
+        if !self.inner.enabled {
+            return Ok(ExtractionResult::skipped("extraction is disabled"));
+        }
+
+        // Check in-progress guard
+        {
+            let guard = self.inner.in_progress.lock().unwrap_or_else(|e| e.into_inner());
+            if *guard {
+                return Ok(ExtractionResult::skipped("extraction already in progress"));
+            }
+        }
+
+        let visible_count = self.inner.count_visible_messages(
+            messages,
+            self.inner.last_extraction_cursor.as_deref(),
+        );
+
+        if visible_count < self.inner.min_messages_between_extractions {
+            return Ok(ExtractionResult::skipped(&format!(
+                "not enough messages (have {}, need {})",
+                visible_count, self.inner.min_messages_between_extractions
+            )));
+        }
+
+        // Set in-progress
+        {
+            let mut guard = self.inner.in_progress.lock().map_err(|_| ExtractionError::AlreadyInProgress)?;
+            *guard = true;
+        }
+
+        let start = std::time::Instant::now();
+        let result = self.do_llm_extract(messages, existing_memories, visible_count, &start);
+
+        // Release in-progress
+        {
+            let mut guard = self.inner.in_progress.lock().map_err(|_| ExtractionError::AlreadyInProgress)?;
+            *guard = false;
+        }
+
+        result
+    }
+
+    fn do_llm_extract(
+        &self,
+        messages: &[MessageSummary],
+        existing_memories: &[MemoryEntry],
+        visible_count: usize,
+        start: &std::time::Instant,
+    ) -> Result<ExtractionResult, ExtractionError> {
+        // Try LLM extraction first
+        let extracted = match self.call_llm_extract(messages, existing_memories) {
+            Ok(memories) => memories,
+            Err(_) => {
+                // Fallback to pattern-based extraction
+                let recent = self.inner.get_recent_messages(messages, self.inner.max_turns);
+                self.inner.pattern_extract_from_messages(&recent)
+            }
+        };
+
+        if extracted.is_empty() {
+            if let Some(last) = messages.last() {
+                self.inner.set_cursor(&last.id);
+            }
+            return Ok(ExtractionResult::skipped("no memories extracted from recent messages"));
+        }
+
+        let mut saved_paths = Vec::new();
+        for mem in &extracted {
+            let category = self.inner.resolve_category(&mem.category);
+            let entry = MemoryEntry::with_confidence(
+                "extracted",
+                category,
+                &mem.content,
+                mem.confidence.clamp(0.0, 1.0),
+                mem.tags.clone(),
+            )?;
+
+            let path = self.inner.save_memory_entry(&entry)?;
+            saved_paths.push(path);
+        }
+
+        if let Some(last) = messages.last() {
+            self.inner.set_cursor(&last.id);
+        }
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+        Ok(ExtractionResult::success(saved_paths, visible_count, duration_ms))
+    }
+
+    /// Call the LLM to extract memories from recent messages.
+    fn call_llm_extract(
+        &self,
+        messages: &[MessageSummary],
+        existing_memories: &[MemoryEntry],
+    ) -> Result<Vec<ExtractedMemory>, ExtractionError> {
+        let visible_count = self.inner.count_visible_messages(
+            messages,
+            self.inner.last_extraction_cursor.as_deref(),
+        );
+
+        let prompt = self.inner.build_extraction_prompt(visible_count, existing_memories);
+
+        // Build the conversation messages for the LLM
+        let recent = self.inner.get_recent_messages(messages, self.inner.max_turns);
+        let mut conversation_text = String::new();
+        for msg in &recent {
+            conversation_text.push_str(&format!("[{}] {}\n", msg.role, msg.content));
+        }
+
+        let system_msg = crate::api::Message {
+            role: "system".to_string(),
+            content: crate::api::MessageContent::Text(prompt),
+        };
+        let user_msg = crate::api::Message {
+            role: "user".to_string(),
+            content: crate::api::MessageContent::Text(format!(
+                "Extract memories from this conversation:\n\n{conversation_text}"
+            )),
+        };
+
+        // Use a dedicated runtime to avoid nested runtime panics
+        let client = self.client.clone();
+        let rt = tokio::runtime::Runtime::new().map_err(|e| {
+            ExtractionError::ParseError(format!("failed to create tokio runtime: {e}"))
+        })?;
+
+        let blocks = rt.block_on(async {
+            client
+                .send_message(vec![system_msg, user_msg], None, None)
+                .await
+                .map_err(|e| ExtractionError::ParseError(format!("LLM call failed: {e}")))
+        })?;
+
+        // Extract text from response blocks
+        let response_text: String = blocks
+            .iter()
+            .filter_map(|b| match b {
+                crate::api::ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<&str>>()
+            .join("");
+
+        parse_llm_extraction_output(&response_text)
+    }
+
+    /// Access the inner pattern-based extractor.
+    pub fn inner(&self) -> &MemoryExtractor {
+        &self.inner
+    }
+}
+
+/// Parse the LLM's JSON array output into extracted memories.
+///
+/// Tries to find a JSON array in the response text (may be wrapped in
+/// markdown code blocks). Falls back to empty vec on parse failure.
+fn parse_llm_extraction_output(text: &str) -> Result<Vec<ExtractedMemory>, ExtractionError> {
+    // Strip markdown code fences if present
+    let cleaned = text
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    // Try to find a JSON array in the text
+    let json_start = cleaned.find('[');
+    let json_end = cleaned.rfind(']');
+
+    let json_str = match (json_start, json_end) {
+        (Some(s), Some(e)) if e > s => &cleaned[s..=e],
+        _ => return Err(ExtractionError::ParseError("no JSON array found in LLM output".into())),
+    };
+
+    let parsed: Vec<ExtractedMemory> = serde_json::from_str(json_str).map_err(|e| {
+        ExtractionError::ParseError(format!("failed to parse LLM extraction output: {e}"))
+    })?;
+
+    Ok(parsed)
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 

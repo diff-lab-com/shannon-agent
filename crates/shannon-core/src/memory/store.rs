@@ -433,6 +433,90 @@ impl MemoryStore {
             }
         }
     }
+
+    /// Search memories ranked by multi-signal relevance to the query.
+    ///
+    /// Unlike [`search`] which requires a substring match, this method scores
+    /// every memory against the query using term overlap, category affinity,
+    /// temporal decay, confidence, and access frequency. Results are returned
+    /// in descending relevance order.
+    pub fn search_by_relevance(
+        &self,
+        query: &str,
+        project: Option<&str>,
+        max_results: usize,
+    ) -> Vec<MemoryEntry> {
+        let query_lower = query.to_lowercase();
+        let query_terms: std::collections::HashSet<&str> =
+            query_lower.split_whitespace().collect();
+
+        let mut scored: Vec<(f64, MemoryEntry)> = self
+            .entries
+            .values()
+            .filter(|e| project.is_none_or(|p| e.project == p))
+            .filter_map(|e| {
+                let score = semantic_relevance_score(e, &query_terms);
+                // Only include results above a minimal threshold
+                if score > 0.05 {
+                    Some((score, e.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(max_results);
+        scored.into_iter().map(|(_, e)| e).collect()
+    }
+
+    /// Detect and resolve contradictory memories.
+    ///
+    /// Finds pairs of memories in the same category that express opposing
+    /// sentiments (e.g., "always use X" vs "never use X"). The newer memory
+    /// replaces the older one. Returns the number of conflicts resolved.
+    pub fn resolve_conflicts(&mut self) -> Result<usize, MemoryError> {
+        let mut to_remove: Vec<String> = Vec::new();
+
+        let ids: Vec<String> = self.entries.keys().cloned().collect();
+
+        for i in 0..ids.len() {
+            if to_remove.contains(&ids[i]) {
+                continue;
+            }
+            for j in (i + 1)..ids.len() {
+                if to_remove.contains(&ids[j]) {
+                    continue;
+                }
+
+                let entry_i = &self.entries[&ids[i]];
+                let entry_j = &self.entries[&ids[j]];
+
+                if entry_i.category == entry_j.category
+                    && are_contradictory(&entry_i.content, &entry_j.content)
+                {
+                    // Remove the older one
+                    let remove_id = if entry_i.created_at < entry_j.created_at {
+                        &ids[i]
+                    } else {
+                        &ids[j]
+                    };
+                    to_remove.push(remove_id.clone());
+                }
+            }
+        }
+
+        let count = to_remove.len();
+        for id in &to_remove {
+            self.entries.remove(id);
+        }
+
+        if count > 0 {
+            self.save()?;
+        }
+
+        Ok(count)
+    }
 }
 
 // Deduplicate memories by removing entries with very similar content.
@@ -452,13 +536,91 @@ fn deduplicate_memories(memories: Vec<MemoryEntry>) -> Vec<MemoryEntry> {
     unique
 }
 
-/// Compute a composite relevance score for a memory entry.
+/// Compute a composite relevance score for a memory entry (used by `search`).
 ///
 /// Combines confidence (40%), access frequency (30%), and recency (30%).
 fn relevance_score(entry: &MemoryEntry) -> f64 {
     let confidence = entry.confidence;
-    let access = (entry.access_count as f64).ln_1p() / 5.0_f64.ln_1p().max(0.01); // normalize: 5 accesses = 1.0
+    let access = (entry.access_count as f64).ln_1p() / 5.0_f64.ln_1p().max(0.01);
     let age_hours = (Utc::now() - entry.accessed_at).num_hours().max(0) as f64;
-    let recency = 1.0 / (1.0 + age_hours / 168.0); // half-life of 1 week
+    let recency = 1.0 / (1.0 + age_hours / 168.0);
     0.4 * confidence + 0.3 * access.min(1.0) + 0.3 * recency
+}
+
+/// Compute a semantic relevance score combining query-term overlap with
+/// temporal decay, confidence, and access frequency.
+///
+/// Weight breakdown:
+/// - 35% query term overlap (TF overlap between query and memory content)
+/// - 25% temporal decay (half-life of 2 weeks)
+/// - 25% confidence
+/// - 15% access frequency
+fn semantic_relevance_score(
+    entry: &MemoryEntry,
+    query_terms: &std::collections::HashSet<&str>,
+) -> f64 {
+    if query_terms.is_empty() {
+        return relevance_score(entry);
+    }
+
+    // Term overlap: fraction of query terms found in content or tags
+    let content_lower: String = entry.content.to_lowercase();
+    let tag_text: String = entry.tags.iter().map(|t| t.to_lowercase()).collect::<Vec<_>>().join(" ");
+    let combined = format!("{content_lower} {tag_text}");
+    let content_terms: std::collections::HashSet<&str> = combined.split_whitespace().collect();
+
+    let overlap = query_terms.intersection(&content_terms).count() as f64
+        / query_terms.len() as f64;
+
+    // Temporal decay: half-life of 2 weeks (336 hours)
+    let age_hours = (Utc::now() - entry.created_at).num_hours().max(0) as f64;
+    let decay = 1.0 / (1.0 + age_hours / 336.0);
+
+    // Access frequency (logarithmic normalization)
+    let access = (entry.access_count as f64).ln_1p() / 10.0_f64.ln_1p().max(0.01);
+
+    0.35 * overlap + 0.25 * decay + 0.25 * entry.confidence + 0.15 * access.min(1.0)
+}
+
+/// Detect whether two memory contents express contradictory sentiments.
+///
+/// Looks for opposing signal words (always/never, do/don't, etc.) while
+/// requiring sufficient content overlap to ensure the memories are about
+/// the same topic.
+fn are_contradictory(a: &str, b: &str) -> bool {
+    let a_lower = a.to_lowercase();
+    let b_lower = b.to_lowercase();
+
+    // Must share at least moderate content overlap (same topic)
+    let overlap = content_similarity(&a_lower, &b_lower);
+    if overlap < 0.3 {
+        return false;
+    }
+
+    // Opposing signal pairs
+    const OPPOSING: &[(&str, &str)] = &[
+        ("always", "never"),
+        ("must", "must not"),
+        ("should", "should not"),
+        ("use", "don't use"),
+        ("use", "do not use"),
+        ("enable", "disable"),
+        ("prefer", "avoid"),
+        ("include", "exclude"),
+        ("allow", "deny"),
+        ("required", "forbidden"),
+    ];
+
+    for (pos, neg) in OPPOSING {
+        let a_pos = a_lower.contains(pos) && !a_lower.contains(neg);
+        let a_neg = a_lower.contains(neg) && !a_lower.contains(pos);
+        let b_pos = b_lower.contains(pos) && !b_lower.contains(neg);
+        let b_neg = b_lower.contains(neg) && !b_lower.contains(pos);
+
+        if (a_pos && b_neg) || (a_neg && b_pos) {
+            return true;
+        }
+    }
+
+    false
 }

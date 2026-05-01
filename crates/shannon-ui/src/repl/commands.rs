@@ -4451,13 +4451,17 @@ fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
 
     let history = engine.conversation_history();
 
-    // Analyze first
-    let compact_engine = match CompactEngine::with_defaults() {
+    // Analyze first — use LLM summarizer for quality, fallback to rule-based
+    let client = engine.client().clone();
+    let compact_engine = match CompactEngine::with_llm_summarizer(client) {
         Ok(e) => e,
-        Err(e) => {
-            repl.chat.add_message(ChatRole::System, format!("Compact engine error: {e}"));
-            return Ok(());
-        }
+        Err(_) => match CompactEngine::with_defaults() {
+            Ok(e) => e,
+            Err(e) => {
+                repl.chat.add_message(ChatRole::System, format!("Compact engine error: {e}"));
+                return Ok(());
+            }
+        },
     };
 
     let analysis = compact_engine.analyze_context(&history);

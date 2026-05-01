@@ -2467,7 +2467,7 @@ impl Repl {
         }
     }
 
-    /// Perform auto-compaction using truncate strategy (no LLM call needed).
+    /// Perform auto-compaction using LLM-powered summarization.
     fn do_auto_compact(&mut self) {
         use shannon_core::compact::CompactEngine;
 
@@ -2478,9 +2478,14 @@ impl Repl {
             return; // Not enough to compact
         }
 
-        let compact_engine = match CompactEngine::with_defaults() {
+        // Use LLM summarizer for higher quality compression, fallback to rule-based
+        let client = engine.client().clone();
+        let compact_engine = match CompactEngine::with_llm_summarizer(client) {
             Ok(e) => e,
-            Err(_) => return,
+            Err(_) => match CompactEngine::with_defaults() {
+                Ok(e) => e,
+                Err(_) => return,
+            },
         };
 
         let before = history.len();

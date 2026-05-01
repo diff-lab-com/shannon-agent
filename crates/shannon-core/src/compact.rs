@@ -539,6 +539,165 @@ impl Summarizer for RuleBasedSummarizer {
 }
 
 // ============================================================================
+// LLM-Based Summarizer
+// ============================================================================
+
+/// AI-powered summarizer that uses the configured LLM to produce high-quality
+/// conversation summaries. Falls back to [`RuleBasedSummarizer`] on errors.
+///
+/// Uses a dedicated tokio runtime to bridge the sync `Summarizer` trait with
+/// the async `LlmClient`, avoiding nested-runtime panics.
+pub struct LlmSummarizer {
+    client: crate::api::LlmClient,
+    fallback: RuleBasedSummarizer,
+}
+
+impl LlmSummarizer {
+    /// Create a new LLM summarizer wrapping the given client.
+    pub fn new(client: crate::api::LlmClient) -> Self {
+        Self {
+            client,
+            fallback: RuleBasedSummarizer::new(),
+        }
+    }
+
+    /// Build the messages payload for a summarization request.
+    fn build_summarize_messages(
+        &self,
+        messages: &[Message],
+        max_tokens: usize,
+    ) -> Vec<Message> {
+        vec![
+            Message {
+                role: "system".to_string(),
+                content: MessageContent::Text(CompactPrompt::system_prompt(max_tokens)),
+            },
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Text(
+                    CompactPrompt::conversation_to_summarize(messages),
+                ),
+            },
+        ]
+    }
+
+    /// Build the messages payload for a micro-compact request.
+    fn build_micro_messages(
+        &self,
+        message: &Message,
+        max_tokens: usize,
+    ) -> Vec<Message> {
+        vec![
+            Message {
+                role: "system".to_string(),
+                content: MessageContent::Text(
+                    "You are a content compression assistant. Compress the following \
+                     message while preserving all key information, file paths, data values, \
+                     and code references. Output ONLY the compressed text, no meta-commentary."
+                        .to_string(),
+                ),
+            },
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Text(CompactPrompt::micro_compact_prompt(message, max_tokens)),
+            },
+        ]
+    }
+}
+
+impl std::fmt::Debug for LlmSummarizer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LlmSummarizer")
+            .field("model", &self.client.model())
+            .finish()
+    }
+}
+
+impl Summarizer for LlmSummarizer {
+    fn summarize(&self, messages: &[Message], max_tokens: usize) -> Result<String, CompactError> {
+        if messages.is_empty() {
+            return Err(CompactError::NoMessagesToCompact);
+        }
+
+        let payload = self.build_summarize_messages(messages, max_tokens);
+
+        let result = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt.block_on(async {
+                match self.client.send_message(payload, None, None).await {
+                    Ok(blocks) => {
+                        let text: String = blocks
+                            .into_iter()
+                            .filter_map(|b| match b {
+                                ContentBlock::Text { text } => Some(text),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        if text.trim().is_empty() {
+                            Err("LLM returned empty summary".to_string())
+                        } else {
+                            Ok(text)
+                        }
+                    }
+                    Err(e) => Err(format!("LLM summarization API error: {e}")),
+                }
+            }),
+            Err(e) => Err(format!("Failed to create runtime: {e}")),
+        };
+
+        match result {
+            Ok(summary) => Ok(summary),
+            Err(reason) => {
+                tracing::warn!(
+                    "LLM summarization failed ({}), falling back to rule-based",
+                    reason
+                );
+                self.fallback.summarize(messages, max_tokens)
+            }
+        }
+    }
+
+    fn micro_summarize(&self, message: &Message, max_tokens: usize) -> Result<String, CompactError> {
+        let payload = self.build_micro_messages(message, max_tokens);
+
+        let result = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt.block_on(async {
+                match self.client.send_message(payload, None, None).await {
+                    Ok(blocks) => {
+                        let text: String = blocks
+                            .into_iter()
+                            .filter_map(|b| match b {
+                                ContentBlock::Text { text } => Some(text),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        if text.trim().is_empty() {
+                            Err("LLM returned empty micro-summary".to_string())
+                        } else {
+                            Ok(text)
+                        }
+                    }
+                    Err(e) => Err(format!("LLM micro-summarization API error: {e}")),
+                }
+            }),
+            Err(e) => Err(format!("Failed to create runtime: {e}")),
+        };
+
+        match result {
+            Ok(summary) => Ok(summary),
+            Err(reason) => {
+                tracing::warn!(
+                    "LLM micro-summarization failed ({}), falling back to rule-based",
+                    reason
+                );
+                self.fallback.micro_summarize(message, max_tokens)
+            }
+        }
+    }
+}
+
+// ============================================================================
 // Message Protection & Priority Classification
 // ============================================================================
 
@@ -799,6 +958,23 @@ impl CompactEngine {
     /// Create with default config and a rule-based summarizer (no AI needed)
     pub fn with_defaults() -> Result<Self, CompactError> {
         Self::new(CompactConfig::default(), Box::new(RuleBasedSummarizer::new()))
+    }
+
+    /// Create with an LLM-powered summarizer for higher quality compression.
+    ///
+    /// Falls back to rule-based summarization on API errors.
+    pub fn with_llm_summarizer(
+        client: crate::api::LlmClient,
+    ) -> Result<Self, CompactError> {
+        Self::new(CompactConfig::default(), Box::new(LlmSummarizer::new(client)))
+    }
+
+    /// Create with an LLM summarizer and custom config.
+    pub fn with_llm_and_config(
+        client: crate::api::LlmClient,
+        config: CompactConfig,
+    ) -> Result<Self, CompactError> {
+        Self::new(config, Box::new(LlmSummarizer::new(client)))
     }
 
     /// Get a reference to the config

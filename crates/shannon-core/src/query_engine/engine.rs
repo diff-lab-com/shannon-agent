@@ -706,7 +706,7 @@ impl QueryEngine {
                                 message: "Compaction skipped (too many failures), truncating old messages".to_string(),
                             }));
                         } else {
-                            match crate::compact::CompactEngine::with_defaults() {
+                            match crate::compact::CompactEngine::with_llm_summarizer(client.clone()) {
                                 Ok(mut compact_engine) => {
                                     // Build re-injection context from ContextInjector if available,
                                     // otherwise fall back to the system prompt (truncated).
@@ -1483,9 +1483,70 @@ impl QueryEngine {
                         }
                     }
                     Err(e) => {
+                        // Check if this is a token overflow — attempt auto-compaction and retry once
+                        if e.is_token_overflow() {
+                            let compact_keep = 20;
+                            if messages.len() > compact_keep {
+                                tracing::warn!("Token overflow detected, auto-compacting and retrying");
+                                messages = messages.split_off(messages.len() - compact_keep);
+                                // Re-inject system prompt at front
+                                if let Some(ref sp) = system_prompt {
+                                    if !sp.is_empty() {
+                                        messages.insert(0, crate::api::Message {
+                                            role: "system".to_string(),
+                                            content: crate::api::MessageContent::Text(sp.clone()),
+                                        });
+                                    }
+                                }
+                                let retry_result = if let Some(ref blocks) = system_blocks_opt {
+                                    client.send_message_stream_structured_with_retry(messages.clone(), tools_schema.clone(), blocks.clone()).await
+                                } else {
+                                    client.send_message_stream_with_retry(messages.clone(), tools_schema.clone(), system_prompt.clone()).await
+                                };
+                                match retry_result {
+                                    Ok(mut retry_stream) => {
+                                        // Re-process the retry stream with the same logic
+                                        while let Some(event_result) = retry_stream.next().await {
+                                            match event_result {
+                                                Ok(stream_event) => {
+                                                    // Forward all events from the retry
+                                                    let event_json = serde_json::to_string(&stream_event).unwrap_or_default();
+                                                    let _ = tx.send(Ok(QueryEvent::Text { query_id, content: event_json }));
+                                                }
+                                                Err(retry_err) => {
+                                                    let suggestion = retry_err.user_suggestion()
+                                                        .map(|s| format!(" {}.", s))
+                                                        .unwrap_or_default();
+                                                    let _ = tx.send(Ok(QueryEvent::Failed {
+                                                        query_id,
+                                                        error: format!("Auto-compact retry also failed: {retry_err}.{suggestion}"),
+                                                    }));
+                                                    return;
+                                                }
+                                            }
+                                        }
+                                        let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
+                                        return;
+                                    }
+                                    Err(retry_err) => {
+                                        let suggestion = retry_err.user_suggestion()
+                                            .map(|s| format!(" {}.", s))
+                                            .unwrap_or_default();
+                                        let _ = tx.send(Ok(QueryEvent::Failed {
+                                            query_id,
+                                            error: format!("Token overflow — auto-compact retry failed: {retry_err}.{suggestion}"),
+                                        }));
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                        let suggestion = e.user_suggestion()
+                            .map(|s| format!(" {s}."))
+                            .unwrap_or_default();
                         let _ = tx.send(Ok(QueryEvent::Failed {
                             query_id,
-                            error: e.to_string(),
+                            error: format!("{e}.{suggestion}"),
                         }));
                         return;
                     }
