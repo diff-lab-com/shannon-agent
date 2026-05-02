@@ -2,7 +2,6 @@
 //!
 //! Provides language detection from file extensions and tree-sitter grammar lookup.
 
-use crate::{CodegenError, Result};
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -187,23 +186,6 @@ pub fn supported_languages() -> Vec<LanguageConfig> {
 /// # Arguments
 ///
 /// * `path` - File path to analyze
-///
-/// # Returns
-///
-/// Tree-sitter Language if supported and feature enabled
-///
-/// # Errors
-///
-/// Returns CodegenError if language is not supported or feature not enabled
-pub fn get_language_for_path(path: &Path) -> Result<tree_sitter::Language> {
-    let config = language_for_path(path)
-        .ok_or_else(|| CodegenError::UnsupportedLanguage(path.display().to_string()))?;
-
-    config.ts_id.to_language()
-        .ok_or_else(|| CodegenError::UnsupportedLanguage(
-            format!("{} (feature not enabled)", config.name)
-        ))
-}
 
 #[cfg(test)]
 mod tests {

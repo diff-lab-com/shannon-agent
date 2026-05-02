@@ -176,6 +176,9 @@ pub struct ExportOptions {
 
     /// Include timestamps
     pub include_timestamps: bool,
+
+    /// Sanitize/redact sensitive content (API keys, home paths)
+    pub sanitize: bool,
 }
 
 impl Default for ExportOptions {
@@ -185,6 +188,7 @@ impl Default for ExportOptions {
             filename: None,
             include_metadata: true,
             include_timestamps: true,
+            sanitize: false,
         }
     }
 }
@@ -208,6 +212,9 @@ pub fn parse_export_args(args: &str) -> Result<ExportOptions, String> {
             }
             "--no-timestamps" => {
                 options.include_timestamps = false;
+            }
+            "--sanitize" => {
+                options.sanitize = true;
             }
             t if t.starts_with('-') => {
                 return Err(format!("Unknown option: {t}"));
@@ -292,6 +299,10 @@ pub fn export_to_markdown(session: &ExportSession, options: &ExportOptions) -> S
         md.push_str("\n\n---\n\n");
     }
 
+    if options.sanitize {
+        md = sanitize_content(&md, &dirs::home_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default());
+    }
+
     md
 }
 
@@ -334,7 +345,13 @@ pub fn export_to_json(session: &ExportSession, options: &ExportOptions) -> Strin
 
     json_obj["messages"] = serde_json::json!(messages);
 
-    serde_json::to_string_pretty(&json_obj).unwrap_or_default()
+    let json_str = serde_json::to_string_pretty(&json_obj).unwrap_or_default();
+
+    if options.sanitize {
+        sanitize_content(&json_str, &dirs::home_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default())
+    } else {
+        json_str
+    }
 }
 
 /// Format a Unix timestamp as readable string

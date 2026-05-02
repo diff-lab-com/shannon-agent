@@ -957,8 +957,6 @@ pub struct HookManager {
     project_config_path: PathBuf,
     /// Base directory for resolving project-level paths (defaults to cwd)
     base_dir: PathBuf,
-    /// Optional LLM client for LLM-based hooks
-    llm_client: Option<crate::api::LlmClient>,
 }
 
 impl std::fmt::Debug for HookManager {
@@ -992,7 +990,6 @@ impl HookManager {
             user_config_path,
             project_config_path,
             base_dir,
-            llm_client: None,
         }
     }
 
@@ -1003,7 +1000,6 @@ impl HookManager {
             user_config_path: user_path,
             project_config_path: project_path,
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            llm_client: None,
         }
     }
 
@@ -1018,7 +1014,6 @@ impl HookManager {
             user_config_path,
             project_config_path,
             base_dir,
-            llm_client: None,
         }
     }
 

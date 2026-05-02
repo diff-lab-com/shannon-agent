@@ -30,6 +30,7 @@ mod debug;
 mod doctor;
 mod mcp;
 mod lsp;
+#[allow(dead_code)]
 mod plugin;
 mod repl;
 mod repomap;

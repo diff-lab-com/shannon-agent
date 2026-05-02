@@ -157,43 +157,6 @@ pub fn generate_repomap_filtered(
     })
 }
 
-/// Format repository map as markdown
-///
-/// # Arguments
-///
-/// * `repo_map` - Repository map to format
-///
-/// # Returns
-///
-/// Markdown formatted string
-pub fn format_repomap_markdown(repo_map: &RepoMap) -> String {
-    let mut output = String::new();
-
-    output.push_str("# Repository Map\n\n");
-    output.push_str(&format!(
-        "**Files**: {} | **Symbols**: {} | **Lines**: {}\n\n",
-        repo_map.files.len(),
-        repo_map.total_symbols,
-        repo_map.total_lines
-    ));
-
-    for file in &repo_map.files {
-        output.push_str(&format!("## `{}` ({})\n\n", file.path, file.language));
-
-        if file.symbols.is_empty() {
-            output.push_str("*No symbols found*\n\n");
-            continue;
-        }
-
-        for symbol in &file.symbols {
-            format_symbol(&mut output, symbol, 0);
-        }
-
-        output.push('\n');
-    }
-
-    output
-}
 
 /// Format a symbol with indentation
 #[allow(dead_code)]
@@ -300,24 +263,6 @@ def hello():
         let repo_map = generate_repomap(root, 10).unwrap();
         assert_eq!(repo_map.files.len(), 2);
         assert_eq!(repo_map.total_symbols, 3); // 2 from Rust, 1 from Python
-    }
-
-    #[test]
-    fn test_format_repomap_markdown() {
-        let repo_map = RepoMap {
-            files: vec![FileSummary {
-                path: "test.rs".to_string(),
-                language: "Rust".to_string(),
-                symbols: vec![],
-                lines: 10,
-            }],
-            total_symbols: 0,
-            total_lines: 10,
-        };
-
-        let markdown = format_repomap_markdown(&repo_map);
-        assert!(markdown.contains("# Repository Map"));
-        assert!(markdown.contains("test.rs"));
     }
 
     #[test]

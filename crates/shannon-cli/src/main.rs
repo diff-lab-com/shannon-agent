@@ -45,6 +45,7 @@ impl std::fmt::Display for OutputFormat {
 /// Exit codes for non-interactive CI mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
 enum HeadlessExitCode {
     /// 0 - assistant completed the task successfully.
     Success = 0,
@@ -102,6 +103,7 @@ struct HeadlessOutput {
 /// Each event is serialized as a single JSON object per line (newline-delimited).
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "type")]
+#[allow(dead_code)]
 enum CiEvent {
     /// Session started.
     #[serde(rename = "start")]
@@ -1357,7 +1359,7 @@ fn run_serve_command(port: u16, host: Option<String>, config: &CliConfig) -> Res
         let reg_result = register_default_tools_with_project_dir_ex(&mut tools, &project_dir)
             .map_err(|e| anyhow::anyhow!("tool registration failed: {e}"))?;
         let agent_context_handle = reg_result.agent_context_handle;
-        let plan_mode_flag = reg_result.plan_manager.plan_mode_flag();
+        let _plan_mode_flag = reg_result.plan_manager.plan_mode_flag();
 
         // Load and register skills.
         let _ = shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
