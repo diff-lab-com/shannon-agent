@@ -240,15 +240,13 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             }
             if repl.prompt.input().contains('\n') {
                 repl.prompt.cursor_up();
-            } else if !repl.prompt.input().is_empty() || repl.command_history.cursor() >= 0 {
+            } else if repl.command_history.cursor() >= 0 || !repl.command_history.is_empty() {
                 if repl.command_history.cursor() < 0 {
                     repl.saved_input = repl.prompt.input().to_string();
                 }
                 if let Some(cmd) = repl.command_history.up() {
                     repl.prompt.set_input(cmd.to_string());
                 }
-            } else {
-                repl.chat.scroll_up();
             }
             Ok(())
         }
@@ -268,8 +266,6 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                     repl.command_history.reset_cursor();
                     repl.prompt.set_input(repl.saved_input.clone());
                 }
-            } else {
-                repl.chat.scroll_down();
             }
             Ok(())
         }
