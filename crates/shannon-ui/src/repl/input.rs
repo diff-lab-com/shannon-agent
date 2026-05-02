@@ -172,6 +172,8 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         KeyCode::Enter => {
             if key.modifiers.contains(KeyModifiers::SHIFT) {
                 repl.prompt.insert_newline();
+            } else if !repl.state.completion_suggestions.is_empty() {
+                accept_completion(repl);
             } else {
                 super::commands::submit_input(repl)?;
             }
@@ -221,15 +223,21 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Char(c) => {
             repl.prompt.add_char(c);
-            repl.state.completion_suggestions.clear();
+            update_auto_completions(repl);
             Ok(())
         }
         KeyCode::Backspace => {
             repl.prompt.backspace();
-            repl.state.completion_suggestions.clear();
+            update_auto_completions(repl);
             Ok(())
         }
         KeyCode::Up => {
+            if !repl.state.completion_suggestions.is_empty() {
+                if repl.state.completion_suggestion_index > 0 {
+                    repl.state.completion_suggestion_index -= 1;
+                }
+                return Ok(());
+            }
             if repl.prompt.input().contains('\n') {
                 repl.prompt.cursor_up();
             } else if !repl.prompt.input().is_empty() || repl.command_history.cursor() >= 0 {
@@ -245,6 +253,12 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             Ok(())
         }
         KeyCode::Down => {
+            if !repl.state.completion_suggestions.is_empty() {
+                if repl.state.completion_suggestion_index < repl.state.completion_suggestions.len() - 1 {
+                    repl.state.completion_suggestion_index += 1;
+                }
+                return Ok(());
+            }
             if repl.prompt.input().contains('\n') {
                 repl.prompt.cursor_down();
             } else if repl.command_history.cursor() >= 0 {
@@ -260,6 +274,11 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             Ok(())
         }
         KeyCode::Esc => {
+            if !repl.state.completion_suggestions.is_empty() {
+                repl.state.completion_suggestions.clear();
+                repl.state.completion_suggestion_index = 0;
+                return Ok(());
+            }
             let action = repl.vim_handler.process_key(key);
             handle_vim_action(repl, action);
             Ok(())
@@ -273,7 +292,11 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             Ok(())
         }
         KeyCode::Tab => {
-            handle_tab_completion(repl)?;
+            if !repl.state.completion_suggestions.is_empty() {
+                accept_completion(repl);
+            } else {
+                handle_tab_completion(repl)?;
+            }
             Ok(())
         }
         _ => Ok(()),
@@ -476,6 +499,73 @@ pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String>
         .filter(|c| c.starts_with(prefix))
         .map(|c| (*c).to_string())
         .collect()
+}
+
+/// Generate completion candidates based on current input for auto-popup display.
+pub(crate) fn update_auto_completions(repl: &mut Repl) {
+    let input = repl.prompt.input().to_string();
+    if input.is_empty() {
+        repl.state.completion_suggestions.clear();
+        repl.state.completion_suggestion_index = 0;
+        return;
+    }
+
+    let command_names = repl.runtime.block_on(async {
+        repl.shared_executor.registry().await.list_names_with_aliases().await
+    });
+
+    let (prefix, _word_start, _word_end) = extract_completion_word(&input, repl);
+
+    let has_space = input.trim_end_matches(' ').contains(' ');
+    let candidates: Vec<String> = if !has_space && prefix.starts_with('/') {
+        command_names.iter()
+            .filter(|cmd| format!("/{cmd}").starts_with(&prefix))
+            .map(|cmd| format!("/{cmd}"))
+            .collect()
+    } else if has_space && looks_like_path(&prefix) {
+        complete_file_path(&prefix)
+    } else if has_space {
+        let cmd_name = input.split_whitespace().next().unwrap_or("").trim_start_matches('/');
+        complete_command_args(cmd_name, &prefix)
+    } else {
+        Vec::new()
+    };
+
+    repl.tab_completion_state.last_prefix = prefix;
+    repl.tab_completion_state.candidates = candidates.clone();
+    repl.tab_completion_state.current_index = 0;
+    repl.state.completion_suggestions = candidates;
+    repl.state.completion_suggestion_index = 0;
+}
+
+/// Accept the currently selected completion suggestion and dismiss the popup.
+fn accept_completion(repl: &mut Repl) {
+    let idx = repl.state.completion_suggestion_index;
+    if let Some(selected) = repl.state.completion_suggestions.get(idx).cloned() {
+        let input = repl.prompt.input().to_string();
+        let (_prefix, word_start, _word_end) = extract_completion_word(&input, repl);
+
+        let mut new_input = String::new();
+        if word_start > 0 {
+            let safe_end = input.char_indices()
+                .take_while(|(i, _)| *i < word_start)
+                .last()
+                .map(|(i, c)| i + c.len_utf8())
+                .unwrap_or(0);
+            new_input.push_str(&input[..safe_end]);
+        }
+        new_input.push_str(&selected);
+        if selected.starts_with('/') && !selected.contains(' ') {
+            new_input.push(' ');
+        }
+
+        repl.prompt.set_input(new_input);
+    }
+
+    repl.state.completion_suggestions.clear();
+    repl.state.completion_suggestion_index = 0;
+    repl.tab_completion_state.candidates.clear();
+    repl.tab_completion_state.current_index = 0;
 }
 
 /// Perform tab completion on the current input.

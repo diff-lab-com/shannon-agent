@@ -545,22 +545,23 @@ fn test_tab_complete_suggestions_cleared_on_type() {
 }
 
 #[test]
-fn test_tab_complete_suggestions_cleared_on_backspace() {
+fn test_backspace_updates_auto_completions() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/h".to_string());
-    let tab_key = crossterm::event::KeyEvent::new(
-        crossterm::event::KeyCode::Tab,
-        crossterm::event::KeyModifiers::NONE,
-    );
-    crate::repl::input::handle_input(&mut repl, tab_key).unwrap();
-    assert!(!repl.state.completion_suggestions.is_empty());
+    repl.prompt.set_input("/he".to_string());
 
+    // Auto-completions appear as you type
+    crate::repl::input::update_auto_completions(&mut repl);
+    let prev_count = repl.state.completion_suggestions.len();
+    assert!(prev_count > 0);
+
+    // Backspace changes input from /he to /h — suggestions should update
     let bs_key = crossterm::event::KeyEvent::new(
         crossterm::event::KeyCode::Backspace,
         crossterm::event::KeyModifiers::NONE,
     );
     crate::repl::input::handle_input(&mut repl, bs_key).unwrap();
-    assert!(repl.state.completion_suggestions.is_empty());
+    // Suggestions should be refreshed (possibly different count), not stale
+    assert!(!repl.state.completion_suggestions.is_empty());
 }
 
 #[test]
@@ -1471,21 +1472,30 @@ fn test_completion_suggestion_index_default() {
 }
 
 #[test]
-fn test_completion_suggestion_index_tracks_tab() {
+fn test_completion_suggestion_index_tracks_arrow_keys() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/h".to_string());
+    repl.prompt.set_input("/c".to_string());
+
+    // Auto-completions appear
+    crate::repl::input::update_auto_completions(&mut repl);
+    assert!(!repl.state.completion_suggestions.is_empty());
+    assert_eq!(repl.state.completion_suggestion_index, 0);
+
+    // Down arrow should advance selection
+    let down_key = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Down,
+        crossterm::event::KeyModifiers::NONE,
+    );
+    crate::repl::input::handle_input(&mut repl, down_key).unwrap();
+    assert!(repl.state.completion_suggestion_index > 0 || repl.state.completion_suggestions.len() == 1);
+
+    // Tab should accept the selection and dismiss popup
     let tab_key = crossterm::event::KeyEvent::new(
         crossterm::event::KeyCode::Tab,
         crossterm::event::KeyModifiers::NONE,
     );
     crate::repl::input::handle_input(&mut repl, tab_key).unwrap();
-    // After first tab, index should be 0 (the one just selected)
-    assert_eq!(repl.state.completion_suggestion_index, 0);
-    assert!(!repl.state.completion_suggestions.is_empty());
-
-    // Second tab should advance index
-    crate::repl::input::handle_input(&mut repl, tab_key).unwrap();
-    assert!(repl.state.completion_suggestion_index > 0 || repl.state.completion_suggestions.len() == 1);
+    assert!(repl.state.completion_suggestions.is_empty());
 }
 
 // ── Rendering Snapshot Tests ────────────────────────────────────────
