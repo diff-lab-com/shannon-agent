@@ -33,8 +33,15 @@ impl EventHandler {
     /// Get the next event with timeout
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> io::Result<Option<Event>> {
-        // Drain ALL pending events to prevent queue buildup and escape sequence leakage
+        // Drain pending events to prevent queue buildup and escape sequence leakage.
+        // Cap iterations to prevent starving tick events when events arrive faster
+        // than they can be processed.
+        const MAX_EVENTS_PER_TICK: usize = 64;
+        let mut drained = 0;
         loop {
+            if drained >= MAX_EVENTS_PER_TICK {
+                break;
+            }
             if event::poll(self.tick_rate)? {
                 match event::read()? {
                     CrosstermEvent::Key(key) => return Ok(Some(Event::Input(key))),
@@ -42,7 +49,7 @@ impl EventHandler {
                     CrosstermEvent::Mouse(mouse) => return Ok(Some(Event::Mouse(mouse))),
                     // Ignore other event types (resize, focus)
                     _ => {
-                        // Continue draining to prevent buildup
+                        drained += 1;
                         continue;
                     }
                 }

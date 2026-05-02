@@ -1157,13 +1157,18 @@ pub(super) fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
         } else {
             // Detect markdown headers: # Header, ## Header, etc.
             let header_level = line.chars().take_while(|c| *c == '#').count();
-            if header_level > 0 && header_level <= 6 && line.chars().nth(header_level) == Some(' ') {
-                // Flush accumulated text before the header
-                if !current_text.is_empty() {
-                    segments.push(MdSegment::Text(std::mem::take(&mut current_text)));
+            if header_level > 0 && header_level <= 6 {
+                let rest = &line[header_level..];
+                if rest.starts_with(' ') {
+                    // Flush accumulated text before the header
+                    if !current_text.is_empty() {
+                        segments.push(MdSegment::Text(std::mem::take(&mut current_text)));
+                    }
+                    let header_text = rest[1..].trim().to_string();
+                    segments.push(MdSegment::Header { level: header_level, text: header_text });
+                } else {
+                    current_text.push(line.to_string());
                 }
-                let header_text = line[header_level + 1..].trim().to_string();
-                segments.push(MdSegment::Header { level: header_level, text: header_text });
             } else {
                 current_text.push(line.to_string());
             }

@@ -317,10 +317,11 @@ impl Renderer {
                     let depth = list_ordered.len().saturating_sub(1);
                     let indent = "  ".repeat(depth);
                     if list_ordered.last() == Some(&true) {
-                        let idx = list_item_counters.last_mut().unwrap();
-                        *idx += 1;
-                        let prefix = format!("{indent}{}. ", *idx - 1);
-                        inline_spans.push(Span::styled(prefix, Style::default().fg(Color::Cyan)));
+                        if let Some(idx) = list_item_counters.last_mut() {
+                            *idx += 1;
+                            let prefix = format!("{indent}{}. ", *idx - 1);
+                            inline_spans.push(Span::styled(prefix, Style::default().fg(Color::Cyan)));
+                        }
                     } else {
                         inline_spans.push(Span::styled(format!("{indent}• "), Style::default().fg(Color::Cyan)));
                     }

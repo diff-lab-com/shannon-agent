@@ -30,6 +30,7 @@ mod debug;
 mod doctor;
 mod mcp;
 mod lsp;
+// Plugin management commands — scaffolded for future use
 #[allow(dead_code)]
 mod plugin;
 mod repl;

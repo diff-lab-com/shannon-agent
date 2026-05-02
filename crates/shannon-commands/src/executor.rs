@@ -185,20 +185,20 @@ impl SharedExecutor {
     pub async fn execute(
         &self,
         parsed: &ParsedCommand,
-        _context: &CommandContext,
+        context: &CommandContext,
     ) -> CommandResult<ExecutionResult> {
         let executor = self.inner.read().await;
-        executor.execute(parsed, _context).await
+        executor.execute(parsed, context).await
     }
 
     /// Execute a command string
     pub async fn execute_string(
         &self,
         input: &str,
-        _context: &CommandContext,
+        context: &CommandContext,
     ) -> CommandResult<Vec<ExecutionResult>> {
         let executor = self.inner.read().await;
-        executor.execute_string(input, _context).await
+        executor.execute_string(input, context).await
     }
 
     /// Get the registry

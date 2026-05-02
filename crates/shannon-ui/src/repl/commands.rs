@@ -4415,7 +4415,7 @@ fn handle_debug(repl: &mut Repl, args: &str) -> Result<()> {
             let level_str = parts.get(1).copied().unwrap_or("info");
             let level = parse_log_level(level_str);
             if let Some(lvl) = level {
-                // Safety: REPL event loop is single-threaded; no concurrent reads of RUST_LOG.
+                // SAFETY: REPL event loop is single-threaded; no concurrent reads of RUST_LOG.
                 unsafe { std::env::set_var("RUST_LOG", lvl.to_string()); }
             }
             format_log_response(level)
@@ -4428,10 +4428,10 @@ fn handle_debug(repl: &mut Repl, args: &str) -> Result<()> {
             let toggle = parts.get(1).copied().unwrap_or("on");
             let enabled = matches!(toggle.to_lowercase().as_str(), "on" | "true" | "1" | "yes");
             if enabled {
-                // Safety: REPL event loop is single-threaded.
+                // SAFETY: REPL event loop is single-threaded; no concurrent reads of SHANNON_TRACE.
                 unsafe { std::env::set_var("SHANNON_TRACE", "1"); }
             } else {
-                // Safety: REPL event loop is single-threaded.
+                // SAFETY: REPL event loop is single-threaded; no concurrent reads of SHANNON_TRACE.
                 unsafe { std::env::remove_var("SHANNON_TRACE"); }
             }
             format_trace_response(enabled)

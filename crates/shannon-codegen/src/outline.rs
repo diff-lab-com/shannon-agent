@@ -129,12 +129,12 @@ pub fn file_outline_content(content: &str, language: &str) -> Result<Vec<Symbol>
 
     let ts_lang = lang_config.ts_id.to_language()
         .ok_or_else(|| CodegenError::UnsupportedLanguage(
-            format!("{} (feature not enabled)", language)
+            format!("{language} (feature not enabled)")
         ))?;
 
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang)
-        .map_err(|e| CodegenError::ParseError(format!("Failed to set language: {}", e)))?;
+        .map_err(|e| CodegenError::ParseError(format!("Failed to set language: {e}")))?;
 
     let tree = parser.parse(content, None)
         .ok_or_else(|| CodegenError::ParseError("Failed to parse content".to_string()))?;
@@ -519,33 +519,27 @@ fn extract_child_symbols(node: &tree_sitter::Node, content: &str, language: &str
         let kind = child.kind();
 
         match language {
-            "Rust" => match kind {
-                "function_item" => {
-                    if let Some(name) = extract_node_name(&child, content) {
-                        children.push(Symbol {
-                            name,
-                            kind: SymbolKind::Method,
-                            start_line: child.start_position().row + 1,
-                            end_line: child.end_position().row + 1,
-                            children: Vec::new(),
-                        });
-                    }
+            "Rust" => if kind == "function_item" {
+                if let Some(name) = extract_node_name(&child, content) {
+                    children.push(Symbol {
+                        name,
+                        kind: SymbolKind::Method,
+                        start_line: child.start_position().row + 1,
+                        end_line: child.end_position().row + 1,
+                        children: Vec::new(),
+                    });
                 }
-                _ => {}
             },
-            "Python" => match kind {
-                "function_definition" => {
-                    if let Some(name) = extract_node_name(&child, content) {
-                        children.push(Symbol {
-                            name,
-                            kind: SymbolKind::Method,
-                            start_line: child.start_position().row + 1,
-                            end_line: child.end_position().row + 1,
-                            children: Vec::new(),
-                        });
-                    }
+            "Python" => if kind == "function_definition" {
+                if let Some(name) = extract_node_name(&child, content) {
+                    children.push(Symbol {
+                        name,
+                        kind: SymbolKind::Method,
+                        start_line: child.start_position().row + 1,
+                        end_line: child.end_position().row + 1,
+                        children: Vec::new(),
+                    });
                 }
-                _ => {}
             },
             _ => {}
         }

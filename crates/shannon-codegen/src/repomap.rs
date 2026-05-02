@@ -85,8 +85,7 @@ pub fn generate_repomap_filtered(
 
     // Process files
     for entry in walker {
-        let entry = entry.map_err(|e| CodegenError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        let entry = entry.map_err(|e| CodegenError::Io(std::io::Error::other(
             e.to_string(),
         )))?;
 

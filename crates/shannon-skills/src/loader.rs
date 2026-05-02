@@ -348,7 +348,7 @@ pub fn load_commands_from_directory(
             }
         };
 
-        let parsed = match parse_skill_frontmatter(&content, &stem) {
+        let parsed = match parse_skill_frontmatter(&content, stem) {
             Ok(p) => p,
             Err(e) => {
                 warn!("Failed to parse command file {:?}: {}", path, e);

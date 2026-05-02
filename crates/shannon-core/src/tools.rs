@@ -152,6 +152,12 @@ pub struct ToolRegistry {
 }
 
 impl ToolRegistry {
+    /// Helper to recover from a poisoned lock by extracting the inner value.
+    /// This prevents panics when another thread panicked while holding the lock.
+    fn recover_lock<T>(lock_result: std::sync::LockResult<T>) -> T {
+        lock_result.unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Create a new empty tool registry
     pub fn new() -> Self {
         Self {
@@ -215,7 +221,7 @@ impl ToolRegistry {
     /// Register a new tool
     pub fn register(&self, tool: Box<dyn Tool>) -> ToolResult<()> {
         let name = tool.name().to_string();
-        let mut tools = self.tools.write().unwrap();
+        let mut tools = Self::recover_lock(self.tools.write());
         if tools.contains_key(&name) {
             return Err(ToolError::RegistryError(format!(
                 "Tool {name} already registered"
@@ -228,13 +234,11 @@ impl ToolRegistry {
 
     /// Unregister a tool by name.
     pub fn unregister(&self, name: &str) -> ToolResult<()> {
-        self.tools
-            .write()
-            .unwrap()
+        Self::recover_lock(self.tools.write())
             .remove(name)
             .ok_or_else(|| ToolError::NotFound(name.to_string()))?;
         // Also remove from deferred set if present
-        self.deferred.write().unwrap().remove(name);
+        Self::recover_lock(self.deferred.write()).remove(name);
         self.invalidate_cache();
         Ok(())
     }
@@ -246,13 +250,13 @@ impl ToolRegistry {
     /// through the `ToolSearch` meta-tool.
     pub fn register_deferred(&self, tool: Box<dyn Tool>) -> ToolResult<()> {
         let name = tool.name().to_string();
-        let mut tools = self.tools.write().unwrap();
+        let mut tools = Self::recover_lock(self.tools.write());
         if tools.contains_key(&name) {
             return Err(ToolError::RegistryError(format!(
                 "Tool {name} already registered"
             )));
         }
-        self.deferred.write().unwrap().insert(name.clone());
+        Self::recover_lock(self.deferred.write()).insert(name.clone());
         tools.insert(name, std::sync::Arc::from(tool));
         self.invalidate_cache();
         Ok(())
@@ -268,12 +272,12 @@ impl ToolRegistry {
         let mut deferred_count = 0;
         for tool in batch {
             let name = tool.name().to_string();
-            let mut tools = self.tools.write().unwrap();
+            let mut tools = Self::recover_lock(self.tools.write());
             if tools.contains_key(&name) {
                 continue; // skip duplicates silently in batch mode
             }
             if defer {
-                self.deferred.write().unwrap().insert(name.clone());
+                Self::recover_lock(self.deferred.write()).insert(name.clone());
                 deferred_count += 1;
             }
             tools.insert(name, std::sync::Arc::from(tool));
@@ -287,12 +291,12 @@ impl ToolRegistry {
     /// Returns full `ToolInfo` including input_schema so the LLM can use the
     /// tool after discovery.
     pub fn search_deferred(&self, query: &str) -> Vec<ToolInfo> {
-        let deferred = self.deferred.read().unwrap();
+        let deferred = Self::recover_lock(self.deferred.read());
         if deferred.is_empty() {
             return vec![];
         }
         let query_lower = query.to_lowercase();
-        let tools = self.tools.read().unwrap();
+        let tools = Self::recover_lock(self.tools.read());
         deferred
             .iter()
             .filter_map(|name| {
@@ -320,7 +324,7 @@ impl ToolRegistry {
 
     /// Returns the number of deferred tools.
     pub fn deferred_count(&self) -> usize {
-        self.deferred.read().unwrap().len()
+        Self::recover_lock(self.deferred.read()).len()
     }
 
     /// Get a tool by name (respects the allowed_tools filter).
@@ -330,7 +334,7 @@ impl ToolRegistry {
     /// concurrent registrations.
     pub fn get(&self, name: &str) -> Option<std::sync::Arc<dyn Tool>> {
         if self.is_allowed(name) {
-            self.tools.read().unwrap().get(name).cloned()
+            Self::recover_lock(self.tools.read()).get(name).cloned()
         } else {
             None
         }
@@ -338,9 +342,7 @@ impl ToolRegistry {
 
     /// List all registered tool names (respects the allowed_tools filter)
     pub fn list(&self) -> Vec<String> {
-        self.tools
-            .read()
-            .unwrap()
+        Self::recover_lock(self.tools.read())
             .keys()
             .filter(|name| self.is_allowed(name))
             .cloned()
@@ -349,9 +351,7 @@ impl ToolRegistry {
 
     /// List all registered tools with their metadata (name, description, category, auth, schema).
     pub fn list_tools_info(&self) -> Vec<ToolInfo> {
-        self.tools
-            .read()
-            .unwrap()
+        Self::recover_lock(self.tools.read())
             .values()
             .filter(|t| self.is_allowed(t.name()))
             .map(|t| ToolInfo {
@@ -387,13 +387,13 @@ impl ToolRegistry {
         // Check cache for read-only tools (with TTL expiry)
         if let Some(hash) = input_hash {
             let cache_key = (name.to_string(), hash);
-            if let Some(cached) = self.result_cache.lock().unwrap().get(&cache_key).cloned() {
+            if let Some(cached) = Self::recover_lock(self.result_cache.lock()).get(&cache_key).cloned() {
                 let elapsed = cached.created_at.elapsed().as_secs();
                 if elapsed < self.cache_ttl_secs {
                     return Ok(cached.output);
                 }
                 // Entry expired — remove it
-                self.result_cache.lock().unwrap().remove(&cache_key);
+                Self::recover_lock(self.result_cache.lock()).remove(&cache_key);
             }
         }
 
@@ -404,11 +404,11 @@ impl ToolRegistry {
             if let Ok(ref output) = result {
                 if !output.is_error {
                     let cache_key = (name.to_string(), hash);
-                    let mut cache = self.result_cache.lock().unwrap();
+                    let mut cache = Self::recover_lock(self.result_cache.lock());
 
                     // Evict oldest entries if cache is full (FIFO)
                     if cache.len() >= self.max_cache_entries {
-                        let mut order = self.cache_order.lock().unwrap();
+                        let mut order = Self::recover_lock(self.cache_order.lock());
                         if let Some(old_key) = order.pop_front() {
                             cache.remove(&old_key);
                         }
@@ -418,7 +418,7 @@ impl ToolRegistry {
                         output: output.clone(),
                         created_at: std::time::Instant::now(),
                     });
-                    self.cache_order.lock().unwrap().push_back(cache_key);
+                    Self::recover_lock(self.cache_order.lock()).push_back(cache_key);
                 }
             }
         }
@@ -436,26 +436,26 @@ impl ToolRegistry {
 
     /// Clear the tool result cache.
     pub fn clear_cache(&self) {
-        self.result_cache.lock().unwrap().clear();
-        self.cache_order.lock().unwrap().clear();
+        Self::recover_lock(self.result_cache.lock()).clear();
+        Self::recover_lock(self.cache_order.lock()).clear();
     }
 
     /// Get the number of cached results (including potentially expired ones).
     pub fn cache_size(&self) -> usize {
-        self.result_cache.lock().unwrap().len()
+        Self::recover_lock(self.result_cache.lock()).len()
     }
 
     /// Invalidate cache entries that were created before the given instant.
     /// Useful for clearing stale entries after file changes.
     pub fn invalidate_older_than(&self, cutoff: std::time::Instant) {
-        let mut cache = self.result_cache.lock().unwrap();
+        let mut cache = Self::recover_lock(self.result_cache.lock());
         cache.retain(|_, entry| entry.created_at > cutoff);
     }
 
     /// Evict all expired entries from the cache.
     pub fn evict_expired(&self) {
         let ttl = self.cache_ttl_secs;
-        let mut cache = self.result_cache.lock().unwrap();
+        let mut cache = Self::recover_lock(self.result_cache.lock());
         cache.retain(|_, entry| entry.created_at.elapsed().as_secs() < ttl);
     }
 
@@ -483,9 +483,7 @@ impl ToolRegistry {
 
     /// Return the names of all registered tools flagged as destructive.
     pub fn destructive_tool_names(&self) -> Vec<String> {
-        self.tools
-            .read()
-            .unwrap()
+        Self::recover_lock(self.tools.read())
             .values()
             .filter(|t| t.is_destructive())
             .map(|t| t.name().to_string())
@@ -549,7 +547,7 @@ impl ToolRegistry {
     pub fn to_json_schema(&self) -> Value {
         let ver = self.version.load(std::sync::atomic::Ordering::Relaxed);
         {
-            let cache = self.schema_cache.read().unwrap();
+            let cache = Self::recover_lock(self.schema_cache.read());
             if let Some((cached_ver, ref schema)) = *cache {
                 if cached_ver == ver {
                     return schema.clone();
@@ -557,11 +555,8 @@ impl ToolRegistry {
             }
         }
         // Cache miss — rebuild
-        let deferred = self.deferred.read().unwrap();
-        let tools: Vec<Value> = self
-            .tools
-            .read()
-            .unwrap()
+        let deferred = Self::recover_lock(self.deferred.read());
+        let tools: Vec<Value> = Self::recover_lock(self.tools.read())
             .values()
             .filter(|t| self.is_allowed(t.name()) && !deferred.contains(t.name()))
             .map(|tool| {
@@ -573,7 +568,7 @@ impl ToolRegistry {
             })
             .collect();
         let schema = serde_json::json!(tools);
-        *self.schema_cache.write().unwrap() = Some((ver, schema.clone()));
+        *Self::recover_lock(self.schema_cache.write()) = Some((ver, schema.clone()));
         schema
     }
 
@@ -582,7 +577,7 @@ impl ToolRegistry {
     pub fn to_tool_definitions(&self) -> Vec<crate::api::ToolDefinition> {
         let ver = self.version.load(std::sync::atomic::Ordering::Relaxed);
         {
-            let cache = self.defs_cache.read().unwrap();
+            let cache = Self::recover_lock(self.defs_cache.read());
             if let Some((cached_ver, ref defs)) = *cache {
                 if cached_ver == ver {
                     return defs.clone();
@@ -590,11 +585,8 @@ impl ToolRegistry {
             }
         }
         // Cache miss — rebuild
-        let deferred = self.deferred.read().unwrap();
-        let defs: Vec<crate::api::ToolDefinition> = self
-            .tools
-            .read()
-            .unwrap()
+        let deferred = Self::recover_lock(self.deferred.read());
+        let defs: Vec<crate::api::ToolDefinition> = Self::recover_lock(self.tools.read())
             .values()
             .filter(|t| self.is_allowed(t.name()) && !deferred.contains(t.name()))
             .map(|tool| crate::api::ToolDefinition {
@@ -604,7 +596,7 @@ impl ToolRegistry {
                 strict: Some(false),
             })
             .collect();
-        *self.defs_cache.write().unwrap() = Some((ver, defs.clone()));
+        *Self::recover_lock(self.defs_cache.write()) = Some((ver, defs.clone()));
         defs
     }
 }

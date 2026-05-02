@@ -2017,6 +2017,18 @@ impl Repl {
 
         // Setup terminal
         enable_raw_mode()?;
+
+        // Panic-safety guard: ensure raw mode is disabled even if we panic.
+        let _cleanup_guard = {
+            struct TerminalGuard;
+            impl Drop for TerminalGuard {
+                fn drop(&mut self) {
+                    let _ = disable_raw_mode();
+                }
+            }
+            TerminalGuard
+        };
+
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen)?;
         // Enable bracketed paste mode for proper multi-line paste handling

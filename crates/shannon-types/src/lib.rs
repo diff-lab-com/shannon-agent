@@ -55,6 +55,16 @@ pub trait Entity {
     fn created_at(&self) -> Timestamp;
 }
 
+impl Entity for Message {
+    fn id(&self) -> EntityId {
+        self.id.parse().unwrap_or_else(|_| EntityId::new_v4())
+    }
+
+    fn created_at(&self) -> Timestamp {
+        self.timestamp
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

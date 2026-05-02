@@ -15,6 +15,16 @@ use super::Repl;
 fn open_external_editor(content: &str) -> std::result::Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let dir = std::env::temp_dir();
     let path = dir.join("shannon-input.md");
+
+    // RAII guard ensures temp file cleanup on any exit path
+    struct TempGuard(std::path::PathBuf);
+    impl Drop for TempGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let _guard = TempGuard(path.clone());
+
     std::fs::write(&path, content)?;
     let editor = std::env::var("VISUAL")
         .or_else(|_| std::env::var("EDITOR"))
@@ -24,10 +34,7 @@ fn open_external_editor(content: &str) -> std::result::Result<String, Box<dyn st
         .arg(format!("{} {}", editor, path.display()))
         .status()?;
     if status.success() {
-        let result = std::fs::read_to_string(&path)?;
-        // Clean up temp file
-        let _ = std::fs::remove_file(&path);
-        Ok(result)
+        Ok(std::fs::read_to_string(&path)?)
     } else {
         Err("Editor exited with error".into())
     }
@@ -756,7 +763,7 @@ fn handle_input_dialog_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                 match act.as_str() {
                     "set_api_key" => {
                         if !value.is_empty() {
-                            // Safety: REPL event loop is single-threaded — no concurrent reads of SHANNON_API_KEY.
+                            // SAFETY: REPL event loop is single-threaded; no concurrent reads of SHANNON_API_KEY.
                             unsafe { std::env::set_var("SHANNON_API_KEY", &value); }
                             repl.chat.add_message(
                                 ChatRole::System,
