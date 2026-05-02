@@ -153,7 +153,6 @@ pub enum CoordinatorEvent {
 }
 
 /// Main coordinator for managing multi-agent teams
-#[allow(dead_code)]
 pub struct AgentCoordinator {
     config: CoordinatorConfig,
     teams: Arc<RwLock<HashMap<String, AgentTeam>>>,
@@ -508,7 +507,8 @@ impl AgentCoordinator {
                             "Created isolated worktree for agent"
                         );
                         // Store worktree path in teammate metadata
-                        let agent = team.members.get(&agent_name).unwrap();
+                        let agent = team.members.get(&agent_name)
+                            .expect("agent must exist — we just created its worktree");
                         agent.set_metadata("worktree_path".to_string(),
                             serde_json::json!(session.path.to_string_lossy().to_string())).await;
                         agent.set_metadata("worktree_branch".to_string(),
@@ -1200,6 +1200,7 @@ impl AgentCoordinator {
         }
 
         // Fallback: in-memory only claim (no persistence)
+        // Use assign_task as an atomic claim — it will fail if already owned.
         let task = self.task_board.get_task(task_id).await?;
         if task.status != TaskStatus::Pending {
             return Err(AgentError::Task(
@@ -1217,8 +1218,14 @@ impl AgentCoordinator {
             ));
         }
 
-        // Assign and transition to InProgress
+        // Assign and transition to InProgress — re-verify after assign to catch races
         self.task_board.assign_task(task_id, agent_name.to_string()).await?;
+        let claimed = self.task_board.get_task(task_id).await?;
+        if claimed.owner.as_deref() != Some(agent_name) {
+            return Err(AgentError::Communication(
+                format!("Task {} was claimed by another agent ({:?})", task_id, claimed.owner)
+            ));
+        }
         self.task_board.update_task_status(task_id, TaskStatus::InProgress).await?;
 
         // Update the agent's assigned tasks
@@ -2299,6 +2306,16 @@ impl AgentCoordinator {
                 let agent_name = params["agent_name"].as_str().unwrap_or_default();
                 let task_id_str = params["task_id"].as_str().unwrap_or("");
 
+                // Validate agent is a team member
+                {
+                    let teams = self.teams.read().await;
+                    let is_member = teams.values().any(|team| team.members.contains_key(agent_name));
+                    if !is_member {
+                        drop(teams);
+                        return serde_json::json!({"error": format!("agent '{}' is not a team member", agent_name)});
+                    }
+                }
+
                 let teams = self.teams.read().await;
                 if let Some(team_name) = teams.keys().next() {
                     let team_name = team_name.clone();
@@ -2378,6 +2395,18 @@ impl AgentCoordinator {
     /// Gracefully shutdown the coordinator and all teams
     pub async fn shutdown(&self) -> Result<(), AgentError> {
         tracing::info!("Shutting down agent coordinator");
+
+        // Signal delivery loop to stop
+        let _ = self.delivery_cancel.send(true);
+
+        // Cancel all tracked background tasks
+        {
+            let mut bg = self.background_tasks.write().await;
+            for (key, handle) in bg.drain() {
+                tracing::debug!("Aborting background task: {}", key);
+                handle.abort();
+            }
+        }
 
         let teams = self.teams.write().await;
 

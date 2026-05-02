@@ -374,7 +374,8 @@ pub fn render_permission_dialog(
         ]));
         let diff_lines: Vec<&str> = diff.lines().collect();
         let lang = crate::widgets::detect_diff_language(diff);
-        for line in diff_lines.iter().take(15) {
+        const MAX_DIFF_PREVIEW_LINES: usize = 15;
+        for line in diff_lines.iter().take(MAX_DIFF_PREVIEW_LINES) {
             let color = if line.starts_with('-') && !line.starts_with("---") {
                 theme.diff_removed
             } else if line.starts_with('+') && !line.starts_with("+++") {
@@ -394,9 +395,9 @@ pub fn render_permission_dialog(
             let spans = crate::widgets::highlight_diff_line(line, lang.as_deref(), color, word_color);
             content_lines.push(Line::from(spans));
         }
-        if diff_lines.len() > 15 {
+        if diff_lines.len() > MAX_DIFF_PREVIEW_LINES {
             content_lines.push(Line::from(Span::styled(
-                format!("... ({} more lines)", diff_lines.len().saturating_sub(15)),
+                format!("... ({} more lines)", diff_lines.len().saturating_sub(MAX_DIFF_PREVIEW_LINES)),
                 Style::default().fg(theme.text_dim),
             )));
         }

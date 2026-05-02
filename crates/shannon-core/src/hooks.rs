@@ -1159,6 +1159,11 @@ impl HookManager {
         timeout: Duration,
         stdin_data: &[u8],
     ) -> Result<HookResult, HookError> {
+        // Validate command before execution
+        if command.trim().is_empty() {
+            return Err(HookError::InvalidMatcher("Hook command is empty".to_string()));
+        }
+
         let result = tokio::time::timeout(timeout, async {
             let mut child = tokio::process::Command::new("sh")
                 .arg("-c")

@@ -240,11 +240,13 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             }
             if repl.prompt.input().contains('\n') {
                 repl.prompt.cursor_up();
-            } else if repl.command_history.cursor() >= 0 || !repl.command_history.is_empty() {
+            } else if !repl.command_history.is_empty() {
                 if repl.command_history.cursor() < 0 {
                     repl.saved_input = repl.prompt.input().to_string();
                 }
                 if let Some(cmd) = repl.command_history.up() {
+                    repl.state.completion_suggestions.clear();
+                    repl.state.completion_suggestion_index = 0;
                     repl.prompt.set_input(cmd.to_string());
                 }
             }
@@ -252,7 +254,7 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Down => {
             if !repl.state.completion_suggestions.is_empty() {
-                if repl.state.completion_suggestion_index < repl.state.completion_suggestions.len() - 1 {
+                if repl.state.completion_suggestion_index + 1 < repl.state.completion_suggestions.len() {
                     repl.state.completion_suggestion_index += 1;
                 }
                 return Ok(());
@@ -261,6 +263,8 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                 repl.prompt.cursor_down();
             } else if repl.command_history.cursor() >= 0 {
                 if let Some(cmd) = repl.command_history.down() {
+                    repl.state.completion_suggestions.clear();
+                    repl.state.completion_suggestion_index = 0;
                     repl.prompt.set_input(cmd.to_string());
                 } else {
                     repl.command_history.reset_cursor();
