@@ -11,13 +11,13 @@ use tracing::debug;
 /// Cached regex pattern for inline shell commands: !`command`
 fn inline_shell_pattern() -> &'static Regex {
     static PATTERN: OnceLock<Regex> = OnceLock::new();
-    PATTERN.get_or_init(|| Regex::new(r"!`([^`]+)`").unwrap())
+    PATTERN.get_or_init(|| Regex::new(r"!`([^`]+)`").expect("inline shell pattern is valid"))
 }
 
 /// Cached regex pattern for block shell commands: ```!\ncommand\n```
 fn block_shell_pattern() -> &'static Regex {
     static PATTERN: OnceLock<Regex> = OnceLock::new();
-    PATTERN.get_or_init(|| Regex::new(r"```!\n(.+?)\n```").unwrap())
+    PATTERN.get_or_init(|| Regex::new(r"```!\n(.+?)\n```").expect("block shell pattern is valid"))
 }
 
 /// Engine for executing skills and generating prompt content

@@ -263,7 +263,7 @@ impl SubAgentRegistry {
         content: Value,
     ) -> Result<Vec<AgentMessage>, AgentError> {
         let message_content = if content.is_string() {
-            MessageContent::Text(content.as_str().unwrap().to_string())
+            MessageContent::Text(content.as_str().unwrap_or_default().to_string())
         } else {
             MessageContent::Structured(content)
         };
@@ -493,7 +493,7 @@ impl Tool for AgentSpawnTool {
         metadata.insert("agent_name".into(), json!(agent.name));
 
         Ok(ToolOutput {
-            content: serde_json::to_string_pretty(&content).unwrap(),
+            content: serde_json::to_string_pretty(&content).unwrap_or_default(),
             is_error: false,
             metadata,
         })
@@ -592,7 +592,7 @@ impl Tool for SendMessageTool {
         metadata.insert("response_count".into(), json!(responses.len()));
 
         Ok(ToolOutput {
-            content: serde_json::to_string_pretty(&content).unwrap(),
+            content: serde_json::to_string_pretty(&content).unwrap_or_default(),
             is_error: false,
             metadata,
         })
@@ -677,7 +677,7 @@ impl Tool for TeamCreateTool {
         metadata.insert("team_name".into(), json!(team_name));
 
         Ok(ToolOutput {
-            content: serde_json::to_string_pretty(&content).unwrap(),
+            content: serde_json::to_string_pretty(&content).unwrap_or_default(),
             is_error: false,
             metadata,
         })

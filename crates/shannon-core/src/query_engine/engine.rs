@@ -54,6 +54,7 @@ use crate::query_engine::types::{
 };
 use crate::state::StateManager;
 use crate::tools::ToolRegistry;
+use shannon_types::recover_lock;
 use futures::stream::{self, StreamExt};
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
@@ -628,11 +629,10 @@ impl QueryEngine {
                     let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
 
                     // Auto-save conversation after completion
-                    let final_messages = conversation.messages.clone();
                     let _ = save_conversation_to_disk(
                         &state_for_save,
                         session_id_for_save,
-                        &final_messages,
+                        &conversation.messages,
                         &client_model,
                     );
 
@@ -938,7 +938,7 @@ impl QueryEngine {
 
                                                     // Pre-check with classifier and permission system
                                                     let permission_result = {
-                                                        let guard = permissions.read().unwrap_or_else(|e| e.into_inner());
+                                                        let guard = recover_lock(permissions.read());
                                                         guard.classify_and_check(
                                                             session_id_for_permissions,
                                                             &tool_name,
@@ -1056,9 +1056,7 @@ impl QueryEngine {
                                                                     Some(
                                                                         crate::permissions::PermissionChoice::AlwaysAllow,
                                                                     ) => {
-                                                                        let _ = permissions
-                                                                            .write()
-                                                                            .unwrap_or_else(|e| e.into_inner())
+                                                                        let _ = recover_lock(permissions.write())
                                                                             .process_permission_choice(
                                                                                 session_id_for_permissions,
                                                                                 &prompt_for_choice,
@@ -1069,9 +1067,7 @@ impl QueryEngine {
                                                                         crate::permissions::PermissionChoice::EditAndRun,
                                                                     ) => {
                                                                         // User edited the command; treat as allow-once
-                                                                        let _ = permissions
-                                                                            .write()
-                                                                            .unwrap_or_else(|e| e.into_inner())
+                                                                        let _ = recover_lock(permissions.write())
                                                                             .process_permission_choice(
                                                                                 session_id_for_permissions,
                                                                                 &prompt_for_choice,
@@ -1413,7 +1409,7 @@ impl QueryEngine {
                                                 if !assistant_text.is_empty() {
                                                     conversation.messages.push(Message {
                                                         role: "assistant".to_string(),
-                                                        content: MessageContent::Text(assistant_text.clone()),
+                                                        content: MessageContent::Text(assistant_text),
                                                     });
                                                 }
                                                 let total_cost = CostTracker::calculate_cost(
@@ -1431,11 +1427,10 @@ impl QueryEngine {
                                                     tx.send(Ok(QueryEvent::Completed { query_id }));
 
                                                 // Auto-save conversation after completion
-                                                let final_messages = conversation.messages.clone();
                                                 let _ = save_conversation_to_disk(
                                                     &state_for_save,
                                                     session_id_for_save,
-                                                    &final_messages,
+                                                    &conversation.messages,
                                                     &client_model,
                                                 );
 
@@ -1471,11 +1466,10 @@ impl QueryEngine {
                             let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
 
                             // Auto-save conversation after completion
-                            let final_messages = conversation.messages.clone();
                             let _ = save_conversation_to_disk(
                                 &state_for_save,
                                 session_id_for_save,
-                                &final_messages,
+                                &conversation.messages,
                                 &client_model,
                             );
 
@@ -1580,7 +1574,7 @@ impl QueryEngine {
     /// Token counts and cost are sourced from the cost tracker, which accumulates
     /// actual API-reported usage (not estimates).
     pub fn conversation_stats(&self) -> ConversationStats {
-        let tracker = self.cost_tracker.read().unwrap_or_else(|e| e.into_inner());
+        let tracker = recover_lock(self.cost_tracker.read());
         ConversationStats {
             message_count: self.conversation.messages.len(),
             turn_count: self.conversation.turn_count,
@@ -1594,7 +1588,7 @@ impl QueryEngine {
     /// Returns a formatted summary of accumulated API costs including
     /// input/output tokens and total USD cost.
     pub fn cost_summary(&self) -> String {
-        self.cost_tracker.read().unwrap_or_else(|e| e.into_inner()).summary()
+        recover_lock(self.cost_tracker.read()).summary()
     }
 
     /// Get a reference to the cost tracker for reading cost details.

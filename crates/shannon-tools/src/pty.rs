@@ -6,6 +6,7 @@
 //! - Line-buffered output matching user expectations
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use shannon_types::recover_lock;
 use std::io::Read;
 use tracing::warn;
 
@@ -89,14 +90,21 @@ pub fn execute_in_pty(
     let master = pair.master;
 
     let _reader_thread = std::thread::spawn(move || {
-        let mut reader = master.try_clone_reader().unwrap();
+        let mut reader = match master.try_clone_reader() {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("Failed to clone PTY reader: {e}");
+                return;
+            }
+        };
         let mut buf = [0u8; 8192];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    let mut locked = reader_buf.lock().unwrap();
-                    locked.extend_from_slice(&buf[..n]);
+                    if let Ok(mut locked) = reader_buf.lock() {
+                        locked.extend_from_slice(&buf[..n]);
+                    }
                 }
                 Err(_) => break,
             }
@@ -114,7 +122,7 @@ pub fn execute_in_pty(
                     let code = status.exit_code() as i32;
                     // Give reader a moment to drain
                     std::thread::sleep(std::time::Duration::from_millis(50));
-                    let output = output_buf.lock().unwrap();
+                    let output = recover_lock(output_buf.lock());
                     let stdout = String::from_utf8_lossy(&output).to_string();
                     return Ok(PtyOutput {
                         stdout,
@@ -125,7 +133,7 @@ pub fn execute_in_pty(
                     if std::time::Instant::now() >= deadline {
                         let _ = child.kill();
                         std::thread::sleep(std::time::Duration::from_millis(100));
-                        let output = output_buf.lock().unwrap();
+                        let output = recover_lock(output_buf.lock());
                         let stdout = String::from_utf8_lossy(&output).to_string();
                         return Err(format!(
                             "Command timed out after {timeout}ms\n{stdout}"
@@ -140,7 +148,7 @@ pub fn execute_in_pty(
         let status = child.wait().map_err(|e| format!("PTY wait failed: {e}"))?;
         let code = status.exit_code() as i32;
         std::thread::sleep(std::time::Duration::from_millis(50));
-        let output = output_buf.lock().unwrap();
+        let output = recover_lock(output_buf.lock());
         let stdout = String::from_utf8_lossy(&output).to_string();
         Ok(PtyOutput {
             stdout,

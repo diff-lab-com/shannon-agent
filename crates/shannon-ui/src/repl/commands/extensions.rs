@@ -511,8 +511,13 @@ pub(crate) fn handle_agents(repl: &mut Repl, args: &str) -> Result<()> {
     fn ensure_registry(repl: &mut Repl) {
         if repl.agent_registry.is_none() {
             let config = CoordinatorConfig::default();
-            let coordinator = repl.runtime.block_on(AgentCoordinator::new(config))
-                .expect("failed to create agent coordinator");
+            let coordinator = match repl.runtime.block_on(AgentCoordinator::new(config)) {
+                Ok(c) => c,
+                Err(e) => {
+                    repl.chat.add_message(ChatRole::System, format!("Failed to create agent coordinator: {e}"));
+                    return;
+                }
+            };
             repl.agent_registry = Some(std::sync::Arc::new(SubAgentRegistry::new(
                 std::sync::Arc::new(coordinator),
             )));
@@ -537,7 +542,10 @@ pub(crate) fn handle_agents(repl: &mut Repl, args: &str) -> Result<()> {
                 return Ok(());
             }
             ensure_registry(repl);
-            let registry = repl.agent_registry.as_ref().unwrap().clone();
+            let registry = match repl.agent_registry.as_ref() {
+                Some(r) => r.clone(),
+                None => return Ok(()),
+            };
             let config = AgentConfig {
                 name: name.to_string(),
                 system_prompt: prompt.to_string(),
@@ -557,7 +565,10 @@ pub(crate) fn handle_agents(repl: &mut Repl, args: &str) -> Result<()> {
         }
         "list" => {
             ensure_registry(repl);
-            let registry = repl.agent_registry.as_ref().unwrap().clone();
+            let registry = match repl.agent_registry.as_ref() {
+                Some(r) => r.clone(),
+                None => return Ok(()),
+            };
             let agents = repl.runtime.block_on(registry.list_agents());
             if agents.is_empty() {
                 repl.chat.add_message(ChatRole::System, "No agents spawned yet.".to_string());
@@ -581,7 +592,10 @@ pub(crate) fn handle_agents(repl: &mut Repl, args: &str) -> Result<()> {
                 return Ok(());
             }
             ensure_registry(repl);
-            let registry = repl.agent_registry.as_ref().unwrap().clone();
+            let registry = match repl.agent_registry.as_ref() {
+                Some(r) => r.clone(),
+                None => return Ok(()),
+            };
             match repl.runtime.block_on(registry.get_agent(name)) {
                 Some(agent) => {
                     repl.chat.add_message(ChatRole::System, format!(
@@ -606,7 +620,10 @@ pub(crate) fn handle_agents(repl: &mut Repl, args: &str) -> Result<()> {
                 return Ok(());
             }
             ensure_registry(repl);
-            let registry = repl.agent_registry.as_ref().unwrap().clone();
+            let registry = match repl.agent_registry.as_ref() {
+                Some(r) => r.clone(),
+                None => return Ok(()),
+            };
             match repl.runtime.block_on(registry.send_message("repl", name, serde_json::json!(msg))) {
                 Ok(responses) => {
                     let mut out = format!("Message sent to '{name}', {} response(s):\n", responses.len());
@@ -632,7 +649,10 @@ pub(crate) fn handle_agents(repl: &mut Repl, args: &str) -> Result<()> {
                 return Ok(());
             }
             ensure_registry(repl);
-            let registry = repl.agent_registry.as_ref().unwrap().clone();
+            let registry = match repl.agent_registry.as_ref() {
+                Some(r) => r.clone(),
+                None => return Ok(()),
+            };
             match repl.runtime.block_on(registry.get_agent(name)) {
                 Some(mut agent) => {
                     agent.mark_failed("killed by user".to_string());

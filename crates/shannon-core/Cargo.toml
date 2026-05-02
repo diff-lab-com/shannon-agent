@@ -22,6 +22,9 @@ rand = { workspace = true }
 # Tool interface
 shannon-tool-interface = { path = "../shannon-tool-interface" }
 
+# Shared types
+shannon-types = { path = "../shannon-types" }
+
 # HTTP client for Claude API
 reqwest = { workspace = true }
 

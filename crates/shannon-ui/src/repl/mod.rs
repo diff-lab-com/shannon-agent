@@ -28,6 +28,7 @@ use crate::{
     Result,
 };
 use rust_i18n::t;
+use shannon_types::recover_lock;
 use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -915,7 +916,7 @@ impl Repl {
                 let discovery_rt = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
-                    .unwrap_or_else(|_| tokio::runtime::Runtime::new().unwrap());
+                    .unwrap_or_else(|_| tokio::runtime::Runtime::new().expect("failed to create tokio runtime"));
 
                 // Classify servers into local (stdio) and remote (http/sse) buckets
                 let mut local_servers: Vec<(String, String, Vec<String>, HashMap<String, String>, Vec<String>)> = Vec::new();
@@ -1074,7 +1075,7 @@ impl Repl {
                     let store = shannon_core::DeferredSchemaStore::default();
                     for name in mcp_pool.deferred_schema_tool_names() {
                         if let Some(schema) = mcp_pool.get_deferred_schema(&name) {
-                            store.lock().unwrap().insert(name, schema);
+                            recover_lock(store.lock()).insert(name, schema);
                         }
                     }
                     let search_tool = shannon_core::DeferredSchemaSearchTool::new(store);
@@ -1244,7 +1245,7 @@ impl Repl {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .unwrap_or_else(|_| tokio::runtime::Runtime::new().unwrap());
+                .unwrap_or_else(|_| tokio::runtime::Runtime::new().expect("failed to create tokio runtime"));
             rt.block_on(async {
                 pool.set_sampling_provider(sampling).await;
                 pool.set_elicitation_provider(elicitation).await;
@@ -1308,7 +1309,7 @@ impl Repl {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .unwrap_or_else(|_| tokio::runtime::Runtime::new().unwrap());
+                .unwrap_or_else(|_| tokio::runtime::Runtime::new().expect("failed to create tokio runtime"));
             rt.block_on(async move {
                 pool.set_progress_callback(std::sync::Arc::new(move |tool_name, progress, total| {
                     let _ = tx.send((tool_name.to_string(), progress, total));
@@ -1673,10 +1674,13 @@ impl Repl {
         }
 
         // Find the most recently updated session
-        let most_recent = sessions
+        let most_recent = match sessions
             .iter()
             .max_by_key(|s| s.updated_at)
-            .unwrap(); // safe: sessions is non-empty
+        {
+            Some(s) => s,
+            None => return,
+        };
 
         // Only auto-restore if updated within the last 2 hours
         let two_hours_ago = chrono::Utc::now() - chrono::Duration::hours(2);
@@ -1755,7 +1759,7 @@ impl Repl {
     pub fn cycle_approval_mode(&mut self) {
         if let Some(ref query_engine) = self.query_engine {
             let current = {
-                let perms = query_engine.permissions().read().unwrap_or_else(|e| e.into_inner());
+                let perms = recover_lock(query_engine.permissions().read());
                 perms.approval_mode()
             };
 
@@ -1768,13 +1772,13 @@ impl Repl {
                     "set_bypass_mode",
                 );
             } else {
-                let mut perms = query_engine.permissions().write().unwrap_or_else(|e| e.into_inner());
+                let mut perms = recover_lock(query_engine.permissions().write());
                 perms.set_approval_mode(next);
                 let label = next.short_label().to_string();
                 drop(perms);
-                self.state.approval_mode_label = label.clone();
                 self.state.status = format!("Mode: {label}");
                 self.state.toast = Some((format!("  Mode: {label}  "), std::time::Instant::now()));
+                self.state.approval_mode_label = label;
             }
         }
     }
@@ -1783,7 +1787,7 @@ impl Repl {
     fn sync_approval_mode_label(&mut self) {
         if let Some(ref query_engine) = self.query_engine {
             let label = {
-                let perms = query_engine.permissions().read().unwrap_or_else(|e| e.into_inner());
+                let perms = recover_lock(query_engine.permissions().read());
                 perms.approval_mode().short_label().to_string()
             };
             self.state.approval_mode_label = label;
@@ -2048,7 +2052,7 @@ impl Repl {
             let session_id = engine.session_id().to_string();
             let hook_mgr = engine.hook_manager();
             let event = shannon_core::hooks::HookEvent::SessionStart {
-                session_id: session_id.clone(),
+                session_id,
             };
             self.runtime.block_on(async {
                 let mgr = hook_mgr.read().await;
@@ -2159,7 +2163,7 @@ impl Repl {
             let session_id = engine.session_id().to_string();
             let hook_mgr = engine.hook_manager();
             let event = shannon_core::hooks::HookEvent::SessionEnd {
-                session_id: session_id.clone(),
+                session_id,
             };
             self.runtime.block_on(async {
                 let mgr = hook_mgr.read().await;

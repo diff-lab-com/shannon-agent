@@ -13,6 +13,7 @@ use crate::{Tool, ToolError, ToolResult, ToolOutput};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shannon_types::recover_lock;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -151,7 +152,7 @@ impl LspClient {
     /// Send a JSON-RPC request and wait for the response.
     async fn send_request(&mut self, method: &str, params: &serde_json::Value) -> Result<serde_json::Value, String> {
         let id = {
-            let mut rid = self.request_id.lock().unwrap();
+            let mut rid = recover_lock(self.request_id.lock());
             let current = *rid;
             *rid += 1;
             current
@@ -605,18 +606,20 @@ fn extract_hover_contents(value: Option<&serde_json::Value>) -> String {
         Some(v) if v.is_array() => {
             // MarkedString[] - concatenate
             v.as_array()
-                .unwrap()
-                .iter()
-                .map(|item| match item {
-                    serde_json::Value::String(s) => s.clone(),
-                    obj => obj
-                        .get("value")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
+                .map(|arr| {
+                    arr.iter()
+                        .map(|item| match item {
+                            serde_json::Value::String(s) => s.clone(),
+                            obj => obj
+                                .get("value")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n\n")
                 })
-                .collect::<Vec<_>>()
-                .join("\n\n")
+                .unwrap_or_default()
         }
         Some(other) => other.to_string(),
     }
@@ -908,7 +911,15 @@ impl GoToDefinitionTool {
             .output()
             .await;
 
-        if which_result.is_err() || !which_result.unwrap().status.success() {
+        let which_ok = match which_result {
+            Ok(output) => output,
+            Err(_) => {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "Language server '{server_cmd}' not found. Please install it."
+                )));
+            }
+        };
+        if !which_ok.status.success() {
             return Err(ToolError::ExecutionFailed(format!(
                 "Language server '{server_cmd}' not found. Please install it to use code intelligence features."
             )));
@@ -1040,7 +1051,15 @@ impl FindReferencesTool {
             .output()
             .await;
 
-        if which_result.is_err() || !which_result.unwrap().status.success() {
+        let which_ok = match which_result {
+            Ok(output) => output,
+            Err(_) => {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "Language server '{server_cmd}' not found. Please install it."
+                )));
+            }
+        };
+        if !which_ok.status.success() {
             return Err(ToolError::ExecutionFailed(format!(
                 "Language server '{server_cmd}' not found. Please install it."
             )));
@@ -1182,7 +1201,15 @@ impl HoverTool {
             .output()
             .await;
 
-        if which_result.is_err() || !which_result.unwrap().status.success() {
+        let which_ok = match which_result {
+            Ok(output) => output,
+            Err(_) => {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "Language server '{server_cmd}' not found. Please install it."
+                )));
+            }
+        };
+        if !which_ok.status.success() {
             return Err(ToolError::ExecutionFailed(format!(
                 "Language server '{server_cmd}' not found. Please install it."
             )));
@@ -1314,7 +1341,15 @@ impl DocumentSymbolTool {
             .output()
             .await;
 
-        if which_result.is_err() || !which_result.unwrap().status.success() {
+        let which_ok = match which_result {
+            Ok(output) => output,
+            Err(_) => {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "Language server '{server_cmd}' not found. Please install it."
+                )));
+            }
+        };
+        if !which_ok.status.success() {
             return Err(ToolError::ExecutionFailed(format!(
                 "Language server '{server_cmd}' not found. Please install it."
             )));
@@ -1481,7 +1516,15 @@ impl WorkspaceSymbolTool {
         })?;
 
         let which_result = Command::new("which").arg(&server_cmd).output().await;
-        if which_result.is_err() || !which_result.unwrap().status.success() {
+        let which_ok = match which_result {
+            Ok(output) => output,
+            Err(_) => {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "Language server '{server_cmd}' not found. Please install it."
+                )));
+            }
+        };
+        if !which_ok.status.success() {
             return Err(ToolError::ExecutionFailed(format!(
                 "Language server '{server_cmd}' not found. Please install it."
             )));
@@ -1685,7 +1728,15 @@ impl RenameSymbolTool {
         })?;
 
         let which_result = Command::new("which").arg(&server_cmd).output().await;
-        if which_result.is_err() || !which_result.unwrap().status.success() {
+        let which_ok = match which_result {
+            Ok(output) => output,
+            Err(_) => {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "Language server '{server_cmd}' not found. Please install it."
+                )));
+            }
+        };
+        if !which_ok.status.success() {
             return Err(ToolError::ExecutionFailed(format!(
                 "Language server '{server_cmd}' not found. Please install it."
             )));
@@ -1884,7 +1935,15 @@ impl CodeActionsTool {
         })?;
 
         let which_result = Command::new("which").arg(&server_cmd).output().await;
-        if which_result.is_err() || !which_result.unwrap().status.success() {
+        let which_ok = match which_result {
+            Ok(output) => output,
+            Err(_) => {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "Language server '{server_cmd}' not found. Please install it."
+                )));
+            }
+        };
+        if !which_ok.status.success() {
             return Err(ToolError::ExecutionFailed(format!(
                 "Language server '{server_cmd}' not found. Please install it."
             )));

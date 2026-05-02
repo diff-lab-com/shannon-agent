@@ -341,7 +341,8 @@ pub fn parse_diff_stat(output: &str) -> Option<DiffStats> {
 // Simple regex for parsing stat lines
 static STATS_REGEX: once_cell::sync::Lazy<regex::Regex> =
     once_cell::sync::Lazy::new(|| {
-        regex::Regex::new(r"(\d+) insertion[s]?,?\s*(\d+) deletion[s]?").unwrap()
+        regex::Regex::new(r"(\d+) insertion[s]?,?\s*(\d+) deletion[s]?")
+            .unwrap_or_else(|e| panic!("invalid STATS_REGEX pattern: {e}"))
     });
 
 /// Common diff patterns
@@ -478,12 +479,18 @@ impl DiffAnalyzer {
     /// Create a new analyzer with compiled regex patterns.
     pub fn new() -> Self {
         Self {
-            function_re: regex::Regex::new(patterns::FUNCTION_PATTERN).unwrap(),
-            import_re: regex::Regex::new(patterns::IMPORT_PATTERN).unwrap(),
-            struct_re: regex::Regex::new(patterns::STRUCT_PATTERN).unwrap(),
-            test_re: regex::Regex::new(patterns::TEST_PATTERN).unwrap(),
-            doc_re: regex::Regex::new(patterns::DOC_COMMENT_PATTERN).unwrap(),
-            config_re: regex::Regex::new(patterns::CONFIG_PATTERN).unwrap(),
+            function_re: regex::Regex::new(patterns::FUNCTION_PATTERN)
+                .unwrap_or_else(|e| panic!("invalid FUNCTION_PATTERN: {e}")),
+            import_re: regex::Regex::new(patterns::IMPORT_PATTERN)
+                .unwrap_or_else(|e| panic!("invalid IMPORT_PATTERN: {e}")),
+            struct_re: regex::Regex::new(patterns::STRUCT_PATTERN)
+                .unwrap_or_else(|e| panic!("invalid STRUCT_PATTERN: {e}")),
+            test_re: regex::Regex::new(patterns::TEST_PATTERN)
+                .unwrap_or_else(|e| panic!("invalid TEST_PATTERN: {e}")),
+            doc_re: regex::Regex::new(patterns::DOC_COMMENT_PATTERN)
+                .unwrap_or_else(|e| panic!("invalid DOC_COMMENT_PATTERN: {e}")),
+            config_re: regex::Regex::new(patterns::CONFIG_PATTERN)
+                .unwrap_or_else(|e| panic!("invalid CONFIG_PATTERN: {e}")),
         }
     }
 

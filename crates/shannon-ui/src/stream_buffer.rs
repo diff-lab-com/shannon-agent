@@ -78,7 +78,7 @@ impl StreamBuffer {
                 batch
             }
             StreamMode::Smooth => {
-                let (chunk, _) = self.pending_chunks.pop_front().unwrap();
+                let (chunk, _) = self.pending_chunks.pop_front().expect("pending_chunks non-empty: checked above");
                 self.smooth_count += 1;
                 chunk
             }

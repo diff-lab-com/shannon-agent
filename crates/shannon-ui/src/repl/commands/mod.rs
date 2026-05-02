@@ -26,6 +26,7 @@ use crate::{
     Result,
 };
 use rust_i18n::t;
+use shannon_types::recover_lock;
 
 use super::Repl;
 
@@ -317,7 +318,7 @@ pub fn execute_pending_action(repl: &mut Repl, action: &str) -> Result<()> {
         }
         "set_bypass_mode" => {
             if let Some(ref query_engine) = repl.query_engine {
-                let mut perms = query_engine.permissions().write().unwrap_or_else(|e| e.into_inner());
+                let mut perms = recover_lock(query_engine.permissions().write());
                 perms.set_approval_mode(shannon_core::permissions::ApprovalMode::BypassPermissions);
                 drop(perms);
                 repl.state.approval_mode_label = "BYPASS".to_string();

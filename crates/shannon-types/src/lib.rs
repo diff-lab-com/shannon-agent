@@ -65,6 +65,15 @@ impl Entity for Message {
     }
 }
 
+/// Recover from a poisoned lock by extracting the inner guard.
+///
+/// When a thread panics while holding a `std::sync` lock, the lock becomes
+/// "poisoned". In most cases the data is still valid, so we recover by
+/// extracting the inner value rather than propagating the panic.
+pub fn recover_lock<T>(lock_result: std::sync::LockResult<T>) -> T {
+    lock_result.unwrap_or_else(|e| e.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

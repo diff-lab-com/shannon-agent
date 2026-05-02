@@ -18,6 +18,7 @@
 use crate::memory::{MemoryCategory, MemoryEntry, MemoryError};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use shannon_types::recover_lock;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -321,7 +322,7 @@ impl MemoryExtractor {
 
         // 2. In-progress guard
         {
-            let guard = self.in_progress.lock().unwrap_or_else(|e| e.into_inner());
+            let guard = recover_lock(self.in_progress.lock());
             if *guard {
                 return false;
             }
@@ -791,7 +792,7 @@ impl LlmMemoryExtractor {
 
         // Check in-progress guard
         {
-            let guard = self.inner.in_progress.lock().unwrap_or_else(|e| e.into_inner());
+            let guard = recover_lock(self.inner.in_progress.lock());
             if *guard {
                 return Ok(ExtractionResult::skipped("extraction already in progress"));
             }

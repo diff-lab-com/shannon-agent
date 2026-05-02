@@ -10,6 +10,7 @@
 use async_trait::async_trait;
 use serde_json::Value;
 use shannon_tool_interface::{Tool, ToolError, ToolOutput, ToolResult};
+use shannon_types::recover_lock;
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -737,7 +738,7 @@ pub fn prepare_deferred_schemas(
     for tool in tools.iter_mut() {
         let real_schema = tool.swap_schema_for_deferred();
         let name = tool.name().to_string();
-        store.lock().unwrap().insert(name, real_schema);
+        recover_lock(store.lock()).insert(name, real_schema);
     }
     store
 }
@@ -798,7 +799,7 @@ impl Tool for DeferredSchemaSearchTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidInput("Missing 'tool_name' parameter".to_string()))?;
 
-        let schemas = self.schemas.lock().unwrap();
+        let schemas = recover_lock(self.schemas.lock());
         match schemas.get(tool_name) {
             Some(schema) => {
                 let schema_str = serde_json::to_string_pretty(schema)

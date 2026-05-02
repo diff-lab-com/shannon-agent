@@ -495,9 +495,12 @@ fn extract_origin(raw_url: &str) -> Result<String, AuthError> {
             format!("Invalid URL (no scheme): {raw_url}")
         ));
     }
-    let after_scheme = &raw_url[raw_url.find("://").unwrap() + 3..];
+    let scheme_end = raw_url.find("://").ok_or_else(|| {
+        AuthError::Configuration(format!("Invalid URL (malformed scheme): {raw_url}"))
+    })?;
+    let after_scheme = &raw_url[scheme_end + 3..];
     let origin_end = after_scheme.find('/').unwrap_or(after_scheme.len());
-    let scheme = &raw_url[..raw_url.find("://").unwrap() + 3];
+    let scheme = &raw_url[..scheme_end + 3];
     Ok(format!("{}{}", scheme, &after_scheme[..origin_end]))
 }
 

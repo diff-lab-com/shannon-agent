@@ -21,6 +21,7 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
+use shannon_types::recover_lock;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -303,7 +304,7 @@ impl FeatureFlagManager {
 
         // 2. Runtime override
         {
-            let overrides = self.overrides.read().unwrap_or_else(|e| e.into_inner());
+            let overrides = recover_lock(self.overrides.read());
             if let Some(&enabled) = overrides.get(name) {
                 return (enabled, FlagSource::Override);
             }
@@ -325,7 +326,7 @@ impl FeatureFlagManager {
     /// Runtime overrides take priority over config-file values but are
     /// lower priority than environment variables.
     pub fn set_override(&self, flag: &str, enabled: bool) {
-        let mut overrides = self.overrides.write().unwrap_or_else(|e| e.into_inner());
+        let mut overrides = recover_lock(self.overrides.write());
         overrides.insert(flag.to_lowercase(), enabled);
     }
 
@@ -333,7 +334,7 @@ impl FeatureFlagManager {
     /// resolution chain.
     #[allow(dead_code)]
     pub fn clear_override(&self, flag: &str) {
-        let mut overrides = self.overrides.write().unwrap_or_else(|e| e.into_inner());
+        let mut overrides = recover_lock(self.overrides.write());
         overrides.remove(&flag.to_lowercase());
     }
 
@@ -375,7 +376,7 @@ impl FeatureFlagManager {
 
     /// Read a single flag from the config file (with caching).
     fn read_config_flag(&self, name: &str) -> Option<bool> {
-        let cache = self.config_cache.read().unwrap_or_else(|e| e.into_inner());
+        let cache = recover_lock(self.config_cache.read());
         if let Some(ref map) = *cache {
             return map.get(name).copied();
         }
@@ -383,7 +384,7 @@ impl FeatureFlagManager {
 
         // Lazy-load the config file.
         let loaded = self.load_config_features();
-        let mut cache = self.config_cache.write().unwrap_or_else(|e| e.into_inner());
+        let mut cache = recover_lock(self.config_cache.write());
         *cache = Some(loaded.clone());
         loaded.get(name).copied()
     }
@@ -469,7 +470,7 @@ impl FeatureFlagManager {
         std::fs::write(path, json)?;
 
         // Invalidate cache so next read picks up the change.
-        let mut cache = self.config_cache.write().unwrap_or_else(|e| e.into_inner());
+        let mut cache = recover_lock(self.config_cache.write());
         *cache = None;
 
         Ok(())

@@ -135,8 +135,11 @@ fn validate_worktree_name(name: &str) -> Result<(), ToolError> {
 
 /// Get the current git HEAD commit
 fn get_current_head_commit(repo_path: &Path) -> Result<Option<String>, ToolError> {
+    let repo_str = repo_path.to_str().ok_or_else(|| {
+        ToolError::ExecutionFailed("Repository path contains invalid UTF-8".to_string())
+    })?;
     let output = Command::new("git")
-        .args(["-C", repo_path.to_str().unwrap(), "rev-parse", "HEAD"])
+        .args(["-C", repo_str, "rev-parse", "HEAD"])
         .output()
         .map_err(|e| ToolError::ExecutionFailed(format!("Failed to get HEAD commit: {e}")))?;
 
@@ -166,7 +169,9 @@ fn find_git_root(start_path: &Path) -> Option<PathBuf> {
 
 /// Generate a random worktree name
 fn generate_worktree_name() -> String {
-    format!("worktree-{}", Uuid::new_v4().to_string().split('-').next().unwrap())
+    let uuid_str = Uuid::new_v4().to_string();
+    let first_segment = uuid_str.split('-').next().unwrap_or("unknown");
+    format!("worktree-{first_segment}")
 }
 
 /// Get current working directory
@@ -221,7 +226,9 @@ impl WorktreeTool {
             .ok_or_else(|| ToolError::ExecutionFailed("Not in a git repository".to_string()))?;
 
         // Change to git root for worktree creation
-        change_directory(git_root.to_str().unwrap())?;
+        change_directory(git_root.to_str().ok_or_else(|| {
+            ToolError::ExecutionFailed("Git root path contains invalid UTF-8".to_string())
+        })?)?;
 
         // Get original HEAD commit
         let original_head_commit = get_current_head_commit(&git_root).ok();
@@ -240,13 +247,17 @@ impl WorktreeTool {
         // Create worktree using git
         let branch_name = format!("worktree/{worktree_name}");
 
+        let worktree_path_str = worktree_path.to_str().ok_or_else(|| {
+            ToolError::ExecutionFailed("Worktree path contains invalid UTF-8".to_string())
+        })?;
+
         let output = Command::new("git")
             .args([
                 "worktree",
                 "add",
                 "-b",
                 &branch_name,
-                worktree_path.to_str().unwrap(),
+                worktree_path_str,
             ])
             .output()
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to create worktree: {e}")))?;
@@ -277,7 +288,9 @@ impl WorktreeTool {
         }
 
         // Change to worktree directory
-        change_directory(worktree_path.to_str().unwrap())?;
+        change_directory(worktree_path.to_str().ok_or_else(|| {
+            ToolError::ExecutionFailed("Worktree path contains invalid UTF-8".to_string())
+        })?)?;
 
         Ok(EnterWorktreeOutput {
             worktree_path: worktree_path.to_string_lossy().to_string(),
@@ -293,9 +306,13 @@ impl WorktreeTool {
 
     /// Count changes in worktree
     fn count_worktree_changes(worktree_path: &Path, original_head: Option<&String>) -> Result<(usize, usize), ToolError> {
+        let worktree_str = worktree_path.to_str().ok_or_else(|| {
+            ToolError::ExecutionFailed("Worktree path contains invalid UTF-8".to_string())
+        })?;
+
         // Count changed files
         let status_output = Command::new("git")
-            .args(["-C", worktree_path.to_str().unwrap(), "status", "--porcelain"])
+            .args(["-C", worktree_str, "status", "--porcelain"])
             .output()
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to get git status: {e}")))?;
 
@@ -313,7 +330,7 @@ impl WorktreeTool {
             let revlist_output = Command::new("git")
                 .args([
                     "-C",
-                    worktree_path.to_str().unwrap(),
+                    worktree_str,
                     "rev-list",
                     "--count",
                     &format!("{original_commit}..HEAD"),

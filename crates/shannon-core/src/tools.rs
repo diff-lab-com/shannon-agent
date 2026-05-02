@@ -155,7 +155,7 @@ impl ToolRegistry {
     /// Helper to recover from a poisoned lock by extracting the inner value.
     /// This prevents panics when another thread panicked while holding the lock.
     fn recover_lock<T>(lock_result: std::sync::LockResult<T>) -> T {
-        lock_result.unwrap_or_else(|e| e.into_inner())
+        shannon_types::recover_lock(lock_result)
     }
 
     /// Create a new empty tool registry

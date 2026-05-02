@@ -3,6 +3,7 @@
 use crate::definition::{Skill, SkillFull, SkillId, SkillMetadata, SkillSource};
 use crate::error::{SkillError, SkillResult};
 use crate::loader::{load_full_skill as loader_load_full_skill, load_metadata_only as loader_load_metadata_only, load_skill_from_file, load_skills_from_directory};
+use shannon_types::recover_lock;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
@@ -505,8 +506,7 @@ impl SkillRegistry {
     /// If the total estimated tokens exceed `budget`, descriptions are
     /// truncated to fit. Skills are returned in alphabetical order by name.
     pub fn available_skills_metadata_with_budget(&self, budget: usize) -> Vec<SkillMetadata> {
-        let inner = self.inner.read()
-            .unwrap_or_else(|e| e.into_inner());
+        let inner = recover_lock(self.inner.read());
 
         let mut all_meta: Vec<SkillMetadata> = Vec::new();
 

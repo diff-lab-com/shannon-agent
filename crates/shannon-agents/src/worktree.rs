@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use shannon_core::tools::{Tool, ToolError, ToolOutput, ToolResult};
+use shannon_types::recover_lock;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -148,7 +149,10 @@ impl WorktreeManager {
             cmd.arg(start);
         }
 
-        cmd.arg(worktree_path.to_str().unwrap());
+        let worktree_str = worktree_path.to_str().ok_or_else(|| {
+            AgentError::Worktree(format!("Worktree path is not valid UTF-8: {}", worktree_path.display()))
+        })?;
+        cmd.arg(worktree_str);
 
         let output = cmd
             .current_dir(&self.config.repository_path)
@@ -344,9 +348,12 @@ impl WorktreeManager {
 
     /// Remove a worktree
     async fn remove_worktree(&self, path: &Path) -> Result<(), AgentError> {
+        let path_str = path.to_str().ok_or_else(|| {
+            AgentError::Worktree(format!("Worktree path is not valid UTF-8: {}", path.display()))
+        })?;
         let output = Command::new("git")
             .args(["worktree", "remove"])
-            .arg(path.to_str().unwrap())
+            .arg(path_str)
             .current_dir(&self.config.repository_path)
             .output()
             .map_err(|e| AgentError::Worktree(format!("Failed to execute git: {e}")))?;
@@ -412,7 +419,7 @@ static ACTIVE_WORKTREE: LazyLock<Arc<RwLock<Option<WorktreeSession>>>> =
 
 /// Get a snapshot of the currently active worktree session (if any).
 pub fn get_active_worktree() -> Option<WorktreeSession> {
-    ACTIVE_WORKTREE.read().unwrap().clone()
+    recover_lock(ACTIVE_WORKTREE.read()).clone()
 }
 
 /// Validate that a worktree name contains only safe characters.
@@ -454,7 +461,7 @@ fn find_git_root(start: &Path) -> Option<PathBuf> {
 fn generate_random_name() -> String {
     format!(
         "wt-{}",
-        uuid::Uuid::new_v4().to_string().split('-').next().unwrap()
+        uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0")
     )
 }
 
@@ -548,9 +555,12 @@ impl Tool for EnterWorktreeTool {
         let branch = format!("worktree/{name}");
 
         // Create the worktree.
+        let worktree_str = worktree_path.to_str().ok_or_else(|| {
+            ToolError::ExecutionFailed(format!("Worktree path is not valid UTF-8: {}", worktree_path.display()))
+        })?;
         let output = Command::new("git")
             .args(["worktree", "add", "-b", &branch])
-            .arg(worktree_path.to_str().unwrap())
+            .arg(worktree_str)
             .current_dir(&git_root)
             .output()
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to run git: {e}")))?;
@@ -724,7 +734,7 @@ impl Tool for ExitWorktreeTool {
                 // Remove the worktree via git.
                 let output = Command::new("git")
                     .args(["worktree", "remove", "--force"])
-                    .arg(session.path.to_str().unwrap())
+                    .arg(session.path.to_str().unwrap_or("."))
                     .output()
                     .map_err(|e| {
                         ToolError::ExecutionFailed(format!("Failed to run git: {e}"))
@@ -775,8 +785,11 @@ impl Tool for ExitWorktreeTool {
 
 /// Check whether a worktree path has uncommitted changes.
 fn has_uncommitted_changes(path: &Path) -> Result<bool, ToolError> {
+    let path_str = path.to_str().ok_or_else(|| {
+        ToolError::ExecutionFailed(format!("Path is not valid UTF-8: {}", path.display()))
+    })?;
     let output = Command::new("git")
-        .args(["-C", path.to_str().unwrap(), "status", "--porcelain"])
+        .args(["-C", path_str, "status", "--porcelain"])
         .output()
         .map_err(|e| ToolError::ExecutionFailed(format!("Failed to run git: {e}")))?;
 

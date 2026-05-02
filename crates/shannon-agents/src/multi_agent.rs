@@ -356,7 +356,7 @@ pub fn topological_sort(
                 .entry(dep.as_str())
                 .or_default()
                 .push(agent.name.as_str());
-            *in_degree.get_mut(agent.name.as_str()).unwrap() += 1;
+            *in_degree.get_mut(agent.name.as_str()).expect("in_degree entry exists for all agents") += 1;
         }
     }
 
@@ -376,7 +376,7 @@ pub fn topological_sort(
 
         if let Some(children) = dependents.get(name) {
             for &child in children {
-                let deg = in_degree.get_mut(child).unwrap();
+                let deg = in_degree.get_mut(child).expect("in_degree entry exists for all agents");
                 *deg -= 1;
                 if *deg == 0 {
                     queue.push_back(child);
@@ -526,7 +526,13 @@ impl MultiAgentSpawner {
 
                     tokio::spawn(async move {
                         // Acquire semaphore permit (respects max_parallel)
-                        let _permit = sem.acquire().await.unwrap();
+                        let _permit = match sem.acquire().await {
+                            Ok(p) => p,
+                            Err(e) => {
+                                tracing::error!("semaphore acquire failed: {e}");
+                                return AgentResult::skipped(agent.name.clone());
+                            }
+                        };
 
                         // Check cancellation before starting
                         if cancel_flag.load(Ordering::Relaxed) {

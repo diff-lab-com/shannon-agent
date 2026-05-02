@@ -16,6 +16,7 @@ use crate::{
     Result,
 };
 use rust_i18n::t;
+use shannon_types::recover_lock;
 use ratatui::backend::CrosstermBackend;
 use futures::StreamExt;
 use ratatui::Terminal;
@@ -248,7 +249,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                     tokens_in_turn = input_tokens + output_tokens;
                     let budget_limit;
                     {
-                        let mut s = ss.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut s = recover_lock(ss.lock());
                         s.cost = total_cost_usd;
                         budget_limit = s.budget;
                     }
@@ -333,7 +334,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
 
             let current_status;
             {
-                let s = streaming.lock().unwrap_or_else(|e| e.into_inner());
+                let s = recover_lock(streaming.lock());
                 current_status = s.status.clone();
 
                 if !s.delta.is_empty() {
@@ -341,7 +342,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                 }
             }
             {
-                let mut s = streaming.lock().unwrap_or_else(|e| e.into_inner());
+                let mut s = recover_lock(streaming.lock());
                 s.delta.clear();
             }
 
@@ -373,7 +374,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
             }
 
             {
-                let s = streaming.lock().unwrap_or_else(|e| e.into_inner());
+                let s = recover_lock(streaming.lock());
                 if s.cost > 0.0 { repl.state.total_cost_usd = s.cost; }
 
                 // Update token display in real-time during streaming

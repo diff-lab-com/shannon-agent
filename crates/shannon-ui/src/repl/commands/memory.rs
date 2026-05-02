@@ -2,6 +2,7 @@
 
 use crate::{widgets::ChatRole, Result};
 use rust_i18n::t;
+use shannon_types::recover_lock;
 use super::super::Repl;
 
 pub(crate) fn handle_remember(repl: &mut Repl, args: &str) -> Result<()> {
@@ -30,7 +31,7 @@ pub(crate) fn handle_remember(repl: &mut Repl, args: &str) -> Result<()> {
     };
 
     let project = repl.state.working_directory.clone();
-    let mut store = memory.write().unwrap();
+    let mut store = recover_lock(memory.write());
     let entry = MemoryEntry::new(&project, MemoryCategory::Context, content);
     let id = entry.id.clone();
     let _ = store.add(entry);
@@ -69,7 +70,7 @@ pub(crate) fn handle_recall(repl: &mut Repl, args: &str) -> Result<()> {
         }
     };
 
-    let store = memory.read().unwrap();
+    let store = recover_lock(memory.read());
     let project = repl.state.working_directory.clone();
 
     let results = if args.trim().is_empty() {
@@ -120,7 +121,7 @@ pub(crate) fn handle_forget(repl: &mut Repl, args: &str) -> Result<()> {
         }
     };
 
-    let mut store = memory.write().unwrap();
+    let mut store = recover_lock(memory.write());
     // Find by prefix match
     let found = store.project_memories(&repl.state.working_directory)
         .into_iter()
@@ -162,7 +163,7 @@ pub(crate) fn handle_memory(repl: &mut Repl, args: &str) -> Result<()> {
                     return Ok(());
                 }
             };
-            let mut store = memory.write().unwrap();
+            let mut store = recover_lock(memory.write());
             let removed = store.cleanup(chrono::Duration::days(90), 500).unwrap_or(0);
             repl.chat.add_message(ChatRole::System, format!("Cleanup complete: removed {removed} stale memories. {} remaining.", store.len()));
         }
@@ -181,7 +182,7 @@ pub(crate) fn handle_memory(repl: &mut Repl, args: &str) -> Result<()> {
                     return Ok(());
                 }
             };
-            let store = memory.read().unwrap();
+            let store = recover_lock(memory.read());
             let project = repl.state.working_directory.clone();
             let project_count = store.project_memories(&project).len();
             let total = store.len();

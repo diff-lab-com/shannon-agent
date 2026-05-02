@@ -843,6 +843,8 @@ impl HomeGuard {
     /// original value on drop.
     pub fn set(new_home: &str) -> Self {
         let old = std::env::var_os("HOME");
+        // SAFETY: Environment variable modification before concurrent access begins.
+        // HomeGuard is intended for test setup where no other threads read HOME yet.
         unsafe { std::env::set_var("HOME", new_home) };
         Self(old)
     }
@@ -903,6 +905,9 @@ impl Drop for ApiKeyGuard {
 
 impl Drop for HomeGuard {
     fn drop(&mut self) {
+        // SAFETY: Environment variable restoration during guard teardown.
+        // The Drop guard pattern ensures this runs even if the caller panics,
+        // and no concurrent access to HOME is expected at this point.
         match &self.0 {
             Some(home) => unsafe { std::env::set_var("HOME", home) },
             None => unsafe { std::env::remove_var("HOME") },

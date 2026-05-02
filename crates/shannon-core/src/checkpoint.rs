@@ -8,6 +8,7 @@
 //! - Restore code only
 //! - Summarize from here (compact messages from that point)
 
+use shannon_types::recover_lock;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -188,7 +189,7 @@ impl CheckpointManager {
             prompt_preview,
         };
 
-        let mut checkpoints = self.checkpoints.lock().unwrap();
+        let mut checkpoints = recover_lock(self.checkpoints.lock());
         checkpoints.push(tc);
 
         // Trim old checkpoints
@@ -202,14 +203,12 @@ impl CheckpointManager {
 
     /// List all stored turn checkpoints (most recent last).
     pub fn list_checkpoints(&self) -> Vec<TurnCheckpoint> {
-        self.checkpoints.lock().unwrap().clone()
+        recover_lock(self.checkpoints.lock()).clone()
     }
 
     /// List legacy checkpoints (git-only, without turn info).
     pub fn list_legacy_checkpoints(&self) -> Vec<Checkpoint> {
-        self.checkpoints
-            .lock()
-            .unwrap()
+        recover_lock(self.checkpoints.lock())
             .iter()
             .map(|tc| tc.checkpoint.clone())
             .collect()
@@ -222,7 +221,7 @@ impl CheckpointManager {
         }
 
         let tc = {
-            let checkpoints = self.checkpoints.lock().unwrap();
+            let checkpoints = recover_lock(self.checkpoints.lock());
             if index >= checkpoints.len() {
                 return Err(format!(
                     "Invalid checkpoint index {index}. Available: 0..{}",
@@ -246,7 +245,7 @@ impl CheckpointManager {
         }
 
         // Remove checkpoints after the reverted one
-        self.checkpoints.lock().unwrap().truncate(index + 1);
+        recover_lock(self.checkpoints.lock()).truncate(index + 1);
         let _ = self.save_to_disk();
 
         Ok(tc)
@@ -254,7 +253,7 @@ impl CheckpointManager {
 
     /// Revert the most recent checkpoint (convenience method).
     pub fn undo_last(&self) -> Result<Checkpoint, String> {
-        let count = self.checkpoints.lock().unwrap().len();
+        let count = recover_lock(self.checkpoints.lock()).len();
         if count == 0 {
             return Err("No checkpoints to undo".to_string());
         }
@@ -264,25 +263,25 @@ impl CheckpointManager {
 
     /// Pop (discard) the most recent checkpoint without reverting.
     pub fn discard_last(&self) -> Option<TurnCheckpoint> {
-        let popped = self.checkpoints.lock().unwrap().pop();
+        let popped = recover_lock(self.checkpoints.lock()).pop();
         let _ = self.save_to_disk();
         popped
     }
 
     /// Clear all checkpoints.
     pub fn clear(&self) {
-        self.checkpoints.lock().unwrap().clear();
+        recover_lock(self.checkpoints.lock()).clear();
         let _ = self.save_to_disk();
     }
 
     /// Number of stored checkpoints.
     pub fn len(&self) -> usize {
-        self.checkpoints.lock().unwrap().len()
+        recover_lock(self.checkpoints.lock()).len()
     }
 
     /// Whether there are any checkpoints.
     pub fn is_empty(&self) -> bool {
-        self.checkpoints.lock().unwrap().is_empty()
+        recover_lock(self.checkpoints.lock()).is_empty()
     }
 
     // ---- Persistence ----
@@ -306,7 +305,7 @@ impl CheckpointManager {
             let _ = fs::create_dir_all(parent);
         }
 
-        let checkpoints = self.checkpoints.lock().unwrap();
+        let checkpoints = recover_lock(self.checkpoints.lock());
         let json = serde_json::to_string_pretty(&*checkpoints)
             .map_err(|e| format!("Failed to serialize checkpoints: {e}"))?;
 
@@ -333,7 +332,7 @@ impl CheckpointManager {
         let loaded: Vec<TurnCheckpoint> = serde_json::from_str(&data)
             .map_err(|e| format!("Failed to parse checkpoints: {e}"))?;
 
-        let mut checkpoints = self.checkpoints.lock().unwrap();
+        let mut checkpoints = recover_lock(self.checkpoints.lock());
         *checkpoints = loaded;
 
         Ok(())

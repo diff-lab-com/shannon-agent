@@ -1,5 +1,6 @@
 use crate::{widgets::ChatRole, Result};
 use rust_i18n::t;
+use shannon_types::recover_lock;
 use super::super::Repl;
 
 pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
@@ -147,7 +148,7 @@ pub(crate) fn handle_mode(repl: &mut Repl, args: &str) -> Result<()> {
         // Show current mode and available options
         let current = {
             let query_engine = repl.query_engine.as_ref().expect("query engine missing");
-            let permissions = query_engine.permissions().read().unwrap_or_else(|e| e.into_inner());
+            let permissions = recover_lock(query_engine.permissions().read());
             permissions.approval_mode()
         };
         let mut msg = format!("Current approval mode: {current}\n\nAvailable modes:\n");
@@ -165,7 +166,7 @@ pub(crate) fn handle_mode(repl: &mut Repl, args: &str) -> Result<()> {
     match ApprovalMode::from_str_ci(trimmed) {
         Some(mode) => {
             let query_engine = repl.query_engine.as_ref().expect("query engine missing");
-            query_engine.permissions().write().unwrap_or_else(|e| e.into_inner()).set_approval_mode(mode);
+            recover_lock(query_engine.permissions().write()).set_approval_mode(mode);
             repl.state.approval_mode_label = mode.short_label().to_string();
             {
                 repl.chat.add_message(

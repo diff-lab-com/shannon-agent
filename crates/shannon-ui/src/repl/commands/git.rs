@@ -34,7 +34,7 @@ pub(crate) fn handle_create_pr(repl: &mut Repl, args: &str) -> Result<()> {
         .args(["rev-parse", "--is-inside-work-tree"])
         .current_dir(&repl.state.working_directory)
         .output();
-    if git_check.is_err() || !git_check.unwrap().status.success() {
+    if git_check.is_err() || !git_check.as_ref().map(|o| o.status.success()).unwrap_or(false) {
         repl.chat.add_message(ChatRole::System, "Not inside a git repository.".to_string());
         return Ok(());
     }
@@ -66,7 +66,7 @@ pub(crate) fn handle_create_pr(repl: &mut Repl, args: &str) -> Result<()> {
             .args(["rev-parse", "--verify", "main"])
             .current_dir(&repl.state.working_directory)
             .output();
-        if main_check.is_ok() && main_check.unwrap().status.success() {
+        if main_check.as_ref().map(|o| o.status.success()).unwrap_or(false) {
             "main".to_string()
         } else {
             "master".to_string()
