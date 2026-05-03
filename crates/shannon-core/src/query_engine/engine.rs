@@ -124,7 +124,7 @@ fn generate_diff_preview(path: &str, old: &str, new: &str) -> String {
                 diff.push_str(&format!("+{}\n", new_lines[i]));
                 changes += 2;
             }
-            (None, None) => unreachable!(),
+            (None, None) => { /* both iterators exhausted — skip */ }
         }
     }
 
