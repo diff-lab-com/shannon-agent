@@ -11,6 +11,31 @@ use ratatui::{
 };
 use std::collections::HashMap;
 
+/// Return a style for a unified-diff line with syntax-aware coloring.
+///
+/// Categories (checked in order):
+/// - `--- a/file`, `+++ b/file` → yellow + bold (file headers)
+/// - `@@ ... @@`               → cyan (hunk headers)
+/// - `+content`                → green (added, via `theme.diff_added`)
+/// - `-content`                → red (removed, via `theme.diff_removed`)
+/// - `diff ...`, `index ...`, `Binary ...` → dim (git meta)
+/// - everything else           → dim (context)
+fn diff_line_style(line: &str, theme: &Theme) -> Style {
+    if (line.starts_with("---") || line.starts_with("+++")) && line.len() > 3 {
+        Style::default().fg(theme.warning).add_modifier(Modifier::BOLD)
+    } else if line.starts_with('+') {
+        Style::default().fg(theme.diff_added)
+    } else if line.starts_with('-') {
+        Style::default().fg(theme.diff_removed)
+    } else if line.starts_with('@') {
+        Style::default().fg(theme.secondary)
+    } else if line.starts_with("diff ") || line.starts_with("index ") || line.starts_with("Binary ") {
+        Style::default().fg(theme.muted)
+    } else {
+        Style::default().fg(theme.text_dim)
+    }
+}
+
 /// Full-screen overlay for viewing diffs
 #[derive(Debug, Clone)]
 pub struct DiffViewerWidget {
@@ -246,21 +271,10 @@ impl DiffViewerWidget {
                                 ))));
                             } else {
                                 for line in diff_lines.iter() {
-                                    let color = if line.starts_with('-') && !line.starts_with("---") {
-                                        theme.diff_removed
-                                    } else if line.starts_with('+') && !line.starts_with("+++") {
-                                        theme.diff_added
-                                    } else if line.starts_with('@') {
-                                        theme.primary
-                                    } else if line.starts_with("diff ") || line.starts_with("index ") {
-                                        theme.muted
-                                    } else {
-                                        theme.text_dim
-                                    };
                                     let display = truncate_to(&format!("  {line}"), inner_width);
                                     items.push(ListItem::new(Line::from(Span::styled(
                                         display,
-                                        Style::default().fg(color),
+                                        diff_line_style(line, theme),
                                     ))));
                                 }
                             }
@@ -320,21 +334,10 @@ impl DiffViewerWidget {
                 ))));
             } else {
                 for line in diff_lines {
-                    let color = if line.starts_with('-') && !line.starts_with("---") {
-                        theme.diff_removed
-                    } else if line.starts_with('+') && !line.starts_with("+++") {
-                        theme.diff_added
-                    } else if line.starts_with('@') {
-                        theme.primary
-                    } else if line.starts_with("diff ") || line.starts_with("index ") {
-                        theme.muted
-                    } else {
-                        theme.text_dim
-                    };
                     let display = truncate_to(line, inner_width);
                     items.push(ListItem::new(Line::from(Span::styled(
                         display,
-                        Style::default().fg(color),
+                        diff_line_style(line, theme),
                     ))));
                 }
             }
@@ -509,21 +512,16 @@ impl DiffViewerWidget {
 
             // Hunk content lines
             for line in &hunk.lines {
-                let color = match hunk.action {
-                    HunkAction::Accepted if line.starts_with('+') => theme.success,
-                    HunkAction::Rejected if line.starts_with('-') => theme.error,
-                    _ => {
-                        if line.starts_with('-') { theme.diff_removed }
-                        else if line.starts_with('+') { theme.diff_added }
-                        else if line.starts_with('@') { theme.primary }
-                        else { theme.text_dim }
-                    }
+                let base_style = match hunk.action {
+                    HunkAction::Accepted if line.starts_with('+') => Style::default().fg(theme.success),
+                    HunkAction::Rejected if line.starts_with('-') => Style::default().fg(theme.error),
+                    _ => diff_line_style(line, theme),
                 };
                 let display = truncate_to(&format!("  {line}"), inner_width);
                 let style = if hunk.action == HunkAction::Rejected && !line.starts_with('-') && !line.starts_with("@@") {
-                    Style::default().fg(color).add_modifier(Modifier::CROSSED_OUT)
+                    base_style.add_modifier(Modifier::CROSSED_OUT)
                 } else {
-                    Style::default().fg(color)
+                    base_style
                 };
                 items.push(ListItem::new(Line::from(Span::styled(display, style))));
             }
