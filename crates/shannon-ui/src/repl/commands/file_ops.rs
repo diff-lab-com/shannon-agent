@@ -383,6 +383,52 @@ pub(crate) fn import_from_markdown(repl: &mut Repl, content: &str) -> Result<usi
     Ok(count)
 }
 
+pub(crate) fn handle_add_dir(repl: &mut Repl, args: &str) -> Result<()> {
+    let path = args.trim();
+    if path.is_empty() {
+        repl.chat.add_message(ChatRole::System, "Usage: /add-dir <path>\nAdds a directory for file access during this session.".to_string());
+        return Ok(());
+    }
+
+    // Expand ~/ to home directory
+    let expanded = if path.starts_with("~/") {
+        if let Some(home) = dirs::home_dir() {
+            home.join(&path[2..]).to_string_lossy().to_string()
+        } else {
+            path.to_string()
+        }
+    } else {
+        path.to_string()
+    };
+
+    let abs_path = if std::path::Path::new(&expanded).is_absolute() {
+        expanded
+    } else {
+        let base = std::path::PathBuf::from(&repl.state.working_directory);
+        base.join(&expanded).to_string_lossy().to_string()
+    };
+
+    let p = std::path::Path::new(&abs_path);
+    if !p.exists() {
+        repl.chat.add_message(ChatRole::System, format!("Directory not found: {abs_path}"));
+        return Ok(());
+    }
+    if !p.is_dir() {
+        repl.chat.add_message(ChatRole::System, format!("Not a directory: {abs_path}"));
+        return Ok(());
+    }
+
+    if repl.state.extra_dirs.contains(&abs_path) {
+        repl.chat.add_message(ChatRole::System, format!("Directory already added: {abs_path}"));
+        return Ok(());
+    }
+
+    repl.state.extra_dirs.push(abs_path.clone());
+    let count = repl.state.extra_dirs.len();
+    repl.chat.add_message(ChatRole::System, format!("Added directory: {abs_path}\nExtra directories ({count}): {}", repl.state.extra_dirs.join(", ")));
+    Ok(())
+}
+
 pub(crate) fn handle_watch(repl: &mut Repl, args: &str) -> Result<()> {
     let trimmed = args.trim();
 

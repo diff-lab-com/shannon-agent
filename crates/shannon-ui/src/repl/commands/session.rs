@@ -548,6 +548,34 @@ pub(crate) fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn handle_plan(repl: &mut Repl, args: &str) -> Result<()> {
+    let args = args.trim();
+
+    // Handle plan mode deactivation
+    if args == "off" || args == "exit" || args == "end" {
+        if let Ok(mut flag) = repl.plan_mode_flag.write() {
+            *flag = false;
+        }
+        repl.state.plan.active = false;
+        repl.state.plan.approved = false;
+        repl.chat.add_message(ChatRole::System, "Plan mode deactivated. Write operations are now enabled.".to_string());
+        return Ok(());
+    }
+
+    // Delegate to cost::handle_plan for all other cases (creates plan, status, approve, reject, etc.)
+    // and also activate the plan-mode flag so write tools are blocked.
+    super::cost::handle_plan(repl, args)?;
+
+    // If a plan was created (active and has content), also set the engine flag
+    if repl.state.plan.active {
+        if let Ok(mut flag) = repl.plan_mode_flag.write() {
+            *flag = true;
+        }
+    }
+
+    Ok(())
+}
+
 pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
     use shannon_core::compact::{CompactEngine, CompactStrategy};
 
@@ -662,6 +690,16 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
             "truncate" => CompactStrategy::TruncateOld,
             "micro" => CompactStrategy::MicroCompress,
             "group" => CompactStrategy::GroupCompress,
+            "auto" | "" => CompactStrategy::SummarizeOld,
+            // Treat unrecognized non-empty args as focus keywords (freeform instructions)
+            other if !other.is_empty() => {
+                let keywords: Vec<&str> = other.split_whitespace().collect();
+                repl.chat.add_message(ChatRole::System, format!(
+                    "Focus compact: preserving messages matching '{}'\nCompacting remaining messages...",
+                    keywords.join("', '")
+                ));
+                return handle_compact_with_focus(repl, keywords, history, compact_engine);
+            }
             _ => CompactStrategy::SummarizeOld,
         };
         (strategy, None)
@@ -726,6 +764,57 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
         }
         repl.chat.add_message(ChatRole::System, report);
     } else if focus_keywords.is_some() {
+        repl.chat.add_message(ChatRole::System, "Focus compact complete (no compaction needed for focused messages).".to_string());
+    }
+
+    Ok(())
+}
+
+/// Helper for freeform-focus compaction (called when /compact receives unrecognized non-empty args).
+fn handle_compact_with_focus(
+    repl: &mut Repl,
+    keywords: Vec<&str>,
+    history: Vec<shannon_core::api::Message>,
+    compact_engine: shannon_core::compact::CompactEngine,
+) -> Result<()> {
+    let keyword_strings: Vec<String> = keywords.iter().map(|s| s.to_string()).collect();
+    let mut to_compact: Vec<shannon_core::api::Message> = Vec::new();
+    let mut to_keep: Vec<shannon_core::api::Message> = Vec::new();
+    for msg in history {
+        let text = match &msg.content {
+            shannon_core::api::MessageContent::Text(t) => t.to_lowercase(),
+            shannon_core::api::MessageContent::Blocks(blocks) => blocks.iter()
+                .filter_map(|b| match b { shannon_core::api::ContentBlock::Text { text } => Some(text.clone()), _ => None })
+                .collect::<Vec<_>>().join(" ").to_lowercase(),
+        };
+        let matches_focus = keywords.iter().any(|kw| text.contains(&kw.to_lowercase()));
+        if matches_focus || msg.role == "system" {
+            to_keep.push(msg);
+        } else {
+            to_compact.push(msg);
+        }
+    }
+    let compact_result = if !to_compact.is_empty() {
+        let mut compact_engine = compact_engine;
+        let cr = compact_engine.compact(&mut to_compact);
+        to_keep.append(&mut to_compact);
+        cr.ok()
+    } else {
+        None
+    };
+
+    if let Some(ref mut engine) = repl.query_engine {
+        engine.replace_conversation(to_keep);
+    }
+
+    if let Some(cr) = compact_result {
+        repl.chat.add_message(ChatRole::System, format!(
+            "Context compacted (focus: {}):\n  Tokens: {} → {} ({:.1}% reduction)\n  Messages removed: {}",
+            keyword_strings.join(", "),
+            cr.original_tokens, cr.compacted_tokens, cr.reduction_ratio * 100.0,
+            cr.messages_removed,
+        ));
+    } else {
         repl.chat.add_message(ChatRole::System, "Focus compact complete (no compaction needed for focused messages).".to_string());
     }
 
@@ -827,5 +916,31 @@ pub(crate) fn handle_session(repl: &mut Repl, args: &str) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+pub(crate) fn handle_rename(repl: &mut Repl, args: &str) -> Result<()> {
+    let name = args.trim();
+    if name.is_empty() {
+        // Show current title
+        match &repl.state.session_title {
+            Some(title) => {
+                repl.chat.add_message(ChatRole::System, format!("Current session: {title}\nUsage: /rename <new-name>"));
+            }
+            None => {
+                repl.chat.add_message(ChatRole::System, "No custom session name set.\nUsage: /rename <new-name>".to_string());
+            }
+        }
+        return Ok(());
+    }
+
+    if name == "reset" || name == "clear" {
+        repl.state.session_title = None;
+        repl.chat.add_message(ChatRole::System, "Session name reset to default.".to_string());
+        return Ok(());
+    }
+
+    repl.state.session_title = Some(name.to_string());
+    repl.chat.add_message(ChatRole::System, format!("Session renamed to: {name}"));
     Ok(())
 }

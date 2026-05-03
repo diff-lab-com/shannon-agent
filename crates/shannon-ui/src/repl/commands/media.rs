@@ -347,24 +347,39 @@ pub(crate) fn handle_browse(repl: &mut Repl, args: &str) -> Result<()> {
     Ok(())
 }
 
+fn copy_nth_response(repl: &mut Repl, n: usize) -> Option<String> {
+    if n == 0 {
+        repl.chat.add_message(ChatRole::System, "Invalid index. Use /copy 1 for the latest response.".to_string());
+        return None;
+    }
+    let mut responses: Vec<String> = Vec::new();
+    for (_, m) in repl.chat.iter_messages() {
+        if m.role == ChatRole::Assistant {
+            responses.push(m.content.clone());
+        }
+    }
+    let total = responses.len();
+    if n > total {
+        repl.chat.add_message(ChatRole::System, format!("Only {total} assistant response(s) in this session. Use /copy 1 for the latest."));
+        return None;
+    }
+    Some(responses[total - n].clone())
+}
+
 pub(crate) fn handle_copy(repl: &mut Repl, args: &str) -> Result<()> {
     let trimmed = args.trim();
 
     // Determine what to copy
-    let content = if trimmed.is_empty() || trimmed == "last" || trimmed == "response" {
-        // Copy the last assistant message
-        let mut last = None;
-        for (_, m) in repl.chat.iter_messages() {
-            if m.role == ChatRole::Assistant {
-                last = Some(m.content.clone());
-            }
+    let content = if trimmed.is_empty() || trimmed == "last" || trimmed == "response" || trimmed == "1" {
+        match copy_nth_response(repl, 1) {
+            Some(c) => c,
+            None => return Ok(()),
         }
-        match last {
-            Some(msg) => msg,
-            None => {
-                repl.chat.add_message(ChatRole::System, "No assistant response to copy.".to_string());
-                return Ok(());
-            }
+    } else if trimmed.starts_with(|c: char| c.is_ascii_digit()) && !trimmed.contains(' ') {
+        let n: usize = trimmed.parse().unwrap_or(1);
+        match copy_nth_response(repl, n) {
+            Some(c) => c,
+            None => return Ok(()),
         }
     } else if trimmed == "status" {
         repl.state.status.clone()

@@ -217,6 +217,10 @@ pub struct ReplState {
     pub ralph_state: Option<RalphState>,
     /// Billing manager for per-model cost tracking and budget alerts
     pub billing_manager: shannon_core::billing::BillingManager,
+    /// Additional working directories added via /add-dir
+    pub extra_dirs: Vec<String>,
+    /// Custom session title (set via /rename)
+    pub session_title: Option<String>,
 }
 
 /// State for the autonomous loop iteration engine.
@@ -393,6 +397,8 @@ impl Default for ReplState {
             loop_state: None,
             ralph_state: None,
             billing_manager: shannon_core::billing::BillingManager::new(),
+            extra_dirs: Vec::new(),
+            session_title: None,
         }
     }
 }
@@ -710,6 +716,8 @@ pub struct Repl {
     pub(crate) command_watcher: Option<CustomCommandWatcher>,
     /// Crash-safe JSONL session recovery log (appends each turn with fsync)
     pub(crate) session_recovery: shannon_core::SessionRecovery,
+    /// Shared plan-mode flag (clone of the one in QueryEngine)
+    pub(crate) plan_mode_flag: std::sync::Arc<std::sync::RwLock<bool>>,
 }
 
 /// State for tab completion cycling
@@ -865,6 +873,7 @@ impl Repl {
             instruction_watcher: None,
             command_watcher: None,
             session_recovery: shannon_core::SessionRecovery::new().unwrap_or_default(),
+            plan_mode_flag: std::sync::Arc::new(std::sync::RwLock::new(false)),
         };
 
         repl.sync_approval_mode_label();
@@ -1607,6 +1616,7 @@ impl Repl {
             },
             command_watcher: Some(CustomCommandWatcher::new()),
             session_recovery: shannon_core::SessionRecovery::new().unwrap_or_default(),
+            plan_mode_flag: plan_mode_flag.clone(),
         };
 
         repl.sync_approval_mode_label();

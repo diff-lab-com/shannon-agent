@@ -138,7 +138,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
         repl.shared_executor.registry().await.contains(cmd_name).await
     });
     // Commands handled in the match block but not in the global registry
-    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "agent", "route", "mcp", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "rewind", "notify", "webhook", "routine", "create-pr", "patch", "sandbox", "find", "grep", "conv-search", "copy", "paste", "add", "watch", "bind", "project", "terminal-setup", "theme", "diff", "commands"];
+    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "agent", "route", "mcp", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "rewind", "notify", "webhook", "routine", "create-pr", "patch", "sandbox", "find", "grep", "conv-search", "copy", "paste", "add", "add-dir", "adddir", "rename", "watch", "bind", "project", "terminal-setup", "theme", "diff", "commands"];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
     if command_exists || is_repl_command {
@@ -170,7 +170,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "billing" | "usage" => cost::handle_billing(repl, args)?,
             "suggest" => cost::handle_suggest(repl, args)?,
             "permissions" | "perms" | "perm" => cost::handle_permissions(repl, args)?,
-            "plan" => cost::handle_plan(repl, args)?,
+            "plan" => session::handle_plan(repl, args)?,
             "team" => extensions::handle_team(repl, args)?,
             "agents" => extensions::handle_agents(repl, args)?,
             "agent" => loop_engine::handle_agent(repl, args)?,
@@ -204,11 +204,13 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "copy" | "clip" => media::handle_copy(repl, args)?,
             "paste" => media::handle_paste(repl)?,
             "add" => file_ops::handle_add(repl, args)?,
+            "add-dir" | "adddir" => file_ops::handle_add_dir(repl, args)?,
             "watch" => file_ops::handle_watch(repl, args)?,
             "bind" => loop_engine::handle_bind(repl, args)?,
             "project" => loop_engine::handle_project(repl, args)?,
             "theme" => config::handle_theme(repl, args)?,
             "session" => session::handle_session(repl, args)?,
+            "rename" => session::handle_rename(repl, args)?,
             "accessibility" | "a11y" => config::handle_accessibility(repl, args)?,
             "diag" => debug::handle_diag(repl, args)?,
             "commands" => hooks::handle_commands(repl, args)?,
