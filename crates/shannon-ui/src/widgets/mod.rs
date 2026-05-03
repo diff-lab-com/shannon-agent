@@ -22,7 +22,8 @@ pub use welcome::WelcomeWidget;
 pub use status_bar::StatusBarWidget;
 pub use chat::{ChatWidget, ChatMessage, ChatRole};
 pub use prompt::PromptWidget;
-pub use sidebar::{SidebarWidget, SidebarInfo};
+#[allow(unused_imports)]
+pub use sidebar::{SidebarWidget, SidebarInfo, SidebarSection};
 pub use key_hint::KeyHintWidget;
 #[allow(unused_imports)]
 pub use session_tab::{SessionTabWidget, SessionInfo};
@@ -334,7 +335,8 @@ impl MainLayoutWidget {
 
             if let (Some(info), Some(sb_area)) = (sidebar_info, sidebar_area) {
                 if sb_area.width > 5 && sb_area.height > 3 {
-                    SidebarWidget::render(frame, sb_area, info, theme, sidebar_tab);
+                    let sidebar_widget = SidebarWidget::new();
+                    sidebar_widget.render(frame, sb_area, info, theme, sidebar_tab);
                 }
             }
         }

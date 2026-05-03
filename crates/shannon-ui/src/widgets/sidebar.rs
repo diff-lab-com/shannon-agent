@@ -8,6 +8,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
+use std::collections::HashSet;
 
 /// Data needed to render the sidebar
 pub struct SidebarInfo {
@@ -43,8 +44,37 @@ pub struct SidebarInfo {
     pub tokens_per_sec: Option<f64>,
 }
 
-/// Right sidebar panel showing session metadata
-pub struct SidebarWidget;
+/// Identifiable collapsible sections within sidebar tabs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SidebarSection {
+    /// Context tab: Model name
+    Model,
+    /// Context tab: Context window usage
+    ContextUsage,
+    /// Context tab: Cost
+    Cost,
+    /// Context tab: Tools invoked
+    Tools,
+    /// Context / Perf tab: File changes
+    Changes,
+    /// Context tab: LSP diagnostics
+    Diagnostics,
+    /// Perf tab: Session duration
+    Session,
+    /// Perf tab: Throughput stats
+    Throughput,
+    /// Perf tab: Cost efficiency
+    PerfCost,
+    /// Perf tab: Activity stats
+    Activity,
+}
+
+/// Right sidebar panel showing session metadata with collapsible sections.
+#[derive(Debug, Clone)]
+pub struct SidebarWidget {
+    /// Set of section identifiers that are currently collapsed.
+    collapsed: HashSet<SidebarSection>,
+}
 
 /// Minimum terminal width for the sidebar to appear
 const SIDEBAR_WIDTH: u16 = 28;
@@ -81,8 +111,42 @@ pub(super) fn format_tokens(count: u64) -> String {
 }
 
 impl SidebarWidget {
+    /// Create a new sidebar widget with all sections expanded.
+    pub fn new() -> Self {
+        Self {
+            collapsed: HashSet::new(),
+        }
+    }
+
+    /// Toggle the collapsed state of a section.
+    #[allow(dead_code)]
+    pub fn toggle_section(&mut self, section: SidebarSection) {
+        if self.collapsed.contains(&section) {
+            self.collapsed.remove(&section);
+        } else {
+            self.collapsed.insert(section);
+        }
+    }
+
+    /// Check whether a section is currently collapsed.
+    pub fn is_collapsed(&self, section: SidebarSection) -> bool {
+        self.collapsed.contains(&section)
+    }
+
+    /// Build a section header line with collapse indicator.
+    fn section_header(&self, label: &str, section: SidebarSection, theme: &Theme) -> Line<'static> {
+        let indicator = if self.is_collapsed(section) { "▸" } else { "▾" };
+        Line::from(vec![
+            Span::styled(indicator.to_string(), Style::default().fg(theme.muted)),
+            Span::styled(
+                format!(" {label}"),
+                Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD),
+            ),
+        ])
+    }
+
     /// Render the sidebar panel
-    pub fn render(frame: &mut Frame, area: Rect, info: &SidebarInfo, theme: &Theme, tab: crate::repl::SidebarTab) {
+    pub fn render(&self, frame: &mut Frame, area: Rect, info: &SidebarInfo, theme: &Theme, tab: crate::repl::SidebarTab) {
         let block = Block::default()
             .borders(Borders::LEFT)
             .border_style(Style::default().fg(theme.border))
@@ -134,123 +198,135 @@ impl SidebarWidget {
         match tab {
             crate::repl::SidebarTab::Context => {
                 // Model section
-                lines.push(Line::from(Span::styled("Model", Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD))));
-                let model_name = info.model.as_deref().unwrap_or("unknown");
-                lines.push(Line::from(Span::styled(truncate_to(model_name, w), Style::default().fg(theme.primary))));
-                lines.push(Line::from(""));
+                lines.push(self.section_header("Model", SidebarSection::Model, theme));
+                if !self.is_collapsed(SidebarSection::Model) {
+                    let model_name = info.model.as_deref().unwrap_or("unknown");
+                    lines.push(Line::from(Span::styled(truncate_to(model_name, w), Style::default().fg(theme.primary))));
+                    lines.push(Line::from(""));
+                }
 
                 // Context usage
-                lines.push(Line::from(Span::styled("Context", Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD))));
-                let tokens_str = format_tokens(info.tokens_used);
-                let pct = if info.context_window > 0 {
-                    ((info.tokens_used as f64 / info.context_window as f64) * 100.0).min(100.0)
-                } else {
-                    0.0
-                };
-                let pct_label = format!("{tokens_str} ({pct:.0}%)");
-                lines.push(Line::from(Span::styled(pct_label, Style::default().fg(theme.text))));
-                // Progress bar based on actual context window percentage
-                let bar_width = w.saturating_sub(2).max(4);
-                let filled = (pct / 100.0 * bar_width as f64).round() as usize;
-                let filled = filled.min(bar_width);
-                let bar_color = if pct > 90.0 {
-                    theme.error
-                } else if pct > 75.0 {
-                    theme.warning
-                } else {
-                    theme.secondary
-                };
-                let bar_str = format!(" {}{}", crate::a11y::bar_filled().repeat(filled), crate::a11y::bar_empty().repeat(bar_width.saturating_sub(filled)));
-                lines.push(Line::from(Span::styled(truncate_to(&bar_str, w), Style::default().fg(bar_color))));
+                lines.push(self.section_header("Context", SidebarSection::ContextUsage, theme));
+                if !self.is_collapsed(SidebarSection::ContextUsage) {
+                    let tokens_str = format_tokens(info.tokens_used);
+                    let pct = if info.context_window > 0 {
+                        ((info.tokens_used as f64 / info.context_window as f64) * 100.0).min(100.0)
+                    } else {
+                        0.0
+                    };
+                    let pct_label = format!("{tokens_str} ({pct:.0}%)");
+                    lines.push(Line::from(Span::styled(pct_label, Style::default().fg(theme.text))));
+                    // Progress bar based on actual context window percentage
+                    let bar_width = w.saturating_sub(2).max(4);
+                    let filled = (pct / 100.0 * bar_width as f64).round() as usize;
+                    let filled = filled.min(bar_width);
+                    let bar_color = if pct > 90.0 {
+                        theme.error
+                    } else if pct > 75.0 {
+                        theme.warning
+                    } else {
+                        theme.secondary
+                    };
+                    let bar_str = format!(" {}{}", crate::a11y::bar_filled().repeat(filled), crate::a11y::bar_empty().repeat(bar_width.saturating_sub(filled)));
+                    lines.push(Line::from(Span::styled(truncate_to(&bar_str, w), Style::default().fg(bar_color))));
 
-                // Pressure level indicator
-                let (level_label, level_color) = if pct > 95.0 {
-                    ("EMERGENCY", theme.error)
-                } else if pct > 85.0 {
-                    ("CRITICAL", theme.error)
-                } else if pct > 75.0 {
-                    ("HIGH", theme.warning)
-                } else if pct > 50.0 {
-                    ("NORMAL", theme.text_dim)
-                } else {
-                    ("LOW", theme.success)
-                };
-                lines.push(Line::from(vec![
-                    Span::styled("  ", Style::default()),
-                    Span::styled(level_label, Style::default().fg(level_color).add_modifier(Modifier::BOLD)),
-                ]));
-                lines.push(Line::from(""));
+                    // Pressure level indicator
+                    let (level_label, level_color) = if pct > 95.0 {
+                        ("EMERGENCY", theme.error)
+                    } else if pct > 85.0 {
+                        ("CRITICAL", theme.error)
+                    } else if pct > 75.0 {
+                        ("HIGH", theme.warning)
+                    } else if pct > 50.0 {
+                        ("NORMAL", theme.text_dim)
+                    } else {
+                        ("LOW", theme.success)
+                    };
+                    lines.push(Line::from(vec![
+                        Span::styled("  ", Style::default()),
+                        Span::styled(level_label, Style::default().fg(level_color).add_modifier(Modifier::BOLD)),
+                    ]));
+                    lines.push(Line::from(""));
+                }
 
                 // Cost
-                lines.push(Line::from(Span::styled("Cost", Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD))));
-                let cost_str = format!("${:.4}", info.cost_usd);
-                lines.push(Line::from(Span::styled(cost_str, Style::default().fg(theme.warning))));
-                lines.push(Line::from(""));
+                lines.push(self.section_header("Cost", SidebarSection::Cost, theme));
+                if !self.is_collapsed(SidebarSection::Cost) {
+                    let cost_str = format!("${:.4}", info.cost_usd);
+                    lines.push(Line::from(Span::styled(cost_str, Style::default().fg(theme.warning))));
+                    lines.push(Line::from(""));
+                }
 
                 // Tools
-                lines.push(Line::from(Span::styled("Tools", Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD))));
-                lines.push(Line::from(Span::styled(info.tools_invoked.to_string(), Style::default().fg(theme.text))));
-                if info.error_count > 0 {
-                    lines.push(Line::from(Span::styled(
-                        format!("  {} errors", info.error_count),
-                        Style::default().fg(theme.error),
-                    )));
+                lines.push(self.section_header("Tools", SidebarSection::Tools, theme));
+                if !self.is_collapsed(SidebarSection::Tools) {
+                    lines.push(Line::from(Span::styled(info.tools_invoked.to_string(), Style::default().fg(theme.text))));
+                    if info.error_count > 0 {
+                        lines.push(Line::from(Span::styled(
+                            format!("  {} errors", info.error_count),
+                            Style::default().fg(theme.error),
+                        )));
+                    }
                 }
 
                 // Diff stats
                 if !info.modified_files.is_empty() {
                     lines.push(Line::from(""));
-                    lines.push(Line::from(Span::styled("Changes", Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD))));
-                    lines.push(Line::from(vec![
-                        Span::styled("+", Style::default().fg(theme.success)),
-                        Span::styled(info.total_additions.to_string(), Style::default().fg(theme.success)),
-                        Span::styled(" ", Style::default().fg(theme.text_dim)),
-                        Span::styled("-", Style::default().fg(theme.error)),
-                        Span::styled(info.total_deletions.to_string(), Style::default().fg(theme.error)),
-                        Span::styled(format!("  ({} files)", info.modified_files.len()), Style::default().fg(theme.muted)),
-                    ]));
+                    lines.push(self.section_header("Changes", SidebarSection::Changes, theme));
+                    if !self.is_collapsed(SidebarSection::Changes) {
+                        lines.push(Line::from(vec![
+                            Span::styled("+", Style::default().fg(theme.success)),
+                            Span::styled(info.total_additions.to_string(), Style::default().fg(theme.success)),
+                            Span::styled(" ", Style::default().fg(theme.text_dim)),
+                            Span::styled("-", Style::default().fg(theme.error)),
+                            Span::styled(info.total_deletions.to_string(), Style::default().fg(theme.error)),
+                            Span::styled(format!("  ({} files)", info.modified_files.len()), Style::default().fg(theme.muted)),
+                        ]));
+                    }
                 }
 
                 // Diagnostics section
                 if !info.diagnostics.is_empty() {
                     lines.push(Line::from(""));
-                    lines.push(Line::from(Span::styled("Diagnostics", Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD))));
-                    let errs = info.diagnostics.iter().filter(|d| matches!(d.severity, super::super::lsp_bridge::DiagnosticSeverity::Error)).count();
-                    let warns = info.diagnostics.iter().filter(|d| matches!(d.severity, super::super::lsp_bridge::DiagnosticSeverity::Warning)).count();
-                    lines.push(Line::from(vec![
-                        Span::styled(format!("{errs}"), Style::default().fg(theme.error)),
-                        Span::styled("E ", Style::default().fg(theme.text_dim)),
-                        Span::styled(format!("{warns}"), Style::default().fg(theme.warning)),
-                        Span::styled("W", Style::default().fg(theme.text_dim)),
-                    ]));
-                    for diag in info.diagnostics.iter().take(8) {
-                        let color = match diag.severity {
-                            super::super::lsp_bridge::DiagnosticSeverity::Error => theme.error,
-                            super::super::lsp_bridge::DiagnosticSeverity::Warning => theme.warning,
-                            super::super::lsp_bridge::DiagnosticSeverity::Info => theme.primary,
-                            super::super::lsp_bridge::DiagnosticSeverity::Hint => theme.text_dim,
-                        };
-                        let icon = match diag.severity {
-                            super::super::lsp_bridge::DiagnosticSeverity::Error => "E",
-                            super::super::lsp_bridge::DiagnosticSeverity::Warning => "W",
-                            super::super::lsp_bridge::DiagnosticSeverity::Info => "I",
-                            super::super::lsp_bridge::DiagnosticSeverity::Hint => "H",
-                        };
-                        let fname = diag.file_path.split('/').next_back().unwrap_or(&diag.file_path);
+                    lines.push(self.section_header("Diagnostics", SidebarSection::Diagnostics, theme));
+                    if !self.is_collapsed(SidebarSection::Diagnostics) {
+                        let errs = info.diagnostics.iter().filter(|d| matches!(d.severity, super::super::lsp_bridge::DiagnosticSeverity::Error)).count();
+                        let warns = info.diagnostics.iter().filter(|d| matches!(d.severity, super::super::lsp_bridge::DiagnosticSeverity::Warning)).count();
                         lines.push(Line::from(vec![
-                            Span::styled(format!("[{icon}]"), Style::default().fg(color)),
-                            Span::styled(format!(" {}", truncate_to(fname, w.saturating_sub(6))), Style::default().fg(theme.text_dim)),
+                            Span::styled(format!("{errs}"), Style::default().fg(theme.error)),
+                            Span::styled("E ", Style::default().fg(theme.text_dim)),
+                            Span::styled(format!("{warns}"), Style::default().fg(theme.warning)),
+                            Span::styled("W", Style::default().fg(theme.text_dim)),
                         ]));
-                        lines.push(Line::from(Span::styled(
-                            format!("  {}", truncate_to(&diag.message, w.saturating_sub(4))),
-                            Style::default().fg(color),
-                        )));
-                    }
-                    if info.diagnostics.len() > 8 {
-                        lines.push(Line::from(Span::styled(
-                            format!("  ...+{} more", info.diagnostics.len() - 8),
-                            Style::default().fg(theme.muted),
-                        )));
+                        for diag in info.diagnostics.iter().take(8) {
+                            let color = match diag.severity {
+                                super::super::lsp_bridge::DiagnosticSeverity::Error => theme.error,
+                                super::super::lsp_bridge::DiagnosticSeverity::Warning => theme.warning,
+                                super::super::lsp_bridge::DiagnosticSeverity::Info => theme.primary,
+                                super::super::lsp_bridge::DiagnosticSeverity::Hint => theme.text_dim,
+                            };
+                            let icon = match diag.severity {
+                                super::super::lsp_bridge::DiagnosticSeverity::Error => "E",
+                                super::super::lsp_bridge::DiagnosticSeverity::Warning => "W",
+                                super::super::lsp_bridge::DiagnosticSeverity::Info => "I",
+                                super::super::lsp_bridge::DiagnosticSeverity::Hint => "H",
+                            };
+                            let fname = diag.file_path.split('/').next_back().unwrap_or(&diag.file_path);
+                            lines.push(Line::from(vec![
+                                Span::styled(format!("[{icon}]"), Style::default().fg(color)),
+                                Span::styled(format!(" {}", truncate_to(fname, w.saturating_sub(6))), Style::default().fg(theme.text_dim)),
+                            ]));
+                            lines.push(Line::from(Span::styled(
+                                format!("  {}", truncate_to(&diag.message, w.saturating_sub(4))),
+                                Style::default().fg(color),
+                            )));
+                        }
+                        if info.diagnostics.len() > 8 {
+                            lines.push(Line::from(Span::styled(
+                                format!("  ...+{} more", info.diagnostics.len() - 8),
+                                Style::default().fg(theme.muted),
+                            )));
+                        }
                     }
                 }
             }
@@ -304,97 +380,109 @@ impl SidebarWidget {
             }
             crate::repl::SidebarTab::Perf => {
                 // Session duration
-                lines.push(Line::from(Span::styled("Session", Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD))));
-                let dur = info.session_duration_secs;
-                let dur_str = if dur >= 3600 {
-                    format!("{}h {}m", dur / 3600, (dur % 3600) / 60)
-                } else if dur >= 60 {
-                    format!("{}m {}s", dur / 60, dur % 60)
-                } else {
-                    format!("{dur}s")
-                };
-                lines.push(Line::from(Span::styled(dur_str, Style::default().fg(theme.text))));
-                lines.push(Line::from(""));
+                lines.push(self.section_header("Session", SidebarSection::Session, theme));
+                if !self.is_collapsed(SidebarSection::Session) {
+                    let dur = info.session_duration_secs;
+                    let dur_str = if dur >= 3600 {
+                        format!("{}h {}m", dur / 3600, (dur % 3600) / 60)
+                    } else if dur >= 60 {
+                        format!("{}m {}s", dur / 60, dur % 60)
+                    } else {
+                        format!("{dur}s")
+                    };
+                    lines.push(Line::from(Span::styled(dur_str, Style::default().fg(theme.text))));
+                    lines.push(Line::from(""));
+                }
 
                 // Throughput
-                lines.push(Line::from(Span::styled("Throughput", Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD))));
-                let tok_str = format_tokens(info.tokens_used);
-                if let Some(tps) = info.tokens_per_sec {
+                lines.push(self.section_header("Throughput", SidebarSection::Throughput, theme));
+                if !self.is_collapsed(SidebarSection::Throughput) {
+                    let tok_str = format_tokens(info.tokens_used);
+                    if let Some(tps) = info.tokens_per_sec {
+                        lines.push(Line::from(vec![
+                            Span::styled(tok_str, Style::default().fg(theme.text)),
+                            Span::styled(format!(" ({tps:.0} tok/s)"), Style::default().fg(theme.text_dim)),
+                        ]));
+                    } else {
+                        lines.push(Line::from(Span::styled(tok_str, Style::default().fg(theme.text))));
+                    }
+                    // Turns and rate
+                    let dur = info.session_duration_secs;
+                    let turns_str = format!("{} turns", info.turn_count);
+                    let avg_dur = if info.turn_count > 0 && dur > 0 {
+                        format!(" (~{}s/turn)", dur / info.turn_count as u64)
+                    } else {
+                        String::new()
+                    };
                     lines.push(Line::from(vec![
-                        Span::styled(tok_str, Style::default().fg(theme.text)),
-                        Span::styled(format!(" ({tps:.0} tok/s)"), Style::default().fg(theme.text_dim)),
+                        Span::styled(turns_str, Style::default().fg(theme.text)),
+                        Span::styled(avg_dur, Style::default().fg(theme.text_dim)),
                     ]));
-                } else {
-                    lines.push(Line::from(Span::styled(tok_str, Style::default().fg(theme.text))));
+                    lines.push(Line::from(""));
                 }
-                // Turns and rate
-                let turns_str = format!("{} turns", info.turn_count);
-                let avg_dur = if info.turn_count > 0 && dur > 0 {
-                    format!(" (~{}s/turn)", dur / info.turn_count as u64)
-                } else {
-                    String::new()
-                };
-                lines.push(Line::from(vec![
-                    Span::styled(turns_str, Style::default().fg(theme.text)),
-                    Span::styled(avg_dur, Style::default().fg(theme.text_dim)),
-                ]));
-                lines.push(Line::from(""));
 
                 // Cost efficiency
-                lines.push(Line::from(Span::styled("Cost", Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD))));
-                lines.push(Line::from(Span::styled(format!("${:.4}", info.cost_usd), Style::default().fg(theme.warning))));
-                if info.turn_count > 0 {
-                    let per_turn = info.cost_usd / info.turn_count as f64;
-                    lines.push(Line::from(Span::styled(
-                        format!("  ${per_turn:.4}/turn"),
-                        Style::default().fg(theme.text_dim),
-                    )));
+                lines.push(self.section_header("Cost", SidebarSection::PerfCost, theme));
+                if !self.is_collapsed(SidebarSection::PerfCost) {
+                    lines.push(Line::from(Span::styled(format!("${:.4}", info.cost_usd), Style::default().fg(theme.warning))));
+                    if info.turn_count > 0 {
+                        let per_turn = info.cost_usd / info.turn_count as f64;
+                        lines.push(Line::from(Span::styled(
+                            format!("  ${per_turn:.4}/turn"),
+                            Style::default().fg(theme.text_dim),
+                        )));
+                    }
+                    if info.tokens_used > 0 {
+                        let per_tok = info.cost_usd / info.tokens_used as f64 * 1000.0;
+                        lines.push(Line::from(Span::styled(
+                            format!("  ${per_tok:.4}/1k tok"),
+                            Style::default().fg(theme.text_dim),
+                        )));
+                    }
+                    lines.push(Line::from(""));
                 }
-                if info.tokens_used > 0 {
-                    let per_tok = info.cost_usd / info.tokens_used as f64 * 1000.0;
-                    lines.push(Line::from(Span::styled(
-                        format!("  ${per_tok:.4}/1k tok"),
-                        Style::default().fg(theme.text_dim),
-                    )));
-                }
-                lines.push(Line::from(""));
 
                 // Activity
-                lines.push(Line::from(Span::styled("Activity", Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD))));
-                lines.push(Line::from(vec![
-                    Span::styled(format!("{}", info.tools_invoked), Style::default().fg(theme.text)),
-                    Span::styled(" tools", Style::default().fg(theme.text_dim)),
-                ]));
-                lines.push(Line::from(vec![
-                    Span::styled(format!("{}", info.commands_run), Style::default().fg(theme.text)),
-                    Span::styled(" commands", Style::default().fg(theme.text_dim)),
-                ]));
-                if info.error_count > 0 {
-                    lines.push(Line::from(Span::styled(
-                        format!("{} errors", info.error_count),
-                        Style::default().fg(theme.error),
-                    )));
+                lines.push(self.section_header("Activity", SidebarSection::Activity, theme));
+                if !self.is_collapsed(SidebarSection::Activity) {
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("{}", info.tools_invoked), Style::default().fg(theme.text)),
+                        Span::styled(" tools", Style::default().fg(theme.text_dim)),
+                    ]));
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("{}", info.commands_run), Style::default().fg(theme.text)),
+                        Span::styled(" commands", Style::default().fg(theme.text_dim)),
+                    ]));
+                    if info.error_count > 0 {
+                        lines.push(Line::from(Span::styled(
+                            format!("{} errors", info.error_count),
+                            Style::default().fg(theme.error),
+                        )));
+                    }
                 }
 
                 // Diff stats
                 if !info.modified_files.is_empty() {
                     lines.push(Line::from(""));
-                    lines.push(Line::from(Span::styled("Changes", Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD))));
-                    lines.push(Line::from(vec![
-                        Span::styled("+", Style::default().fg(theme.success)),
-                        Span::styled(info.total_additions.to_string(), Style::default().fg(theme.success)),
-                        Span::styled(" ", Style::default().fg(theme.text_dim)),
-                        Span::styled("-", Style::default().fg(theme.error)),
-                        Span::styled(info.total_deletions.to_string(), Style::default().fg(theme.error)),
-                        Span::styled(format!("  ({} files)", info.modified_files.len()), Style::default().fg(theme.muted)),
-                    ]));
-                    let chg_rate = if dur > 0 {
-                        let lines_per_min = ((info.total_additions + info.total_deletions) as f64 / dur as f64) * 60.0;
-                        format!("  {lines_per_min:.0} lines/min")
-                    } else {
-                        String::new()
-                    };
-                    lines.push(Line::from(Span::styled(chg_rate, Style::default().fg(theme.text_dim))));
+                    lines.push(self.section_header("Changes", SidebarSection::Changes, theme));
+                    if !self.is_collapsed(SidebarSection::Changes) {
+                        lines.push(Line::from(vec![
+                            Span::styled("+", Style::default().fg(theme.success)),
+                            Span::styled(info.total_additions.to_string(), Style::default().fg(theme.success)),
+                            Span::styled(" ", Style::default().fg(theme.text_dim)),
+                            Span::styled("-", Style::default().fg(theme.error)),
+                            Span::styled(info.total_deletions.to_string(), Style::default().fg(theme.error)),
+                            Span::styled(format!("  ({} files)", info.modified_files.len()), Style::default().fg(theme.muted)),
+                        ]));
+                        let dur = info.session_duration_secs;
+                        let chg_rate = if dur > 0 {
+                            let lines_per_min = ((info.total_additions + info.total_deletions) as f64 / dur as f64) * 60.0;
+                            format!("  {lines_per_min:.0} lines/min")
+                        } else {
+                            String::new()
+                        };
+                        lines.push(Line::from(Span::styled(chg_rate, Style::default().fg(theme.text_dim))));
+                    }
                 }
             }
             crate::repl::SidebarTab::Agents => {
@@ -496,6 +584,12 @@ impl SidebarWidget {
     /// Width the sidebar occupies (including border)
     pub fn width() -> u16 {
         SIDEBAR_WIDTH
+    }
+}
+
+impl Default for SidebarWidget {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
