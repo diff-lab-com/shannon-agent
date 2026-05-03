@@ -98,7 +98,7 @@ pub(crate) fn handle_hooks(repl: &mut Repl, args: &str) -> Result<()> {
             let mut mgr2 = HookManager::new();
             match mgr2.load() {
                 Ok(()) => { repl.chat.add_message(ChatRole::System, t!("commands.hooks.reloaded").to_string()); }
-                Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to reload hooks: {e}")); }
+                Err(e) => { super::set_error(repl, &format!("reloading hooks: {e}")); }
             }
             return Ok(());
         }
@@ -204,7 +204,7 @@ pub(crate) fn handle_commands(repl: &mut Repl, args: &str) -> Result<()> {
                         repl.chat.add_message(ChatRole::System, format!("Editor exited with status: {s}"));
                     }
                     Err(e) => {
-                        repl.chat.add_message(ChatRole::System, format!("Failed to launch editor: {e}"));
+                        super::set_error(repl, &format!("launching editor: {e}"));
                     }
                 }
             }
@@ -249,13 +249,13 @@ pub(crate) fn handle_commands(repl: &mut Repl, args: &str) -> Result<()> {
 
         // Create directory and default template
         if let Err(e) = std::fs::create_dir_all(&cmd_dir) {
-            repl.chat.add_message(ChatRole::System, format!("Failed to create directory {}: {e}", cmd_dir.display()));
+            super::set_error(repl, &format!("creating directory {}: {e}", cmd_dir.display()));
             return Ok(());
         }
 
         let template = format!("---\ndescription: {name} command\n---\n\n$ARGUMENTS\n");
         if let Err(e) = std::fs::write(&file_path, &template) {
-            repl.chat.add_message(ChatRole::System, format!("Failed to write {}: {e}", file_path.display()));
+            super::set_error(repl, &format!("writing {}: {e}", file_path.display()));
             return Ok(());
         }
 
@@ -289,7 +289,7 @@ pub(crate) fn handle_commands(repl: &mut Repl, args: &str) -> Result<()> {
             Some(e) => {
                 let path = e.path.clone();
                 if let Err(err) = std::fs::remove_file(&path) {
-                    repl.chat.add_message(ChatRole::System, format!("Failed to delete {}: {err}", path.display()));
+                    super::set_error(repl, &format!("deleting {}: {err}", path.display()));
                 } else {
                     repl.chat.add_message(ChatRole::System, format!("Deleted command '{name}' ({}).", path.display()));
                     // Auto-reload to update registry

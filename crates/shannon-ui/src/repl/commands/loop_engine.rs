@@ -62,7 +62,7 @@ pub(crate) fn handle_loop(repl: &mut Repl, args: &str) -> Result<()> {
     };
 
     if task.is_empty() {
-        repl.chat.add_message(ChatRole::System, "Error: no task description provided.".to_string());
+        super::set_error(repl, "no task description provided");
         return Ok(());
     }
 
@@ -200,7 +200,7 @@ pub(crate) fn handle_ralph(repl: &mut Repl, args: &str) -> Result<()> {
 
     let task = remaining.trim().to_string();
     if task.is_empty() {
-        repl.chat.add_message(ChatRole::System, "Error: no task description provided.".to_string());
+        super::set_error(repl, "no task description provided");
         return Ok(());
     }
 
@@ -377,8 +377,7 @@ pub(crate) fn handle_bind(repl: &mut Repl, args: &str) -> Result<()> {
                     format!("Keybindings template saved to {}", kb_path.display()));
             }
             Err(e) => {
-                repl.chat.add_message(ChatRole::System,
-                    format!("Failed to save keybindings: {e}"));
+                super::set_error(repl, &format!("saving keybindings: {e}"));
             }
         }
         return Ok(());
@@ -400,8 +399,7 @@ pub(crate) fn handle_bind(repl: &mut Repl, args: &str) -> Result<()> {
                         format!("Loaded keybindings config ({line_count} custom binding(s) defined).\nKeybindings take effect on next restart."));
                 }
                 Err(e) => {
-                    repl.chat.add_message(ChatRole::System,
-                        format!("Failed to read keybindings: {e}"));
+                    super::set_error(repl, &format!("reading keybindings: {e}"));
                 }
             }
         }
@@ -509,8 +507,7 @@ mode = \"suggest\"    # suggest | auto-edit | full-auto | readonly\n\
                     format!("Created project config: {}\nEdit it to customize Shannon for this project.", config_path.display()));
             }
             Err(e) => {
-                repl.chat.add_message(ChatRole::System,
-                    format!("Failed to create config: {e}"));
+                super::set_error(repl, &format!("creating config: {e}"));
             }
         }
         return Ok(());
@@ -784,7 +781,7 @@ Agent definitions are loaded from:
             let custom_agents = match loader.discover() {
                 Ok(agents) => agents,
                 Err(e) => {
-                    repl.chat.add_message(ChatRole::System, format!("Error loading custom agents: {e}"));
+                    super::set_error(repl, &format!("loading custom agents: {e}"));
                     return Ok(());
                 }
             };
@@ -983,13 +980,13 @@ Agent definitions are loaded from:
                                 repl.chat.add_message(ChatRole::System, format!("Message sent to agent '{}'.", agent.name));
                             }
                             Err(e) => {
-                                repl.chat.add_message(ChatRole::System, format!("Failed to send message: {e}"));
+                                super::set_error(repl, &format!("sending message to agent: {e}"));
                             }
                         }
                     }
                 }
                 Err(e) => {
-                    repl.chat.add_message(ChatRole::System, format!("Failed to spawn agent: {e}"));
+                    super::set_error(repl, &format!("spawning agent: {e}"));
                 }
             }
         }
@@ -1151,8 +1148,8 @@ pub(crate) fn handle_routine(repl: &mut Repl, args: &str) -> Result<()> {
         "save" => {
             let path = shannon_core::scheduled_routines::RoutineManager::default_storage_path();
             match repl.state.routine_manager.save_to_file(&path) {
-                Ok(()) => repl.chat.add_message(ChatRole::System, format!("Routines saved to {}", path.display())),
-                Err(e) => repl.chat.add_message(ChatRole::System, format!("Failed to save: {e}")),
+                Ok(()) => { repl.chat.add_message(ChatRole::System, format!("Routines saved to {}", path.display())); }
+                Err(e) => { super::set_error(repl, &format!("saving routines: {e}")); }
             };
         }
         "help" | "-h" | "--help" => {

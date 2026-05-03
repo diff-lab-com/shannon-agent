@@ -111,7 +111,7 @@ pub(crate) fn handle_config(repl: &mut Repl, args: &str) -> Result<()> {
                 manager.set(key.to_string(), value.clone());
                 match manager.save() {
                     Ok(_) => config_utils::format_config_set(key, &value.to_string()),
-                    Err(e) => format!("Error saving config: {e}"),
+                    Err(e) => format!("Error: saving config: {e}"),
                 }
             }
         }
@@ -125,7 +125,7 @@ pub(crate) fn handle_config(repl: &mut Repl, args: &str) -> Result<()> {
                     let _val = manager.get(key).unwrap_or(serde_json::Value::Null);
                     match manager.save() {
                         Ok(_) => config_utils::format_config_reset(key),
-                        Err(e) => format!("Error saving config: {e}"),
+                        Err(e) => format!("Error: saving config: {e}"),
                     }
                 } else {
                     config_utils::format_config_reset(key)

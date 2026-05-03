@@ -30,6 +30,13 @@ use shannon_types::recover_lock;
 
 use super::Repl;
 
+/// Display an error message in the chat as a system message.
+/// All user-facing error messages from slash commands should use this helper
+/// for a consistent "Error: <msg>" format.
+pub(crate) fn set_error(repl: &mut Repl, msg: &str) {
+    repl.chat.add_message(ChatRole::System, format!("Error: {msg}"));
+}
+
 /// Expand `[Pasted Text #N X lines]` markers with the actual stored content.
 /// Removes expanded entries from the map.
 fn expand_pasted_texts(
@@ -138,7 +145,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
         repl.shared_executor.registry().await.contains(cmd_name).await
     });
     // Commands handled in the match block but not in the global registry
-    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "agent", "route", "mcp", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "rewind", "notify", "webhook", "routine", "create-pr", "patch", "sandbox", "find", "grep", "conv-search", "copy", "paste", "add", "add-dir", "adddir", "rename", "watch", "bind", "project", "terminal-setup", "theme", "diff", "commands"];
+    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "agent", "route", "mcp", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "rewind", "notify", "webhook", "routine", "create-pr", "patch", "sandbox", "find", "grep", "conv-search", "copy", "paste", "add", "add-dir", "adddir", "rename", "watch", "bind", "project", "terminal-setup", "theme", "diff", "commands", "recap", "effort", "focus"];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
     if command_exists || is_repl_command {
@@ -211,6 +218,9 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "theme" => config::handle_theme(repl, args)?,
             "session" => session::handle_session(repl, args)?,
             "rename" => session::handle_rename(repl, args)?,
+            "recap" => session::handle_recap(repl, args)?,
+            "effort" => session::handle_effort(repl, args)?,
+            "focus" => session::handle_focus(repl, args)?,
             "accessibility" | "a11y" => config::handle_accessibility(repl, args)?,
             "diag" => debug::handle_diag(repl, args)?,
             "commands" => hooks::handle_commands(repl, args)?,

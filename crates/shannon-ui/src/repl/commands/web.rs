@@ -79,10 +79,7 @@ pub(crate) fn handle_webhook(repl: &mut Repl, args: &str) -> Result<()> {
                             repl.webhook_receiver = Some(receiver);
                         }
                         Err(e) => {
-                            repl.chat.add_message(
-                                ChatRole::System,
-                                format!("Failed to start webhook receiver on port {port}: {e}"),
-                            );
+                            super::set_error(repl, &format!("starting webhook receiver on port {port}: {e}"));
                         }
                     }
                 }
@@ -203,7 +200,7 @@ pub(crate) fn handle_web_search(repl: &mut Repl, args: &str) -> Result<()> {
             repl.chat.add_message(ChatRole::System, output);
         }
         Err(e) => {
-            repl.chat.add_message(ChatRole::System, format!("Web search failed: {e}\nSet SHANNON_SEARCH_API_KEY for web search capability."));
+            super::set_error(repl, &format!("web search: {e}\nSet SHANNON_SEARCH_API_KEY for web search capability."));
         }
     }
     Ok(())

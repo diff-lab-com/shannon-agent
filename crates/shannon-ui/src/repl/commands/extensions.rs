@@ -106,7 +106,7 @@ pub(crate) fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
                     }
                 }
                 Err(e) => {
-                    repl.chat.add_message(ChatRole::System, format!("Failed to save config: {e}"));
+                    super::set_error(repl, &format!("saving config: {e}"));
                 }
             }
         }
@@ -120,7 +120,7 @@ pub(crate) fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
             if config.mcp_servers.remove(name).is_some() {
                 match save_config(&config) {
                     Ok(()) => { repl.chat.add_message(ChatRole::System, format!("Removed MCP server '{name}'.")); }
-                    Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to save config: {e}")); }
+                    Err(e) => { super::set_error(repl, &format!("saving config: {e}")); }
                 }
             } else {
                 repl.chat.add_message(ChatRole::System, format!("Server '{name}' not found in config."));
@@ -204,7 +204,7 @@ pub(crate) fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
             mgr.approve_server(name);
             match mgr.save_to_file(&approval_path) {
                 Ok(()) => { repl.chat.add_message(ChatRole::System, format!("Approved '{name}'. It will connect on next startup.")); }
-                Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to save approval: {e}")); }
+                Err(e) => { super::set_error(repl, &format!("saving approval: {e}")); }
             }
         }
         "deny" => {
@@ -219,14 +219,14 @@ pub(crate) fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
             mgr.deny_server(name);
             match mgr.save_to_file(&approval_path) {
                 Ok(()) => { repl.chat.add_message(ChatRole::System, format!("Denied '{name}'. It will be skipped on next startup.")); }
-                Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to save denial: {e}")); }
+                Err(e) => { super::set_error(repl, &format!("saving denial: {e}")); }
             }
         }
         "reset-approvals" => {
             let approval_path = PathBuf::from(".shannon/mcp_approvals.json");
             match shannon_core::McpApprovalManager::reset_persisted(&approval_path) {
                 Ok(()) => { repl.chat.add_message(ChatRole::System, "All approval decisions cleared. Servers will be re-evaluated on next startup.".to_string()); }
-                Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to reset approvals: {e}")); }
+                Err(e) => { super::set_error(repl, &format!("resetting approvals: {e}")); }
             }
         }
         "reload" => {
@@ -378,7 +378,7 @@ pub(crate) fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
                     }
                 }
                 Err(e) => {
-                    repl.chat.add_message(ChatRole::System, format!("Failed to discover MCP config: {e}"));
+                    super::set_error(repl, &format!("discovering MCP config: {e}"));
                 }
             }
         }
@@ -442,10 +442,10 @@ pub(crate) fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
                                 repl.chat.add_message(ChatRole::System, format!("Server '{server}' returned no resource list."));
                             }
                         } else {
-                            repl.chat.add_message(ChatRole::System, format!("Failed to list resources from '{server}'."));
+                            super::set_error(repl, &format!("listing resources from '{server}'"));
                         }
                     }
-                    Err(e) => { repl.chat.add_message(ChatRole::System, format!("Error: {e}")); }
+                    Err(e) => { super::set_error(repl, &format!("{e}")); }
                 }
             }
         }
@@ -514,7 +514,7 @@ pub(crate) fn handle_agents(repl: &mut Repl, args: &str) -> Result<()> {
             let coordinator = match repl.runtime.block_on(AgentCoordinator::new(config)) {
                 Ok(c) => c,
                 Err(e) => {
-                    repl.chat.add_message(ChatRole::System, format!("Failed to create agent coordinator: {e}"));
+                    super::set_error(repl, &format!("creating agent coordinator: {e}"));
                     return;
                 }
             };
@@ -559,7 +559,7 @@ pub(crate) fn handle_agents(repl: &mut Repl, args: &str) -> Result<()> {
                     ));
                 }
                 Err(e) => {
-                    repl.chat.add_message(ChatRole::System, format!("Failed to spawn agent: {e}"));
+                    super::set_error(repl, &format!("spawning agent: {e}"));
                 }
             }
         }
@@ -638,7 +638,7 @@ pub(crate) fn handle_agents(repl: &mut Repl, args: &str) -> Result<()> {
                     repl.chat.add_message(ChatRole::System, out);
                 }
                 Err(e) => {
-                    repl.chat.add_message(ChatRole::System, format!("Failed to send message: {e}"));
+                    super::set_error(repl, &format!("sending message: {e}"));
                 }
             }
         }
@@ -747,10 +747,10 @@ pub(crate) fn handle_team(repl: &mut Repl, args: &str) -> Result<()> {
                             repl.team_coordinator = Some(std::sync::Arc::new(coordinator));
                             repl.chat.add_message(ChatRole::System, format!("Team '{name}' created."));
                         }
-                        Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to create team: {e}")); }
+                        Err(e) => { super::set_error(repl, &format!("creating team: {e}")); }
                     }
                 }
-                Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to initialize coordinator: {e}")); }
+                Err(e) => { super::set_error(repl, &format!("initializing coordinator: {e}")); }
             }
         }
         "add" => {
@@ -770,7 +770,7 @@ pub(crate) fn handle_team(repl: &mut Repl, args: &str) -> Result<()> {
                         };
                         repl.chat.add_message(ChatRole::System, format!("Agent '{agent_name}' added to team '{team_name}'.{worktree_msg}"));
                     }
-                    Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to add agent: {e}")); }
+                    Err(e) => { super::set_error(repl, &format!("adding agent: {e}")); }
                 }
             } else {
                 repl.chat.add_message(ChatRole::System, "No team created yet. Use /team create first.".to_string());
@@ -786,7 +786,7 @@ pub(crate) fn handle_team(repl: &mut Repl, args: &str) -> Result<()> {
             if let Some(ref coordinator) = repl.team_coordinator {
                 match repl.runtime.block_on(coordinator.add_task(team_name, subject.clone(), String::new(), TaskPriority::Medium)) {
                     Ok(task_id) => { repl.chat.add_message(ChatRole::System, format!("Task added to '{team_name}': {subject} (id: {task_id})")); }
-                    Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to add task: {e}")); }
+                    Err(e) => { super::set_error(repl, &format!("adding task: {e}")); }
                 }
             } else {
                 repl.chat.add_message(ChatRole::System, "No team created yet. Use /team create first.".to_string());
@@ -801,7 +801,7 @@ pub(crate) fn handle_team(repl: &mut Repl, args: &str) -> Result<()> {
             if let Some(ref coordinator) = repl.team_coordinator {
                 match repl.runtime.block_on(coordinator.assign_task(team_name, uuid::Uuid::nil())) {
                     Ok(agent) => { repl.chat.add_message(ChatRole::System, format!("Task assigned to '{agent}' in team '{team_name}'.")); }
-                    Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to assign task: {e}")); }
+                    Err(e) => { super::set_error(repl, &format!("assigning task: {e}")); }
                 }
             } else {
                 repl.chat.add_message(ChatRole::System, "No team created yet. Use /team create first.".to_string());
@@ -820,7 +820,7 @@ pub(crate) fn handle_team(repl: &mut Repl, args: &str) -> Result<()> {
                 } else {
                     match repl.runtime.block_on(coordinator.team_status(team_name)) {
                         Ok(status) => { repl.chat.add_message(ChatRole::System, status); }
-                        Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to get status: {e}")); }
+                        Err(e) => { super::set_error(repl, &format!("getting status: {e}")); }
                     }
                 }
             } else {
@@ -843,7 +843,7 @@ pub(crate) fn handle_team(repl: &mut Repl, args: &str) -> Result<()> {
             if let Some(ref coordinator) = repl.team_coordinator {
                 match repl.runtime.block_on(coordinator.shutdown()) {
                     Ok(()) => { repl.chat.add_message(ChatRole::System, "Team shut down.".to_string()); }
-                    Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to shutdown: {e}")); }
+                    Err(e) => { super::set_error(repl, &format!("shutting down: {e}")); }
                 }
             } else {
                 repl.chat.add_message(ChatRole::System, "No active team.".to_string());
@@ -858,7 +858,7 @@ pub(crate) fn handle_team(repl: &mut Repl, args: &str) -> Result<()> {
             if let Some(ref coordinator) = repl.team_coordinator {
                 match repl.runtime.block_on(coordinator.disband_team(team_name)) {
                     Ok(()) => { repl.chat.add_message(ChatRole::System, format!("Team '{team_name}' disbanded and cleaned up.")); }
-                    Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to disband: {e}")); }
+                    Err(e) => { super::set_error(repl, &format!("disbanding team: {e}")); }
                 }
             } else {
                 repl.chat.add_message(ChatRole::System, "No active team coordinator.".to_string());

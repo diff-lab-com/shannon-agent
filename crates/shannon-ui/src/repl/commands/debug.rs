@@ -154,7 +154,7 @@ pub(crate) fn handle_diag(repl: &mut Repl, args: &str) -> Result<()> {
             repl.chat.add_message(ChatRole::System, msg);
         }
         Err(e) => {
-            repl.chat.add_message(ChatRole::System, format!("Failed to run {label}: {e}"));
+            super::set_error(repl, &format!("running {label}: {e}"));
         }
     }
     Ok(())

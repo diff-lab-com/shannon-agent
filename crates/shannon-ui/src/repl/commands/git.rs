@@ -163,14 +163,12 @@ pub(crate) fn handle_create_pr(repl: &mut Repl, args: &str) -> Result<()> {
             let stderr = String::from_utf8_lossy(&out.stderr);
             // It's ok if already pushed (error contains "already up-to-date" or similar)
             if !stderr.contains("up-to-date") && !stderr.contains("Everything up-to-date") {
-                repl.chat.add_message(ChatRole::System,
-                    format!("Failed to push branch: {stderr}"));
+                super::set_error(repl, &format!("pushing branch: {stderr}"));
                 return Ok(());
             }
         }
         Err(e) => {
-            repl.chat.add_message(ChatRole::System,
-                format!("Failed to push branch: {e}"));
+            super::set_error(repl, &format!("pushing branch: {e}"));
             return Ok(());
         }
     }
@@ -222,13 +220,11 @@ pub(crate) fn handle_create_pr(repl: &mut Repl, args: &str) -> Result<()> {
                     }
                 }
             } else {
-                repl.chat.add_message(ChatRole::System,
-                    format!("Failed to create PR: {stderr}"));
+                super::set_error(repl, &format!("creating PR: {stderr}"));
             }
         }
         Err(e) => {
-            repl.chat.add_message(ChatRole::System,
-                format!("Failed to run gh pr create: {e}"));
+            super::set_error(repl, &format!("running gh pr create: {e}"));
         }
     }
 
@@ -371,10 +367,10 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
             }
             Ok(o) => {
                 let err = String::from_utf8_lossy(&o.stderr);
-                repl.chat.add_message(ChatRole::System, format!("git diff failed: {err}"));
+                super::set_error(repl, &format!("git diff: {err}"));
             }
             Err(e) => {
-                repl.chat.add_message(ChatRole::System, format!("Failed to run git diff: {e}"));
+                super::set_error(repl, &format!("running git diff: {e}"));
             }
         }
         return Ok(());
@@ -391,9 +387,9 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
                 repl.chat.add_message(ChatRole::System, "All changes accepted and staged.".to_string());
             }
             Ok(o) => {
-                repl.chat.add_message(ChatRole::System, format!("Failed to stage: {}", String::from_utf8_lossy(&o.stderr)));
+                super::set_error(repl, &format!("staging: {}", String::from_utf8_lossy(&o.stderr)));
             }
-            Err(e) => { repl.chat.add_message(ChatRole::System, format!("Error: {e}")); }
+            Err(e) => { super::set_error(repl, &format!("{e}")); }
         }
         return Ok(());
     }
@@ -421,9 +417,9 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
                 repl.chat.add_message(ChatRole::System, format!("All unstaged changes discarded ({file_count} files)."));
             }
             Ok(o) => {
-                repl.chat.add_message(ChatRole::System, format!("Failed to discard: {}", String::from_utf8_lossy(&o.stderr)));
+                super::set_error(repl, &format!("discarding changes: {}", String::from_utf8_lossy(&o.stderr)));
             }
-            Err(e) => { repl.chat.add_message(ChatRole::System, format!("Error: {e}")); }
+            Err(e) => { super::set_error(repl, &format!("discarding changes: {e}")); }
         }
         // Also clean untracked files
         let _ = std::process::Command::new("git")
@@ -445,9 +441,9 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
                 repl.chat.add_message(ChatRole::System, format!("Changes to '{file}' accepted (staged)."));
             }
             Ok(o) => {
-                repl.chat.add_message(ChatRole::System, format!("Failed: {}", String::from_utf8_lossy(&o.stderr)));
+                super::set_error(repl, &format!("git operation failed: {}", String::from_utf8_lossy(&o.stderr)));
             }
-            Err(e) => { repl.chat.add_message(ChatRole::System, format!("Error: {e}")); }
+            Err(e) => { super::set_error(repl, &format!("{e}")); }
         }
         return Ok(());
     }
@@ -464,9 +460,9 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
                 repl.chat.add_message(ChatRole::System, format!("Changes to '{file}' rejected (reverted)."));
             }
             Ok(o) => {
-                repl.chat.add_message(ChatRole::System, format!("Failed: {}", String::from_utf8_lossy(&o.stderr)));
+                super::set_error(repl, &format!("git operation failed: {}", String::from_utf8_lossy(&o.stderr)));
             }
-            Err(e) => { repl.chat.add_message(ChatRole::System, format!("Error: {e}")); }
+            Err(e) => { super::set_error(repl, &format!("{e}")); }
         }
         return Ok(());
     }
@@ -514,7 +510,7 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
 
                 repl.chat.add_message(ChatRole::System, msg);
             }
-            Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to get status: {e}")); }
+            Err(e) => { super::set_error(repl, &format!("getting git status: {e}")); }
         }
         return Ok(());
     }
@@ -548,7 +544,7 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
                                 repl.chat.add_message(ChatRole::System, msg);
                             }
                         }
-                        Err(e) => { repl.chat.add_message(ChatRole::System, format!("Error: {e}")); }
+                        Err(e) => { super::set_error(repl, &format!("{e}")); }
                     }
                 } else {
                     repl.chat.add_message(ChatRole::System, format!("Invalid file number: {num}. Use /diff review to list files."));
@@ -574,10 +570,10 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
             }
             Ok(o) => {
                 let err = String::from_utf8_lossy(&o.stderr);
-                repl.chat.add_message(ChatRole::System, format!("git diff failed: {err}"));
+                super::set_error(repl, &format!("git diff: {err}"));
             }
             Err(e) => {
-                repl.chat.add_message(ChatRole::System, format!("Failed to run git diff: {e}"));
+                super::set_error(repl, &format!("running git diff: {e}"));
             }
         }
         return Ok(());
@@ -600,10 +596,10 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
                 }
                 Ok(o) => {
                     let err = String::from_utf8_lossy(&o.stderr);
-                    repl.chat.add_message(ChatRole::System, format!("git diff failed: {err}"));
+                    super::set_error(repl, &format!("git diff: {err}"));
                 }
                 Err(e) => {
-                    repl.chat.add_message(ChatRole::System, format!("Failed to run git diff: {e}"));
+                    super::set_error(repl, &format!("running git diff: {e}"));
                 }
             }
             return Ok(());
@@ -738,7 +734,7 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
                 repl.chat.add_message(ChatRole::System, report);
             }
         }
-        Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to run git diff: {e}")); }
+        Err(e) => { super::set_error(repl, &format!("running git diff: {e}")); }
     }
     Ok(())
 }
@@ -844,7 +840,7 @@ pub(crate) fn handle_stage(repl: &mut Repl, args: &str) -> Result<()> {
                 repl.chat.add_message(ChatRole::System, format!("git add failed: {err}"));
             }
             Err(e) => {
-                repl.chat.add_message(ChatRole::System, format!("Failed to run git add: {e}"));
+                super::set_error(repl, &format!("running git add: {e}"));
             }
         }
     } else {
@@ -865,7 +861,7 @@ pub(crate) fn handle_stage(repl: &mut Repl, args: &str) -> Result<()> {
                 repl.chat.add_message(ChatRole::System, format!("git add failed: {err}"));
             }
             Err(e) => {
-                repl.chat.add_message(ChatRole::System, format!("Failed to run git add: {e}"));
+                super::set_error(repl, &format!("running git add: {e}"));
             }
         }
     }
@@ -894,7 +890,7 @@ pub(crate) fn handle_status(repl: &mut Repl, args: &str) -> Result<()> {
             stdout.to_string()
         }
         Err(e) => {
-            repl.chat.add_message(ChatRole::System, format!("Failed to run git status: {e}"));
+            super::set_error(repl, &format!("running git status: {e}"));
             return Ok(());
         }
     };
@@ -959,7 +955,7 @@ pub(crate) fn handle_ci(repl: &mut Repl, args: &str) -> Result<()> {
                     }
                 }
                 Err(e) => {
-                    repl.chat.add_message(ChatRole::System, format!("Failed to query CI: {e}"));
+                    super::set_error(repl, &format!("querying CI: {e}"));
                 }
             }
         }
@@ -981,7 +977,7 @@ pub(crate) fn handle_ci(repl: &mut Repl, args: &str) -> Result<()> {
                     }
                 }
                 Err(e) => {
-                    repl.chat.add_message(ChatRole::System, format!("Failed to list runs: {e}"));
+                    super::set_error(repl, &format!("listing CI runs: {e}"));
                 }
             }
         }
@@ -1002,7 +998,7 @@ pub(crate) fn handle_ci(repl: &mut Repl, args: &str) -> Result<()> {
                     }
                 }
                 Err(e) => {
-                    repl.chat.add_message(ChatRole::System, format!("Failed to list workflows: {e}"));
+                    super::set_error(repl, &format!("listing workflows: {e}"));
                 }
             }
         }
@@ -1028,7 +1024,7 @@ pub(crate) fn handle_ci(repl: &mut Repl, args: &str) -> Result<()> {
                     }
                 }
                 Err(e) => {
-                    repl.chat.add_message(ChatRole::System, format!("Failed to view run: {e}"));
+                    super::set_error(repl, &format!("viewing CI run: {e}"));
                 }
             }
         }
@@ -1056,7 +1052,7 @@ pub(crate) fn handle_ci(repl: &mut Repl, args: &str) -> Result<()> {
                     }
                 }
                 Err(e) => {
-                    repl.chat.add_message(ChatRole::System, format!("Failed to trigger workflow: {e}"));
+                    super::set_error(repl, &format!("triggering workflow: {e}"));
                 }
             }
         }
@@ -1253,7 +1249,7 @@ pub(crate) fn handle_worktree(repl: &mut Repl, args: &str) -> Result<()> {
             };
             match repl.runtime.block_on(engine.tools().execute("enter_worktree", input)) {
                 Ok(result) => { repl.chat.add_message(ChatRole::System, format!("Entered worktree: {}", result.content)); }
-                Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to enter worktree: {e}")); }
+                Err(e) => { super::set_error(repl, &format!("entering worktree: {e}")); }
             }
         }
         "exit" => {
@@ -1266,7 +1262,7 @@ pub(crate) fn handle_worktree(repl: &mut Repl, args: &str) -> Result<()> {
             };
             match repl.runtime.block_on(engine.tools().execute("exit_worktree", input)) {
                 Ok(result) => { repl.chat.add_message(ChatRole::System, format!("Exited worktree: {}", result.content)); }
-                Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to exit worktree: {e}")); }
+                Err(e) => { super::set_error(repl, &format!("exiting worktree: {e}")); }
             }
         }
         _ => {

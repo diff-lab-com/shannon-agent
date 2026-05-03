@@ -8,7 +8,7 @@ pub(crate) fn handle_sessions(repl: &mut Repl, args: &str) -> Result<()> {
     let sessions = match repl.state_manager.list_persisted_sessions() {
         Ok(s) => s,
         Err(e) => {
-            repl.chat.add_message(ChatRole::System, format!("Error listing sessions: {e}"));
+            super::set_error(repl, &format!("listing sessions: {e}"));
             return Ok(());
         }
     };
@@ -138,10 +138,10 @@ pub(crate) fn handle_resume(repl: &mut Repl, args: &str) -> Result<()> {
             }
         }
         Ok(None) => {
-            repl.chat.add_message(ChatRole::System, format!("Session not found: {session_id}"));
+            super::set_error(repl, &format!("session not found: {session_id}"));
         }
         Err(e) => {
-            repl.chat.add_message(ChatRole::System, format!("Error loading session: {e}"));
+            super::set_error(repl, &format!("loading session: {e}"));
         }
     }
 
@@ -186,7 +186,7 @@ pub(crate) fn handle_branch(repl: &mut Repl, args: &str) -> Result<()> {
             return Ok(());
         }
         Err(e) => {
-            repl.chat.add_message(ChatRole::System, format!("Error loading session: {e}"));
+            super::set_error(repl, &format!("loading session for branch: {e}"));
             return Ok(());
         }
     };
@@ -230,7 +230,7 @@ pub(crate) fn handle_branch(repl: &mut Repl, args: &str) -> Result<()> {
             );
         }
         Err(e) => {
-            repl.chat.add_message(ChatRole::System, format!("Error creating branch: {e}"));
+            super::set_error(repl, &format!("creating branch: {e}"));
         }
     }
 
@@ -262,7 +262,7 @@ pub(crate) fn handle_history(repl: &mut Repl, args: &str) -> Result<()> {
 
         match std::fs::write(export_path, md) {
             Ok(_) => { repl.chat.add_message(ChatRole::System, format!("Session exported to: {export_path}")); }
-            Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to export: {e}")); }
+            Err(e) => { super::set_error(repl, &format!("exporting session: {e}")); }
         };
         return Ok(());
     }
@@ -905,8 +905,7 @@ pub(crate) fn handle_session(repl: &mut Repl, args: &str) -> Result<()> {
                         format!("Session exported to {filename} ({} messages)", messages.len()));
                 }
                 Err(e) => {
-                    repl.chat.add_message(ChatRole::System,
-                        format!("Failed to export session: {e}"));
+                    super::set_error(repl, &format!("exporting session: {e}"));
                 }
             }
         }
@@ -942,5 +941,134 @@ pub(crate) fn handle_rename(repl: &mut Repl, args: &str) -> Result<()> {
 
     repl.state.session_title = Some(name.to_string());
     repl.chat.add_message(ChatRole::System, format!("Session renamed to: {name}"));
+    Ok(())
+}
+
+/// /recap — Generate a summary of the conversation so far.
+///
+/// Shows message counts by role, the last N user messages, total turns,
+/// and the session title if set. REPL-only, no API call.
+pub(crate) fn handle_recap(repl: &mut Repl, _args: &str) -> Result<()> {
+    let total = repl.chat.len();
+    if total == 0 {
+        repl.chat.add_message(ChatRole::System, "No messages in this session yet.".to_string());
+        return Ok(());
+    }
+
+    let mut user_count = 0usize;
+    let mut assistant_count = 0usize;
+    let mut system_count = 0usize;
+    let mut tool_count = 0usize;
+    let mut user_messages: Vec<String> = Vec::new();
+
+    for i in 0..repl.chat.len() {
+        if let Some(msg) = repl.chat.get_message(i) {
+            match msg.role {
+                ChatRole::User => {
+                    user_count += 1;
+                    let preview: String = msg.content.chars().take(80).collect();
+                    let ellipsis = if msg.content.len() > 80 { "..." } else { "" };
+                    user_messages.push(format!("{preview}{ellipsis}"));
+                }
+                ChatRole::Assistant => assistant_count += 1,
+                ChatRole::System => system_count += 1,
+                ChatRole::Tool => tool_count += 1,
+            }
+        }
+    }
+
+    let mut output = String::from("Conversation Recap:\n\n");
+    output.push_str(&format!(
+        "  Messages: {total} total ({user_count} user, {assistant_count} assistant, {system_count} system, {tool_count} tool)\n"
+    ));
+    output.push_str(&format!("  Turns: {}\n", repl.state.turn_count));
+
+    if let Some(ref title) = repl.state.session_title {
+        output.push_str(&format!("  Session: \"{title}\"\n"));
+    }
+
+    if let Some(started) = &repl.session_started_at {
+        let elapsed = chrono::Utc::now() - *started;
+        let mins = elapsed.num_minutes();
+        let secs = elapsed.num_seconds() % 60;
+        output.push_str(&format!("  Duration: {mins}m {secs}s\n"));
+    }
+
+    let model = repl.state.model.as_deref().unwrap_or("default");
+    output.push_str(&format!("  Model: {model}\n"));
+
+    if !user_messages.is_empty() {
+        let last_n: Vec<&String> = user_messages.iter().rev().take(5).collect();
+        output.push_str("\n  Recent user messages:\n");
+        for (i, msg) in last_n.iter().rev().enumerate() {
+            output.push_str(&format!("    {}. {msg}\n", i + 1));
+        }
+    }
+
+    repl.chat.add_message(ChatRole::System, output);
+    Ok(())
+}
+
+/// /effort — Set or view the thinking effort level for the model.
+///
+/// With no args: show current effort level.
+/// With args "low", "medium", "high": set the effort level.
+pub(crate) fn handle_effort(repl: &mut Repl, args: &str) -> Result<()> {
+    let level = args.trim().to_lowercase();
+
+    if level.is_empty() {
+        match &repl.state.effort_level {
+            Some(effort) => {
+                repl.chat.add_message(ChatRole::System, format!("Current effort level: {effort}\nUsage: /effort <low|medium|high>"));
+            }
+            None => {
+                repl.chat.add_message(ChatRole::System, "No effort level set (using model default).\nUsage: /effort <low|medium|high>".to_string());
+            }
+        }
+        return Ok(());
+    }
+
+    match level.as_str() {
+        "low" | "medium" | "high" => {
+            repl.state.effort_level = Some(level.clone());
+            repl.chat.add_message(ChatRole::System, format!("Effort level set to: {level}"));
+        }
+        _ => {
+            repl.chat.add_message(ChatRole::System, "Invalid effort level. Use: low, medium, or high.".to_string());
+        }
+    }
+
+    Ok(())
+}
+
+/// /focus — Set context focus to limit what the model pays attention to.
+///
+/// With no args: show current focus.
+/// With args: set focus area (e.g., "frontend", "backend", "security").
+/// With "off" or "clear": remove focus.
+pub(crate) fn handle_focus(repl: &mut Repl, args: &str) -> Result<()> {
+    let area = args.trim();
+
+    if area.is_empty() {
+        match &repl.state.focus_area {
+            Some(focus) => {
+                repl.chat.add_message(ChatRole::System, format!("Current focus: {focus}\nUsage: /focus <area> | /focus off"));
+            }
+            None => {
+                repl.chat.add_message(ChatRole::System, "No focus area set.\nUsage: /focus <area> (e.g., frontend, backend, security)".to_string());
+            }
+        }
+        return Ok(());
+    }
+
+    let area_lower = area.to_lowercase();
+    if area_lower == "off" || area_lower == "clear" {
+        repl.state.focus_area = None;
+        repl.chat.add_message(ChatRole::System, "Focus area cleared.".to_string());
+    } else {
+        repl.state.focus_area = Some(area.to_string());
+        repl.chat.add_message(ChatRole::System, format!("Focus area set to: {area}"));
+    }
+
     Ok(())
 }

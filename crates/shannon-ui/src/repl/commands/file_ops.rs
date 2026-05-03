@@ -264,7 +264,7 @@ pub(crate) fn handle_export(repl: &mut Repl, args: &str) -> Result<()> {
             };
             repl.chat.add_message(ChatRole::System, format!("Session exported to: {filename} ({} messages, {format_name} format)", repl.chat.len()));
         }
-        Err(e) => { repl.chat.add_message(ChatRole::System, format!("Failed to export session: {e}")); }
+        Err(e) => { super::set_error(repl, &format!("exporting session: {e}")); }
     }
     Ok(())
 }
@@ -279,7 +279,7 @@ pub(crate) fn handle_import(repl: &mut Repl, args: &str) -> Result<()> {
     let content = match std::fs::read_to_string(filename) {
         Ok(c) => c,
         Err(e) => {
-            repl.chat.add_message(ChatRole::System, format!("Failed to read file '{filename}': {e}"));
+            super::set_error(repl, &format!("reading file '{filename}': {e}"));
             return Ok(());
         }
     };
@@ -489,7 +489,7 @@ pub(crate) fn handle_watch(repl: &mut Repl, args: &str) -> Result<()> {
                         format!("Watching {count} tracked files in git repository.\nUse /watch check to scan for changes."));
                 }
                 Err(e) => {
-                    repl.chat.add_message(ChatRole::System, format!("Failed: {e}"));
+                    repl.chat.add_message(ChatRole::System, format!("Error: {e}"));
                 }
             }
         }

@@ -36,7 +36,8 @@ pub(crate) fn handle_remember(repl: &mut Repl, args: &str) -> Result<()> {
     let id = entry.id.clone();
     let _ = store.add(entry);
     if let Err(e) = store.save() {
-        repl.chat.add_message(ChatRole::System, format!("Failed to save memory: {e}"));
+        drop(store);
+        super::set_error(repl, &format!("saving memory: {e}"));
         return Ok(());
     }
     drop(store);
@@ -136,7 +137,7 @@ pub(crate) fn handle_forget(repl: &mut Repl, args: &str) -> Result<()> {
                     repl.chat.add_message(ChatRole::System, format!("Forgot memory {display}..."));
                 }
                 Ok(false) => { repl.chat.add_message(ChatRole::System, "Memory not found.".to_string()); }
-                Err(e) => { repl.chat.add_message(ChatRole::System, format!("Error deleting memory: {e}")); }
+                Err(e) => { drop(store); super::set_error(repl, &format!("deleting memory: {e}")); }
             }
         }
         None => { repl.chat.add_message(ChatRole::System, format!("No memory found matching '{id_prefix}'")); }

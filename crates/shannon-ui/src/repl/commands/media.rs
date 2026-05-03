@@ -278,7 +278,7 @@ pub(crate) fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
     let bytes = match std::fs::read(file_path) {
         Ok(b) => b,
         Err(e) => {
-            repl.chat.add_message(ChatRole::System, format!("Failed to read file: {e}"));
+            super::set_error(repl, &format!("reading file: {e}"));
             return Ok(());
         }
     };
@@ -340,7 +340,7 @@ pub(crate) fn handle_browse(repl: &mut Repl, args: &str) -> Result<()> {
     let mut selector = crate::widgets::select::FileSelectorWidget::new("File Browser".to_string())
         .with_path(&path);
     if let Err(e) = selector.refresh() {
-        repl.chat.add_message(ChatRole::System, format!("Failed to browse {path}: {e}"));
+        super::set_error(repl, &format!("browsing {path}: {e}"));
         return Ok(());
     }
     repl.state.file_selector = Some(selector);

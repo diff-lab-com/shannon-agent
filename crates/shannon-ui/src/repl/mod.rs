@@ -221,6 +221,10 @@ pub struct ReplState {
     pub extra_dirs: Vec<String>,
     /// Custom session title (set via /rename)
     pub session_title: Option<String>,
+    /// Thinking effort level for the model (set via /effort)
+    pub effort_level: Option<String>,
+    /// Context focus area to limit model attention (set via /focus)
+    pub focus_area: Option<String>,
 }
 
 /// State for the autonomous loop iteration engine.
@@ -399,6 +403,8 @@ impl Default for ReplState {
             billing_manager: shannon_core::billing::BillingManager::new(),
             extra_dirs: Vec::new(),
             session_title: None,
+            effort_level: None,
+            focus_area: None,
         }
     }
 }
