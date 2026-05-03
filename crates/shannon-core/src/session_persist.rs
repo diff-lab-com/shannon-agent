@@ -297,7 +297,7 @@ impl SessionPersistManager {
 
 impl Default for SessionPersistManager {
     fn default() -> Self {
-        Self::new().expect("failed to create SessionPersistManager")
+        Self::with_dir(default_storage_dir()).expect("failed to create SessionPersistManager")
     }
 }
 

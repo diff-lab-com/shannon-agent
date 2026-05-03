@@ -18,6 +18,24 @@ use std::process::Command;
 // Helper: run a git command and capture output
 // ---------------------------------------------------------------------------
 
+/// Validate a user-provided git argument (branch name, etc.) to prevent injection.
+fn validate_git_arg(arg: &str) -> Result<&str, ToolError> {
+    if arg.is_empty() {
+        return Err(ToolError::InvalidInput("Argument must not be empty".to_string()));
+    }
+    if arg.starts_with('-') {
+        return Err(ToolError::InvalidInput(format!(
+            "Invalid argument: '{arg}' must not start with '-'"
+        )));
+    }
+    if arg.contains('\0') {
+        return Err(ToolError::InvalidInput(
+            "Argument must not contain null bytes".to_string(),
+        ));
+    }
+    Ok(arg)
+}
+
 /// Run a git command in a given working directory and return stdout, stderr, exit status.
 fn run_git(args: &[&str], cwd: Option<&str>) -> Result<(String, String, bool), ToolError> {
     let mut cmd = Command::new("git");
@@ -157,9 +175,7 @@ impl GitBranchTool {
             .as_deref()
             .ok_or_else(|| ToolError::InvalidInput("Branch name is required for create action".to_string()))?;
 
-        if name.is_empty() {
-            return Err(ToolError::InvalidInput("Branch name cannot be empty".to_string()));
-        }
+        validate_git_arg(name)?;
 
         let checkout = input.checkout.unwrap_or(false);
 
@@ -202,9 +218,7 @@ impl GitBranchTool {
             .as_deref()
             .ok_or_else(|| ToolError::InvalidInput("Branch name is required for switch action".to_string()))?;
 
-        if name.is_empty() {
-            return Err(ToolError::InvalidInput("Branch name cannot be empty".to_string()));
-        }
+        validate_git_arg(name)?;
 
         // Safety check: warn if working directory is dirty
         if is_working_dir_dirty(cwd)? {
@@ -247,9 +261,7 @@ impl GitBranchTool {
             .as_deref()
             .ok_or_else(|| ToolError::InvalidInput("Branch name is required for delete action".to_string()))?;
 
-        if name.is_empty() {
-            return Err(ToolError::InvalidInput("Branch name cannot be empty".to_string()));
-        }
+        validate_git_arg(name)?;
 
         // Safety: refuse to delete the current branch
         let current = current_branch(cwd)?;

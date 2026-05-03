@@ -280,6 +280,7 @@ fn search_identifiers(identifiers: &[String], working_dir: &Path) -> Vec<String>
         let output = std::process::Command::new("grep")
             .args([
                 "-rl",
+                "-F",
                 "--include=*.rs",
                 "--include=*.py",
                 "--include=*.ts",
@@ -312,20 +313,24 @@ fn search_identifiers(identifiers: &[String], working_dir: &Path) -> Vec<String>
 
 /// Search for files containing keywords.
 fn search_keywords(keywords: &[String], working_dir: &Path) -> Vec<String> {
-    // Use the most specific keyword first
-    let pattern = keywords.join("|");
+    // Build fixed-string patterns with multiple -e flags to avoid regex injection
+    let mut base_args: Vec<String> = vec![
+        "-rl".to_string(),
+        "-F".to_string(),
+        "--include=*.rs".to_string(),
+        "--include=*.py".to_string(),
+        "--include=*.ts".to_string(),
+        "--include=*.js".to_string(),
+        "--include=*.toml".to_string(),
+    ];
+    for kw in keywords {
+        base_args.push("-e".to_string());
+        base_args.push(kw.clone());
+    }
+    base_args.push(".".to_string());
 
     let output = std::process::Command::new("grep")
-        .args([
-            "-rl",
-            "--include=*.rs",
-            "--include=*.py",
-            "--include=*.ts",
-            "--include=*.js",
-            "--include=*.toml",
-            &pattern,
-            ".",
-        ])
+        .args(&base_args)
         .current_dir(working_dir)
         .output();
 

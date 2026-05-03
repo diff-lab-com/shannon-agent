@@ -88,7 +88,7 @@ impl WebFetchTool {
             client: Client::builder()
                 .user_agent("ShannonCode/1.0")
                 .build()
-                .expect("Failed to create HTTP client"),
+                .unwrap_or_else(|e| panic!("Failed to create HTTP client: {e}")),
         }
     }
 
@@ -116,11 +116,12 @@ impl WebFetchTool {
 
         let content_length = processed.len();
 
-        // Extract requested range
-        let end_index = (start_index + max_length).min(content_length);
+        // Extract requested range (clamp start_index to avoid out-of-bounds panic)
+        let start_index = start_index.min(processed.len());
+        let end_index = (start_index + max_length).min(processed.len());
         let content = processed
             .get(start_index..end_index)
-            .unwrap_or(&processed[start_index..])
+            .unwrap_or("")
             .to_string();
 
         let has_more = end_index < content_length;
@@ -356,7 +357,7 @@ impl WebSearchTool {
             client: Client::builder()
                 .user_agent("ShannonCode/1.0")
                 .build()
-                .expect("Failed to create HTTP client"),
+                .unwrap_or_else(|e| panic!("Failed to create HTTP client: {e}")),
             api_key,
             provider,
         }
@@ -369,7 +370,7 @@ impl WebSearchTool {
             client: Client::builder()
                 .user_agent("ShannonCode/1.0")
                 .build()
-                .expect("Failed to create HTTP client"),
+                .unwrap_or_else(|e| panic!("Failed to create HTTP client: {e}")),
             api_key: Some(key),
             provider: SearchProvider::Tavily,
         }
@@ -382,7 +383,7 @@ impl WebSearchTool {
             client: Client::builder()
                 .user_agent("ShannonCode/1.0")
                 .build()
-                .expect("Failed to create HTTP client"),
+                .unwrap_or_else(|e| panic!("Failed to create HTTP client: {e}")),
             api_key: None,
             provider: SearchProvider::Tavily,
         }

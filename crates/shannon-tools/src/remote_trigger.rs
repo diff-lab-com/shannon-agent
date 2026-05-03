@@ -539,7 +539,7 @@ mod tests {
     /// Find a free port by binding to port 0.
     fn free_port() -> u16 {
         let listener = std::net::TcpListener::bind("127.0.0.1:0")
-            .expect("Failed to bind to find free port");
+            .expect("Failed to bind port for free port discovery");
         listener.local_addr().unwrap().port()
     }
 

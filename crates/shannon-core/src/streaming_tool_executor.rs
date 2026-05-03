@@ -344,8 +344,8 @@ impl StreamingToolExecutor {
     /// is still Queued/Executing, this method will not yield tool B (index 1)
     /// even if B is already Completed.
     pub async fn get_remaining_results(&self) -> Option<TrackedTool> {
-        let mut cursor = self.yield_cursor.lock().await;
         let tools = self.tools.lock().await;
+        let mut cursor = self.yield_cursor.lock().await;
 
         if *cursor >= tools.len() {
             return None;
@@ -371,9 +371,10 @@ impl StreamingToolExecutor {
             }
 
             // Check if all tools have been yielded or there are no tools
+            // Lock order: tools -> yield_cursor (same as reset())
             {
-                let cursor = self.yield_cursor.lock().await;
                 let tools = self.tools.lock().await;
+                let cursor = self.yield_cursor.lock().await;
                 if *cursor >= tools.len() {
                     return None;
                 }
@@ -491,8 +492,8 @@ impl StreamingToolExecutor {
 
     /// Check if all tools have been yielded.
     pub async fn is_drained(&self) -> bool {
-        let cursor = self.yield_cursor.lock().await;
         let tools = self.tools.lock().await;
+        let cursor = self.yield_cursor.lock().await;
         *cursor >= tools.len()
     }
 

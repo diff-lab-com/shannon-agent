@@ -21,7 +21,7 @@ impl LlmClient {
         let client = Client::builder()
             .timeout(Duration::from_secs(config.timeout_seconds))
             .build()
-            .expect("Failed to create HTTP client");
+            .unwrap_or_else(|e| panic!("Failed to create HTTP client: {e}"));
 
         Self { config, client }
     }
@@ -31,7 +31,7 @@ impl LlmClient {
     /// Checks `SHANNON_API_KEY` -> `ANTHROPIC_API_KEY` -> `OPENAI_API_KEY`
     /// and auto-detects provider from base URL. Falls back to Ollama if no
     /// API keys are found.
-    pub fn from_env() -> Result<Self, ApiError> {
+    pub fn from_env() -> Self {
         let config = LlmClientConfig::default();
 
         // Validate configuration (will catch missing API keys for auth-required providers)
@@ -39,15 +39,11 @@ impl LlmClient {
             tracing::warn!("LLM config issue: {}", e);
         }
 
-        if config.provider.requires_auth() && config.api_key.is_empty() {
-            return Err(ApiError::AuthenticationFailed);
-        }
-
-        Ok(if config.provider.requires_auth() {
+        if config.provider.requires_auth() {
             Self::new(config)
         } else {
             Self::new_unauthenticated(config)
-        })
+        }
     }
 
     /// Create a client that requires no authentication (e.g., Ollama)
@@ -55,7 +51,7 @@ impl LlmClient {
         let client = Client::builder()
             .timeout(Duration::from_secs(config.timeout_seconds))
             .build()
-            .expect("Failed to create HTTP client");
+            .unwrap_or_else(|e| panic!("Failed to create HTTP client: {e}"));
 
         Self { config, client }
     }

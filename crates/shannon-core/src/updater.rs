@@ -162,7 +162,10 @@ impl AutoUpdater {
             .user_agent(format!("shannon-code/{CURRENT_VERSION}"))
             .timeout(Duration::from_secs(10))
             .build()
-            .expect("failed to build HTTP client");
+            .unwrap_or_else(|e| {
+                eprintln!("Warning: failed to build HTTP client for updater: {e}");
+                reqwest::Client::new()
+            });
 
         Self {
             config,

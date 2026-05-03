@@ -681,42 +681,36 @@ impl Transport for WebSocketTransport {
 
     async fn receive(&mut self) -> Result<Option<String>, TransportError> {
         if let Some(stream) = &mut self.stream {
-            match stream.next().await {
-                Some(Ok(msg)) => match msg {
-                    Message::Text(text) => {
-                        // Utf8Bytes has an as_bytes() method that returns &[u8]
-                        match std::str::from_utf8(text.as_bytes()) {
-                            Ok(s) => {
-                                debug!("WebSocket received: {} bytes", s.len());
-                                Ok(Some(s.to_string()))
+            loop {
+                match stream.next().await {
+                    Some(Ok(msg)) => match msg {
+                        Message::Text(text) => {
+                            // Utf8Bytes has an as_bytes() method that returns &[u8]
+                            match std::str::from_utf8(text.as_bytes()) {
+                                Ok(s) => {
+                                    debug!("WebSocket received: {} bytes", s.len());
+                                    return Ok(Some(s.to_string()));
+                                }
+                                Err(_) => return Err(TransportError::InvalidMessage("Invalid UTF-8 in text message".to_string()))
                             }
-                            Err(_) => Err(TransportError::InvalidMessage("Invalid UTF-8 in text message".to_string()))
                         }
+                        Message::Binary(data) => {
+                            // Try to convert binary to string
+                            return std::str::from_utf8(&data)
+                                .map(|s| Some(s.to_string()))
+                                .map_err(|_| TransportError::InvalidMessage("Invalid UTF-8 in binary message".to_string()));
+                        }
+                        Message::Close(_) => return Ok(None),
+                        Message::Ping(data) => {
+                            // Respond to ping automatically
+                            let _ = stream.send(Message::Pong(data)).await;
+                            continue;
+                        }
+                        Message::Pong(_) | _ => continue,
                     }
-                    Message::Binary(data) => {
-                        // Try to convert binary to string
-                        Ok(std::str::from_utf8(&data)
-                            .map(|s| Some(s.to_string()))
-                            .map_err(|_| TransportError::InvalidMessage("Invalid UTF-8 in binary message".to_string()))?)
-                    }
-                    Message::Close(_) => Ok(None),
-                    Message::Ping(data) => {
-                        // Respond to ping automatically
-                        let _ = stream.send(Message::Pong(data)).await;
-                        // Continue waiting for real message
-                        self.receive().await
-                    }
-                    Message::Pong(_) => {
-                        // Ignore pong, continue waiting
-                        self.receive().await
-                    }
-                    _ => {
-                        // Other message types, continue waiting
-                        self.receive().await
-                    }
+                    Some(Err(e)) => return Err(TransportError::WebSocket(format!("Receive error: {e}"))),
+                    None => return Ok(None),
                 }
-                Some(Err(e)) => Err(TransportError::WebSocket(format!("Receive error: {e}"))),
-                None => Ok(None),
             }
         } else {
             Err(TransportError::ConnectionClosed)

@@ -147,7 +147,13 @@ pub(crate) fn handle_mode(repl: &mut Repl, args: &str) -> Result<()> {
     if trimmed.is_empty() {
         // Show current mode and available options
         let current = {
-            let query_engine = repl.query_engine.as_ref().expect("query engine missing");
+            let query_engine = match repl.query_engine.as_ref() {
+                Some(e) => e,
+                None => {
+                    repl.chat.add_message(ChatRole::System, "Error: Query engine not available.".to_string());
+                    return Ok(());
+                }
+            };
             let permissions = recover_lock(query_engine.permissions().read());
             permissions.approval_mode()
         };
@@ -165,7 +171,13 @@ pub(crate) fn handle_mode(repl: &mut Repl, args: &str) -> Result<()> {
 
     match ApprovalMode::from_str_ci(trimmed) {
         Some(mode) => {
-            let query_engine = repl.query_engine.as_ref().expect("query engine missing");
+            let query_engine = match repl.query_engine.as_ref() {
+                Some(e) => e,
+                None => {
+                    repl.chat.add_message(ChatRole::System, "Error: Query engine not available.".to_string());
+                    return Ok(());
+                }
+            };
             recover_lock(query_engine.permissions().write()).set_approval_mode(mode);
             repl.state.approval_mode_label = mode.short_label().to_string();
             {
@@ -197,7 +209,13 @@ pub(crate) fn handle_context(repl: &mut Repl, args: &str) -> Result<()> {
         let cwd = std::env::current_dir().unwrap_or_default();
         match shannon_core::project_instructions::load_full_context(&cwd) {
             Some(instructions) => {
-                let query_engine = repl.query_engine.as_mut().expect("query engine missing");
+                let query_engine = match repl.query_engine.as_mut() {
+                    Some(e) => e,
+                    None => {
+                        repl.chat.add_message(ChatRole::System, "Error: Query engine not available.".to_string());
+                        return Ok(());
+                    }
+                };
                 query_engine.append_system_prompt(&instructions.content);
                 let files = instructions.loaded_files.join(", ");
                 {

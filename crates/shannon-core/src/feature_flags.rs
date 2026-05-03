@@ -452,9 +452,12 @@ impl FeatureFlagManager {
         };
 
         // Insert into the "features" object.
+        if root.as_object_mut().is_none() {
+            root = serde_json::json!({"features": {}});
+        }
         let features = root
             .as_object_mut()
-            .expect("root is always an Object")
+            .expect("root is guaranteed Object after above check")
             .entry("features")
             .or_insert_with(|| serde_json::Value::Object(Default::default()));
 

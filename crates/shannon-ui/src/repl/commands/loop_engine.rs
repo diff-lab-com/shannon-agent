@@ -519,8 +519,8 @@ mode = \"suggest\"    # suggest | auto-edit | full-auto | readonly\n\
         return Ok(());
     }
 
-    if trimmed.starts_with("model ") {
-        let model = trimmed.strip_prefix("model ").expect("checked starts_with").trim();
+    if let Some(rest) = trimmed.strip_prefix("model ") {
+        let model = rest.trim();
         if model.is_empty() {
             repl.chat.add_message(ChatRole::System,
                 format!("Current model: {}", repl.state.model.as_deref().unwrap_or("none")));
@@ -537,8 +537,8 @@ mode = \"suggest\"    # suggest | auto-edit | full-auto | readonly\n\
         return Ok(());
     }
 
-    if trimmed.starts_with("set ") {
-        let rest = trimmed.strip_prefix("set ").expect("checked starts_with").trim();
+    if let Some(rest) = trimmed.strip_prefix("set ") {
+        let rest = rest.trim();
         let parts: Vec<&str> = rest.splitn(2, ' ').collect();
         if parts.len() < 2 {
             repl.chat.add_message(ChatRole::System,
@@ -953,8 +953,13 @@ Agent definitions are loaded from:
 
             if repl.agent_registry.is_none() {
                 let config = CoordinatorConfig::default();
-                let coordinator = repl.runtime.block_on(AgentCoordinator::new(config))
-                    .expect("failed to create agent coordinator");
+                let coordinator = match repl.runtime.block_on(AgentCoordinator::new(config)) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        super::set_error(repl, &format!("creating agent coordinator: {e}"));
+                        return Ok(());
+                    }
+                };
                 repl.agent_registry = Some(std::sync::Arc::new(SubAgentRegistry::new(
                     std::sync::Arc::new(coordinator),
                 )));

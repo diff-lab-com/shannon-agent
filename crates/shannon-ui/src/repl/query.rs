@@ -78,7 +78,14 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
     let assistant_msg_index = repl.chat.add_message(ChatRole::Assistant, String::new());
 
     // Take the query engine out — spawn requires 'static ownership
-    let mut query_engine = repl.query_engine.take().expect("QueryEngine not initialized");
+    let mut query_engine = match repl.query_engine.take() {
+        Some(e) => e,
+        None => {
+            repl.chat.add_message(ChatRole::System, "Error: Query engine not available. Please restart the session.".to_string());
+            repl.state.status = "Ready".to_string();
+            return Ok(());
+        }
+    };
 
     // Sync the model (and provider, if changed) from REPL state into the engine's LLM client
     if let Some(ref provider) = repl.state.selected_provider {

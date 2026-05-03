@@ -613,7 +613,7 @@ impl SessionRecovery {
 
 impl Default for SessionRecovery {
     fn default() -> Self {
-        Self::new().expect("failed to create SessionRecovery")
+        Self::with_dir(default_sessions_base_dir()).expect("failed to create SessionRecovery")
     }
 }
 

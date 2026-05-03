@@ -141,8 +141,7 @@ async fn execute_task(params: ExecuteTaskParams, args: &Args) {
 /// Run the actual LLM call for a task, streaming text deltas as progress.
 async fn run_llm_task(params: &ExecuteTaskParams, args: &Args) -> Result<String, String> {
     // Create LLM client from environment variables
-    let mut client = LlmClient::from_env()
-        .map_err(|e| format!("Failed to create LLM client (check API key env vars): {e}"))?;
+    let mut client = LlmClient::from_env();
 
     // Apply model override from CLI args
     if let Some(ref model) = args.model {

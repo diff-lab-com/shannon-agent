@@ -835,7 +835,7 @@ mod tests {
     #[test]
     fn test_calculate_cost_model_with_prefix() {
         let cost = CostTracker::calculate_cost("gpt-4o-mini", 1_000_000, 1_000_000);
-        assert!((cost - 12.5).abs() < 0.001);
+        assert!((cost - 0.75).abs() < 0.001);
     }
 
     // QueryEngineConfig edge cases

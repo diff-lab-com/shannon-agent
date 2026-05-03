@@ -373,8 +373,10 @@ impl Default for SettingsManager {
 impl SettingsManager {
     /// Create a new SettingsManager with default settings
     pub fn new() -> Self {
-        let home_dir = dirs::home_dir()
-            .expect("Home directory should exist");
+        let home_dir = dirs::home_dir().unwrap_or_else(|| {
+            eprintln!("Warning: Home directory not found, using /tmp");
+            std::path::PathBuf::from("/tmp")
+        });
 
         let user_config_path = home_dir
             .join(".shannon")

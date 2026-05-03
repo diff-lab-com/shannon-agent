@@ -2748,7 +2748,22 @@ impl McpProcessPool {
                 )));
             }
             ServerState::Starting => {
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+                loop {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    match handle.get_state().await {
+                        ServerState::Healthy => break,
+                        ServerState::Stopped | ServerState::Unhealthy(_) => {
+                            break;
+                        }
+                        ServerState::Starting if tokio::time::Instant::now() > deadline => {
+                            return Err(ToolError::ExecutionFailed(format!(
+                                "MCP server '{server_name}' timed out waiting to start"
+                            )));
+                        }
+                        _ => continue,
+                    }
+                }
             }
         }
 
@@ -2786,7 +2801,6 @@ impl McpProcessPool {
         }
     }
 
-    /// Enforce maximum output size by truncating oversized results.
     /// Enforce maximum output size by truncating oversized results.
     /// Stores the full content in the result store for later retrieval.
     fn enforce_output_limit(&self, mut output: ToolOutput, max_chars: usize, tool_name: &str) -> ToolOutput {
@@ -2934,7 +2948,22 @@ impl McpProcessPool {
                 )));
             }
             ServerState::Starting => {
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+                loop {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    match handle.get_state().await {
+                        ServerState::Healthy => break,
+                        ServerState::Stopped | ServerState::Unhealthy(_) => {
+                            break;
+                        }
+                        ServerState::Starting if tokio::time::Instant::now() > deadline => {
+                            return Err(ToolError::ExecutionFailed(format!(
+                                "MCP server '{server_name}' timed out waiting to start"
+                            )));
+                        }
+                        _ => continue,
+                    }
+                }
             }
         }
 

@@ -494,8 +494,8 @@ pub(crate) fn handle_watch(repl: &mut Repl, args: &str) -> Result<()> {
             }
         }
         _ => {
-            if trimmed.starts_with("track ") {
-                let file = trimmed.strip_prefix("track ").expect("checked starts_with").trim();
+            if let Some(rest) = trimmed.strip_prefix("track ") {
+                let file = rest.trim();
                 repl.chat.add_message(ChatRole::System,
                     format!("Tracking '{file}'. Use /watch check to scan for changes."));
             } else {

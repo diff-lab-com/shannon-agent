@@ -224,9 +224,9 @@ mod tests {
     #[tokio::test]
     async fn test_shared_executor_creates_arc() {
         // Just verify the type compiles and creates an Arc
-        let client = LlmClient::from_env().ok();
-        if let Some(c) = client {
-            let _executor: Arc<dyn AgentExecutor> = shared_executor(c);
+        let client = LlmClient::from_env();
+        {
+            let _executor: Arc<dyn AgentExecutor> = shared_executor(client);
         }
         // If no API key, just pass — the compilation check is the real test
     }

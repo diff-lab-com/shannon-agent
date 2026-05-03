@@ -102,7 +102,7 @@ impl MemoryStore {
         results.sort_by(|a, b| {
             let score_a = relevance_score(a);
             let score_b = relevance_score(b);
-            score_b.partial_cmp(&score_a).expect("relevance scores should be comparable")
+            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
         });
         results
     }

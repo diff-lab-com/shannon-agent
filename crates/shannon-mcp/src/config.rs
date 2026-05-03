@@ -386,9 +386,9 @@ pub fn expand_env_vars(input: &str) -> String {
                 let value = match std::env::var(&var_name) {
                     Ok(v) => v,
                     Err(_) => {
-                        if modifier.starts_with('?') {
-                            let err_msg = if modifier.len() > 1 {
-                                &modifier[1..]
+                        if let Some(stripped) = modifier.strip_prefix('?') {
+                            let err_msg = if !stripped.is_empty() {
+                                stripped
                             } else {
                                 "required env var not set"
                             };

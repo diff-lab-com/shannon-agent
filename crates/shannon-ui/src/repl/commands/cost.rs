@@ -198,7 +198,8 @@ pub(crate) fn handle_billing(repl: &mut Repl, args: &str) -> Result<()> {
             repl.chat.add_message(ChatRole::System, msg);
         }
         _ if subcmd.starts_with("budget ") => {
-            let amount_str = subcmd.strip_prefix("budget ").expect("checked starts_with").trim();
+            let rest = subcmd.strip_prefix("budget ").unwrap_or("");
+            let amount_str = rest.trim();
             if amount_str == "off" || amount_str == "none" {
                 let mut cfg = repl.state.billing_manager.config().clone();
                 cfg.monthly_budget = None;

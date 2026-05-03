@@ -484,7 +484,14 @@ impl CredentialManager {
 
 impl Default for CredentialManager {
     fn default() -> Self {
-        Self::new().expect("Failed to create default credential manager")
+        let credentials_dir = dirs::home_dir()
+            .unwrap_or_else(|| {
+                eprintln!("Warning: Home directory not found, using /tmp");
+                std::path::PathBuf::from("/tmp")
+            })
+            .join(".shannon")
+            .join("credentials");
+        Self::with_dir(credentials_dir).expect("Failed to create default credential manager")
     }
 }
 

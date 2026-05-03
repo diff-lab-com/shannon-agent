@@ -929,7 +929,8 @@ impl Repl {
         let mcp_rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .unwrap_or_else(|_| tokio::runtime::Runtime::new().expect("failed to create tokio runtime"));
+            .or_else(|_| tokio::runtime::Runtime::new())
+            .map_err(|e| anyhow::anyhow!("failed to create MCP runtime: {e}"))?;
         if !cfg!(test) {
             let mut mcp_registry = shannon_core::mcp_advanced::McpServerRegistry::new();
             let mcp_count = mcp_registry.load_from_default_paths();

@@ -226,13 +226,13 @@ pub(crate) fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
     }
 
     // Handle /image paste subcommand
-    if input.starts_with("paste") {
-        return handle_image_paste(repl, input.strip_prefix("paste").expect("checked starts_with").trim());
+    if let Some(rest) = input.strip_prefix("paste") {
+        return handle_image_paste(repl, rest.trim());
     }
 
     // Handle /image url <url> subcommand
-    if input.starts_with("url ") {
-        return handle_image_url(repl, input.strip_prefix("url ").expect("checked starts_with").trim());
+    if let Some(rest) = input.strip_prefix("url ") {
+        return handle_image_url(repl, rest.trim());
     }
 
     // Auto-detect URL (starts with http:// or https://)
@@ -241,11 +241,11 @@ pub(crate) fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
     }
 
     // Split path from optional prompt
-    let (path, prompt) = if input.starts_with('"') {
+    let (path, prompt) = if let Some(rest) = input.strip_prefix('"') {
         // Quoted path: "path with spaces" prompt
-        if let Some(end) = input.strip_prefix('"').expect("checked starts_with").find('"') {
-            let path = &input[1..end + 1];
-            let prompt = input[end + 2..].trim();
+        if let Some(end) = rest.find('"') {
+            let path = &rest[..end];
+            let prompt = rest[end + 1..].trim();
             (path.to_string(), if prompt.is_empty() { "Describe this image.".to_string() } else { prompt.to_string() })
         } else {
             (input.to_string(), "Describe this image.".to_string())
@@ -259,9 +259,9 @@ pub(crate) fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
     };
 
     // Expand ~ to home dir
-    let expanded_path = if path.starts_with("~/") {
+    let expanded_path = if let Some(rest) = path.strip_prefix("~/") {
         if let Some(home) = dirs::home_dir() {
-            home.join(path.strip_prefix("~/").expect("checked starts_with")).to_string_lossy().to_string()
+            home.join(rest).to_string_lossy().to_string()
         } else {
             path.clone()
         }
@@ -395,7 +395,12 @@ pub(crate) fn handle_copy(repl: &mut Repl, args: &str) -> Result<()> {
     // Try platform-specific clipboard commands
     let success = copy_to_clipboard(&content);
     if success {
-        let preview = if content.len() > 60 { format!("{}...", &content[..60]) } else { content.clone() };
+        let preview = if content.chars().count() > 60 {
+            let truncated: String = content.chars().take(60).collect();
+            format!("{truncated}...")
+        } else {
+            content.clone()
+        };
         repl.chat.add_message(ChatRole::System, format!("Copied to clipboard: {preview}"));
     } else {
         // Fallback: write to temp file

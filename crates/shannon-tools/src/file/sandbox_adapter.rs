@@ -329,15 +329,17 @@ impl PathSandboxAdapter {
 
     /// Check if a path is read-only.
     fn is_read_only(&self, path: &Path) -> bool {
+        let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         self.config.read_only_paths.iter().any(|ro| {
-            path.starts_with(ro) || path == ro
+            canonical.starts_with(ro) || canonical == *ro
         })
     }
 
     /// Check if a path is in the denied list.
     fn is_path_denied(&self, path: &Path) -> bool {
+        let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         self.config.denied_paths.iter().any(|denied| {
-            path.starts_with(denied) || path == denied
+            canonical.starts_with(denied) || canonical == *denied
         })
     }
 
@@ -348,8 +350,9 @@ impl PathSandboxAdapter {
             return true;
         }
 
+        let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         self.config.allowed_paths.iter().any(|allowed| {
-            path.starts_with(allowed) || path == allowed
+            canonical.starts_with(allowed) || canonical == *allowed
         })
     }
 }
