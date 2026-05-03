@@ -445,7 +445,7 @@ pub(crate) fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
                             super::set_error(repl, &format!("listing resources from '{server}'"));
                         }
                     }
-                    Err(e) => { super::set_error(repl, &format!("{e}")); }
+                    Err(e) => { super::set_error(repl, &e.to_string()); }
                 }
             }
         }

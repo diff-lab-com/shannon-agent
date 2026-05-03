@@ -225,6 +225,7 @@ fn resolve_content_imports(
 }
 
 /// Inner recursive implementation that shares a visited set and byte counter.
+#[allow(clippy::too_many_arguments)]
 fn resolve_content_imports_inner(
     content: &str,
     source_dir: &Path,
@@ -278,6 +279,7 @@ fn resolve_content_imports_inner(
 }
 
 /// Process a single line, replacing @import references with file content.
+#[allow(clippy::too_many_arguments)]
 fn process_import_line_inner(
     line: &str,
     source_dir: &Path,

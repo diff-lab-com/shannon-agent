@@ -29,6 +29,7 @@ impl StatusBarWidget {
 
     /// Render enhanced status bar with spinner animation and optional progress bar.
     /// Dense single-line format for maximum screen real estate.
+    #[allow(clippy::too_many_arguments)]
     pub fn render_with_spinner(
         frame: &mut Frame,
         area: Rect,

@@ -1112,6 +1112,7 @@ impl Tool for PowerShellTool {
 }
 
 /// System tool enum for unified interface
+#[allow(clippy::large_enum_variant)]
 pub enum SystemTool {
     Bash(BashTool),
     PowerShell(PowerShellTool),

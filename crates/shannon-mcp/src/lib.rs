@@ -1,4 +1,5 @@
 // shannon-mcp: MCP (Model Context Protocol) implementation for Shannon
+#![allow(clippy::type_complexity)]
 //
 // This crate provides a complete implementation of the Model Context Protocol,
 // enabling AI assistants to interact with local servers, tools, and resources.

@@ -417,6 +417,7 @@ pub fn generate_directory_tree(dir_path: &str, max_depth: Option<usize>) -> AtRe
 }
 
 /// Recursively build the tree listing.
+#[allow(clippy::too_many_arguments)]
 fn build_tree_recursive(
     dir: &Path,
     output: &mut String,

@@ -934,6 +934,7 @@ fn emit_output_event(event: &OutputEvent) {
 /// - Outputs structured JSON with `--output-format json`
 ///
 /// Exit codes: 0 success, 1 error, 2 tool denied, 3 max turns reached.
+#[allow(clippy::too_many_arguments)]
 fn run_headless_query(
     prompt: &str,
     config: &CliConfig,

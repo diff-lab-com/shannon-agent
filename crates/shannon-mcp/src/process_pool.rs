@@ -752,6 +752,7 @@ impl McpServerHandle {
     }
 
     /// Background task: read JSON-RPC responses from stdout and route to pending requests.
+    #[allow(clippy::too_many_arguments)]
     async fn read_responses(
         reader: BufReader<ChildStdout>,
         pending: &DashMap<u64, PendingRequest>,
@@ -4051,6 +4052,7 @@ impl PooledMcpToolAdapter {
     ///
     /// `max_output_chars` overrides the pool's global limit (from `_meta.maxResultSizeChars`).
     /// `tool_timeout_secs` overrides the handle's default timeout (from `_meta.timeoutSeconds`).
+    #[allow(clippy::too_many_arguments)]
     pub fn with_output_limit(
         pool: Arc<McpProcessPool>,
         server_name: String,
