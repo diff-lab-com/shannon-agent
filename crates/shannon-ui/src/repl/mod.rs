@@ -721,6 +721,8 @@ pub struct Repl {
     pub(crate) instruction_watcher: Option<shannon_core::project_instructions::InstructionWatcher>,
     /// Custom command file watcher for hot-reloading .claude/commands/ and .shannon/commands/
     pub(crate) command_watcher: Option<CustomCommandWatcher>,
+    /// Background update check result (deferred to avoid blocking startup)
+    pub(crate) update_check_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<String>>>,
     /// Crash-safe JSONL session recovery log (appends each turn with fsync)
     pub(crate) session_recovery: shannon_core::SessionRecovery,
     /// Shared plan-mode flag (clone of the one in QueryEngine)
@@ -879,6 +881,7 @@ impl Repl {
             webhook_receiver: None,
             instruction_watcher: None,
             command_watcher: None,
+            update_check_rx: None,
             session_recovery: shannon_core::SessionRecovery::new().unwrap_or_default(),
             plan_mode_flag: std::sync::Arc::new(std::sync::RwLock::new(false)),
         };
@@ -916,6 +919,12 @@ impl Repl {
         //   - Remote (http/sse) servers: batches of 20
         let mut discovered_mcp_prompts: Vec<(String, PromptInfo)> = Vec::new(); // populated during pooled discovery
         let mcp_pool = Arc::new(McpProcessPool::new()); // persistent pool for all MCP servers
+        // Shared single-thread runtime for all MCP async operations (discovery, sampling, progress).
+        // Reusing one runtime avoids ~30ms of overhead from creating three separate runtimes.
+        let mcp_rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap_or_else(|_| tokio::runtime::Runtime::new().expect("failed to create tokio runtime"));
         if !cfg!(test) {
             let mut mcp_registry = shannon_core::mcp_advanced::McpServerRegistry::new();
             let mcp_count = mcp_registry.load_from_default_paths();
@@ -929,10 +938,7 @@ impl Repl {
                     tracing::debug!("Could not load MCP approval state: {}", e);
                 }
 
-                let discovery_rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .unwrap_or_else(|_| tokio::runtime::Runtime::new().expect("failed to create tokio runtime"));
+                let discovery_rt = &mcp_rt;
 
                 // Classify servers into local (stdio) and remote (http/sse) buckets
                 let mut local_servers: Vec<(String, String, Vec<String>, HashMap<String, String>, Vec<String>)> = Vec::new();
@@ -1258,11 +1264,7 @@ impl Repl {
             // For now, elicitation auto-declines (no TUI callback wired yet).
             // Future: wire to input_dialog for interactive elicitation.
             let elicitation = shannon_mcp::make_elicitation_provider(None);
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap_or_else(|_| tokio::runtime::Runtime::new().expect("failed to create tokio runtime"));
-            rt.block_on(async {
+            mcp_rt.block_on(async {
                 pool.set_sampling_provider(sampling).await;
                 pool.set_elicitation_provider(elicitation).await;
                 // Expose the project directory as a filesystem root so MCP servers
@@ -1322,11 +1324,7 @@ impl Repl {
         let mcp_progress_rx = {
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<(String, f64, Option<f64>)>();
             let pool = mcp_pool.clone();
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap_or_else(|_| tokio::runtime::Runtime::new().expect("failed to create tokio runtime"));
-            rt.block_on(async move {
+            mcp_rt.block_on(async move {
                 pool.set_progress_callback(std::sync::Arc::new(move |tool_name, progress, total| {
                     let _ = tx.send((tool_name.to_string(), progress, total));
                 })).await;
@@ -1622,6 +1620,7 @@ impl Repl {
                 }
             },
             command_watcher: Some(CustomCommandWatcher::new()),
+            update_check_rx: None,
             session_recovery: shannon_core::SessionRecovery::new().unwrap_or_default(),
             plan_mode_flag: plan_mode_flag.clone(),
         };
@@ -2092,9 +2091,33 @@ impl Repl {
             welcome_text,
         );
 
-        // Check for updates on startup (non-blocking)
-        if let Some(update_msg) = self.check_for_updates() {
-            self.chat.add_message(ChatRole::System, update_msg);
+        // Check for updates in background to avoid blocking startup
+        {
+            let (tx, rx) = std::sync::mpsc::channel::<String>();
+            self.update_check_rx = Some(std::sync::Mutex::new(rx));
+            let config = shannon_core::updater::UpdaterConfig {
+                repo: "shannon-code/shannon".to_string(),
+                check_interval: std::time::Duration::from_secs(86400),
+                enabled: true,
+                include_prereleases: false,
+            };
+            std::thread::spawn(move || {
+                let mut updater = shannon_core::updater::AutoUpdater::new(config);
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .ok();
+                let status = rt.as_ref().map(|rt| {
+                    rt.block_on(updater.check_for_update())
+                });
+                if let Some(shannon_core::updater::UpdateStatus::UpdateAvailable { current, latest, release }) = status {
+                    let msg = format!(
+                        "Update available: {} → {} ({}). Download: {}",
+                        current, latest, release.tag_name, release.html_url
+                    );
+                    let _ = tx.send(msg);
+                }
+            });
         }
 
         // Auto-restore the most recent session if it was active within the last 2 hours.
@@ -2102,6 +2125,15 @@ impl Repl {
 
         // Main event loop
         while self.running {
+            // Poll deferred update check result
+            let update_msg = self.update_check_rx.as_ref().and_then(|rx| {
+                rx.lock().ok().and_then(|guard| guard.try_recv().ok())
+            });
+            if let Some(msg) = update_msg {
+                self.chat.add_message(ChatRole::System, msg);
+                self.update_check_rx = None;
+            }
+
             // Check for permission requests (non-blocking)
             if self.state.permission_dialog.is_none() {
                 if let Ok(permission_req) = self.permission_req_rx.try_recv() {
@@ -2329,35 +2361,6 @@ impl Repl {
                     self.state.spinner.tick();
                 }
             }
-        }
-    }
-
-    /// Check for Shannon updates on startup (non-blocking)
-    fn check_for_updates(&self) -> Option<String> {
-        use shannon_core::updater::{AutoUpdater, UpdaterConfig};
-        use std::time::Duration;
-
-        let config = UpdaterConfig {
-            repo: "shannon-code/shannon".to_string(),
-            check_interval: Duration::from_secs(86400),
-            enabled: true,
-            include_prereleases: false,
-        };
-        let mut updater = AutoUpdater::new(config);
-
-        match self.runtime.block_on(updater.check_for_update()) {
-            shannon_core::updater::UpdateStatus::UpdateAvailable { current, latest, release } => {
-                Some(format!(
-                    "Update available: {} → {} ({}). Download: {}",
-                    current, latest, release.tag_name, release.html_url
-                ))
-            }
-            shannon_core::updater::UpdateStatus::CheckFailed { error } => {
-                // Silently ignore update check failures — don't block startup
-                let _ = error;
-                None
-            }
-            _ => None,
         }
     }
 
