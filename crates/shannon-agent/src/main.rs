@@ -7,12 +7,14 @@
 //!   shannon-agent --name worker-1 --model claude-sonnet-4-20250514
 
 use clap::Parser;
+use futures::StreamExt;
 use shannon_agents::{
     frame_message, parse_message,
     AgentReadyParams, ExecuteTaskParams, TaskCompleteParams, TaskProgressParams,
     AgentIdleParams,
     JsonRpcMessage, JsonRpcError,
 };
+use shannon_core::api::{LlmClient, Message, MessageContent, StreamEvent, ContentDelta};
 use std::io;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -86,8 +88,7 @@ async fn respond_error(id: i64, error: JsonRpcError) {
     }
 }
 
-/// Execute a task. In a real implementation this would call the LLM.
-/// For now, this is a stub that simulates task execution.
+/// Execute a task by calling the LLM with streaming and reporting progress.
 async fn execute_task(params: ExecuteTaskParams, args: &Args) {
     tracing::info!(
         task_id = %params.task_id,
@@ -95,31 +96,39 @@ async fn execute_task(params: ExecuteTaskParams, args: &Args) {
         "Executing task"
     );
 
-    // Send a progress notification
+    // Send a progress notification that we're starting
     let progress_params = serde_json::to_value(TaskProgressParams {
         task_id: params.task_id.clone(),
         chunk: format!("Starting task: {}", params.subject),
     }).unwrap();
     notify(methods::TASK_PROGRESS, progress_params).await;
 
-    // TODO: In a full implementation, this would:
-    // 1. Construct an LLM prompt from the task description
-    // 2. Call the LLM client with tool access
-    // 3. Stream progress updates
-    // 4. Return the final result
-    //
-    // For now, we acknowledge the task and report completion.
-    let output = format!(
-        "Task '{}' ({}): execution stub — no LLM client wired yet. Agent: {}",
-        params.subject, params.task_id, args.name
-    );
+    // Build the LLM client from environment
+    let result = run_llm_task(&params, args).await;
 
-    let complete_params = serde_json::to_value(TaskCompleteParams {
-        task_id: params.task_id.clone(),
-        success: true,
-        output,
-    }).unwrap();
-    notify(methods::TASK_COMPLETE, complete_params).await;
+    match result {
+        Ok(output) => {
+            let complete_params = serde_json::to_value(TaskCompleteParams {
+                task_id: params.task_id.clone(),
+                success: true,
+                output,
+            }).unwrap();
+            notify(methods::TASK_COMPLETE, complete_params).await;
+        }
+        Err(err) => {
+            tracing::error!(
+                task_id = %params.task_id,
+                error = %err,
+                "Task execution failed"
+            );
+            let complete_params = serde_json::to_value(TaskCompleteParams {
+                task_id: params.task_id.clone(),
+                success: false,
+                output: format!("Error: {err}"),
+            }).unwrap();
+            notify(methods::TASK_COMPLETE, complete_params).await;
+        }
+    }
 
     // Report idle
     let idle_params = serde_json::to_value(AgentIdleParams {
@@ -127,6 +136,101 @@ async fn execute_task(params: ExecuteTaskParams, args: &Args) {
         available_tasks_count: 0,
     }).unwrap();
     notify(methods::AGENT_IDLE, idle_params).await;
+}
+
+/// Run the actual LLM call for a task, streaming text deltas as progress.
+async fn run_llm_task(params: &ExecuteTaskParams, args: &Args) -> Result<String, String> {
+    // Create LLM client from environment variables
+    let mut client = LlmClient::from_env()
+        .map_err(|e| format!("Failed to create LLM client (check API key env vars): {e}"))?;
+
+    // Apply model override from CLI args
+    if let Some(ref model) = args.model {
+        client.set_model(model.clone());
+    }
+
+    // Build system prompt
+    let system_prompt = args.system_prompt.as_deref().unwrap_or(
+        "You are an AI agent executing a task. Follow instructions precisely. \
+         Be concise and produce actionable output."
+    );
+
+    // Build user message from the task description
+    let user_content = if params.description.is_empty() {
+        params.subject.clone()
+    } else {
+        format!("{}\n\n{}", params.subject, params.description)
+    };
+
+    let messages = vec![Message {
+        role: "user".to_string(),
+        content: MessageContent::Text(user_content),
+    }];
+
+    // Use streaming to report progress as text arrives
+    let mut stream = client
+        .send_message_stream(messages, None, Some(system_prompt.to_string()))
+        .await
+        .map_err(|e| format!("LLM stream error: {e}"))?;
+
+    let mut full_response = String::new();
+
+    while let Some(event_result) = stream.next().await {
+        match event_result {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => match delta {
+                ContentDelta::TextDelta { text } => {
+                    full_response.push_str(&text);
+
+                    // Send incremental progress
+                    let progress_params = serde_json::to_value(TaskProgressParams {
+                        task_id: params.task_id.clone(),
+                        chunk: text,
+                    }).unwrap();
+                    notify(methods::TASK_PROGRESS, progress_params).await;
+                }
+                ContentDelta::ThinkingDelta { thinking } => {
+                    tracing::debug!(thinking = %thinking, "Model thinking");
+                }
+                ContentDelta::InputJsonDelta { .. } => {}
+            },
+            Ok(StreamEvent::MessageStart { .. }) => {
+                tracing::debug!(task_id = %params.task_id, "LLM stream started");
+            }
+            Ok(StreamEvent::MessageStop) => {
+                tracing::debug!(task_id = %params.task_id, "LLM stream completed");
+            }
+            Ok(StreamEvent::MessageDelta { delta, .. }) => {
+                if let Some(reason) = delta.stop_reason {
+                    tracing::debug!(
+                        task_id = %params.task_id,
+                        stop_reason = %reason,
+                        "Stream ending"
+                    );
+                }
+            }
+            Ok(_) => {
+                // Ignore other events (content_block_start, content_block_stop, ping)
+            }
+            Err(e) => {
+                // If we already collected some text, return it as a partial
+                // result rather than failing completely
+                if full_response.is_empty() {
+                    return Err(format!("Stream error: {e}"));
+                }
+                tracing::warn!(
+                    error = %e,
+                    "Stream error after partial response, returning what we have"
+                );
+                break;
+            }
+        }
+    }
+
+    if full_response.is_empty() {
+        return Err("LLM returned an empty response".to_string());
+    }
+
+    Ok(full_response)
 }
 
 #[tokio::main]
