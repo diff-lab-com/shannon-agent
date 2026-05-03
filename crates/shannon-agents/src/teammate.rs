@@ -379,7 +379,11 @@ impl Teammate {
                 result.content,
             ))
         } else {
-            // Fallback: no executor, return placeholder response
+            // Fallback: no executor configured, return placeholder response
+            tracing::warn!(
+                agent = %self.name,
+                "No executor configured for agent; returning placeholder response"
+            );
             let response = format!("Agent '{}' received: {}", self.name, content);
 
             Ok(AgentMessage::new_text(

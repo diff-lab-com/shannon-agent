@@ -706,7 +706,11 @@ impl MultiAgentSpawner {
 
             Ok(AgentResult::completed(agent.name.clone(), result, start.elapsed()))
         } else {
-            // No executor: return a stub result so tests still pass
+            // No executor configured: log warning and return a stub result
+            tracing::warn!(
+                agent = %agent.name,
+                "No executor configured for agent; returning stub result"
+            );
             Ok(AgentResult::completed(
                 agent.name.clone(),
                 ToolOutput {
