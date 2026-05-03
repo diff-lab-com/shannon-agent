@@ -957,6 +957,8 @@ pub struct HookManager {
     project_config_path: PathBuf,
     /// Base directory for resolving project-level paths (defaults to cwd)
     base_dir: PathBuf,
+    /// Optional LLM client for evaluating LLM-type hooks
+    llm_client: Option<crate::api::client::LlmClient>,
 }
 
 impl std::fmt::Debug for HookManager {
@@ -966,6 +968,7 @@ impl std::fmt::Debug for HookManager {
             .field("project_config_path", &self.project_config_path)
             .field("base_dir", &self.base_dir)
             .field("hooks_file", &self.hooks_file)
+            .field("llm_client", &self.llm_client.is_some())
             .finish()
     }
 }
@@ -990,6 +993,7 @@ impl HookManager {
             user_config_path,
             project_config_path,
             base_dir,
+            llm_client: None,
         }
     }
 
@@ -1000,6 +1004,7 @@ impl HookManager {
             user_config_path: user_path,
             project_config_path: project_path,
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            llm_client: None,
         }
     }
 
@@ -1014,6 +1019,7 @@ impl HookManager {
             user_config_path,
             project_config_path,
             base_dir,
+            llm_client: None,
         }
     }
 
@@ -1406,21 +1412,129 @@ impl HookManager {
     /// Execute an LLM hook: LLM-powered hook evaluation
     ///
     /// LLM hooks use an LLM to evaluate hook events and make decisions.
-    /// This is a stub implementation that returns Allow until full LLM integration is complete.
+    /// Sends the hook's prompt template (with variable substitution) along with
+    /// the event JSON to the LLM, then parses the response as a HookDecision.
     async fn execute_llm_hook(
         &self,
         hook_def: &HookDef,
-        _event_json: &[u8],
+        event_json: &[u8],
     ) -> Result<HookResult, HookError> {
-        // TODO: Implement full LLM hook support
-        // For now, return Allow decision so code compiles
-        Ok(HookResult {
-            exit_code: 0,
-            stdout: "LLM hook not yet implemented, allowing by default".to_string(),
-            stderr: String::new(),
-            decision: HookDecision::Allow,
-            command: format!("llm: {}", hook_def.command),
+        let timeout = hook_def.timeout_duration();
+        let command_label = format!("llm: {}", hook_def.prompt_template.as_deref().unwrap_or(&hook_def.command));
+
+        let client = match &self.llm_client {
+            Some(c) => c.clone(),
+            None => {
+                tracing::warn!("LLM hook executed but no LlmClient configured, allowing by default");
+                return Ok(HookResult {
+                    exit_code: 0,
+                    stdout: "No LLM client configured, allowing by default".to_string(),
+                    stderr: String::new(),
+                    decision: HookDecision::Allow,
+                    command: command_label,
+                });
+            }
+        };
+
+        // Build the user prompt from the template or fall back to the command field
+        let event_json_str = String::from_utf8_lossy(event_json);
+        let user_prompt = match &hook_def.prompt_template {
+            Some(template) => template
+                .replace("{{event_json}}", &event_json_str)
+                .replace("{{event_type}}", &Self::extract_event_type_from_json(&event_json_str)),
+            None => hook_def.command.clone(),
+        };
+
+        let system_prompt = "\
+You are a hook evaluator for a code assistant. You receive an event and must decide \
+whether to allow or deny the operation.
+
+Respond with EXACTLY one of these JSON objects on a SINGLE line, nothing else:
+- {\"decision\":\"allow\"}
+- {\"decision\":\"deny\",\"reason\":\"<brief reason>\"}
+
+Do not include any other text, explanation, or formatting.";
+
+        let messages = vec![crate::api::types::Message {
+            role: "user".to_string(),
+            content: crate::api::types::MessageContent::Text(user_prompt),
+        }];
+
+        // If the hook specifies a model override, clone the client and swap the model
+        let client = match &hook_def.model {
+            Some(model) => {
+                let mut c = client;
+                c.set_model(model.clone());
+                c
+            }
+            None => client,
+        };
+
+        let result = tokio::time::timeout(timeout, async {
+            client
+                .send_message(messages, None, Some(system_prompt.to_string()))
+                .await
         })
+        .await;
+
+        match result {
+            Ok(Ok(content_blocks)) => {
+                // Extract text from response content blocks
+                let response_text = content_blocks
+                    .iter()
+                    .filter_map(|block| match block {
+                        crate::api::types::ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
+
+                let decision = HookResult::parse_decision(&response_text);
+                Ok(HookResult {
+                    exit_code: 0,
+                    stdout: response_text,
+                    stderr: String::new(),
+                    decision,
+                    command: command_label,
+                })
+            }
+            Ok(Err(api_err)) => {
+                // LLM call failed — fail-open (Allow) during development
+                tracing::warn!("LLM hook call failed: {api_err}, allowing by default");
+                Ok(HookResult {
+                    exit_code: -1,
+                    stdout: String::new(),
+                    stderr: format!("LLM call failed: {api_err}"),
+                    decision: HookDecision::Allow,
+                    command: command_label,
+                })
+            }
+            Err(_) => {
+                // Timeout — fail-open
+                tracing::warn!("LLM hook timed out after {}s, allowing by default", timeout.as_secs());
+                Ok(HookResult {
+                    exit_code: -1,
+                    stdout: String::new(),
+                    stderr: format!("LLM hook timed out after {}s", timeout.as_secs()),
+                    decision: HookDecision::Allow,
+                    command: command_label,
+                })
+            }
+        }
+    }
+
+    /// Extract the event type value from a JSON payload for template substitution.
+    fn extract_event_type_from_json(json_str: &str) -> String {
+        serde_json::from_str::<Value>(json_str)
+            .ok()
+            .and_then(|v| {
+                // HookEvent is serialized with PascalCase; iterate keys looking
+                // for a known event-type object and return its key name.
+                v.as_object()
+                    .map(|obj| obj.keys().next().cloned())
+                    .flatten()
+            })
+            .unwrap_or_else(|| "Unknown".to_string())
     }
 
     /// Process hook results and determine the final outcome.
@@ -1477,6 +1591,11 @@ impl HookManager {
             .keys()
             .filter_map(|k| HookEventType::from_str_lossy(k))
             .collect()
+    }
+
+    /// Set the LLM client used for evaluating LLM-type hooks
+    pub fn set_llm_client(&mut self, client: crate::api::client::LlmClient) {
+        self.llm_client = Some(client);
     }
 }
 
