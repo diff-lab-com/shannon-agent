@@ -3827,8 +3827,30 @@ impl McpProcessPool {
     }
 
     /// Gracefully shut down all servers (stdio + remote).
+    ///
+    /// For each stdio server this closes stdin, waits up to 2 s for the child
+    /// process to exit, then force-kills it. Remote handles are simply dropped
+    /// (no OS process to reap). Background tasks (health checker, config
+    /// watcher) are also cancelled.
     pub async fn shutdown_all(&self) {
         info!("Shutting down all MCP servers");
+
+        // Cancel background health-check task.
+        {
+            let mut guard = self.health_task.lock().await;
+            if let Some(handle) = guard.take() {
+                handle.abort();
+            }
+        }
+
+        // Cancel background config-watcher task.
+        {
+            let mut guard = self.config_watcher_task.lock().await;
+            if let Some(handle) = guard.take() {
+                handle.abort();
+            }
+        }
+
         for entry in self.handles.iter() {
             entry.value().shutdown().await;
         }
@@ -3973,16 +3995,54 @@ impl McpProcessPool {
 
 impl Drop for McpProcessPool {
     fn drop(&mut self) {
-        // Best-effort cleanup: kill child processes to prevent zombies.
-        // Since Drop can't be async, we synchronously iterate and kill.
-        for entry in self.handles.iter() {
-            let handle = entry.value();
-            if let Ok(mut child_guard) = handle.child.try_lock() {
-                if let Some(ref mut child) = *child_guard {
-                    // start_kill() is sync and sends SIGKILL immediately.
-                    let _ = child.start_kill();
+        // Best-effort graceful cleanup: try to shut down child processes
+        // cleanly before falling back to SIGKILL.
+        //
+        // Since Drop can't be async we spawn a detached thread that creates
+        // its own small tokio runtime and runs the async shutdown with a hard
+        // upper-bound timeout (5 s).  If we're somehow outside tokio we fall
+        // back to immediate synchronous SIGKILL.
+
+        if self.handles.is_empty() {
+            return;
+        }
+
+        let handles: Vec<Arc<McpServerHandle>> =
+            self.handles.iter().map(|e| e.value().clone()).collect();
+        self.handles.clear();
+        self.remote_handles.clear();
+
+        if tokio::runtime::Handle::try_current().is_ok() {
+            // We're inside a tokio runtime — spawn a detached thread with its
+            // own runtime to avoid the "cannot block_on inside async" panic.
+            let _ = std::thread::Builder::new()
+                .name("mcp-pool-shutdown".into())
+                .spawn(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_time()
+                        .build();
+                    let Ok(rt) = rt else { return };
+                    rt.block_on(async {
+                        let _ = tokio::time::timeout(
+                            Duration::from_secs(5),
+                            async {
+                                for h in &handles {
+                                    h.shutdown().await;
+                                }
+                            },
+                        )
+                        .await;
+                    });
+                });
+        } else {
+            // Outside tokio — fall back to synchronous SIGKILL.
+            for h in &handles {
+                if let Ok(mut child_guard) = h.child.try_lock() {
+                    if let Some(ref mut child) = *child_guard {
+                        let _ = child.start_kill();
+                    }
+                    *child_guard = None;
                 }
-                *child_guard = None;
             }
         }
     }
