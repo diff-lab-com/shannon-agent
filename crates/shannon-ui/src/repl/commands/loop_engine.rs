@@ -97,7 +97,10 @@ pub(crate) fn check_loop_iteration(repl: &mut Repl) -> bool {
         return false;
     }
 
-    let ls = repl.state.loop_state.as_mut().unwrap();
+    let ls = match repl.state.loop_state.as_mut() {
+        Some(ls) => ls,
+        None => return false,
+    };
     ls.iteration += 1;
 
     // Check max iterations
@@ -242,7 +245,10 @@ pub(crate) fn check_ralph_iteration(repl: &mut Repl) -> bool {
         return false;
     }
 
-    let rs = repl.state.ralph_state.as_mut().unwrap();
+    let rs = match repl.state.ralph_state.as_mut() {
+        Some(rs) => rs,
+        None => return false,
+    };
     rs.iteration += 1;
 
     // Get last assistant message to check for completion keywords
@@ -253,7 +259,7 @@ pub(crate) fn check_ralph_iteration(repl: &mut Repl) -> bool {
         let found = keywords.iter().any(|kw| msg.contains(&kw.to_uppercase()));
         if found {
             let iter = rs.iteration;
-            let matched_kw = keywords.iter().find(|kw| msg.contains(&kw.to_uppercase())).unwrap();
+            let matched_kw = keywords.iter().find(|kw| msg.contains(&kw.to_uppercase())).unwrap_or(&keywords[0]);
             repl.chat.add_message(ChatRole::System, format!(
                 "Ralph complete: detected \"{matched_kw}\" after {iter} iteration(s)."
             ));
@@ -966,7 +972,13 @@ Agent definitions are loaded from:
                 team: None,
             };
 
-            let registry = repl.agent_registry.as_ref().unwrap().clone();
+            let registry = match repl.agent_registry.as_ref() {
+                Some(r) => r.clone(),
+                None => {
+                    repl.chat.add_message(ChatRole::System, "Agent registry not available.".to_string());
+                    return Ok(());
+                }
+            };
             match repl.runtime.block_on(registry.spawn(agent_config)) {
                 Ok(agent) => {
                     repl.chat.add_message(ChatRole::System, format!(

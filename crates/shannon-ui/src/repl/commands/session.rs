@@ -759,8 +759,8 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
             compact_result.messages_compacted,
             compact_result.duration.as_secs_f64(),
         );
-        if focus_keywords.is_some() {
-            report.push_str(&format!("\n  Focus: {}", focus_keywords.as_ref().unwrap().join(", ")));
+        if let Some(ref kws) = focus_keywords {
+            report.push_str(&format!("\n  Focus: {}", kws.join(", ")));
         }
         repl.chat.add_message(ChatRole::System, report);
     } else if focus_keywords.is_some() {

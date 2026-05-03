@@ -153,7 +153,7 @@ pub(crate) fn handle_mode(repl: &mut Repl, args: &str) -> Result<()> {
         };
         let mut msg = format!("Current approval mode: {current}\n\nAvailable modes:\n");
         for name in ApprovalMode::all_names() {
-            let mode = ApprovalMode::from_str_ci(name).unwrap();
+            let mode = ApprovalMode::from_str_ci(name).expect("from_str_ci should return valid mode for all_names()");
             let marker = if mode == current { " *" } else { "" };
             msg.push_str(&format!("  {name}{marker} — {}\n", mode.description()));
         }

@@ -227,7 +227,13 @@ pub(crate) fn handle_commands(repl: &mut Repl, args: &str) -> Result<()> {
             repl.chat.add_message(ChatRole::System, "Command name can only contain letters, numbers, '-', '_', and ':' (for subdirectories).".to_string());
             return Ok(());
         }
-        let cwd = std::env::current_dir().unwrap();
+        let cwd = match std::env::current_dir() {
+            Ok(d) => d,
+            Err(e) => {
+                super::set_error(repl, &format!("cannot determine current directory: {e}"));
+                return Ok(());
+            }
+        };
         let dir = cwd.join(".claude").join("commands");
         // Handle subdirectory prefix: "project:foo" → .claude/commands/project/foo.md
         let (sub_dir, file_name) = if let Some((prefix, stem)) = name.split_once(':') {

@@ -96,7 +96,7 @@ impl StatusBarWidget {
                 let mut bar = String::with_capacity(bar_w + 2);
                 bar.push('[');
                 for i in 0..bar_w {
-                    bar.push(if i < filled { crate::a11y::bar_filled().chars().next().unwrap() } else { crate::a11y::bar_empty().chars().next().unwrap() });
+                    bar.push(if i < filled { crate::a11y::bar_filled().chars().next().unwrap_or('█') } else { crate::a11y::bar_empty().chars().next().unwrap_or('░') });
                 }
                 bar.push(']');
                 // Color based on usage: green < 50%, yellow < 80%, red >= 80%

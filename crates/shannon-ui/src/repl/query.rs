@@ -752,7 +752,13 @@ fn auto_save_memory(repl: &mut Repl, response: &str) {
         return;
     }
 
-    let mut store = memory.write().unwrap();
+    let mut store = match memory.write() {
+        Ok(guard) => guard,
+        Err(e) => {
+            tracing::warn!("memory lock poisoned, recovering: {e}");
+            e.into_inner()
+        }
+    };
     let project = repl.state.working_directory.clone();
 
     use shannon_core::memory::{MemoryEntry, MemoryCategory};
