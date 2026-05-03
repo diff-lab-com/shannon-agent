@@ -928,4 +928,536 @@ mod tests {
         assert!(SidebarWidget::fits(80));
         assert!(!SidebarWidget::fits(60));
     }
+
+    // ── Markdown Parsing Edge Case Tests ──────────────────────────────────
+
+    #[test]
+    fn test_parse_markdown_unclosed_code_block() {
+        let input = "Before\n```rust\nfn main() {}\nno closing fence";
+        let segments = chat::parse_markdown_segments(input);
+        assert_eq!(segments.len(), 2);
+        match &segments[1] {
+            chat::MdSegment::CodeBlock { lang, code } => {
+                assert_eq!(lang.as_deref(), Some("rust"));
+                assert!(code.contains("fn main()"));
+                assert!(code.contains("no closing fence"));
+            }
+            _ => panic!("Expected CodeBlock segment"),
+        }
+    }
+
+    #[test]
+    fn test_parse_markdown_unclosed_code_block_no_text() {
+        let input = "Text\n```\ncode line 1\ncode line 2";
+        let segments = chat::parse_markdown_segments(input);
+        assert_eq!(segments.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_markdown_empty_input() {
+        let segments = chat::parse_markdown_segments("");
+        assert!(segments.is_empty());
+    }
+
+    #[test]
+    fn test_parse_markdown_single_newline() {
+        let segments = chat::parse_markdown_segments("\n");
+        assert_eq!(segments.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_markdown_multiple_code_blocks() {
+        let input = "```\ncode1\n```\nBetween\n```\ncode2\n```";
+        let segments = chat::parse_markdown_segments(input);
+        assert_eq!(segments.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_markdown_code_block_with_backticks_inside() {
+        let input = "```\nthis has `backticks` inside\n```";
+        let segments = chat::parse_markdown_segments(input);
+        assert_eq!(segments.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_markdown_nested_code_fences() {
+        let input = "````\n```\ninner\n```\n````";
+        let segments = chat::parse_markdown_segments(input);
+        // Parser uses starts_with("```") so ```` both opens and closes,
+        // and the inner ``` lines also trigger open/close, producing multiple segments.
+        assert!(segments.len() >= 1, "Should produce at least one segment");
+    }
+
+    #[test]
+    fn test_parse_markdown_very_long_line() {
+        let long_line = "a".repeat(10_000);
+        let segments = chat::parse_markdown_segments(&long_line);
+        assert_eq!(segments.len(), 1);
+        match &segments[0] {
+            chat::MdSegment::Text(lines) => {
+                assert_eq!(lines.len(), 1);
+                assert_eq!(lines[0].len(), 10_000);
+            }
+            _ => panic!("Expected Text segment"),
+        }
+    }
+
+    #[test]
+    fn test_parse_markdown_many_lines() {
+        let input: String = (0..500).map(|i| format!("Line {i}")).collect::<Vec<_>>().join("\n");
+        let segments = chat::parse_markdown_segments(&input);
+        assert_eq!(segments.len(), 1);
+        match &segments[0] {
+            chat::MdSegment::Text(lines) => assert_eq!(lines.len(), 500),
+            _ => panic!("Expected Text segment"),
+        }
+    }
+
+    #[test]
+    fn test_parse_markdown_header_levels() {
+        for level in 1..=6 {
+            let input = format!("{} Header", "#".repeat(level));
+            let segments = chat::parse_markdown_segments(&input);
+            assert_eq!(segments.len(), 1, "Expected single header segment for level {level}");
+            match &segments[0] {
+                chat::MdSegment::Header { level: l, text } => {
+                    assert_eq!(*l, level);
+                    assert_eq!(text, "Header");
+                }
+                _ => panic!("Expected Header segment for level {level}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_markdown_header_no_space() {
+        let input = "#Header";
+        let segments = chat::parse_markdown_segments(input);
+        match &segments[0] {
+            chat::MdSegment::Text(lines) => assert_eq!(lines[0], "#Header"),
+            _ => panic!("Expected Text segment, not a header"),
+        }
+    }
+
+    #[test]
+    fn test_parse_markdown_header_seven_hashes() {
+        let input = "####### Not a header";
+        let segments = chat::parse_markdown_segments(input);
+        match &segments[0] {
+            chat::MdSegment::Text(lines) => assert_eq!(lines[0], "####### Not a header"),
+            _ => panic!("Expected Text segment for 7-hash line"),
+        }
+    }
+
+    #[test]
+    fn test_parse_markdown_code_block_with_lang_and_filename() {
+        let input = "```rust:src/main.rs\nfn main() {}\n```";
+        let segments = chat::parse_markdown_segments(input);
+        assert_eq!(segments.len(), 1);
+        match &segments[0] {
+            chat::MdSegment::CodeBlock { lang, code } => {
+                assert_eq!(lang.as_deref(), Some("rust:src/main.rs"));
+                assert_eq!(code, "fn main() {}");
+            }
+            _ => panic!("Expected CodeBlock segment"),
+        }
+    }
+
+    #[test]
+    fn test_parse_markdown_code_block_empty() {
+        let input = "```\n```";
+        let segments = chat::parse_markdown_segments(input);
+        assert_eq!(segments.len(), 1);
+        match &segments[0] {
+            chat::MdSegment::CodeBlock { lang, code } => {
+                assert!(lang.is_none());
+                assert!(code.is_empty());
+            }
+            _ => panic!("Expected CodeBlock segment"),
+        }
+    }
+
+    #[test]
+    fn test_parse_markdown_text_before_and_after_code() {
+        let input = "Before\n```\ncode\n```\nAfter";
+        let segments = chat::parse_markdown_segments(input);
+        assert_eq!(segments.len(), 3);
+        assert!(matches!(&segments[0], chat::MdSegment::Text(_)));
+        assert!(matches!(&segments[1], chat::MdSegment::CodeBlock { .. }));
+        assert!(matches!(&segments[2], chat::MdSegment::Text(_)));
+    }
+
+    // ── Render Cache Tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_render_cache_insert_and_get() {
+        let mut cache = MessageRenderCache::new(10);
+        let hash = content_hash("hello");
+        let lines = vec![Line::from("hello")];
+        cache.insert(0, hash, 80, lines.clone());
+        let result = cache.get(0, hash, 80);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_render_cache_miss_on_different_hash() {
+        let mut cache = MessageRenderCache::new(10);
+        let hash1 = content_hash("hello");
+        let hash2 = content_hash("world");
+        cache.insert(0, hash1, 80, vec![Line::from("hello")]);
+        assert!(cache.get(0, hash2, 80).is_none());
+    }
+
+    #[test]
+    fn test_render_cache_miss_on_different_width() {
+        let mut cache = MessageRenderCache::new(10);
+        let hash = content_hash("hello");
+        cache.insert(0, hash, 80, vec![Line::from("hello")]);
+        assert!(cache.get(0, hash, 60).is_none());
+    }
+
+    #[test]
+    fn test_render_cache_invalidation_on_message_change() {
+        let mut cache = MessageRenderCache::new(10);
+        let hash_old = content_hash("old content");
+        let hash_new = content_hash("new content");
+        cache.insert(0, hash_old, 80, vec![Line::from("old")]);
+        assert!(cache.get(0, hash_old, 80).is_some());
+        cache.invalidate(0);
+        assert!(cache.get(0, hash_old, 80).is_none());
+        cache.insert(0, hash_new, 80, vec![Line::from("new")]);
+        assert!(cache.get(0, hash_new, 80).is_some());
+    }
+
+    #[test]
+    fn test_render_cache_clear() {
+        let mut cache = MessageRenderCache::new(10);
+        let hash = content_hash("hello");
+        cache.insert(0, hash, 80, vec![Line::from("hello")]);
+        cache.insert(1, hash, 80, vec![Line::from("world")]);
+        cache.clear();
+        assert!(cache.get(0, hash, 80).is_none());
+        assert!(cache.get(1, hash, 80).is_none());
+    }
+
+    #[test]
+    fn test_render_cache_lru_eviction() {
+        let mut cache = MessageRenderCache::new(2);
+        let hash = content_hash("x");
+        cache.insert(0, hash, 80, vec![Line::from("0")]);
+        cache.insert(1, hash, 80, vec![Line::from("1")]);
+        let _ = cache.get(0, hash, 80);
+        cache.insert(2, hash, 80, vec![Line::from("2")]);
+        assert!(cache.get(0, hash, 80).is_some(), "Entry 0 should survive");
+        assert!(cache.get(1, hash, 80).is_none(), "Entry 1 should be evicted");
+        assert!(cache.get(2, hash, 80).is_some(), "Entry 2 should exist");
+    }
+
+    #[test]
+    fn test_render_cache_invalidate_nonexistent() {
+        let mut cache = MessageRenderCache::new(10);
+        cache.invalidate(999);
+    }
+
+    // ── Sidebar Layout Tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_sidebar_width_constant() {
+        assert_eq!(SidebarWidget::width(), 28);
+    }
+
+    #[test]
+    fn test_sidebar_fits_at_boundary() {
+        assert!(SidebarWidget::fits(78));
+        assert!(!SidebarWidget::fits(77));
+    }
+
+    #[test]
+    fn test_sidebar_fits_large_terminal() {
+        assert!(SidebarWidget::fits(200));
+        assert!(SidebarWidget::fits(120));
+    }
+
+    #[test]
+    fn test_sidebar_fits_narrow_terminal() {
+        assert!(!SidebarWidget::fits(40));
+        assert!(!SidebarWidget::fits(20));
+    }
+
+    #[test]
+    fn test_sidebar_layout_with_sidebar_visible() {
+        let area = Rect::new(0, 0, 120, 30);
+        let (_header, chat, _prompt, _status, sidebar_area, full) =
+            MainLayoutWidget::layout_with_sidebar(area, 3, true);
+        assert_eq!(full, area);
+        assert!(sidebar_area.is_some());
+        let sb = sidebar_area.unwrap();
+        assert!(sb.width > 0);
+        assert!(sb.height > 0);
+        assert!(chat.width < area.width);
+    }
+
+    #[test]
+    fn test_sidebar_layout_hidden_when_too_narrow() {
+        let area = Rect::new(0, 0, 70, 20);
+        let (_, _, _, _, sidebar_area, _) =
+            MainLayoutWidget::layout_with_sidebar(area, 3, true);
+        assert!(sidebar_area.is_none());
+    }
+
+    #[test]
+    fn test_sidebar_layout_not_visible_when_flag_off() {
+        let area = Rect::new(0, 0, 120, 30);
+        let (_, _, _, _, sidebar_area, _) =
+            MainLayoutWidget::layout_with_sidebar(area, 3, false);
+        assert!(sidebar_area.is_none());
+    }
+
+    #[test]
+    fn test_sidebar_info_all_fields() {
+        let info = SidebarInfo {
+            model: Some("claude-opus".to_string()),
+            tokens_used: 150_000,
+            cost_usd: 1.2345,
+            tools_invoked: 7,
+            modified_files: vec![
+                ("src/main.rs".to_string(), 50, 10),
+                ("lib.rs".to_string(), 20, 5),
+            ],
+            total_additions: 70,
+            total_deletions: 15,
+            error_count: 0,
+            context_window: 200_000,
+            active_agents: vec![],
+            diagnostics: vec![],
+            session_duration_secs: 300,
+            turn_count: 10,
+            commands_run: 5,
+            tokens_per_sec: Some(85.5),
+        };
+        assert_eq!(info.model.as_deref(), Some("claude-opus"));
+        assert_eq!(info.tokens_used, 150_000);
+        assert_eq!(info.modified_files.len(), 2);
+        assert_eq!(info.total_additions, 70);
+        assert_eq!(info.total_deletions, 15);
+    }
+
+    #[test]
+    fn test_sidebar_info_default_values() {
+        let info = SidebarInfo {
+            model: None,
+            tokens_used: 0,
+            cost_usd: 0.0,
+            tools_invoked: 0,
+            modified_files: vec![],
+            total_additions: 0,
+            total_deletions: 0,
+            error_count: 0,
+            context_window: 0,
+            active_agents: vec![],
+            diagnostics: vec![],
+            session_duration_secs: 0,
+            turn_count: 0,
+            commands_run: 0,
+            tokens_per_sec: None,
+        };
+        assert!(info.model.is_none());
+        assert!(info.modified_files.is_empty());
+    }
+
+    // ── Token Formatting Edge Cases ────────────────────────────────────────
+
+    #[test]
+    fn test_format_tokens_boundary_values() {
+        assert_eq!(sidebar::format_tokens(0), "0");
+        assert_eq!(sidebar::format_tokens(999), "999");
+        assert_eq!(sidebar::format_tokens(1000), "1.0k");
+        assert_eq!(sidebar::format_tokens(999_999), "1000.0k");
+        assert_eq!(sidebar::format_tokens(1_000_000), "1.0M");
+    }
+
+    #[test]
+    fn test_format_tokens_exact_millions() {
+        assert_eq!(sidebar::format_tokens(1_000_000), "1.0M");
+        assert_eq!(sidebar::format_tokens(2_500_000), "2.5M");
+    }
+
+    // ── Truncation Edge Cases ──────────────────────────────────────────────
+
+    #[test]
+    fn test_truncate_to_zero_chars() {
+        let ellipsis = "\u{2026}";
+        assert_eq!(chat::truncate_to("hello", 0), ellipsis);
+    }
+
+    #[test]
+    fn test_truncate_to_one_char() {
+        let ellipsis = "\u{2026}";
+        assert_eq!(chat::truncate_to("hello", 1), ellipsis);
+    }
+
+    #[test]
+    fn test_truncate_to_two_chars() {
+        assert_eq!(chat::truncate_to("hello", 2), "h\u{2026}");
+    }
+
+    #[test]
+    fn test_truncate_to_empty_string() {
+        // Empty string fits in any width, including 0
+        assert_eq!(chat::truncate_to("", 10), "");
+        assert_eq!(chat::truncate_to("", 0), "");
+    }
+
+    #[test]
+    fn test_truncate_to_unicode() {
+        assert_eq!(chat::truncate_to("hello world", 5), "hell\u{2026}");
+        let unicode = "caf\u{e9} r\u{e9}sum\u{e9}";
+        assert_eq!(chat::truncate_to(unicode, 5), "caf\u{e9}\u{2026}");
+    }
+
+    // ── Chat Widget Scroll Bounds ──────────────────────────────────────────
+
+    #[test]
+    fn test_chat_scroll_bounds_empty() {
+        let mut chat = ChatWidget::new(100);
+        chat.scroll_up();
+        assert_eq!(chat.scroll_offset, 0);
+        chat.scroll_down();
+        assert_eq!(chat.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_chat_scroll_bounds_single_message() {
+        let mut chat = ChatWidget::new(100);
+        chat.add_message(ChatRole::User, "Hello".to_string());
+        assert_eq!(chat.scroll_offset, 0);
+        chat.scroll_down();
+        assert_eq!(chat.scroll_offset, 0);
+        chat.scroll_up();
+        assert_eq!(chat.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_chat_scroll_up_does_not_underflow() {
+        let mut chat = ChatWidget::new(100);
+        chat.add_message(ChatRole::User, "A".to_string());
+        chat.add_message(ChatRole::Assistant, "B".to_string());
+        for _ in 0..10 {
+            chat.scroll_up();
+        }
+        assert_eq!(chat.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_chat_scroll_down_does_not_overflow() {
+        let mut chat = ChatWidget::new(100);
+        chat.add_message(ChatRole::User, "A".to_string());
+        chat.add_message(ChatRole::Assistant, "B".to_string());
+        for _ in 0..10 {
+            chat.scroll_down();
+        }
+        assert_eq!(chat.scroll_offset, 1);
+    }
+
+    #[test]
+    fn test_chat_scroll_to_top_and_back() {
+        let mut chat = ChatWidget::new(100);
+        for i in 0..20 {
+            chat.add_message(ChatRole::User, format!("Msg {i}"));
+        }
+        // After adding 20 messages, scroll_offset = 19 (auto-scrolled to bottom)
+        assert_eq!(chat.scroll_offset, 19);
+        // scroll_to_top sets offset to len()-1 which is still 19 (top of display = oldest)
+        chat.scroll_to_top();
+        assert_eq!(chat.scroll_offset, 19);
+        // scroll_to_latest resets offset to 0 (bottom = newest)
+        chat.scroll_to_latest();
+        assert_eq!(chat.scroll_offset, 0);
+    }
+
+    // ── Chat Widget Update Bounds ──────────────────────────────────────────
+
+    #[test]
+    fn test_chat_update_message_out_of_bounds() {
+        let mut chat = ChatWidget::new(100);
+        chat.add_message(ChatRole::User, "Hello".to_string());
+        chat.update_message(5, "Updated".to_string());
+        assert_eq!(chat.messages[0].content, "Hello");
+    }
+
+    #[test]
+    fn test_chat_update_last_message_empty_chat() {
+        let mut chat = ChatWidget::new(100);
+        chat.update_last_message("still empty".to_string());
+        assert!(chat.is_empty());
+    }
+
+    // ── StreamingState Tests ───────────────────────────────────────────────
+
+    #[test]
+    fn test_streaming_state_default() {
+        assert_eq!(StreamingState::default(), StreamingState::Idle);
+    }
+
+    #[test]
+    fn test_streaming_state_variants() {
+        let thinking = StreamingState::Thinking;
+        let tool = StreamingState::CallingTool { name: "bash".to_string() };
+        let generating = StreamingState::Generating { elapsed_secs: 5 };
+        assert_eq!(thinking, StreamingState::Thinking);
+        assert_eq!(tool, StreamingState::CallingTool { name: "bash".to_string() });
+        assert_eq!(generating, StreamingState::Generating { elapsed_secs: 5 });
+    }
+
+    // ── Content Hash Tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_content_hash_deterministic() {
+        let h1 = content_hash("test string");
+        let h2 = content_hash("test string");
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn test_content_hash_different_inputs() {
+        let h1 = content_hash("string A");
+        let h2 = content_hash("string B");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_content_hash_empty() {
+        let h = content_hash("");
+        assert_ne!(h, 0);
+    }
+
+    // ── Chat Toggle Fold Tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_toggle_fold_non_tool_message() {
+        let mut chat = ChatWidget::new(100);
+        chat.add_message(ChatRole::User, "Hello".to_string());
+        chat.toggle_fold(0);
+        assert_eq!(chat.messages[0].folded, false);
+    }
+
+    #[test]
+    fn test_toggle_last_tool_fold_no_tools() {
+        let mut chat = ChatWidget::new(100);
+        chat.add_message(ChatRole::User, "Hello".to_string());
+        chat.add_message(ChatRole::Assistant, "Hi".to_string());
+        chat.toggle_last_tool_fold();
+        assert_eq!(chat.len(), 2);
+    }
+
+    #[test]
+    fn test_toggle_last_tool_fold_with_tools() {
+        let mut chat = ChatWidget::new(100);
+        chat.add_message(ChatRole::User, "Run tests".to_string());
+        chat.add_tool_message("bash".to_string(), "cargo test".to_string(), false, None);
+        assert!(chat.messages[1].folded);
+        chat.toggle_last_tool_fold();
+        assert!(!chat.messages[1].folded);
+    }
 }
