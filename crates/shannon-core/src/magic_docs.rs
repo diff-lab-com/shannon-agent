@@ -250,20 +250,26 @@ impl MagicDocsService {
         templates.insert(
             "module".to_string(),
             "# {title}\n\n> Auto-generated documentation stub.\n\n## Overview\n\n\
-             TODO: Add module overview.\n\n## Examples\n\n```rust\n// TODO: Add usage examples.\n```\n"
+             The `{title}` module provides core functionality. Describe the purpose \
+             and scope of this module here.\n\n## Examples\n\n```rust\n\
+             use {title}::SomeType;\n\n// Add usage examples demonstrating the module's public API.\n```\n"
                 .to_string(),
         );
         templates.insert(
             "function".to_string(),
-            "## `{title}`\n\n```rust\n// TODO: Add function signature.\nfn {title}() {{}}\n```\n\n\
-             **Description:** TODO\n\n**Parameters:** TODO\n\n**Returns:** TODO\n\n\
-             **Examples:**\n\n```rust\n// TODO\n```\n"
+            "## `{title}`\n\n```rust\nfn {title}(/* parameters */) -> /* return type */\n```\n\n\
+             **Description:** Describe what `{title}` does and when to use it.\n\n\
+             **Parameters:** List each parameter with its type and purpose.\n\n\
+             **Returns:** Describe the return value and any error conditions.\n\n\
+             **Examples:**\n\n```rust\n// Add a call example for {title}.\n```\n"
                 .to_string(),
         );
         templates.insert(
             "type".to_string(),
-            "## `{title}`\n\n```rust\n// TODO: Add type definition.\nstruct {title};\n```\n\n\
-             **Description:** TODO\n\n**Fields:** TODO\n\n**Implementations:** TODO\n"
+            "## `{title}`\n\n```rust\nstruct {title} {{ /* fields */ }}\n```\n\n\
+             **Description:** Describe the purpose and invariants of `{title}`.\n\n\
+             **Fields:** Document each field's role and any constraints.\n\n\
+             **Implementations:** Note key trait implementations and associated methods.\n"
                 .to_string(),
         );
         Self { templates }
