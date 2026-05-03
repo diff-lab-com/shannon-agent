@@ -251,6 +251,20 @@ impl QueryEngine {
         self.config.system_prompt.clone()
     }
 
+    /// Set the thinking effort level (`/effort`).
+    ///
+    /// Maps to `budget_tokens` for Anthropic and `reasoning_effort` for OpenAI.
+    pub fn set_effort_level(&mut self, level: Option<String>) {
+        self.config.effort_level = level;
+    }
+
+    /// Set the focus area (`/focus`).
+    ///
+    /// Injected into the system prompt to steer model attention.
+    pub fn set_focus_area(&mut self, area: Option<String>) {
+        self.config.focus_area = area;
+    }
+
     /// Attach a memory store to this query engine.
     ///
     /// Enables memory-augmented queries (relevant memories injected into the
@@ -550,6 +564,17 @@ impl QueryEngine {
             system_blocks.extend(extra_blocks);
         }
 
+        // Inject focus area from /focus command into system prompt
+        if let Some(ref focus) = config.focus_area {
+            let focus_text = format!(
+                "## User Focus Area\n\
+                 The user wants you to focus on: **{focus}**.\n\
+                 Prioritize this area in your responses. Give extra attention to \
+                 aspects related to {focus} when analyzing, coding, or reviewing."
+            );
+            system_blocks.push(SystemContentBlock::text(focus_text));
+        }
+
         // Decide whether to use structured blocks or fallback to plain string.
         // Use structured blocks only when we have content (avoids empty system arrays).
         let system_blocks_opt = if system_blocks.is_empty() {
@@ -596,6 +621,21 @@ impl QueryEngine {
                 // Enable extended thinking with a budget if configured
                 if config.enable_thinking {
                     cfg.budget_tokens = Some(10000);
+                }
+                // Map effort_level from /effort command to provider-specific parameters
+                if let Some(ref effort) = config.effort_level {
+                    let reasoning_effort = match effort.as_str() {
+                        "low" => crate::api::types::ReasoningEffort::Low,
+                        "medium" => crate::api::types::ReasoningEffort::Medium,
+                        "high" => crate::api::types::ReasoningEffort::High,
+                        _ => crate::api::types::ReasoningEffort::Medium,
+                    };
+                    cfg.reasoning_effort = Some(reasoning_effort);
+                    // For Anthropic: also set budget_tokens based on effort level
+                    if matches!(cfg.provider, crate::api::LlmProvider::Anthropic | crate::api::LlmProvider::Bedrock | crate::api::LlmProvider::Custom) {
+                        let budget = reasoning_effort.to_anthropic_budget(200_000);
+                        cfg.budget_tokens = Some(budget as u32);
+                    }
                 }
                 cfg
             };

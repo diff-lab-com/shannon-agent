@@ -68,6 +68,7 @@ fn make_client(server: &ServerGuard, provider: LlmProvider) -> LlmClient {
         fallback_base_url: None,
         max_stream_reconnects: 3,
         budget_tokens: None,
+        reasoning_effort: None,
     };
     LlmClient::new(config)
 }
@@ -878,6 +879,8 @@ fn test_query_engine_config_custom() {
         compression_strategy: shannon_core::query_engine::CompressionStrategy::TruncateOldest,
         system_prompt: Some("Custom prompt".to_string()),
         auto_commit: false,
+        effort_level: None,
+        focus_area: None,
     };
     assert_eq!(config.max_turns, 5);
     assert_eq!(config.max_budget_usd, Some(1.0));

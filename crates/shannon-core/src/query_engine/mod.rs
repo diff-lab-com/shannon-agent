@@ -854,6 +854,8 @@ mod tests {
             compression_strategy: CompressionStrategy::default(),
             system_prompt: None,
             auto_commit: false,
+            effort_level: None,
+            focus_area: None,
         };
         assert_eq!(config.max_turns, 5);
         assert_eq!(config.max_budget_usd, Some(1.0));
@@ -1105,6 +1107,8 @@ mod tests {
             compression_strategy: CompressionStrategy::default(),
             system_prompt: None,
             auto_commit: false,
+            effort_level: None,
+            focus_area: None,
         };
         assert_eq!(config.max_turns, 1);
         assert_eq!(config.max_budget_usd, Some(0.01));

@@ -352,6 +352,10 @@ pub struct QueryEngineConfig {
     pub system_prompt: Option<String>,
     /// When true, automatically stage and commit after file-write tools (Edit, Write)
     pub auto_commit: bool,
+    /// Effort level for the LLM (e.g. "low", "medium", "high")
+    pub effort_level: Option<String>,
+    /// Focus area for the LLM (e.g. "security", "performance")
+    pub focus_area: Option<String>,
 }
 
 impl Default for QueryEngineConfig {
@@ -397,6 +401,8 @@ impl Default for QueryEngineConfig {
                      - When referencing git commits, use the full hash.".to_string(),
             ),
             auto_commit: false,
+            effort_level: None,
+            focus_area: None,
         }
     }
 }

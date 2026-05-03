@@ -150,7 +150,7 @@ impl LlmClient {
             stop_sequences: None,
             budget_tokens: self.config.budget_tokens,
             thinking_budget: None,
-            reasoning_effort: None,
+            reasoning_effort: self.config.reasoning_effort,
         };
 
         let url = self.endpoint_url();
@@ -228,7 +228,7 @@ impl LlmClient {
             stop_sequences: None,
             budget_tokens: self.config.budget_tokens,
             thinking_budget: None,
-            reasoning_effort: None,
+            reasoning_effort: self.config.reasoning_effort,
         };
 
         let url = self.endpoint_url();

@@ -38,6 +38,11 @@ use ratatui::{
     Terminal,
 };
 use std::collections::HashMap;
+
+/// Type alias for local (stdio) MCP server config: (name, command, args, env, oauth_scopes).
+type LocalServerEntry = (String, String, Vec<String>, HashMap<String, String>, Vec<String>);
+/// Type alias for remote (HTTP/SSE) MCP server config: (name, url, headers, oauth_scopes).
+type HttpServerEntry = (String, String, HashMap<String, String>, Vec<String>);
 use std::io;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
@@ -941,8 +946,8 @@ impl Repl {
                 let discovery_rt = &mcp_rt;
 
                 // Classify servers into local (stdio) and remote (http/sse) buckets
-                let mut local_servers: Vec<(String, String, Vec<String>, HashMap<String, String>, Vec<String>)> = Vec::new();
-                let mut http_servers: Vec<(String, String, HashMap<String, String>, Vec<String>)> = Vec::new(); // (name, url, headers, oauth_scopes)
+                let mut local_servers: Vec<LocalServerEntry> = Vec::new();
+                let mut http_servers: Vec<HttpServerEntry> = Vec::new(); // (name, url, headers, oauth_scopes)
 
                 for config in mcp_registry.enabled_servers() {
                     // Check server approval before attempting discovery

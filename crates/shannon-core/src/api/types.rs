@@ -264,6 +264,11 @@ pub struct LlmClientConfig {
     /// Budget tokens for extended thinking mode (Anthropic-specific).
     /// When set, enables extended thinking with the given token budget.
     pub budget_tokens: Option<u32>,
+    /// Reasoning effort level for models that support adaptive thinking.
+    /// Maps to Anthropic's `budget_tokens` (via percentage of context window) and
+    /// OpenAI's `reasoning_effort` parameter. Takes precedence over `budget_tokens`
+    /// for OpenAI-compatible providers when set.
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl Default for LlmClientConfig {
@@ -321,6 +326,7 @@ impl Default for LlmClientConfig {
             fallback_base_url: None,
             max_stream_reconnects: 3,
             budget_tokens: None,
+            reasoning_effort: None,
         }
     }
 }
@@ -426,6 +432,7 @@ impl From<ShannonConfig> for LlmClientConfig {
             fallback_base_url: None,
             max_stream_reconnects: 3,
             budget_tokens: None,
+            reasoning_effort: None,
         }
     }
 }
@@ -495,6 +502,7 @@ impl LlmClientConfig {
             fallback_base_url: None,
             max_stream_reconnects: 3,
             budget_tokens: None,
+            reasoning_effort: None,
         }
     }
 
@@ -519,6 +527,7 @@ impl LlmClientConfig {
             fallback_base_url: None,
             max_stream_reconnects: 3,
             budget_tokens: None,
+            reasoning_effort: None,
         }
     }
 
@@ -543,6 +552,7 @@ impl LlmClientConfig {
             fallback_base_url: None,
             max_stream_reconnects: 3,
             budget_tokens: None,
+            reasoning_effort: None,
         }
     }
 
@@ -567,6 +577,7 @@ impl LlmClientConfig {
             fallback_base_url: None,
             max_stream_reconnects: 3,
             budget_tokens: None,
+            reasoning_effort: None,
         }
     }
 
@@ -591,6 +602,7 @@ impl LlmClientConfig {
             fallback_base_url: None,
             max_stream_reconnects: 3,
             budget_tokens: None,
+            reasoning_effort: None,
         }
     }
 
@@ -613,6 +625,7 @@ impl LlmClientConfig {
             fallback_base_url: None,
             max_stream_reconnects: 3,
             budget_tokens: None,
+            reasoning_effort: None,
         }
     }
 
@@ -635,6 +648,7 @@ impl LlmClientConfig {
             fallback_base_url: None,
             max_stream_reconnects: 3,
             budget_tokens: None,
+            reasoning_effort: None,
         }
     }
 
@@ -657,6 +671,7 @@ impl LlmClientConfig {
             fallback_base_url: None,
             max_stream_reconnects: 3,
             budget_tokens: None,
+            reasoning_effort: None,
         }
     }
 
@@ -679,6 +694,7 @@ impl LlmClientConfig {
             fallback_base_url: None,
             max_stream_reconnects: 3,
             budget_tokens: None,
+            reasoning_effort: None,
         }
     }
 }

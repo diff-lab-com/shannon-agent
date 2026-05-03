@@ -89,6 +89,10 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
         query_engine.set_model(model.clone());
     }
 
+    // Sync effort_level and focus_area from REPL state into the query engine
+    query_engine.set_effort_level(repl.state.effort_level.clone());
+    query_engine.set_focus_area(repl.state.focus_area.clone());
+
     let query_id = Uuid::new_v4();
     let session_id = Uuid::new_v4();
 

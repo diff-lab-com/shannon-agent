@@ -118,6 +118,11 @@ fn serialize_openai_request(request: &MessageRequest) -> Value {
         body["stream_options"] = json!({"include_usage": true});
     }
 
+    // Pass through reasoning_effort for OpenAI-compatible providers
+    if let Some(ref effort) = request.reasoning_effort {
+        body["reasoning_effort"] = json!(effort.to_openai_effort());
+    }
+
     body
 }
 
