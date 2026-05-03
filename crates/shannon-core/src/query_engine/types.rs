@@ -1,7 +1,9 @@
 //! Types and data structures for the query engine.
 
 use crate::permissions::{PermissionChoice, PermissionPrompt};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -77,6 +79,123 @@ pub struct CostTracker {
     pub budget_limit_usd: Option<f64>,
 }
 
+/// Pricing for a single model: cost per million tokens.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelPricing {
+    /// Input price per million tokens (USD)
+    pub input_price_per_mtok: f64,
+    /// Output price per million tokens (USD)
+    pub output_price_per_mtok: f64,
+}
+
+/// Default pricing table for known models.
+/// Prices per million tokens. Extend or override via `SHANNON_PRICING_JSON`
+/// env var or a `.shannon-pricing.json` file in the project directory.
+static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
+    // Anthropic Claude 4 series
+    ("claude-opus-4",   ModelPricing { input_price_per_mtok: 15.0, output_price_per_mtok: 75.0 }),
+    ("claude-sonnet-4", ModelPricing { input_price_per_mtok: 3.0,  output_price_per_mtok: 15.0 }),
+    ("claude-haiku-4",  ModelPricing { input_price_per_mtok: 0.80, output_price_per_mtok: 4.0 }),
+    // Anthropic Claude 3.5 series
+    ("claude-3-5-sonnet", ModelPricing { input_price_per_mtok: 3.0,  output_price_per_mtok: 15.0 }),
+    ("claude-3-5-haiku",  ModelPricing { input_price_per_mtok: 0.80, output_price_per_mtok: 4.0 }),
+    // Anthropic Claude 3 series
+    ("claude-3-opus", ModelPricing { input_price_per_mtok: 15.0, output_price_per_mtok: 75.0 }),
+    // OpenAI GPT-4.1 series
+    ("gpt-4.1",       ModelPricing { input_price_per_mtok: 2.0,  output_price_per_mtok: 8.0 }),
+    ("gpt-4.1-mini",  ModelPricing { input_price_per_mtok: 0.40, output_price_per_mtok: 1.60 }),
+    ("gpt-4.1-nano",  ModelPricing { input_price_per_mtok: 0.10, output_price_per_mtok: 0.40 }),
+    // OpenAI GPT-4o series
+    ("gpt-4o",        ModelPricing { input_price_per_mtok: 2.5,  output_price_per_mtok: 10.0 }),
+    ("gpt-4o-mini",   ModelPricing { input_price_per_mtok: 0.15, output_price_per_mtok: 0.60 }),
+    // OpenAI GPT-4 / 3.5
+    ("gpt-4-turbo",   ModelPricing { input_price_per_mtok: 10.0, output_price_per_mtok: 30.0 }),
+    ("gpt-3.5-turbo", ModelPricing { input_price_per_mtok: 0.5,  output_price_per_mtok: 1.5 }),
+    // Ollama / local models (free)
+    ("llama",   ModelPricing { input_price_per_mtok: 0.0, output_price_per_mtok: 0.0 }),
+    ("mistral", ModelPricing { input_price_per_mtok: 0.0, output_price_per_mtok: 0.0 }),
+    ("qwen",    ModelPricing { input_price_per_mtok: 0.0, output_price_per_mtok: 0.0 }),
+];
+
+/// Fallback pricing used for models not found in the table.
+const DEFAULT_PRICING_FALLBACK: ModelPricing = ModelPricing {
+    input_price_per_mtok: 3.0,
+    output_price_per_mtok: 15.0,
+};
+
+/// Lazily-built pricing table: merge defaults with any runtime overrides.
+static PRICING_TABLE: Lazy<HashMap<String, ModelPricing>> = Lazy::new(build_pricing_table);
+
+/// Build the final pricing table by layering overrides on top of defaults.
+///
+/// Override sources (later wins):
+/// 1. `.shannon-pricing.json` file in the current working directory
+/// 2. `SHANNON_PRICING_JSON` environment variable (JSON string)
+fn build_pricing_table() -> HashMap<String, ModelPricing> {
+    let mut table = HashMap::new();
+
+    // Seed with defaults
+    for (key, pricing) in DEFAULT_PRICING {
+        table.insert(key.to_string(), pricing.clone());
+    }
+
+    // Layer 1: file overrides
+    if let Ok(data) = std::fs::read_to_string(".shannon-pricing.json") {
+        apply_pricing_overrides(&mut table, &data, "file .shannon-pricing.json");
+    }
+
+    // Layer 2: env-var overrides (highest priority)
+    if let Ok(data) = std::env::var("SHANNON_PRICING_JSON") {
+        apply_pricing_overrides(&mut table, &data, "env SHANNON_PRICING_JSON");
+    }
+
+    table
+}
+
+/// Parse a JSON pricing override blob and merge it into the table.
+fn apply_pricing_overrides(table: &mut HashMap<String, ModelPricing>, json: &str, source: &str) {
+    match serde_json::from_str::<HashMap<String, ModelPricing>>(json) {
+        Ok(overrides) => {
+            for (k, v) in overrides {
+                tracing::debug!(
+                    "Pricing override from {}: {} -> in=${:.2}/Mtok, out=${:.2}/Mtok",
+                    source, k, v.input_price_per_mtok, v.output_price_per_mtok
+                );
+                table.insert(k, v);
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Ignoring pricing overrides from {}: invalid JSON: {e}", source);
+        }
+    }
+}
+
+/// Look up pricing for a model name.  The model string is matched by
+/// substring against the keys in the pricing table (first match wins),
+/// matching the original `contains()` semantics.  Falls back to the default
+/// pricing and emits a debug log for truly unknown models.
+fn lookup_pricing(model: &str) -> ModelPricing {
+    // Check for an exact override first (env/file overrides use exact keys).
+    if let Some(pricing) = PRICING_TABLE.get(model) {
+        return pricing.clone();
+    }
+
+    // Substring matching against known patterns (mirrors original logic).
+    for (key, pricing) in PRICING_TABLE.iter() {
+        if model.contains(key.as_str()) {
+            return pricing.clone();
+        }
+    }
+
+    tracing::debug!(
+        "No pricing entry for model '{}', using default (${:.2}/Mtok in, ${:.2}/Mtok out)",
+        model,
+        DEFAULT_PRICING_FALLBACK.input_price_per_mtok,
+        DEFAULT_PRICING_FALLBACK.output_price_per_mtok,
+    );
+    DEFAULT_PRICING_FALLBACK.clone()
+}
+
 impl CostTracker {
     /// Create a new cost tracker for a specific model
     pub fn new(model: String) -> Self {
@@ -91,26 +210,12 @@ impl CostTracker {
         }
     }
 
-    /// Calculate cost based on model pricing (in USD)
-    /// Prices per million tokens as of 2025
+    /// Calculate cost based on model pricing (in USD).
+    /// Prices per million tokens, looked up from the configurable pricing table.
     pub fn calculate_cost(model: &str, input_tokens: u64, output_tokens: u64) -> f64 {
-        let (input_price_per_mtok, output_price_per_mtok) = match model {
-            // Anthropic Claude series
-            m if m.contains("claude-3-5-sonnet") || m.contains("claude-sonnet-4") => (3.0, 15.0),
-            m if m.contains("claude-3-5-haiku") => (0.80, 4.0),
-            m if m.contains("claude-3-opus") => (15.0, 75.0),
-            // OpenAI GPT series
-            m if m.contains("gpt-4o") => (2.5, 10.0),
-            m if m.contains("gpt-4-turbo") => (10.0, 30.0),
-            m if m.contains("gpt-3.5-turbo") => (0.5, 1.5),
-            // Ollama local models (free)
-            m if m.contains("llama") || m.contains("mistral") || m.contains("qwen") => (0.0, 0.0),
-            // Default fallback
-            _ => (3.0, 15.0),
-        };
-
-        let input_cost = (input_tokens as f64 / 1_000_000.0) * input_price_per_mtok;
-        let output_cost = (output_tokens as f64 / 1_000_000.0) * output_price_per_mtok;
+        let pricing = lookup_pricing(model);
+        let input_cost = (input_tokens as f64 / 1_000_000.0) * pricing.input_price_per_mtok;
+        let output_cost = (output_tokens as f64 / 1_000_000.0) * pricing.output_price_per_mtok;
         input_cost + output_cost
     }
 
@@ -738,5 +843,135 @@ mod tests {
         let tracker = CostTracker::new("llama3".to_string());
         let est = tracker.estimate_query_cost("llama3", 1000, 100, 2048);
         assert_eq!(est.estimated_cost_usd, 0.0);
+    }
+
+    // -- Pricing table tests --
+
+    #[test]
+    fn test_lookup_pricing_claude_sonnet_4() {
+        let p = lookup_pricing("claude-sonnet-4-20250514");
+        assert!((p.input_price_per_mtok - 3.0).abs() < 0.001);
+        assert!((p.output_price_per_mtok - 15.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_lookup_pricing_claude_opus_4() {
+        let p = lookup_pricing("claude-opus-4-20250514");
+        assert!((p.input_price_per_mtok - 15.0).abs() < 0.001);
+        assert!((p.output_price_per_mtok - 75.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_lookup_pricing_claude_haiku_4() {
+        let p = lookup_pricing("claude-haiku-4-20250514");
+        assert!((p.input_price_per_mtok - 0.80).abs() < 0.001);
+        assert!((p.output_price_per_mtok - 4.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_lookup_pricing_gpt41() {
+        let p = lookup_pricing("gpt-4.1");
+        assert!((p.input_price_per_mtok - 2.0).abs() < 0.001);
+        assert!((p.output_price_per_mtok - 8.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_lookup_pricing_gpt41_mini() {
+        let p = lookup_pricing("gpt-4.1-mini");
+        assert!((p.input_price_per_mtok - 0.40).abs() < 0.001);
+        assert!((p.output_price_per_mtok - 1.60).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_lookup_pricing_gpt41_nano() {
+        let p = lookup_pricing("gpt-4.1-nano");
+        assert!((p.input_price_per_mtok - 0.10).abs() < 0.001);
+        assert!((p.output_price_per_mtok - 0.40).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_lookup_pricing_unknown_fallback() {
+        let p = lookup_pricing("some-brand-new-model");
+        assert!((p.input_price_per_mtok - 3.0).abs() < 0.001);
+        assert!((p.output_price_per_mtok - 15.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_lookup_pricing_exact_match_preferred() {
+        // "gpt-4o" should match "gpt-4o" entry, not "gpt-4" or others
+        let p = lookup_pricing("gpt-4o");
+        assert!((p.input_price_per_mtok - 2.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_apply_pricing_overrides_valid_json() {
+        let mut table = HashMap::new();
+        table.insert("test-model".to_string(), ModelPricing {
+            input_price_per_mtok: 5.0,
+            output_price_per_mtok: 25.0,
+        });
+
+        let json = r#"{"test-model": {"input_price_per_mtok": 1.0, "output_price_per_mtok": 2.0}}"#;
+        apply_pricing_overrides(&mut table, json, "test");
+
+        let updated = table.get("test-model").unwrap();
+        assert!((updated.input_price_per_mtok - 1.0).abs() < 0.001);
+        assert!((updated.output_price_per_mtok - 2.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_apply_pricing_overrides_invalid_json() {
+        let mut table = HashMap::new();
+        table.insert("test-model".to_string(), ModelPricing {
+            input_price_per_mtok: 5.0,
+            output_price_per_mtok: 25.0,
+        });
+
+        apply_pricing_overrides(&mut table, "not valid json{{{", "test");
+
+        // Table should be unchanged
+        let entry = table.get("test-model").unwrap();
+        assert!((entry.input_price_per_mtok - 5.0).abs() < 0.001);
+        assert!((entry.output_price_per_mtok - 25.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_apply_pricing_overrides_adds_new_model() {
+        let mut table = HashMap::new();
+
+        let json = r#"{"brand-new-model": {"input_price_per_mtok": 7.0, "output_price_per_mtok": 14.0}}"#;
+        apply_pricing_overrides(&mut table, json, "test");
+
+        let entry = table.get("brand-new-model").unwrap();
+        assert!((entry.input_price_per_mtok - 7.0).abs() < 0.001);
+        assert!((entry.output_price_per_mtok - 14.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_model_pricing_serialization_roundtrip() {
+        let p = ModelPricing {
+            input_price_per_mtok: 2.5,
+            output_price_per_mtok: 10.0,
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        let back: ModelPricing = serde_json::from_str(&json).unwrap();
+        assert!((back.input_price_per_mtok - 2.5).abs() < 0.001);
+        assert!((back.output_price_per_mtok - 10.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_calculate_cost_with_claude_haiku_4() {
+        let cost = CostTracker::calculate_cost("claude-haiku-4-20250514", 1_000_000, 0);
+        assert!((cost - 0.80).abs() < 0.001);
+
+        let cost_out = CostTracker::calculate_cost("claude-haiku-4-20250514", 0, 1_000_000);
+        assert!((cost_out - 4.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_calculate_cost_with_gpt41() {
+        let cost = CostTracker::calculate_cost("gpt-4.1", 1_000_000, 500_000);
+        // 1M * 2.0/1M + 500K * 8.0/1M = 2.0 + 4.0 = 6.0
+        assert!((cost - 6.0).abs() < 0.001);
     }
 }
