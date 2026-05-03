@@ -958,6 +958,61 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("Use to include file contents in the AI context for better code understanding")
             .with_related(vec!["context", "diff"])
         ),
+        "add-dir" => Some(
+            CommandHelpEntry::new(
+                "add-dir".to_string(),
+                "Add a directory to the project context for file search".to_string(),
+                HelpCategory::Files,
+            )
+            .with_aliases(vec!["adddir"])
+            .with_arg_hint("<directory-path>")
+            .with_examples(vec!["/add-dir ../shared-lib", "/add-dir ~/projects/utils"])
+            .with_when_to_use("Use to include additional directories in the project scope for file operations")
+            .with_related(vec!["context", "add"])
+        ),
+        "rename" => Some(
+            CommandHelpEntry::new(
+                "rename".to_string(),
+                "Set or view the session title".to_string(),
+                HelpCategory::Ui,
+            )
+            .with_arg_hint("[<title>]")
+            .with_examples(vec!["/rename", "/rename Bug fix sprint", "/rename off"])
+            .with_when_to_use("Use to name the current session for easier identification in /sessions")
+            .with_related(vec!["sessions", "history"])
+        ),
+        "recap" => Some(
+            CommandHelpEntry::new(
+                "recap".to_string(),
+                "Generate a conversation summary showing progress and context".to_string(),
+                HelpCategory::Ui,
+            )
+            .with_examples(vec!["/recap"])
+            .with_when_to_use("Use to review what has been discussed, message counts, and recent user messages")
+            .with_related(vec!["history", "compact"])
+        ),
+        "effort" => Some(
+            CommandHelpEntry::new(
+                "effort".to_string(),
+                "Set or view the thinking effort level for the model".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("[low|medium|high]")
+            .with_examples(vec!["/effort", "/effort high", "/effort low"])
+            .with_when_to_use("Use to control how much reasoning the model puts into responses. Higher effort = better quality but slower")
+            .with_related(vec!["model", "config"])
+        ),
+        "focus" => Some(
+            CommandHelpEntry::new(
+                "focus".to_string(),
+                "Set a context focus area to direct model attention".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("[<area>|off|clear]")
+            .with_examples(vec!["/focus", "/focus frontend", "/focus security", "/focus off"])
+            .with_when_to_use("Use to tell the model to prioritize a specific area like frontend, backend, security, or performance")
+            .with_related(vec!["effort", "mode"])
+        ),
         "watch" => Some(
             CommandHelpEntry::new(
                 "watch".to_string(),
@@ -1007,6 +1062,7 @@ pub fn all_help_entries() -> Vec<CommandHelpEntry> {
         "review", "local-models", "ci", "hooks", "remember", "recall",
         "forget", "memory", "image", "mode", "context", "undo", "rewind",
         "notify", "create-pr", "patch", "sandbox",
+        "add-dir", "rename", "recap", "effort", "focus",
     ]
     .iter()
     .filter_map(|name| get_command_help(name))
