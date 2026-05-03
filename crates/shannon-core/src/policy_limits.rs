@@ -3,10 +3,13 @@
 //! Organization-level policy limits fetched from API. Controls tool usage,
 //! path access, token budgets, and rate limits at the policy level.
 
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::env;
 use std::time::Duration;
 use thiserror::Error;
+use tracing::warn;
 
 /// Errors that can occur during policy limit enforcement.
 #[derive(Error, Debug)]
@@ -75,6 +78,44 @@ impl Default for PolicyLimits {
     }
 }
 
+impl PolicyLimits {
+    /// Merge fields from a partial API response into these defaults.
+    ///
+    /// Any field present in the response overwrites the default; absent fields
+    /// are kept as-is.
+    fn merge_from_response(mut self, resp: PolicyLimitsResponse) -> Self {
+        if let Some(v) = resp.max_tokens_per_request {
+            self.max_tokens_per_request = v;
+        }
+        if let Some(v) = resp.max_tool_calls_per_turn {
+            self.max_tool_calls_per_turn = v;
+        }
+        if let Some(v) = resp.allowed_tools {
+            self.allowed_tools = v;
+        }
+        if let Some(v) = resp.blocked_paths {
+            self.blocked_paths = v;
+        }
+        if let Some(v) = resp.max_file_size_bytes {
+            self.max_file_size_bytes = v;
+        }
+        self
+    }
+}
+
+/// API response shape for `GET /v1/policy`.
+///
+/// All fields are optional so the server can return a partial override —
+/// missing fields simply retain their local defaults.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PolicyLimitsResponse {
+    pub max_tokens_per_request: Option<usize>,
+    pub max_tool_calls_per_turn: Option<usize>,
+    pub allowed_tools: Option<Vec<String>>,
+    pub blocked_paths: Option<Vec<String>>,
+    pub max_file_size_bytes: Option<u64>,
+}
+
 /// Manager for organization-level policy limits.
 ///
 /// Loads policy configuration from an API (or defaults) and enforces
@@ -99,11 +140,69 @@ impl PolicyLimitsManager {
 
     /// Load policy limits from the organization API.
     ///
-    /// This is a placeholder that returns default limits. In production,
-    /// this would fetch the policy from the organization's admin API.
+    /// Reads `SHANNON_POLICY_API_URL` for the base URL and
+    /// `SHANNON_API_KEY` (or `SHANNON_POLICY_API_KEY`) for the bearer token.
+    /// If the environment variables are not set, or the API is unreachable,
+    /// falls back to default limits and logs a warning.
     pub async fn load_from_api() -> Result<Self, PolicyError> {
-        // Placeholder: in production, fetch from organization API
-        Ok(Self::new())
+        let defaults = PolicyLimits::default();
+
+        let base_url = match env::var("SHANNON_POLICY_API_URL") {
+            Ok(url) => url,
+            Err(_) => {
+                warn!("SHANNON_POLICY_API_URL not set, using default policy limits");
+                return Ok(Self::with_limits(defaults));
+            }
+        };
+
+        let api_key = env::var("SHANNON_POLICY_API_KEY")
+            .or_else(|_| env::var("SHANNON_API_KEY"))
+            .unwrap_or_default();
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .map_err(|e| PolicyError::ApiError(format!("failed to build HTTP client: {e}")))?;
+
+        let url = format!("{}/v1/policy", base_url.trim_end_matches('/'));
+
+        let mut request = client.get(&url);
+        if !api_key.is_empty() {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {api_key}"))
+                    .map_err(|e| PolicyError::ApiError(format!("invalid API key: {e}")))?,
+            );
+            request = request.headers(headers);
+        }
+
+        let response = request.send().await;
+        match response {
+            Ok(resp) if resp.status().is_success() => {
+                match resp.json::<PolicyLimitsResponse>().await {
+                    Ok(body) => {
+                        let merged = defaults.merge_from_response(body);
+                        Ok(Self::with_limits(merged))
+                    }
+                    Err(e) => {
+                        warn!("failed to parse policy API response: {e}, using defaults");
+                        Ok(Self::with_limits(defaults))
+                    }
+                }
+            }
+            Ok(resp) => {
+                warn!(
+                    "policy API returned status {}, using default limits",
+                    resp.status()
+                );
+                Ok(Self::with_limits(defaults))
+            }
+            Err(e) => {
+                warn!("policy API unreachable: {e}, using default limits");
+                Ok(Self::with_limits(defaults))
+            }
+        }
     }
 
     /// Enforce policy checks on a tool invocation.
@@ -425,11 +524,133 @@ mod tests {
     }
 
     #[test]
-    fn test_load_from_api_placeholder() {
-        // This test verifies the placeholder works synchronously
+    fn test_load_from_api_no_env_falls_back_to_defaults() {
+        // Without SHANNON_POLICY_API_URL set, load_from_api returns defaults.
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let manager = rt.block_on(PolicyLimitsManager::load_from_api()).unwrap();
-        assert_eq!(manager.limits().max_tokens_per_request, 200_000);
+        // Ensure the env var is not set for this test.
+        rt.block_on(async {
+            unsafe { env::remove_var("SHANNON_POLICY_API_URL"); }
+            let manager = PolicyLimitsManager::load_from_api().await.unwrap();
+            assert_eq!(manager.limits().max_tokens_per_request, 200_000);
+            assert_eq!(manager.limits().max_tool_calls_per_turn, 50);
+            assert!(manager.limits().allowed_tools.is_empty());
+            assert!(manager.limits().blocked_paths.is_empty());
+        });
+    }
+
+    #[test]
+    fn test_load_from_api_with_mock_server() {
+        use mockito::Server;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut server = Server::new_async().await;
+
+            // Mock a successful policy response.
+            let mock = server
+                .mock("GET", "/v1/policy")
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(
+                    serde_json::json!({
+                        "max_tokens_per_request": 100_000,
+                        "max_tool_calls_per_turn": 25,
+                        "allowed_tools": ["read", "write"],
+                        "blocked_paths": ["/etc", "/secret"],
+                        "max_file_size_bytes": 5_000_000
+                    })
+                    .to_string(),
+                )
+                .create_async()
+                .await;
+
+            unsafe { env::set_var("SHANNON_POLICY_API_URL", server.url()); }
+            unsafe { env::set_var("SHANNON_POLICY_API_KEY", "test-key"); }
+
+            let manager = PolicyLimitsManager::load_from_api().await.unwrap();
+            assert_eq!(manager.limits().max_tokens_per_request, 100_000);
+            assert_eq!(manager.limits().max_tool_calls_per_turn, 25);
+            assert_eq!(
+                manager.limits().allowed_tools,
+                vec!["read".to_string(), "write".to_string()]
+            );
+            assert_eq!(
+                manager.limits().blocked_paths,
+                vec!["/etc".to_string(), "/secret".to_string()]
+            );
+            assert_eq!(manager.limits().max_file_size_bytes, 5_000_000);
+
+            mock.assert_async().await;
+
+            // Clean up env vars.
+            unsafe { env::remove_var("SHANNON_POLICY_API_URL"); }
+            unsafe { env::remove_var("SHANNON_POLICY_API_KEY"); }
+        });
+    }
+
+    #[test]
+    fn test_load_from_api_partial_response_merges() {
+        use mockito::Server;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut server = Server::new_async().await;
+
+            // Only send a partial response — other fields stay at defaults.
+            let mock = server
+                .mock("GET", "/v1/policy")
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(
+                    serde_json::json!({
+                        "max_tokens_per_request": 50_000
+                    })
+                    .to_string(),
+                )
+                .create_async()
+                .await;
+
+            unsafe { env::set_var("SHANNON_POLICY_API_URL", server.url()); }
+
+            let manager = PolicyLimitsManager::load_from_api().await.unwrap();
+            // Overridden field.
+            assert_eq!(manager.limits().max_tokens_per_request, 50_000);
+            // All other fields remain at defaults.
+            assert_eq!(manager.limits().max_tool_calls_per_turn, 50);
+            assert!(manager.limits().allowed_tools.is_empty());
+            assert!(manager.limits().blocked_paths.is_empty());
+            assert_eq!(manager.limits().max_file_size_bytes, 10 * 1024 * 1024);
+
+            mock.assert_async().await;
+
+            unsafe { env::remove_var("SHANNON_POLICY_API_URL"); }
+        });
+    }
+
+    #[test]
+    fn test_load_from_api_server_error_falls_back() {
+        use mockito::Server;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut server = Server::new_async().await;
+
+            let mock = server
+                .mock("GET", "/v1/policy")
+                .with_status(500)
+                .create_async()
+                .await;
+
+            unsafe { env::set_var("SHANNON_POLICY_API_URL", server.url()); }
+
+            let manager = PolicyLimitsManager::load_from_api().await.unwrap();
+            // Falls back to defaults.
+            assert_eq!(manager.limits().max_tokens_per_request, 200_000);
+
+            mock.assert_async().await;
+
+            unsafe { env::remove_var("SHANNON_POLICY_API_URL"); }
+        });
     }
 
     // === PolicyError Tests ===
