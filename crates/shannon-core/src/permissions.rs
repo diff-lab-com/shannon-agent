@@ -399,6 +399,7 @@ pub enum RuleCheckDecision {
 /// This ordering means a deny rule in *any* layer (user, project, or local)
 /// cannot be overridden by an allow rule in a higher-priority layer.
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct PermissionRuleChecker {
     deny_globset: Option<GlobSet>,
     ask_globset: Option<GlobSet>,
@@ -496,18 +497,6 @@ impl PermissionRuleChecker {
     }
 }
 
-impl Default for PermissionRuleChecker {
-    fn default() -> Self {
-        Self {
-            deny_globset: None,
-            ask_globset: None,
-            allow_globset: None,
-            deny_raw: Vec::new(),
-            ask_raw: Vec::new(),
-            allow_raw: Vec::new(),
-        }
-    }
-}
 
 /// A prompt requesting user permission for a tool operation
 #[derive(Debug, Clone, Serialize, Deserialize)]

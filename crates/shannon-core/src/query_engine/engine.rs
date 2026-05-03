@@ -1509,7 +1509,7 @@ impl QueryEngine {
                                                 }
                                                 Err(retry_err) => {
                                                     let suggestion = retry_err.user_suggestion()
-                                                        .map(|s| format!(" {}.", s))
+                                                        .map(|s| format!(" {s}."))
                                                         .unwrap_or_default();
                                                     let _ = tx.send(Ok(QueryEvent::Failed {
                                                         query_id,
@@ -1524,7 +1524,7 @@ impl QueryEngine {
                                     }
                                     Err(retry_err) => {
                                         let suggestion = retry_err.user_suggestion()
-                                            .map(|s| format!(" {}.", s))
+                                            .map(|s| format!(" {s}."))
                                             .unwrap_or_default();
                                         let _ = tx.send(Ok(QueryEvent::Failed {
                                             query_id,

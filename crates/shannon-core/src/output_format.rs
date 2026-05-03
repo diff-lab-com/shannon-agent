@@ -200,11 +200,9 @@ mod tests {
 
     #[test]
     fn test_to_ndjson_one_json_per_line() {
-        let events = vec![
-            OutputEvent::TextDelta { content: "a".into() },
+        let events = [OutputEvent::TextDelta { content: "a".into() },
             OutputEvent::TextDelta { content: "b".into() },
-            OutputEvent::Done { exit_code: 0 },
-        ];
+            OutputEvent::Done { exit_code: 0 }];
         let output: String = events.iter().map(|e| e.to_ndjson()).collect();
         // Each event produces exactly one line
         let lines: Vec<&str> = output.lines().collect();

@@ -3044,11 +3044,8 @@ fn test_load_permission_rules_claude_settings() {
     super::load_permission_rules(&mut pm);
 
     // Pattern-based rules should be applied
-    let memory = pm.memory();
-    let allowed = memory.always_allowed_tools();
-    // Glob patterns are stored via allow_pattern, not as individual tools
-    // Verify at least that no panic occurred
-    drop(memory);
+    // Verify at least that no panic occurred during rule loading
+    let _ = pm.memory();
 
     std::env::set_current_dir(orig_cwd).unwrap();
 }
@@ -3379,4 +3376,209 @@ fn test_commands_reload_full_pipeline() {
     let commit = commands.iter().find(|c| c.name == "commit").unwrap();
     assert_eq!(commit.description.as_deref(), Some("Commit changes"));
     assert_eq!(commit.allowed_tools, vec!["Bash", "Read"]);
+}
+
+// ── /add-dir Command Tests ──────────────────────────────────────────
+
+#[test]
+fn test_repl_add_dir_valid() {
+    let mut repl = Repl::new().unwrap();
+    let tmp = std::env::temp_dir().to_string_lossy().to_string();
+    repl.prompt.set_input(format!("/add-dir {tmp}"));
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Added directory:"));
+    assert!(last_msg.contains(&tmp));
+    assert!(repl.state.extra_dirs.iter().any(|d| d == &tmp));
+}
+
+#[test]
+fn test_repl_add_dir_not_found() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/add-dir /no/such/directory/xyz123".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Directory not found:"));
+    assert!(last_msg.contains("/no/such/directory/xyz123"));
+}
+
+#[test]
+fn test_repl_add_dir_file_not_dir() {
+    let mut repl = Repl::new().unwrap();
+    // Use /etc/passwd — a known file that exists on Linux
+    repl.prompt.set_input("/add-dir /etc/passwd".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Not a directory:"));
+}
+
+#[test]
+fn test_repl_add_dir_duplicate() {
+    let mut repl = Repl::new().unwrap();
+    let tmp = std::env::temp_dir().to_string_lossy().to_string();
+    // Add it once
+    repl.prompt.set_input(format!("/add-dir {tmp}"));
+    super::commands::submit_input(&mut repl).unwrap();
+    assert!(repl.state.extra_dirs.iter().any(|d| d == &tmp));
+    // Add it again
+    repl.prompt.set_input(format!("/add-dir {tmp}"));
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("already added:"));
+    // Should still be exactly 1 entry
+    assert_eq!(repl.state.extra_dirs.iter().filter(|d| **d == tmp).count(), 1);
+}
+
+#[test]
+fn test_repl_add_dir_no_args() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/add-dir".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Usage: /add-dir <path>"));
+}
+
+// ── /rename Command Tests ───────────────────────────────────────────
+
+#[test]
+fn test_repl_rename_set() {
+    let mut repl = Repl::new().unwrap();
+    repl.prompt.set_input("/rename My Session".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    assert_eq!(repl.state.session_title, Some("My Session".to_string()));
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Session renamed to: My Session"));
+}
+
+#[test]
+fn test_repl_rename_show_current() {
+    let mut repl = Repl::new().unwrap();
+    // Set a title first
+    repl.state.session_title = Some("Test Title".to_string());
+    repl.prompt.set_input("/rename".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Current session: Test Title"));
+    assert!(last_msg.contains("Usage: /rename <new-name>"));
+}
+
+#[test]
+fn test_repl_rename_no_title() {
+    let mut repl = Repl::new().unwrap();
+    assert!(repl.state.session_title.is_none());
+    repl.prompt.set_input("/rename".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("No custom session name set"));
+    assert!(last_msg.contains("Usage: /rename <new-name>"));
+}
+
+#[test]
+fn test_repl_rename_reset() {
+    let mut repl = Repl::new().unwrap();
+    // Set a title first
+    repl.state.session_title = Some("Before Reset".to_string());
+    // Now reset it
+    repl.prompt.set_input("/rename reset".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    assert!(repl.state.session_title.is_none());
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Session name reset to default"));
+}
+
+// ── /copy [N] Command Tests ─────────────────────────────────────────
+
+#[test]
+fn test_repl_copy_nth_response() {
+    let mut repl = Repl::new().unwrap();
+    // Create 3 assistant messages
+    repl.chat.add_message(ChatRole::Assistant, "first response".to_string());
+    repl.chat.add_message(ChatRole::Assistant, "second response".to_string());
+    repl.chat.add_message(ChatRole::Assistant, "third response".to_string());
+
+    // /copy 2 should copy the 2nd from end = "second response"
+    repl.prompt.set_input("/copy 2".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    // In test env clipboard is likely unavailable; content goes to temp file
+    assert!(
+        last_msg.contains("second response") || last_msg.contains("clipboard") || last_msg.contains("Clipboard"),
+        "expected copy of 2nd response, got: {last_msg}"
+    );
+}
+
+#[test]
+fn test_repl_copy_out_of_range() {
+    let mut repl = Repl::new().unwrap();
+    // Only 2 assistant messages
+    repl.chat.add_message(ChatRole::Assistant, "alpha".to_string());
+    repl.chat.add_message(ChatRole::Assistant, "beta".to_string());
+
+    // /copy 99 — only 2 responses exist
+    repl.prompt.set_input("/copy 99".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Only 2 assistant response"));
+    assert!(last_msg.contains("/copy 1"));
+}
+
+#[test]
+fn test_repl_copy_zero() {
+    let mut repl = Repl::new().unwrap();
+    repl.chat.add_message(ChatRole::Assistant, "some response".to_string());
+
+    repl.prompt.set_input("/copy 0".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Invalid index"));
+}
+
+// ── /compact [instructions] Tests ───────────────────────────────────
+
+#[test]
+fn test_repl_compact_with_focus_instructions() {
+    let mut repl = Repl::new().unwrap();
+
+    // Seed the query engine with some conversation history so compact has something to work with
+    if let Some(engine) = repl.query_engine.as_mut() {
+        use shannon_core::api::{Message, MessageContent};
+        let messages = vec![
+            Message { role: "user".to_string(), content: MessageContent::Text("Tell me about authentication logic".to_string()) },
+            Message { role: "assistant".to_string(), content: MessageContent::Text("Authentication logic verifies user credentials".to_string()) },
+            Message { role: "user".to_string(), content: MessageContent::Text("What about caching?".to_string()) },
+            Message { role: "assistant".to_string(), content: MessageContent::Text("Caching stores frequently accessed data".to_string()) },
+        ];
+        engine.restore_messages(messages);
+    }
+
+    repl.prompt.set_input("/compact authentication logic".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    // The focus branch prints a "Focus compact" message first, then the result
+    assert!(
+        last_msg.contains("authentication") || last_msg.contains("Focus compact") || last_msg.contains("compacted"),
+        "expected focus compact to mention 'authentication' or report compaction, got: {last_msg}"
+    );
+}
+
+// ── /plan off Test ──────────────────────────────────────────────────
+
+#[test]
+fn test_repl_plan_off() {
+    let mut repl = Repl::new().unwrap();
+    // First create a plan so it's active
+    repl.prompt.set_input("/plan implement search feature".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    assert!(repl.state.plan.active);
+
+    // Now deactivate
+    repl.prompt.set_input("/plan off".to_string());
+    super::commands::submit_input(&mut repl).unwrap();
+    assert!(!repl.state.plan.active, "plan.active should be false after /plan off");
+    assert!(!repl.state.plan.approved, "plan.approved should be false after /plan off");
+    if let Ok(flag) = repl.plan_mode_flag.read() {
+        assert!(!*flag, "plan_mode_flag should be false after /plan off");
+    }
+    let last_msg = &repl.chat.last_message().unwrap().content;
+    assert!(last_msg.contains("Plan mode deactivated"));
 }

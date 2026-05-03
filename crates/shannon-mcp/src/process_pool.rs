@@ -396,9 +396,8 @@ fn compress_json(value: &serde_json::Value, budget: usize) -> String {
             }
             let mut result = String::from("{\n");
             let value_budget = 200; // max chars per value
-            let mut keys_shown = 0;
             let total_keys = map.len();
-            for (key, val) in map.into_iter() {
+            for (i, (key, val)) in map.into_iter().enumerate() {
                 let val_str = serde_json::to_string(val).unwrap_or_default();
                 let display_val = if val_str.len() > value_budget {
                     let mut v_end = value_budget;
@@ -411,12 +410,11 @@ fn compress_json(value: &serde_json::Value, budget: usize) -> String {
                 };
                 let line = format!("  \"{key}\": {display_val},\n");
                 if result.len() + line.len() + 30 > budget {
-                    let remaining = total_keys - keys_shown;
+                    let remaining = total_keys - i;
                     result.push_str(&format!("  // ... {remaining} more keys\n"));
                     break;
                 }
                 result.push_str(&line);
-                keys_shown += 1;
             }
             result.push('}');
             result

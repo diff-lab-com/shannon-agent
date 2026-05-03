@@ -443,7 +443,7 @@ impl SidebarWidget {
                             } else {
                                 0.0
                             };
-                            let bar_w = w.saturating_sub(14).min(8).max(3);
+                            let bar_w = w.saturating_sub(14).clamp(3, 8);
                             let filled = (turns_pct * bar_w as f64).round() as usize;
                             let turns_bar = format!(
                                 "{}{}",

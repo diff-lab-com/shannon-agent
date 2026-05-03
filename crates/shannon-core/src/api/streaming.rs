@@ -108,13 +108,12 @@ impl SseStream {
             self.buffer = self.buffer[newline_pos + 1..].to_string();
 
             // For Ollama NDJSON: validate JSON completeness before parsing
-            if matches!(self.provider, LlmProvider::Ollama) && line.trim_start().starts_with('{') {
-                if !looks_like_complete_json(&line) {
+            if matches!(self.provider, LlmProvider::Ollama) && line.trim_start().starts_with('{')
+                && !looks_like_complete_json(&line) {
                     // Incomplete JSON — put back and wait for more data
                     self.buffer = format!("{}\n{}", line, self.buffer);
                     break;
                 }
-            }
 
             let events = self.parse_sse_line(&line);
             self.pending_events.extend(events);

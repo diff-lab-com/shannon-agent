@@ -393,7 +393,7 @@ pub(crate) fn handle_add_dir(repl: &mut Repl, args: &str) -> Result<()> {
     // Expand ~/ to home directory
     let expanded = if path.starts_with("~/") {
         if let Some(home) = dirs::home_dir() {
-            home.join(&path[2..]).to_string_lossy().to_string()
+            home.join(path.strip_prefix("~/").unwrap_or(path)).to_string_lossy().to_string()
         } else {
             path.to_string()
         }

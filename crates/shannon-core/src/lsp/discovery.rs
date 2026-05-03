@@ -104,8 +104,8 @@ impl ServerDiscovery {
 
         // Check system PATH for known servers
         for (language, command, args) in Self::KNOWN_SERVERS {
-            if !seen_languages.contains_key(*language) {
-                if Self::command_exists(command) {
+            if !seen_languages.contains_key(*language)
+                && Self::command_exists(command) {
                     servers.push(DiscoveredServer {
                         language: language.to_string(),
                         command: command.to_string(),
@@ -114,7 +114,6 @@ impl ServerDiscovery {
                     });
                     seen_languages.insert(language.to_string(), servers.len());
                 }
-            }
         }
 
         servers

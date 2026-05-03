@@ -106,7 +106,7 @@ pub enum PluginSubcommand {
 /// Parse plugin subcommand from argument string
 pub fn parse_plugin_subcommand(arg: &str) -> (PluginSubcommand, Option<String>) {
     let parts: Vec<&str> = arg.splitn(2, ' ').collect();
-    let subcommand = parts.first().map(|s| *s).unwrap_or("");
+    let subcommand = parts.first().copied().unwrap_or("");
     let argument = parts.get(1).map(|s| s.to_string());
 
     let cmd = match subcommand.to_lowercase().as_str() {
@@ -196,8 +196,7 @@ pub fn format_search_results(results: &[(String, String, String, u64)]) -> Strin
 
     for (name, description, author, downloads) in results {
         output.push_str(&format!(
-            "  **{}** — {}\n    by {} — {} downloads\n\n",
-            name, description, author, downloads
+            "  **{name}** — {description}\n    by {author} — {downloads} downloads\n\n"
         ));
     }
 
@@ -215,8 +214,7 @@ pub fn format_ranked_search_results(results: &[(f64, String, String, String, u64
 
     for (score, name, description, author, downloads) in results {
         output.push_str(&format!(
-            "  **{}** (relevance: {:.0}) — {}\n    by {} — {} downloads\n\n",
-            name, score, description, author, downloads
+            "  **{name}** (relevance: {score:.0}) — {description}\n    by {author} — {downloads} downloads\n\n"
         ));
     }
 
@@ -278,30 +276,30 @@ pub fn create_index() -> PluginIndex {
 pub async fn install_from_source(source: &str) -> Result<String, String> {
     let mut registry = create_registry();
     registry.ensure_dir().await
-        .map_err(|e| format!("Failed to create plugins directory: {}", e))?;
+        .map_err(|e| format!("Failed to create plugins directory: {e}"))?;
 
     // Determine the source type
     if source.starts_with("http://") || source.starts_with("https://") || source.starts_with("git@") {
         // Git URL
         registry.install_from_git(source).await
-            .map_err(|e| format!("Failed to install from git: {}", e))
+            .map_err(|e| format!("Failed to install from git: {e}"))
     } else if Path::new(source).exists() {
         // Local path
         registry.install_from_path(Path::new(source)).await
-            .map_err(|e| format!("Failed to install from path: {}", e))
+            .map_err(|e| format!("Failed to install from path: {e}"))
     } else {
         // Try to find in index
         let mut index = create_index();
         if let Err(refresh_err) = index.refresh().await {
-            return Err(format!("Failed to refresh index: {}. The plugin '{}' was not found as a local path or git URL.", refresh_err, source));
+            return Err(format!("Failed to refresh index: {refresh_err}. The plugin '{source}' was not found as a local path or git URL."));
         }
 
         if let Some(entry) = index.get(source) {
             // Found in index, install from git
             registry.install_from_git(&entry.repository).await
-                .map_err(|e| format!("Failed to install from index: {}", e))
+                .map_err(|e| format!("Failed to install from index: {e}"))
         } else {
-            Err(format!("Plugin '{}' not found in index. Try:\n  - A valid git URL\n  - A local path\n  - A name from: /plugin search <query>", source))
+            Err(format!("Plugin '{source}' not found in index. Try:\n  - A valid git URL\n  - A local path\n  - A name from: /plugin search <query>"))
         }
     }
 }
@@ -310,7 +308,7 @@ pub async fn install_from_source(source: &str) -> Result<String, String> {
 pub async fn list_installed() -> Result<Vec<PluginDisplayInfo>, String> {
     let mut registry = create_registry();
     registry.load_all().await
-        .map_err(|e| format!("Failed to load plugins: {}", e))?;
+        .map_err(|e| format!("Failed to load plugins: {e}"))?;
 
     let plugins: Vec<PluginDisplayInfo> = registry.list()
         .into_iter()
@@ -331,7 +329,7 @@ pub async fn list_installed() -> Result<Vec<PluginDisplayInfo>, String> {
 pub async fn search_index(query: &str) -> Result<Vec<(f64, String, String, String, u64)>, String> {
     let mut index = create_index();
     index.refresh().await
-        .map_err(|e| format!("Failed to refresh index: {}", e))?;
+        .map_err(|e| format!("Failed to refresh index: {e}"))?;
 
     let results = index.search_ranked(query);
     Ok(results.into_iter().map(|(score, entry)| {
@@ -343,15 +341,15 @@ pub async fn search_index(query: &str) -> Result<Vec<(f64, String, String, Strin
 pub async fn update_plugins(name: Option<&str>) -> Result<Vec<String>, String> {
     let mut registry = create_registry();
     registry.load_all().await
-        .map_err(|e| format!("Failed to load plugins: {}", e))?;
+        .map_err(|e| format!("Failed to load plugins: {e}"))?;
 
     let updated = if let Some(plugin_name) = name {
         registry.update(plugin_name).await
-            .map_err(|e| format!("Failed to update '{}': {}", plugin_name, e))?;
+            .map_err(|e| format!("Failed to update '{plugin_name}': {e}"))?;
         vec![plugin_name.to_string()]
     } else {
         registry.update_all().await
-            .map_err(|e| format!("Failed to update plugins: {}", e))?
+            .map_err(|e| format!("Failed to update plugins: {e}"))?
     };
 
     Ok(updated)
@@ -361,10 +359,10 @@ pub async fn update_plugins(name: Option<&str>) -> Result<Vec<String>, String> {
 pub async fn get_info(name: &str) -> Result<PluginInfoDisplay, String> {
     let mut index = create_index();
     index.refresh().await
-        .map_err(|e| format!("Failed to refresh index: {}", e))?;
+        .map_err(|e| format!("Failed to refresh index: {e}"))?;
 
     let entry = index.info(name)
-        .ok_or_else(|| format!("Plugin '{}' not found in index", name))?;
+        .ok_or_else(|| format!("Plugin '{name}' not found in index"))?;
 
     Ok(PluginInfoDisplay {
         name: entry.name.clone(),
@@ -382,16 +380,16 @@ pub async fn get_info(name: &str) -> Result<PluginInfoDisplay, String> {
 pub async fn enable_disable(name: &str, enable: bool) -> Result<String, String> {
     let mut registry = create_registry();
     registry.load_all().await
-        .map_err(|e| format!("Failed to load plugins: {}", e))?;
+        .map_err(|e| format!("Failed to load plugins: {e}"))?;
 
     if enable {
         registry.enable(name)
-            .map_err(|e| format!("Failed to enable '{}': {}", name, e))?;
-        Ok(format!("Plugin '{}' enabled", name))
+            .map_err(|e| format!("Failed to enable '{name}': {e}"))?;
+        Ok(format!("Plugin '{name}' enabled"))
     } else {
         registry.disable(name)
-            .map_err(|e| format!("Failed to disable '{}': {}", name, e))?;
-        Ok(format!("Plugin '{}' disabled", name))
+            .map_err(|e| format!("Failed to disable '{name}': {e}"))?;
+        Ok(format!("Plugin '{name}' disabled"))
     }
 }
 
@@ -399,12 +397,12 @@ pub async fn enable_disable(name: &str, enable: bool) -> Result<String, String> 
 pub async fn uninstall(name: &str) -> Result<String, String> {
     let mut registry = create_registry();
     registry.load_all().await
-        .map_err(|e| format!("Failed to load plugins: {}", e))?;
+        .map_err(|e| format!("Failed to load plugins: {e}"))?;
 
     registry.uninstall(name).await
-        .map_err(|e| format!("Failed to uninstall '{}': {}", name, e))?;
+        .map_err(|e| format!("Failed to uninstall '{name}': {e}"))?;
 
-    Ok(format!("Plugin '{}' uninstalled successfully", name))
+    Ok(format!("Plugin '{name}' uninstalled successfully"))
 }
 
 /// Execute a plugin subcommand with actual I/O
@@ -418,10 +416,10 @@ pub async fn execute_plugin_subcommand(arg: &str) -> io::Result<()> {
                 "install requires a plugin name, URL, or path"
             ))?;
 
-            print!("Installing plugin from '{}'...\n", source);
+            println!("Installing plugin from '{source}'...");
             match install_from_source(&source).await {
-                Ok(name) => print!("✓ Plugin '{}' installed successfully\n", name),
-                Err(e) => print!("✗ Installation failed: {}\n", e),
+                Ok(name) => println!("✓ Plugin '{name}' installed successfully"),
+                Err(e) => println!("✗ Installation failed: {e}"),
             }
         }
         PluginSubcommand::Uninstall => {
@@ -430,16 +428,16 @@ pub async fn execute_plugin_subcommand(arg: &str) -> io::Result<()> {
                 "uninstall requires a plugin name"
             ))?;
 
-            print!("Uninstalling plugin '{}'...\n", name);
+            println!("Uninstalling plugin '{name}'...");
             match uninstall(&name).await {
-                Ok(msg) => print!("✓ {}\n", msg),
-                Err(e) => print!("✗ Uninstallation failed: {}\n", e),
+                Ok(msg) => println!("✓ {msg}"),
+                Err(e) => println!("✗ Uninstallation failed: {e}"),
             }
         }
         PluginSubcommand::List => {
             match list_installed().await {
                 Ok(plugins) => print!("{}", format_plugin_list(&plugins)),
-                Err(e) => print!("✗ Failed to list plugins: {}\n", e),
+                Err(e) => println!("✗ Failed to list plugins: {e}"),
             }
         }
         PluginSubcommand::Search => {
@@ -450,19 +448,19 @@ pub async fn execute_plugin_subcommand(arg: &str) -> io::Result<()> {
 
             match search_index(&query).await {
                 Ok(results) => print!("{}", format_ranked_search_results(&results)),
-                Err(e) => print!("✗ Search failed: {}\n", e),
+                Err(e) => println!("✗ Search failed: {e}"),
             }
         }
         PluginSubcommand::Update => {
             match update_plugins(argument.as_deref()).await {
                 Ok(updated) => {
                     if updated.is_empty() {
-                        print!("No plugins were updated (all may be up-to-date or not git repositories)\n");
+                        println!("No plugins were updated (all may be up-to-date or not git repositories)");
                     } else {
-                        print!("✓ Updated plugins: {}\n", updated.join(", "));
+                        println!("✓ Updated plugins: {}", updated.join(", "));
                     }
                 }
-                Err(e) => print!("✗ Update failed: {}\n", e),
+                Err(e) => println!("✗ Update failed: {e}"),
             }
         }
         PluginSubcommand::Enable => {
@@ -472,8 +470,8 @@ pub async fn execute_plugin_subcommand(arg: &str) -> io::Result<()> {
             ))?;
 
             match enable_disable(&name, true).await {
-                Ok(msg) => print!("✓ {}\n", msg),
-                Err(e) => print!("✗ {}\n", e),
+                Ok(msg) => println!("✓ {msg}"),
+                Err(e) => println!("✗ {e}"),
             }
         }
         PluginSubcommand::Disable => {
@@ -483,8 +481,8 @@ pub async fn execute_plugin_subcommand(arg: &str) -> io::Result<()> {
             ))?;
 
             match enable_disable(&name, false).await {
-                Ok(msg) => print!("✓ {}\n", msg),
-                Err(e) => print!("✗ {}\n", e),
+                Ok(msg) => println!("✓ {msg}"),
+                Err(e) => println!("✗ {e}"),
             }
         }
         PluginSubcommand::Info => {
@@ -495,7 +493,7 @@ pub async fn execute_plugin_subcommand(arg: &str) -> io::Result<()> {
 
             match get_info(&name).await {
                 Ok(info) => print!("{}", format_plugin_info(&info)),
-                Err(e) => print!("✗ {}\n", e),
+                Err(e) => println!("✗ {e}"),
             }
         }
         PluginSubcommand::Help => {

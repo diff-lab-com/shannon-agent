@@ -408,6 +408,7 @@ impl Default for ReplState {
 /// - `dir`: root directory to scan
 /// - `prefix`: path prefix for nested dirs (e.g. "project:" for `.claude/commands/project/`)
 /// - `results`: accumulated (command_name, template_text, file_path) triples
+///
 /// Extract a field value from simple YAML-like frontmatter text.
 fn parse_frontmatter_field(frontmatter: &str, field: &str) -> Option<String> {
     for line in frontmatter.lines() {
@@ -573,7 +574,7 @@ impl CustomCommandWatcher {
 
         // Unregister previously registered custom commands to prevent duplicates
         for name in &self.registered_names {
-            let _ = registry.unregister_sync(name);
+            registry.unregister_sync(name);
         }
         self.registered_names.clear();
 

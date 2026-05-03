@@ -1439,16 +1439,14 @@ mod tests {
         // Verify that Project scope exists (from CLAUDE.md at root)
         assert!(
             scopes.contains(&InstructionScope::Project),
-            "Should have Project scope: {:?}",
-            scopes
+            "Should have Project scope: {scopes:?}"
         );
 
         // Verify that Local scope exists (from .claude/, .shannon/, and CLAUDE.local.md)
         let local_count = scopes.iter().filter(|s| **s == InstructionScope::Local).count();
         assert!(
             local_count >= 1,
-            "Should have at least one Local scope entry: {:?}",
-            scopes
+            "Should have at least one Local scope entry: {scopes:?}"
         );
 
         // Verify priority ordering: Managed > Project > User > Local
@@ -1465,9 +1463,7 @@ mod tests {
         if let (Some(pi), Some(li)) = (project_idx, local_idx) {
             assert!(
                 pi < li,
-                "Project scope (idx {}) should come before Local scope (idx {})",
-                pi,
-                li
+                "Project scope (idx {pi}) should come before Local scope (idx {li})"
             );
         }
 

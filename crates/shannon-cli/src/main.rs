@@ -1311,8 +1311,8 @@ fn run_headless_query(
             for (path, old_content, _new) in changed_files {
                 let new_content = std::fs::read_to_string(&path).unwrap_or_default();
                 if old_content != new_content {
-                    println!("--- a/{}", path);
-                    println!("+++ b/{}", path);
+                    println!("--- a/{path}");
+                    println!("+++ b/{path}");
                     let diff = TextDiff::from_lines(&old_content, &new_content);
                     for op in diff.ops() {
                         for change in diff.iter_changes(op) {
@@ -1321,7 +1321,7 @@ fn run_headless_query(
                                 ChangeTag::Insert => "+",
                                 ChangeTag::Equal => " ",
                             };
-                            println!("{}{}", prefix, change);
+                            println!("{prefix}{change}");
                         }
                     }
                 }
@@ -3257,11 +3257,9 @@ mod tests {
 
     #[test]
     fn test_ndjson_stream_multiple_events() {
-        let events = vec![
-            OutputEvent::TextDelta { content: "line1".into() },
+        let events = [OutputEvent::TextDelta { content: "line1".into() },
             OutputEvent::TextDelta { content: "line2".into() },
-            OutputEvent::Done { exit_code: 0 },
-        ];
+            OutputEvent::Done { exit_code: 0 }];
         let output: String = events.iter().map(|e| e.to_ndjson()).collect();
         let lines: Vec<&str> = output.lines().collect();
         assert_eq!(lines.len(), 3);

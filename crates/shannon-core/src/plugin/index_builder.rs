@@ -132,7 +132,7 @@ impl IndexBuilder {
         };
 
         let json = serde_json::to_string_pretty(&index_file)
-            .map_err(|e| PluginError::Serialization(e))?;
+            .map_err(PluginError::Serialization)?;
 
         // Ensure parent directory exists
         if let Some(parent) = output_path.parent() {

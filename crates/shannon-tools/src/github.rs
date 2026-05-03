@@ -57,7 +57,7 @@ fn check_gh_available() -> Result<(), ToolError> {
 /// Check if the current directory is a git repository with a GitHub remote.
 fn check_github_repo() -> Result<(), ToolError> {
     let output = Command::new("git")
-        .args(&["remote", "-v"])
+        .args(["remote", "-v"])
         .output()
         .map_err(|e| ToolError::ExecutionFailed(format!("Failed to check git remotes: {e}")))?;
 
@@ -388,7 +388,7 @@ impl Tool for GhIssueViewTool {
         content.push_str(&format!("Comments: {}\n\n", issue.comments));
 
         if let Some(body) = &issue.body {
-            content.push_str(&format!("{}\n\n", body));
+            content.push_str(&format!("{body}\n\n"));
         }
 
         // Get comments if requested
@@ -666,12 +666,12 @@ impl Tool for GhPrListTool {
             content.push_str(&format!("  Changes: +{} -{} ({} files)\n", pr.additions, pr.deletions, pr.changed_files));
 
             if let Some(mergeable) = pr.mergeable {
-                content.push_str(&format!("  Mergeable: {}\n", mergeable));
+                content.push_str(&format!("  Mergeable: {mergeable}\n"));
             }
 
             if let Some(review_decision) = &pr.review_decision {
                 if !review_decision.is_empty() {
-                    content.push_str(&format!("  Review: {}\n", review_decision));
+                    content.push_str(&format!("  Review: {review_decision}\n"));
                 }
             }
 
@@ -779,19 +779,19 @@ impl Tool for GhPrViewTool {
         content.push_str(&format!("Changes: +{} -{} ({} files)\n", pr.additions, pr.deletions, pr.changed_files));
 
         if let Some(mergeable) = pr.mergeable {
-            content.push_str(&format!("Mergeable: {}\n", mergeable));
+            content.push_str(&format!("Mergeable: {mergeable}\n"));
         }
 
         if let Some(review_decision) = &pr.review_decision {
             if !review_decision.is_empty() {
-                content.push_str(&format!("Review: {}\n", review_decision));
+                content.push_str(&format!("Review: {review_decision}\n"));
             }
         }
 
         content.push('\n');
 
         if let Some(body) = &pr.body {
-            content.push_str(&format!("{}\n\n", body));
+            content.push_str(&format!("{body}\n\n"));
         }
 
         // Get diff if requested
@@ -803,7 +803,7 @@ impl Tool for GhPrViewTool {
                 content.push_str("--- Diff ---\n\n");
                 content.push_str(&diff_stdout);
             } else {
-                content.push_str(&format!("Failed to load diff: {}\n", diff_stderr));
+                content.push_str(&format!("Failed to load diff: {diff_stderr}\n"));
             }
         }
 

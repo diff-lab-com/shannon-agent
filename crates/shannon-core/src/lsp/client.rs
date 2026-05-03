@@ -156,17 +156,17 @@ impl LspClient {
         self.writer
             .write_all(header.as_bytes())
             .await
-            .map_err(|e| LspClientError::ProtocolError(format!("Failed to write header: {}", e)))?;
+            .map_err(|e| LspClientError::ProtocolError(format!("Failed to write header: {e}")))?;
 
         self.writer
             .write_all(request_body.as_bytes())
             .await
-            .map_err(|e| LspClientError::ProtocolError(format!("Failed to write body: {}", e)))?;
+            .map_err(|e| LspClientError::ProtocolError(format!("Failed to write body: {e}")))?;
 
         self.writer
             .flush()
             .await
-            .map_err(|e| LspClientError::ProtocolError(format!("Failed to flush: {}", e)))?;
+            .map_err(|e| LspClientError::ProtocolError(format!("Failed to flush: {e}")))?;
 
         // Read the response
         self.read_response(id).await
@@ -179,7 +179,7 @@ impl LspClient {
         self.reader
             .read_line(&mut header_line)
             .await
-            .map_err(|e| LspClientError::ProtocolError(format!("Failed to read header: {}", e)))?;
+            .map_err(|e| LspClientError::ProtocolError(format!("Failed to read header: {e}")))?;
 
         if !header_line.starts_with("Content-Length:") {
             return Err(LspClientError::ProtocolError(format!(
@@ -194,30 +194,30 @@ impl LspClient {
             .unwrap()
             .trim()
             .parse()
-            .map_err(|e| LspClientError::ProtocolError(format!("Invalid content length: {}", e)))?;
+            .map_err(|e| LspClientError::ProtocolError(format!("Invalid content length: {e}")))?;
 
         // Skip the blank line
         let mut blank_line = String::new();
         self.reader
             .read_line(&mut blank_line)
             .await
-            .map_err(|e| LspClientError::ProtocolError(format!("Failed to read blank line: {}", e)))?;
+            .map_err(|e| LspClientError::ProtocolError(format!("Failed to read blank line: {e}")))?;
 
         // Read the response body
         let mut body_buffer = vec![0u8; content_length];
         self.reader
             .read_exact(&mut body_buffer)
             .await
-            .map_err(|e| LspClientError::ProtocolError(format!("Failed to read body: {}", e)))?;
+            .map_err(|e| LspClientError::ProtocolError(format!("Failed to read body: {e}")))?;
 
         let body = String::from_utf8(body_buffer)
-            .map_err(|e| LspClientError::ProtocolError(format!("Invalid UTF-8 in response: {}", e)))?;
+            .map_err(|e| LspClientError::ProtocolError(format!("Invalid UTF-8 in response: {e}")))?;
 
         tracing::trace!("Received LSP response: {}", body);
 
         // Parse the response
         let response: JsonRpcResponse = serde_json::from_str(&body)
-            .map_err(|e| LspClientError::JsonRpcError(format!("Failed to parse response: {}", e)))?;
+            .map_err(|e| LspClientError::JsonRpcError(format!("Failed to parse response: {e}")))?;
 
         // Check for errors
         if let Some(error) = response.error {
@@ -232,8 +232,7 @@ impl LspClient {
         if let Some(id) = response.id {
             if id.as_u64() != Some(expected_id) {
                 return Err(LspClientError::ProtocolError(format!(
-                    "Response ID mismatch: expected {}, got {:?}",
-                    expected_id, id
+                    "Response ID mismatch: expected {expected_id}, got {id:?}"
                 )));
             }
         }
@@ -250,7 +249,7 @@ impl LspClient {
             uri: root_uri.clone(),
             name: root_uri
                 .path_segments()
-                .and_then(|segments| segments.last())
+                .and_then(|mut segments| segments.next_back())
                 .unwrap_or("project")
                 .to_string(),
         };
@@ -294,17 +293,17 @@ impl LspClient {
         self.writer
             .write_all(header.as_bytes())
             .await
-            .map_err(|e| LspClientError::ProtocolError(format!("Failed to write header: {}", e)))?;
+            .map_err(|e| LspClientError::ProtocolError(format!("Failed to write header: {e}")))?;
 
         self.writer
             .write_all(request_body.as_bytes())
             .await
-            .map_err(|e| LspClientError::ProtocolError(format!("Failed to write body: {}", e)))?;
+            .map_err(|e| LspClientError::ProtocolError(format!("Failed to write body: {e}")))?;
 
         self.writer
             .flush()
             .await
-            .map_err(|e| LspClientError::ProtocolError(format!("Failed to flush: {}", e)))?;
+            .map_err(|e| LspClientError::ProtocolError(format!("Failed to flush: {e}")))?;
 
         Ok(())
     }

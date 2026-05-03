@@ -173,7 +173,7 @@ impl PluginManifest {
                     template: template.clone(),
                 })
             }
-            other => Err(format!("unknown plugin type: '{}'", other)),
+            other => Err(format!("unknown plugin type: '{other}'")),
         }
     }
 

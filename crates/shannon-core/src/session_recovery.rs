@@ -561,7 +561,7 @@ impl SessionRecovery {
         let count = if log_path.exists() {
             let file = File::open(&log_path)?;
             let reader = BufReader::new(file);
-            reader.lines().filter(|l| l.as_ref().map_or(false, |s| !s.trim().is_empty())).count()
+            reader.lines().filter(|l| l.as_ref().is_ok_and(|s| !s.trim().is_empty())).count()
         } else {
             0
         };

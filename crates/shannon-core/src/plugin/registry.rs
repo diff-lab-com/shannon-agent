@@ -117,7 +117,7 @@ impl PluginRegistry {
             .await?;
 
         if !status.success() {
-            return Err(PluginError::GitFailed(format!("Failed to clone {}", repo_url)));
+            return Err(PluginError::GitFailed(format!("Failed to clone {repo_url}")));
         }
 
         // Load manifest
@@ -218,7 +218,7 @@ impl PluginRegistry {
                 .await?;
 
             if !status.success() {
-                return Err(PluginError::GitFailed(format!("Failed to update {}", name)));
+                return Err(PluginError::GitFailed(format!("Failed to update {name}")));
             }
 
             // Reload manifest
@@ -229,7 +229,7 @@ impl PluginRegistry {
 
             Ok(())
         } else {
-            Err(PluginError::GitFailed(format!("Plugin {} is not a git repository", name)))
+            Err(PluginError::GitFailed(format!("Plugin {name} is not a git repository")))
         }
     }
 
@@ -297,7 +297,7 @@ impl PluginRegistry {
 
         let manifest_bytes = fs::read(&manifest_path).await?;
         let manifest = PluginManifest::from_toml_bytes(&manifest_bytes)
-            .map_err(|e| PluginError::InvalidManifest(e))?;
+            .map_err(PluginError::InvalidManifest)?;
 
         Ok(manifest)
     }
@@ -309,8 +309,8 @@ impl PluginRegistry {
 
         // Get the last part of the path
         let name = url.split('/')
-            .last()
-            .ok_or_else(|| PluginError::InvalidManifest(format!("Invalid URL: {}", url)))?;
+            .next_back()
+            .ok_or_else(|| PluginError::InvalidManifest(format!("Invalid URL: {url}")))?;
 
         Ok(name.to_string())
     }
@@ -463,9 +463,8 @@ permissions = [\"read_files\"]\n";
             let dir = temp_dir.path().join(name);
             fs::create_dir_all(&dir).await.unwrap();
             let manifest = format!(
-                "name = \"{}\"\nversion = \"1.0.0\"\ndescription = \"Test\"\n\
-                type = \"skill\"\nentry = \"t.md\"\ntrigger = \"/{}\"\ntemplate = \"hi\"\n",
-                name, name
+                "name = \"{name}\"\nversion = \"1.0.0\"\ndescription = \"Test\"\n\
+                type = \"skill\"\nentry = \"t.md\"\ntrigger = \"/{name}\"\ntemplate = \"hi\"\n"
             );
             fs::write(dir.join("plugin.toml"), manifest)
                 .await

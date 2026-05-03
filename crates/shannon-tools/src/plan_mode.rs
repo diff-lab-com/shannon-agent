@@ -1453,17 +1453,17 @@ mod tests {
         let flag = manager.plan_mode_flag();
 
         // Initially false
-        assert!(!flag.read().unwrap().clone());
+        assert!(!*flag.read().unwrap());
         assert!(!manager.is_active().unwrap());
 
         // Enter plan mode — flag should become true
         manager.enter_plan_mode().unwrap();
-        assert!(flag.read().unwrap().clone());
+        assert!(*flag.read().unwrap());
         assert!(manager.is_active().unwrap());
 
         // Exit plan mode — flag should become false
         manager.exit_plan_mode().unwrap();
-        assert!(!flag.read().unwrap().clone());
+        assert!(!*flag.read().unwrap());
         assert!(!manager.is_active().unwrap());
     }
 
@@ -1474,13 +1474,13 @@ mod tests {
         let flag2 = manager.plan_mode_flag();
 
         // Both share the same underlying flag
-        assert!(!flag1.read().unwrap().clone());
-        assert!(!flag2.read().unwrap().clone());
+        assert!(!*flag1.read().unwrap());
+        assert!(!*flag2.read().unwrap());
 
         manager.enter_plan_mode().unwrap();
 
         // Both should reflect the change
-        assert!(flag1.read().unwrap().clone());
-        assert!(flag2.read().unwrap().clone());
+        assert!(*flag1.read().unwrap());
+        assert!(*flag2.read().unwrap());
     }
 }

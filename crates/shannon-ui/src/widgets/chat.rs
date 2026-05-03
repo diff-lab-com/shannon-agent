@@ -1164,7 +1164,7 @@ pub(super) fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
                     if !current_text.is_empty() {
                         segments.push(MdSegment::Text(std::mem::take(&mut current_text)));
                     }
-                    let header_text = rest[1..].trim().to_string();
+                    let header_text = rest.strip_prefix(' ').unwrap_or(rest).trim().to_string();
                     segments.push(MdSegment::Header { level: header_level, text: header_text });
                 } else {
                     current_text.push(line.to_string());
