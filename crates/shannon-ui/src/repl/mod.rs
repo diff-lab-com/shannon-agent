@@ -362,7 +362,7 @@ impl Default for ReplState {
             theme: Theme::detect(),
             accessibility_mode: std::env::var("NO_GRAPHICS").is_ok() || std::env::var("ACCESSIBILITY").is_ok(),
             keybindings: crate::keybindings::load_keybindings(),
-            sidebar_visible: false,
+            sidebar_visible: true,
             diff_viewer: None,
             interactive_hunks: Vec::new(),
             interactive_selected: 0,
