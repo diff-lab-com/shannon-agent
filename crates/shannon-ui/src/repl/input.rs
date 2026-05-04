@@ -144,6 +144,12 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             open_command_palette(repl);
             Ok(())
         }
+        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            repl.state.sidebar_visible = !repl.state.sidebar_visible;
+            let label = if repl.state.sidebar_visible { "Sidebar ON" } else { "Sidebar OFF" };
+            repl.state.toast = Some((format!("  {label}  "), std::time::Instant::now()));
+            Ok(())
+        }
         KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             repl.running = false;
             Ok(())
@@ -301,6 +307,8 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         KeyCode::Tab => {
             if !repl.state.completion_suggestions.is_empty() {
                 accept_completion(repl);
+            } else if repl.state.sidebar_visible {
+                repl.state.sidebar_tab = repl.state.sidebar_tab.next();
             } else {
                 handle_tab_completion(repl)?;
             }
