@@ -622,7 +622,7 @@ fn render_plan_overlay(
             Line::from(vec![
                 Span::styled("    ", Style::default().fg(theme.text_dim)),
                 Span::styled("• ", Style::default().fg(theme.muted)),
-                Span::styled(line.strip_prefix("- ").expect("checked starts_with").to_string(), Style::default().fg(theme.text)),
+                Span::styled(line.strip_prefix("- ").unwrap_or(line).to_string(), Style::default().fg(theme.text)),
             ])
         } else if line.starts_with(|c: char| c.is_ascii_digit()) && line.contains('.') {
             step_num += 1;

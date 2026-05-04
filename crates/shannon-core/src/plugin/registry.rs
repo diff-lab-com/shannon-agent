@@ -111,8 +111,11 @@ impl PluginRegistry {
         // Clone the repository
         let target_dir = self.plugins_dir.join(&plugin_name);
 
+        let target_str = target_dir.to_str().ok_or_else(|| {
+            PluginError::GitFailed(format!("Plugin path is not valid UTF-8: {}", target_dir.display()))
+        })?;
         let status = Command::new("git")
-            .args(["clone", "--depth", "1", repo_url, target_dir.to_str().unwrap()])
+            .args(["clone", "--depth", "1", repo_url, target_str])
             .status()
             .await?;
 

@@ -557,12 +557,12 @@ mod tests {
         let server = RemoteTriggerServer::new(
             format!("127.0.0.1:{}", free_port()),
             Arc::new(move |prompt, project| {
-                plog.lock().unwrap().push(format!(
+                plog.lock().unwrap_or_else(|e| e.into_inner()).push(format!(
                     "prompt:{prompt}|project:{project:?}"
                 ));
             }),
             Arc::new(move |tool, input| {
-                tlog.lock().unwrap().push(format!("tool:{tool}|input:{input}"));
+                tlog.lock().unwrap_or_else(|e| e.into_inner()).push(format!("tool:{tool}|input:{input}"));
             }),
         );
 
@@ -856,7 +856,7 @@ mod tests {
 
         // Verify the handler was called.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let log = prompt_log.lock().unwrap();
+        let log = prompt_log.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(log.len(), 1);
         assert!(log[0].contains("Hello world"));
 
@@ -881,7 +881,7 @@ mod tests {
         assert_eq!(parsed["tool"], "Bash");
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let log = tool_log.lock().unwrap();
+        let log = tool_log.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(log.len(), 1);
         assert!(log[0].contains("Bash"));
 
@@ -975,8 +975,8 @@ mod tests {
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        assert_eq!(prompt_log.lock().unwrap().len(), 1);
-        assert_eq!(tool_log.lock().unwrap().len(), 1);
+        assert_eq!(prompt_log.lock().unwrap_or_else(|e| e.into_inner()).len(), 1);
+        assert_eq!(tool_log.lock().unwrap_or_else(|e| e.into_inner()).len(), 1);
 
         server.stop().unwrap();
     }

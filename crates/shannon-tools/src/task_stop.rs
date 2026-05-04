@@ -155,7 +155,7 @@ mod tests {
 
         let task = make_task(TodoStatus::InProgress);
         let task_id = task.task_id.clone();
-        store.write().unwrap().insert(task_id.clone(), task);
+        store.write().unwrap_or_else(|e| e.into_inner()).insert(task_id.clone(), task);
 
         let result = tool
             .stop_task(TaskStopInput { task_id: task_id.clone() })
@@ -166,7 +166,7 @@ mod tests {
         assert!(result.message.contains("stopped successfully"));
 
         // Verify the task was actually modified
-        let store = store.read().unwrap();
+        let store = store.read().unwrap_or_else(|e| e.into_inner());
         let task = store.get(&task_id).unwrap();
         assert_eq!(task.status, TodoStatus::Completed);
         assert!(task.description.contains("[CANCELLED]"));
@@ -195,7 +195,7 @@ mod tests {
 
         let task = make_task(TodoStatus::Completed);
         let task_id = task.task_id.clone();
-        store.write().unwrap().insert(task_id.clone(), task);
+        store.write().unwrap_or_else(|e| e.into_inner()).insert(task_id.clone(), task);
 
         let result = tool
             .stop_task(TaskStopInput { task_id: task_id.clone() })
@@ -213,7 +213,7 @@ mod tests {
 
         let task = make_task(TodoStatus::Pending);
         let task_id = task.task_id.clone();
-        store.write().unwrap().insert(task_id.clone(), task);
+        store.write().unwrap_or_else(|e| e.into_inner()).insert(task_id.clone(), task);
 
         let result = tool
             .stop_task(TaskStopInput { task_id: task_id.clone() })
@@ -223,7 +223,7 @@ mod tests {
         assert!(result.stopped);
 
         // Verify the task was modified
-        let store = store.read().unwrap();
+        let store = store.read().unwrap_or_else(|e| e.into_inner());
         let task = store.get(&task_id).unwrap();
         assert_eq!(task.status, TodoStatus::Completed);
         assert!(task.description.contains("[CANCELLED]"));
@@ -239,13 +239,13 @@ mod tests {
         task.description = "Do important work".to_string();
         task.content = "Do important work".to_string();
         let task_id = task.task_id.clone();
-        store.write().unwrap().insert(task_id.clone(), task);
+        store.write().unwrap_or_else(|e| e.into_inner()).insert(task_id.clone(), task);
 
         tool.stop_task(TaskStopInput { task_id: task_id.clone() })
             .await
             .unwrap();
 
-        let store = store.read().unwrap();
+        let store = store.read().unwrap_or_else(|e| e.into_inner());
         let task = store.get(&task_id).unwrap();
         // Subject should be preserved
         assert_eq!(task.subject, "Important task");

@@ -530,10 +530,10 @@ impl TranscriptStore {
                     stats.last_entry = Some(entry.timestamp);
                 }
                 _ => {
-                    if entry.timestamp < stats.first_entry.expect("first_entry set in None case") {
+                    if stats.first_entry.is_none_or(|t| entry.timestamp < t) {
                         stats.first_entry = Some(entry.timestamp);
                     }
-                    if entry.timestamp > stats.last_entry.expect("last_entry set in None case") {
+                    if stats.last_entry.is_none_or(|t| entry.timestamp > t) {
                         stats.last_entry = Some(entry.timestamp);
                     }
                 }

@@ -88,7 +88,10 @@ impl WebFetchTool {
             client: Client::builder()
                 .user_agent("ShannonCode/1.0")
                 .build()
-                .unwrap_or_else(|e| panic!("Failed to create HTTP client: {e}")),
+                .unwrap_or_else(|e| {
+                    tracing::error!("Failed to create HTTP client: {e}");
+                    Client::new()
+                }),
         }
     }
 
@@ -357,7 +360,10 @@ impl WebSearchTool {
             client: Client::builder()
                 .user_agent("ShannonCode/1.0")
                 .build()
-                .unwrap_or_else(|e| panic!("Failed to create HTTP client: {e}")),
+                .unwrap_or_else(|e| {
+                    tracing::error!("Failed to create HTTP client: {e}");
+                    Client::new()
+                }),
             api_key,
             provider,
         }

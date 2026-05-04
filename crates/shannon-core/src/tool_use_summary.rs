@@ -189,7 +189,10 @@ impl ToolUseSummaryGenerator {
             return None;
         }
 
-        let config = self.ai_config.as_ref().expect("ai_config must be set when ai_enabled() is true");
+        let config = match self.ai_config.as_ref() {
+            Some(c) => c,
+            None => return self.generate_enhanced(tools),
+        };
         let prompt = self.build_ai_prompt(tools);
 
         // Attempt AI generation
@@ -227,7 +230,10 @@ impl ToolUseSummaryGenerator {
             })
             .collect();
 
-        let config = self.ai_config.as_ref().expect("ai_config must be set when ai_enabled() is true");
+        let config = match self.ai_config.as_ref() {
+            Some(c) => c,
+            None => return String::new(),
+        };
 
         format!(
             "Generate a concise git-commit-style summary label (max {} chars) for these tool calls. \

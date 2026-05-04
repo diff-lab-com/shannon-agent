@@ -862,7 +862,7 @@ mod tests {
         task2.status = TodoStatus::Completed;
 
         {
-            let mut store = tool.task_store.write().unwrap();
+            let mut store = tool.task_store.write().unwrap_or_else(|e| e.into_inner());
             store.insert(task1.task_id.clone(), task1);
             store.insert(task2.task_id.clone(), task2);
         }
@@ -898,7 +898,7 @@ mod tests {
         let task_id = task.task_id.clone();
 
         {
-            let mut store = tool.task_store.write().unwrap();
+            let mut store = tool.task_store.write().unwrap_or_else(|e| e.into_inner());
             store.insert(task_id.clone(), task);
         }
 
@@ -951,7 +951,7 @@ mod tests {
         let task_id = task.task_id.clone();
 
         {
-            let mut store = tool.task_store.write().unwrap();
+            let mut store = tool.task_store.write().unwrap_or_else(|e| e.into_inner());
             store.insert(task_id.clone(), task);
         }
 
@@ -983,7 +983,7 @@ mod tests {
         let task_id = task.task_id.clone();
 
         {
-            let mut store = tool.task_store.write().unwrap();
+            let mut store = tool.task_store.write().unwrap_or_else(|e| e.into_inner());
             store.insert(task_id.clone(), task);
         }
 

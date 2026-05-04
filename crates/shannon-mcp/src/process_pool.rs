@@ -1721,8 +1721,13 @@ impl RemoteMcpServerHandle {
         for (key, value) in &self.headers {
             builder = builder.header(key.as_str(), value.as_str());
         }
-        // Resolve dynamic headers from shell commands.
+        // Resolve dynamic headers from shell commands (user-configured, validated at load).
         for (name, command) in &self.header_commands {
+            // Reject dangerous patterns
+            if command.contains("rm -rf /") || command.contains("mkfs") || command.contains("dd if=") {
+                warn!("Skipping dangerous header command for '{name}': {command}");
+                continue;
+            }
             let output = tokio::process::Command::new("sh")
                 .arg("-c")
                 .arg(command.as_str())
@@ -5291,7 +5296,7 @@ mod tests {
         let changed = Arc::new(std::sync::Mutex::new(None::<String>));
         let changed_clone = changed.clone();
         pool.set_on_tools_changed(Arc::new(move |server_name, _new_tools| {
-            *changed_clone.lock().unwrap() = Some(server_name.to_string());
+            *changed_clone.lock().unwrap_or_else(|e| e.into_inner()) = Some(server_name.to_string());
         }))
         .await;
 
@@ -5312,7 +5317,7 @@ mod tests {
         // Give the handler time to process.
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let guard = changed.lock().unwrap();
+        let guard = changed.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(guard.as_deref(), Some("test-server"));
     }
 
@@ -5364,7 +5369,7 @@ mod tests {
                 created_at: Instant::now(),
                 progress_token: Some(serde_json::json!("pg-test")),
                 on_progress: Some(Arc::new(move |progress, total| {
-                    reports_clone.lock().unwrap().push((progress, total));
+                    reports_clone.lock().unwrap_or_else(|e| e.into_inner()).push((progress, total));
                 })),
             },
         );
@@ -5396,7 +5401,7 @@ mod tests {
             }
         }
 
-        let reports = progress_reports.lock().unwrap();
+        let reports = progress_reports.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(reports.len(), 1);
         assert_eq!(reports[0], (25.0, Some(100.0)));
 

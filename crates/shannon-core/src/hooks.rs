@@ -1175,6 +1175,14 @@ impl HookManager {
         if command.trim().is_empty() {
             return Err(HookError::InvalidMatcher("Hook command is empty".to_string()));
         }
+        // Warn about potentially dangerous patterns in hook commands
+        for pattern in &["rm -rf /", "mkfs", "dd if=", "> /dev/sd", "chmod 777"] {
+            if command.contains(pattern) {
+                return Err(HookError::InvalidMatcher(
+                    format!("Hook command contains dangerous pattern: {pattern}")
+                ));
+            }
+        }
 
         let result = tokio::time::timeout(timeout, async {
             let mut child = tokio::process::Command::new("sh")

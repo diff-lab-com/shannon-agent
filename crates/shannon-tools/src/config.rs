@@ -497,7 +497,7 @@ mod tests {
     fn make_tool_with_defaults() -> ConfigTool {
         let tool = make_tool();
         {
-            let mut manager = tool.manager.lock().unwrap();
+            let mut manager = tool.manager.lock().unwrap_or_else(|e| e.into_inner());
             manager.set_default("editor.theme".to_string(), json!("dark"));
             manager.set_default("editor.font_size".to_string(), json!(14));
             manager.set_default("server.port".to_string(), json!(8080));
@@ -673,13 +673,13 @@ mod tests {
 
         let mut manager = ConfigManager::with_path(path);
         manager.set_on_change(Box::new(move |key: &str, _value: &Value| {
-            changed_keys_clone.lock().unwrap().push(key.to_string());
+            changed_keys_clone.lock().unwrap_or_else(|e| e.into_inner()).push(key.to_string());
         }));
 
         manager.set("key1".to_string(), json!("value1"));
         manager.set("key2".to_string(), json!("value2"));
 
-        let keys = changed_keys.lock().unwrap();
+        let keys = changed_keys.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(keys.len(), 2);
         assert_eq!(keys[0], "key1");
         assert_eq!(keys[1], "key2");

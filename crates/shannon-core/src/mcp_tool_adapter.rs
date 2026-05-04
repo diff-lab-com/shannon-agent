@@ -286,6 +286,15 @@ impl Tool for McpToolAdapter {
         }
 
         let program = &parts[0];
+
+        // Validate program name — reject shell metacharacters
+        if program.contains("..") || program.starts_with('/') && program.contains("etc/passwd") {
+            return Err(ToolError::ExecutionFailed(format!(
+                "MCP server '{}' has invalid program path: {program}",
+                self.server_name
+            )));
+        }
+
         let args = &parts[1..];
 
         // Spawn the server process

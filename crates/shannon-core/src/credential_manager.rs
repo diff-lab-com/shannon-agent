@@ -491,7 +491,13 @@ impl Default for CredentialManager {
             })
             .join(".shannon")
             .join("credentials");
-        Self::with_dir(credentials_dir).expect("Failed to create default credential manager")
+        Self::with_dir(credentials_dir).unwrap_or_else(|_| {
+            let fallback = std::env::temp_dir().join(".shannon").join("credentials");
+            Self::with_dir(fallback).unwrap_or_else(|_| {
+                Self::with_dir(PathBuf::from("/tmp/.shannon/credentials"))
+                    .expect("credential manager fallback should succeed")
+            })
+        })
     }
 }
 
