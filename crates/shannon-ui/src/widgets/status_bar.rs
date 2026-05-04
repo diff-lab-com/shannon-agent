@@ -1,4 +1,7 @@
 //! Status bar widget
+//!
+//! Zone-based layout for stable, flicker-free rendering:
+//! `[spinner] [model] [context bar] [progress] [padding] [cost] [git] [mode]`
 
 use crate::theme::Theme;
 use ratatui::{
@@ -13,7 +16,7 @@ use ratatui::{
 pub struct StatusBarWidget;
 
 impl StatusBarWidget {
-    /// Render the status bar
+    /// Render the status bar (simple mode, no spinner)
     pub fn render(frame: &mut Frame, area: Rect, message: &str, theme: &Theme) {
         let line = vec![
             Span::styled(" Status: ", Style::default().fg(theme.text_dim)),
@@ -27,8 +30,10 @@ impl StatusBarWidget {
         frame.render_widget(paragraph, area);
     }
 
-    /// Render enhanced status bar with spinner animation and optional progress bar.
-    /// Dense single-line format for maximum screen real estate.
+    /// Render enhanced status bar with spinner animation and zone-based layout.
+    ///
+    /// Layout: `⣷ Working  model  [████░░░░] 3.2k/128k  $0.0167  master  AUTO`
+    /// All zones are left-to-right with single-space gaps — no separators.
     #[allow(clippy::too_many_arguments)]
     pub fn render_with_spinner(
         frame: &mut Frame,
@@ -43,52 +48,39 @@ impl StatusBarWidget {
         progress_bar: Option<&crate::widgets::progress::ProgressBarWidget>,
         theme: &Theme,
         approval_mode: Option<&str>,
-        goal: Option<&str>,
     ) {
-        // Build span with owned strings for proper lifetime
-        let mut span_vec: Vec<Span<'static>> = Vec::new();
-        let mut right_vec: Vec<Span<'static>> = Vec::new();
+        let mut left: Vec<Span<'static>> = Vec::new();
+        let mut right: Vec<Span<'static>> = Vec::new();
 
-        // Separator helper
-        let sep = || -> Span<'static> {
-            Span::styled(" │ ", Style::default().fg(theme.muted))
-        };
-        let right_sep = || -> Span<'static> {
-            Span::styled(" │ ", Style::default().fg(theme.muted))
-        };
-
-        // Show spinner frame when processing
+        // ── Zone 1: Spinner + status ──
         if let Some(sp) = spinner {
             if status != "Ready" {
                 let frame_str = sp.current_char().to_string();
-                span_vec.push(Span::styled(frame_str, Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)));
-                span_vec.push(Span::raw(" "));
+                left.push(Span::styled(
+                    frame_str,
+                    Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
+                ));
+                left.push(Span::raw(" "));
             }
         }
+        // Status text (fixed-width phase labels: "Working", "Thinking", "Streaming", "Ready")
+        left.push(Span::styled(
+            status.to_string(),
+            Style::default().fg(theme.text),
+        ));
 
-        // Show goal with target icon if provided
-        if let Some(goal_text) = goal {
-            span_vec.push(Span::styled("🎯 ", Style::default().fg(theme.primary)));
-            let truncated_goal = if goal_text.chars().count() > 40 {
-                let truncated: String = goal_text.chars().take(37).collect();
-                format!("{truncated}...")
-            } else {
-                goal_text.to_string()
-            };
-            span_vec.push(Span::styled(truncated_goal, Style::default().fg(theme.text)));
-            span_vec.push(sep());
-        }
-
-        span_vec.push(Span::styled(status.to_string(), Style::default().fg(theme.text)));
-
+        // ── Zone 2: Model ──
         if let Some(m) = model {
-            span_vec.push(sep());
-            span_vec.push(Span::styled(m.to_string(), Style::default().fg(theme.primary)));
+            left.push(Span::raw("  "));
+            left.push(Span::styled(
+                truncate_model(m),
+                Style::default().fg(theme.primary),
+            ));
         }
 
-        // Context window usage with mini progress bar
+        // ── Zone 3: Context window usage ──
         if let Some(used) = tokens_used {
-            span_vec.push(sep());
+            left.push(Span::raw("  "));
             if let Some(max) = max_tokens {
                 let pct = (used as f64 / max as f64).min(1.0);
                 let bar_w = 8usize;
@@ -96,50 +88,41 @@ impl StatusBarWidget {
                 let mut bar = String::with_capacity(bar_w + 2);
                 bar.push('[');
                 for i in 0..bar_w {
-                    bar.push(if i < filled { crate::a11y::bar_filled().chars().next().unwrap_or('█') } else { crate::a11y::bar_empty().chars().next().unwrap_or('░') });
+                    bar.push(if i < filled {
+                        crate::a11y::bar_filled().chars().next().unwrap_or('█')
+                    } else {
+                        crate::a11y::bar_empty().chars().next().unwrap_or('░')
+                    });
                 }
                 bar.push(']');
-                // Color based on usage: green < 50%, yellow < 80%, red >= 80%
-                let bar_color = if pct < 0.5 { theme.success }
-                    else if pct < 0.8 { theme.warning }
-                    else { theme.error };
-                span_vec.push(Span::styled(bar, Style::default().fg(bar_color)));
+                let bar_color = if pct < 0.5 {
+                    theme.success
+                } else if pct < 0.8 {
+                    theme.warning
+                } else {
+                    theme.error
+                };
+                left.push(Span::styled(bar, Style::default().fg(bar_color)));
                 let used_k = used as f64 / 1000.0;
                 let max_k = max as f64 / 1000.0;
-                span_vec.push(Span::styled(
+                left.push(Span::styled(
                     format!(" {used_k:.1}k/{max_k:.0}k"),
                     Style::default().fg(theme.secondary),
                 ));
             } else {
-                span_vec.push(Span::styled(format_tokens(used), Style::default().fg(theme.secondary)));
+                left.push(Span::styled(
+                    format_tokens(used),
+                    Style::default().fg(theme.secondary),
+                ));
             }
         }
 
-        // Cost estimation (right side)
-        if let Some(cost) = cost_usd {
-            right_vec.push(right_sep());
-            let cost_color = if cost < 0.01 { theme.text_dim }
-                else if cost < 0.10 { theme.text }
-                else { theme.warning };
-            right_vec.push(Span::styled(format!("${cost:.4}"), Style::default().fg(cost_color)));
-        }
-
-        // Git branch (right side)
-        if let Some(branch) = git_branch {
-            right_vec.push(right_sep());
-            right_vec.push(Span::styled(
-                format!(" {} {}", branch_icon(), branch),
-                Style::default().fg(theme.primary),
-            ));
-        }
-
-        // If a progress bar is provided with active progress, show inline progress
+        // ── Zone 4: Tool progress bar (replaces context bar zone when active) ──
         if let Some(pb) = progress_bar {
             let pct = pb.percentage();
             if pct > 0.0 {
-                span_vec.push(sep());
-                // Inline progress bar: [████████░░░░] 45.2%
-                let bar_width = 10usize;
+                left.push(Span::raw("  "));
+                let bar_width = 12usize;
                 let filled = (pb.progress() * bar_width as f64) as usize;
                 let mut bar_str = String::from("[");
                 for i in 0..bar_width {
@@ -150,17 +133,47 @@ impl StatusBarWidget {
                     }
                 }
                 bar_str.push(']');
-                span_vec.push(Span::styled(bar_str, Style::default().fg(theme.primary)));
-                span_vec.push(Span::styled(
+                left.push(Span::styled(
+                    bar_str,
+                    Style::default().fg(theme.primary),
+                ));
+                left.push(Span::styled(
                     format!(" {pct:.0}%"),
-                    Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme.secondary)
+                        .add_modifier(Modifier::BOLD),
                 ));
             }
         }
 
-        // Approval mode indicator
+        // ── Right zone: Cost ──
+        if let Some(cost) = cost_usd {
+            right.push(Span::raw("  "));
+            let cost_color = if cost < 0.01 {
+                theme.text_dim
+            } else if cost < 0.10 {
+                theme.text
+            } else {
+                theme.warning
+            };
+            right.push(Span::styled(
+                format!("${cost:.4}"),
+                Style::default().fg(cost_color),
+            ));
+        }
+
+        // ── Right zone: Git branch ──
+        if let Some(branch) = git_branch {
+            right.push(Span::raw("  "));
+            right.push(Span::styled(
+                format!("{} {}", branch_icon(), branch),
+                Style::default().fg(theme.primary),
+            ));
+        }
+
+        // ── Right zone: Approval mode ──
         if let Some(mode_label) = approval_mode {
-            span_vec.push(sep());
+            right.push(Span::raw("  "));
             let mode_style = match mode_label {
                 label if label == "SUGGEST" || label == "PLAN" || label == "RO" => {
                     Style::default().fg(theme.warning)
@@ -172,25 +185,42 @@ impl StatusBarWidget {
                 }
                 _ => Style::default().fg(theme.text_dim),
             };
-            span_vec.push(Span::styled(mode_label.to_string(), mode_style.add_modifier(Modifier::BOLD)));
+            right.push(Span::styled(
+                mode_label.to_string(),
+                mode_style.add_modifier(Modifier::BOLD),
+            ));
         }
 
-        // Combine left and right spans with padding
-        let left_content: usize = span_vec.iter().map(|s| s.content.chars().count()).sum::<usize>();
-        let right_content: usize = right_vec.iter().map(|s| s.content.chars().count()).sum::<usize>();
-        let total_content = left_content + right_content;
+        // ── Combine with padding ──
+        let left_w: usize = left.iter().map(|s| s.content.chars().count()).sum();
+        let right_w: usize = right.iter().map(|s| s.content.chars().count()).sum();
+        let total = left_w + right_w;
         let available = area.width as usize;
-        let padding_needed = available.saturating_sub(total_content);
-        if !right_vec.is_empty() && padding_needed > 3 {
-            span_vec.push(Span::raw(" ".repeat(padding_needed)));
-            span_vec.extend(right_vec);
+        let padding = available.saturating_sub(total);
+
+        if !right.is_empty() && padding > 0 {
+            left.push(Span::raw(" ".repeat(padding)));
+            left.extend(right);
+        } else if left_w < available {
+            left.push(Span::raw(" ".repeat(available.saturating_sub(left_w))));
         }
 
-        let paragraph = Paragraph::new(Line::from(span_vec))
+        let paragraph = Paragraph::new(Line::from(left))
             .style(Style::default().bg(theme.context_bar_bg))
             .alignment(Alignment::Left);
 
         frame.render_widget(paragraph, area);
+    }
+}
+
+/// Truncate model name to fit status bar.
+fn truncate_model(model: &str) -> String {
+    const MAX_MODEL_LEN: usize = 24;
+    if model.chars().count() > MAX_MODEL_LEN {
+        let truncated: String = model.chars().take(MAX_MODEL_LEN - 1).collect();
+        format!("{truncated}…")
+    } else {
+        model.to_string()
     }
 }
 
@@ -205,7 +235,7 @@ fn format_tokens(tokens: u64) -> String {
     }
 }
 
-/// Git branch icon (uses the standard branch symbol).
+/// Git branch icon (Powerline symbol).
 fn branch_icon() -> &'static str {
-    "\u{E0A0}" //  git branch symbol from Powerline
+    "\u{E0A0}"
 }

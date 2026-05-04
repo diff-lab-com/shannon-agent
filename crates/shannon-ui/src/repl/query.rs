@@ -161,7 +161,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
         let mut tool_calls: Vec<String> = Vec::new();
         let mut tool_start_times: HashMap<String, Instant> = HashMap::new();
         let mut _tools_in_session: usize = 0;
-        let mut progress_status = "Processing...".to_string();
+        let mut progress_status = "Working".to_string();
         let mut steps_done = 0usize;
         let mut turn_diff = TurnDiff::new(0);
 
@@ -195,12 +195,12 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                         if let Ok(mut s) = ss.lock() {
                             s.tools += 1;
                             s.multi_progress.push((tool_name.clone(), 0.0, color));
-                            s.status = format!("Running: {tool_name} (step {steps_done})");
+                            s.status = format!("Tool: {tool_name}");
                             s.buffer = response_text.clone();
                         }
                     }
 
-                    progress_status = format!("Running: {tool_name} (step {steps_done})");
+                    progress_status = format!("Tool: {tool_name}");
                     let tool_display = format!("\n> Using: {} with input: {}", tool_name,
                         serde_json::to_string_pretty(&tool_input).unwrap_or_else(|_| "invalid".to_string()));
                     tool_start_times.insert(tool_name.clone(), Instant::now());
@@ -242,19 +242,16 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                     response_text.push_str(&format!("\n\n[Turn {turn_number} completed, {tokens_used} tokens]"));
                 }
                 Ok(QueryEvent::Progress { message, .. }) => {
-                    progress_status = format!("Processing: {message}");
+                    progress_status = format!("Working: {message}");
                     response_text.push_str(&format!("\n⏳ {message}"));
                     if let Ok(mut s) = ss.lock() {
                         s.status = progress_status.clone();
                         s.buffer = response_text.clone();
                     }
                 }
-                Ok(QueryEvent::Usage { input_tokens, output_tokens, cost_usd, .. }) => {
+                Ok(QueryEvent::Usage { input_tokens, output_tokens, cost_usd: _, .. }) => {
                     if let Ok(mut s) = ss.lock() { s.tokens = (input_tokens, output_tokens); }
-                    let total = input_tokens + output_tokens;
-                    let total_fmt = if total >= 1000 { format!("{:.1}k", total as f64 / 1000.0) } else { total.to_string() };
-                    progress_status = format!("Processing... ({total_fmt} tokens, ${cost_usd:.4})");
-                    if let Ok(mut s) = ss.lock() { s.status = progress_status.clone(); }
+                    // Status text stays as "Working" — tokens/cost shown in dedicated status bar zones
                 }
                 Ok(QueryEvent::Cost { total_cost_usd, input_tokens, output_tokens, .. }) => {
                     tokens_in_turn = input_tokens + output_tokens;
@@ -330,7 +327,6 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
         let terminal_backend = CrosstermBackend::new(io::stdout());
         let mut polling_terminal = Terminal::new(terminal_backend)?;
         let mut buffer = StreamBuffer::new();
-        let mut thinking_dots: usize = 0;
         let stream_start = std::time::Instant::now();
 
         // Activate streaming state
@@ -365,14 +361,12 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
 
             repl.state.status = current_status.clone();
 
-            // Thinking indicator: animated dots while model thinks
+            // Thinking indicator: fixed-width label while model thinks
             let is_thinking = streaming.lock().map(|s| s.thinking_phase).unwrap_or(false);
             repl.state.thinking_phase = is_thinking;
             if is_thinking {
-                thinking_dots = (thinking_dots + 1) % 4;
-                let dots = ".".repeat(thinking_dots);
                 let phase_idx = (stream_start.elapsed().as_secs() / 2) as usize % THINKING_PHRASES.len();
-                repl.state.status = format!("{}{dots}", THINKING_PHRASES[phase_idx]);
+                repl.state.status = THINKING_PHRASES[phase_idx].to_string();
             }
 
             // Toast for long operations (>5s)
@@ -392,10 +386,6 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                 let (input, output) = s.tokens;
                 if input > 0 || output > 0 {
                     repl.state.tokens_used = pre_stream_tokens + input + output;
-                    let total = input + output;
-                    let total_fmt = if total >= 1000 { format!("{:.1}k", total as f64 / 1000.0) } else { total.to_string() };
-                    let cost_fmt = if repl.state.total_cost_usd > 0.0 { format!(" | ${:.4}", repl.state.total_cost_usd) } else { String::new() };
-                    repl.state.status = format!("{current_status} ({total_fmt} tokens{cost_fmt})");
                 }
 
                 // Update tool count in real-time during streaming
@@ -446,7 +436,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                     Some(&state.approval_mode_label),
                     state.focus_mode, state.fullscreen_mode,
                     None, &[], None,
-                    None, None, None, None,
+                    None, None, None,
                 );
                 if state.multi_progress_visible {
                     let mp_height = 3u16.min(f.area().height.saturating_sub(10));
