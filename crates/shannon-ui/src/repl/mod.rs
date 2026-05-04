@@ -288,6 +288,16 @@ impl SidebarTab {
             SidebarTab::Perf => SidebarTab::Context,
         }
     }
+
+    /// Cycle to the previous tab: Context → Perf → Agents → Files → Context
+    pub fn prev(self) -> Self {
+        match self {
+            SidebarTab::Context => SidebarTab::Perf,
+            SidebarTab::Files => SidebarTab::Context,
+            SidebarTab::Agents => SidebarTab::Files,
+            SidebarTab::Perf => SidebarTab::Agents,
+        }
+    }
 }
 
 /// Display info for a single sub-agent in the sidebar

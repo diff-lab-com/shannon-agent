@@ -150,6 +150,18 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             repl.state.toast = Some((format!("  {label}  "), std::time::Instant::now()));
             Ok(())
         }
+        KeyCode::Left if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if repl.state.sidebar_visible {
+                repl.state.sidebar_tab = repl.state.sidebar_tab.prev();
+            }
+            Ok(())
+        }
+        KeyCode::Right if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if repl.state.sidebar_visible {
+                repl.state.sidebar_tab = repl.state.sidebar_tab.next();
+            }
+            Ok(())
+        }
         KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             repl.running = false;
             Ok(())
@@ -307,8 +319,6 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         KeyCode::Tab => {
             if !repl.state.completion_suggestions.is_empty() {
                 accept_completion(repl);
-            } else if repl.state.sidebar_visible {
-                repl.state.sidebar_tab = repl.state.sidebar_tab.next();
             } else {
                 handle_tab_completion(repl)?;
             }
