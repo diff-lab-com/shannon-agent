@@ -424,6 +424,24 @@ pub(crate) fn handle_theme(repl: &mut Repl, args: &str) -> Result<()> {
 
     let args = args.trim();
 
+    if args == "pick" || args == "picker" || args == "preview" {
+        let themes = Theme::available();
+        let current = &repl.state.theme.name;
+        let items: Vec<_> = themes.into_iter().map(|name| {
+            let label = if name == *current {
+                format!("{name} (current)")
+            } else {
+                name.clone()
+            };
+            crate::widgets::select::SelectItem::new(label, name)
+        }).collect();
+
+        let picker = crate::widgets::select::FuzzyPickerWidget::new("Theme Picker".to_string())
+            .with_items(items);
+        repl.state.theme_picker = Some(picker);
+        return Ok(());
+    }
+
     if args.is_empty() || args == "list" {
         let current = &repl.state.theme.name;
         let available = Theme::available();
@@ -612,6 +630,21 @@ pub(crate) fn handle_color(repl: &mut Repl, args: &str) -> Result<()> {
 }
 
 /// Parse a color string into a ratatui Color
+pub(crate) fn handle_statusline(repl: &mut Repl, args: &str) -> Result<()> {
+    let cmd = args.trim();
+    if cmd.is_empty() || cmd == "off" || cmd == "reset" || cmd == "default" {
+        repl.state.statusline_command = None;
+        repl.state.cached_statusline = None;
+        repl.chat.add_message(ChatRole::System, "Custom statusline disabled.".to_string());
+    } else {
+        repl.state.statusline_command = Some(cmd.to_string());
+        repl.state.cached_statusline = None;
+        repl.state.statusline_last_update = None;
+        repl.chat.add_message(ChatRole::System, format!("Custom statusline set to: {cmd}"));
+    }
+    Ok(())
+}
+
 fn parse_color_string(s: &str) -> Option<ratatui::style::Color> {
     use ratatui::style::Color;
     let lower = s.to_lowercase();

@@ -87,6 +87,11 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         return handle_model_picker_input(repl, key);
     }
 
+    // If theme picker is active, handle theme picker input
+    if repl.state.theme_picker.is_some() {
+        return handle_theme_picker_input(repl, key);
+    }
+
     // If multi-select is active, handle multi-select input
     if repl.state.multi_select.is_some() {
         return handle_multi_select_input(repl, key);
@@ -1166,6 +1171,59 @@ fn handle_model_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Esc => {
             repl.state.model_picker = None;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_theme_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Up => {
+            if let Some(ref mut picker) = repl.state.theme_picker {
+                picker.move_up();
+            }
+        }
+        KeyCode::Down => {
+            if let Some(ref mut picker) = repl.state.theme_picker {
+                picker.move_down();
+            }
+        }
+        KeyCode::Char(c) => {
+            if let Some(ref mut picker) = repl.state.theme_picker {
+                picker.add_search_char(c);
+            }
+        }
+        KeyCode::Backspace => {
+            if let Some(ref mut picker) = repl.state.theme_picker {
+                picker.remove_search_char();
+            }
+        }
+        KeyCode::Enter => {
+            let selected = repl.state.theme_picker.as_ref()
+                .and_then(|p| p.selected_value().map(|v| v.to_string()));
+            repl.state.theme_picker = None;
+
+            if let Some(name) = selected {
+                if let Some(theme) = crate::theme::Theme::named(&name) {
+                    repl.renderer.set_theme(&theme);
+                    repl.state.theme = theme;
+                    crate::repl::preferences::save_preferences(
+                        &crate::repl::preferences::Preferences {
+                            model: repl.state.model.clone(),
+                            provider: repl.state.selected_provider.clone(),
+                            theme: Some(name.clone()),
+                        },
+                    );
+                    repl.chat.add_message(
+                        crate::widgets::ChatRole::System,
+                        format!("Theme switched to '{name}'."),
+                    );
+                }
+            }
+        }
+        KeyCode::Esc => {
+            repl.state.theme_picker = None;
         }
         _ => {}
     }

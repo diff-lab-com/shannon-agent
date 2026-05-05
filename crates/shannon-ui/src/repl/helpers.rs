@@ -286,4 +286,57 @@ impl super::Repl {
             }
         }
     }
+
+    /// Refresh the custom statusline by running the configured command.
+    /// Called periodically from the main event loop (every ~5s).
+    pub fn refresh_statusline(&mut self) {
+        let Some(ref cmd) = self.state.statusline_command else { return };
+
+        // Throttle to once every 5 seconds
+        if let Some(t) = self.state.statusline_last_update {
+            if t.elapsed().as_secs() < 5 {
+                return;
+            }
+        }
+
+        // Build JSON payload with current session state
+        let json_payload = serde_json::json!({
+            "model": self.state.model,
+            "status": self.state.status,
+            "tokens_used": self.state.tokens_used,
+            "input_tokens": self.state.input_tokens,
+            "output_tokens": self.state.output_tokens,
+            "cost_usd": self.state.total_cost_usd,
+            "turn_count": self.state.turn_count,
+            "streaming_active": self.state.streaming_active,
+            "approval_mode": self.state.approval_mode_label,
+        });
+
+        let result = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .env("SHANNON_STATUSLINE", "1")
+            .spawn()
+            .ok()
+            .and_then(|mut child| {
+                use std::io::Write;
+                if let Some(ref mut stdin) = child.stdin {
+                    let _ = stdin.write_all(json_payload.to_string().as_bytes());
+                }
+                child.wait().ok().filter(|s| s.success())?;
+                child.stdout.and_then(|mut out| {
+                    let mut buf = String::new();
+                    std::io::Read::read_to_string(&mut out, &mut buf).ok()?;
+                    Some(buf.trim().to_string())
+                })
+            });
+
+        if let Some(output) = result {
+            self.state.cached_statusline = Some(output);
+        }
+        self.state.statusline_last_update = Some(std::time::Instant::now());
+    }
 }

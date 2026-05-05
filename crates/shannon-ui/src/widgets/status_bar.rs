@@ -50,6 +50,7 @@ impl StatusBarWidget {
         approval_mode: Option<&str>,
         token_breakdown: Option<(u64, u64)>,
         diag_counts: Option<(usize, usize)>,
+        rate_limit: Option<(u32, u32)>,
     ) {
         let mut left: Vec<Span<'static>> = Vec::new();
         let mut right: Vec<Span<'static>> = Vec::new();
@@ -196,6 +197,25 @@ impl StatusBarWidget {
             }
         }
 
+        // ── Right zone: Rate limit usage ──
+        if let Some((used, total)) = rate_limit {
+            if total > 0 {
+                let pct = used as f64 / total as f64;
+                let color = if pct < 0.5 {
+                    theme.success
+                } else if pct < 0.8 {
+                    theme.warning
+                } else {
+                    theme.error
+                };
+                right.push(Span::raw("  "));
+                right.push(Span::styled(
+                    format!("RL:{used}/{total}"),
+                    Style::default().fg(color),
+                ));
+            }
+        }
+
         // ── Right zone: Git branch ──
         if let Some(branch) = git_branch {
             right.push(Span::raw("  "));
@@ -242,6 +262,19 @@ impl StatusBarWidget {
         let paragraph = Paragraph::new(Line::from(left))
             .style(Style::default().bg(theme.context_bar_bg))
             .alignment(Alignment::Left);
+
+        frame.render_widget(paragraph, area);
+    }
+
+    /// Render a custom statusline from a user-configured shell script.
+    /// Replaces the entire status bar with the script's output.
+    pub fn render_custom(frame: &mut Frame, area: Rect, text: &str, theme: &Theme) {
+        let paragraph = Paragraph::new(Line::from(Span::styled(
+            format!(" {text}"),
+            Style::default().fg(theme.text),
+        )))
+        .style(Style::default().bg(theme.context_bar_bg))
+        .alignment(Alignment::Left);
 
         frame.render_widget(paragraph, area);
     }

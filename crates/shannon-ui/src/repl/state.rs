@@ -97,6 +97,8 @@ pub struct ReplState {
     pub multi_select: Option<crate::widgets::select::MultiSelectWidget>,
     /// Active model picker widget (for /models command)
     pub model_picker: Option<crate::widgets::select::ModelPickerWidget>,
+    /// Active theme picker widget (for /theme preview)
+    pub theme_picker: Option<crate::widgets::select::FuzzyPickerWidget>,
     /// Current completion suggestions to display (populated by Tab, cleared by typing)
     pub completion_suggestions: Vec<String>,
     /// Scheduled routine manager for recurring tasks
@@ -221,6 +223,15 @@ pub struct ReplState {
     pub effort_level: Option<String>,
     /// Context focus area to limit model attention (set via /focus)
     pub focus_area: Option<String>,
+    /// Custom statusline command (shell script receiving JSON via stdin)
+    pub statusline_command: Option<String>,
+    /// Cached output from the last statusline command run
+    pub cached_statusline: Option<String>,
+    /// When the statusline was last refreshed
+    pub statusline_last_update: Option<std::time::Instant>,
+    /// Rate limit info from API response headers
+    pub rate_limit_5h: Option<(u32, u32)>, // (used, total)
+    pub rate_limit_7d: Option<(u32, u32)>, // (used, total)
 }
 
 /// State for the autonomous loop iteration engine.
@@ -358,6 +369,7 @@ impl Default for ReplState {
             multi_progress_visible: false,
             multi_select: None,
             model_picker: None,
+            theme_picker: None,
             completion_suggestions: Vec::new(),
             routine_manager: shannon_core::scheduled_routines::RoutineManager::new(),
             completion_suggestion_index: 0,
@@ -420,6 +432,11 @@ impl Default for ReplState {
             session_title: None,
             effort_level: None,
             focus_area: None,
+            statusline_command: None,
+            cached_statusline: None,
+            statusline_last_update: None,
+            rate_limit_5h: None,
+            rate_limit_7d: None,
         }
     }
 }

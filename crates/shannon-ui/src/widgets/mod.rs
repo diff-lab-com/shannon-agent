@@ -244,7 +244,7 @@ impl MainLayoutWidget {
         working_dir: &str,
         theme: &Theme,
     ) {
-        Self::render_complete_with_spinner(frame, chat, prompt, status, model, tokens_used, working_dir, None, None, None, theme, crate::repl::SidebarTab::default(), None, false, false, None, &[], None, None, None, None, None, None);
+        Self::render_complete_with_spinner(frame, chat, prompt, status, model, tokens_used, working_dir, None, None, None, theme, crate::repl::SidebarTab::default(), None, false, false, None, &[], None, None, None, None, None, None, None, None);
     }
 
     /// Render the complete UI with spinner animation support
@@ -273,6 +273,8 @@ impl MainLayoutWidget {
         git_branch: Option<&str>,
         token_breakdown: Option<(u64, u64)>,
         diag_counts: Option<(usize, usize)>,
+        cached_statusline: Option<&str>,
+        rate_limit: Option<(u32, u32)>,
     ) {
         let area = frame.area();
 
@@ -332,7 +334,11 @@ impl MainLayoutWidget {
             HeaderWidget::render(frame, header_area, model, tokens_used, working_dir, theme);
             render_chat(frame, chat_area, theme);
             prompt.render(frame, prompt_area, theme);
-            StatusBarWidget::render_with_spinner(frame, status_area, status, model, tokens_used, max_tokens, cost_usd, git_branch, spinner, progress_bar, theme, approval_mode, token_breakdown, diag_counts);
+            if let Some(custom) = cached_statusline {
+                StatusBarWidget::render_custom(frame, status_area, custom, theme);
+            } else {
+                StatusBarWidget::render_with_spinner(frame, status_area, status, model, tokens_used, max_tokens, cost_usd, git_branch, spinner, progress_bar, theme, approval_mode, token_breakdown, diag_counts, rate_limit);
+            }
 
             if let (Some(info), Some(sb_area)) = (sidebar_info, sidebar_area) {
                 if sb_area.width > 5 && sb_area.height > 3 {

@@ -72,6 +72,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             || state.file_selector.is_some()
             || state.multi_select.is_some()
             || state.model_picker.is_some()
+            || state.theme_picker.is_some()
         {
             // Render base layout first
             crate::widgets::MainLayoutWidget::render_complete_with_spinner(
@@ -84,6 +85,8 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
                 None, None, None,
                 Some((state.input_tokens, state.output_tokens)),
                 Some((state.diagnostic_store.error_count(), state.diagnostic_store.warning_count())),
+                state.cached_statusline.as_deref(),
+                state.rate_limit_5h,
             );
             // Then render the active overlay
             if let Some(ref dialog) = state.active_dialog {
@@ -98,6 +101,8 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
                 msel.render(f, f.area());
             } else if let Some(ref mp) = state.model_picker {
                 mp.render(f, f.area());
+            } else if let Some(ref tp) = state.theme_picker {
+                tp.render(f, f.area());
             }
         } else {
             crate::widgets::MainLayoutWidget::render_complete_with_spinner(
@@ -110,6 +115,8 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
                 None, None, None,
                 Some((state.input_tokens, state.output_tokens)),
                 Some((state.diagnostic_store.error_count(), state.diagnostic_store.warning_count())),
+                state.cached_statusline.as_deref(),
+                state.rate_limit_5h,
             );
         }
 

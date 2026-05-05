@@ -2013,6 +2013,7 @@ mod permission_flow_tests {
                 QueryEvent::Failed { .. } => "Failed",
                 QueryEvent::Thinking { .. } => "Thinking",
                 QueryEvent::Info { .. } => "Info",
+                QueryEvent::RateLimit { .. } => "RateLimit",
             }).collect::<Vec<_>>()
         );
     }

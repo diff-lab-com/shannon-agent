@@ -44,6 +44,8 @@ struct StreamingState {
     delta: String,
     /// Whether the model is still thinking (no text tokens yet)
     thinking_phase: bool,
+    /// Rate limit info from API (used, total)
+    rate_limit: Option<(u32, u32)>,
 }
 
 impl Default for StreamingState {
@@ -60,6 +62,7 @@ impl Default for StreamingState {
             budget: None,
             delta: String::new(),
             thinking_phase: true,
+            rate_limit: None,
         }
     }
 }
@@ -310,6 +313,11 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                 Ok(QueryEvent::Info { message, .. }) => {
                     tracing::info!("Query info: {message}");
                 }
+                Ok(QueryEvent::RateLimit { requests_used, requests_limit, .. }) => {
+                    if let Ok(mut s) = ss.lock() {
+                        s.rate_limit = Some((requests_used, requests_limit));
+                    }
+                }
                 Err(e) => {
                     return Err(format!("Stream error: {e}"));
                 }
@@ -440,6 +448,8 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                     None, None, None,
                     None,
                     None,
+                    None,
+                    None,
                 );
                 if state.multi_progress_visible {
                     let mp_height = 3u16.min(f.area().height.saturating_sub(10));
@@ -481,6 +491,10 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
         repl.state.streaming_active = false;
         repl.state.thinking_phase = false;
         repl.state.streaming_start = None;
+        // Transfer rate limit from streaming state
+        if let Ok(s) = streaming.lock() {
+            repl.state.rate_limit_5h = s.rate_limit;
+        }
         repl.chat.streaming_active = false;
         repl.state.toast = None;
         repl.notify("Response complete");

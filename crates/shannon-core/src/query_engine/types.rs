@@ -584,6 +584,13 @@ pub enum QueryEvent {
 
     /// Informational event (e.g. compaction metrics, context pressure warnings)
     Info { query_id: Uuid, message: String },
+
+    /// Rate limit info from API response headers
+    RateLimit {
+        query_id: Uuid,
+        requests_used: u32,
+        requests_limit: u32,
+    },
 }
 
 /// Streaming query result

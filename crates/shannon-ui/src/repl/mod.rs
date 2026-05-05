@@ -1422,6 +1422,9 @@ impl Repl {
                     self.state.spinner.set_phase(phase);
                     self.state.spinner.tick();
                 }
+
+                // Refresh custom statusline (throttled internally)
+                self.refresh_statusline();
             }
         }
     }
