@@ -983,8 +983,10 @@ fn handle_fuzzy_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             let selected = repl.state.fuzzy_picker.as_ref()
                 .and_then(|p| p.selected_value().map(|v| v.to_string()));
             let is_file_pick = repl.state.file_selector_for_at;
+            let is_session_pick = repl.state.session_picker_active;
             repl.state.fuzzy_picker = None;
             repl.state.file_selector_for_at = false;
+            repl.state.session_picker_active = false;
 
             if let Some(value) = selected {
                 if is_file_pick {
@@ -993,6 +995,9 @@ fn handle_fuzzy_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                     // Remove the trailing @ that triggered the picker
                     let trimmed = current.trim_end_matches('@');
                     repl.prompt.set_input(format!("{trimmed}@{value} "));
+                } else if is_session_pick {
+                    // Resume selected session
+                    super::commands::handle_command(repl, &format!("/resume {value}"))?;
                 } else {
                     repl.prompt.set_input(value);
                     super::commands::submit_input(repl)?;

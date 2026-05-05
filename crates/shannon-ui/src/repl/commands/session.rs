@@ -5,6 +5,36 @@ use crate::{widgets::ChatRole, Result};
 use super::super::Repl;
 
 pub(crate) fn handle_sessions(repl: &mut Repl, args: &str) -> Result<()> {
+    // When called with no args, open interactive session picker
+    if args.trim().is_empty() {
+        let sessions = match repl.state_manager.list_persisted_sessions() {
+            Ok(s) => s,
+            Err(e) => {
+                super::set_error(repl, &format!("listing sessions: {e}"));
+                return Ok(());
+            }
+        };
+
+        if sessions.is_empty() {
+            repl.chat.add_message(ChatRole::System, "No saved sessions found.".to_string());
+            return Ok(());
+        }
+
+        let items: Vec<crate::widgets::select::SelectItem<String>> = sessions.iter().map(|s| {
+            let title = s.title.as_deref().unwrap_or("Untitled");
+            let date = s.updated_at.format("%Y-%m-%d %H:%M");
+            let label = format!("{}  \"{}\"  {} turns  [{}]", date, title, s.turn_count, s.model);
+            crate::widgets::select::SelectItem::new(label, s.session_id.to_string())
+        }).collect();
+
+        let mut picker = crate::widgets::select::FuzzyPickerWidget::new("Resume session...".to_string())
+            .with_items(items);
+        picker.start_search();
+        repl.state.fuzzy_picker = Some(picker);
+        repl.state.session_picker_active = true;
+        return Ok(());
+    }
+
     let sessions = match repl.state_manager.list_persisted_sessions() {
         Ok(s) => s,
         Err(e) => {

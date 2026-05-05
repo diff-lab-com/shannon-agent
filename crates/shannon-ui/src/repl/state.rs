@@ -157,6 +157,8 @@ pub struct ReplState {
     pub leader_active: bool,
     /// Timestamp of last Esc press (for double-Esc detection)
     pub last_esc_time: Option<std::time::Instant>,
+    /// Whether the fuzzy picker is in session-resume mode
+    pub session_picker_active: bool,
     /// Active tab in the sidebar panel
     pub sidebar_tab: SidebarTab,
     /// Cached approval mode label for display (updated on mode change)
@@ -382,6 +384,7 @@ impl Default for ReplState {
             vim_mode: "INSERT".to_string(),
             leader_active: false,
             last_esc_time: None,
+            session_picker_active: false,
             sidebar_tab: SidebarTab::default(),
             approval_mode_label: "AUTO".to_string(),
             active_agents: Vec::new(),

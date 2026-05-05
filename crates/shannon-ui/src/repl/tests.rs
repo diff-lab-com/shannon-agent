@@ -216,8 +216,13 @@ fn test_sessions_command_empty() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/sessions".to_string());
     super::commands::submit_input(&mut repl).unwrap();
-    let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("No saved sessions") || last_msg.contains("Saved sessions"));
+    // With no saved sessions, the picker should be inactive and a chat message shown
+    // OR if sessions exist, the fuzzy picker should be open
+    let has_chat_msg = repl.chat.last_message()
+        .map(|m| m.content.contains("No saved sessions") || m.content.contains("Saved sessions"))
+        .unwrap_or(false);
+    let picker_open = repl.state.fuzzy_picker.is_some() && repl.state.session_picker_active;
+    assert!(has_chat_msg || picker_open);
 }
 
 #[test]
