@@ -568,7 +568,9 @@ impl McpChannelManager {
         let id = channel.id.clone();
         self.name_index.insert(name.to_string(), id.clone());
         self.channels.insert(id.clone(), channel);
-        Ok(self.channels.get(&id).expect("just inserted channel should exist"))
+        Ok(self.channels.get(&id).unwrap_or_else(|| {
+            unreachable!("channel was just inserted with id {id}")
+        }))
     }
 
     /// Get a channel by ID.
@@ -675,7 +677,9 @@ impl ElicitationHandler {
             ElicitationRequest::new(message, requested_schema, source_channel_id);
         let id = request.id.clone();
         self.requests.insert(id.clone(), request);
-        self.requests.get(&id).expect("just inserted request should exist").clone()
+        self.requests.get(&id).cloned().unwrap_or_else(|| {
+            unreachable!("request was just inserted with id {id}")
+        })
     }
 
     /// Get an elicitation request by ID.

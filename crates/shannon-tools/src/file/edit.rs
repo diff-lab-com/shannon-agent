@@ -12,6 +12,32 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 
+// ---------------------------------------------------------------------------
+// Error types
+// ---------------------------------------------------------------------------
+
+/// Errors that can occur during file edit operations.
+#[derive(Debug, thiserror::Error)]
+pub enum EditError {
+    /// The `old_string` parameter was empty.
+    #[error("old_string must not be empty")]
+    EmptyOldString,
+    /// The `old_string` and `new_string` are identical.
+    #[error("old_string and new_string are identical — no change needed")]
+    IdenticalStrings,
+    /// The `old_string` was not found in the file content.
+    #[error("{0}")]
+    NotFound(String),
+    /// The `old_string` matches multiple locations but `replace_all` is false.
+    #[error("{message}")]
+    NotUnique {
+        /// The total number of occurrences found.
+        total: usize,
+        /// The formatted error message including match locations.
+        message: String,
+    },
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EditInput {
     /// Absolute path to the file
@@ -108,14 +134,14 @@ fn count_occurrences(haystack: &str, needle: &str) -> usize {
 }
 
 /// Core editing logic — synchronous, testable without async runtime.
-pub fn perform_edit(content: &str, old_string: &str, new_string: &str, replace_all: bool) -> Result<(String, usize, Vec<ReplacementLocation>), String> {
+pub fn perform_edit(content: &str, old_string: &str, new_string: &str, replace_all: bool) -> Result<(String, usize, Vec<ReplacementLocation>), EditError> {
     // --- Validation ---
     if old_string.is_empty() {
-        return Err("old_string must not be empty".to_string());
+        return Err(EditError::EmptyOldString);
     }
 
     if old_string == new_string {
-        return Err("old_string and new_string are identical — no change needed".to_string());
+        return Err(EditError::IdenticalStrings);
     }
 
     if !content.contains(old_string) {
@@ -145,7 +171,7 @@ pub fn perform_edit(content: &str, old_string: &str, new_string: &str, replace_a
             old_string.len(),
             display_old
         ));
-        return Err(msg);
+        return Err(EditError::NotFound(msg));
     }
 
     let total_matches = count_occurrences(content, old_string);
@@ -164,11 +190,15 @@ pub fn perform_edit(content: &str, old_string: &str, new_string: &str, replace_a
             .iter()
             .map(|loc| format!("  - line {}", loc.line))
             .collect();
-        return Err(format!(
+        let message = format!(
             "old_string is not unique in file — {} occurrences found at:\n{}\nUse replace_all: true to replace all occurrences, or make old_string more specific.",
             total_matches,
             location_strs.join("\n")
-        ));
+        );
+        return Err(EditError::NotUnique {
+            total: total_matches,
+            message,
+        });
     }
 
     // --- Perform replacement ---
@@ -430,7 +460,7 @@ pub async fn execute(input: EditInput) -> Result<ToolOutput, ToolError> {
     // --- Perform the edit ---
     let (new_content, replacements, locations) =
         perform_edit(&content, &input.old_string, &input.new_string, input.replace_all)
-            .map_err(ToolError::InvalidInput)?;
+            .map_err(|e| ToolError::InvalidInput(e.to_string()))?;
 
     // --- Generate diff preview ---
     let hunks = compute_diff_hunks(&content, &new_content);
@@ -582,7 +612,7 @@ mod tests {
     fn test_not_found() {
         let content = "hello world";
         let result = perform_edit(content, "missing", "replacement", false);
-        let err = result.unwrap_err();
+        let err = result.unwrap_err().to_string();
         assert!(err.contains("old_string not found"));
     }
 
@@ -590,7 +620,7 @@ mod tests {
     fn test_empty_old_string() {
         let content = "hello world";
         let result = perform_edit(content, "", "replacement", false);
-        let err = result.unwrap_err();
+        let err = result.unwrap_err().to_string();
         assert!(err.contains("old_string must not be empty"));
     }
 
@@ -598,7 +628,7 @@ mod tests {
     fn test_identical_strings() {
         let content = "hello world";
         let result = perform_edit(content, "hello", "hello", false);
-        let err = result.unwrap_err();
+        let err = result.unwrap_err().to_string();
         assert!(err.contains("identical"));
     }
 
@@ -606,7 +636,7 @@ mod tests {
     fn test_multiple_matches_without_replace_all() {
         let content = "line1 foo\nline2 foo\nline3";
         let result = perform_edit(content, "foo", "bar", false);
-        let err = result.unwrap_err();
+        let err = result.unwrap_err().to_string();
         assert!(err.contains("not unique"));
         assert!(err.contains("2 occurrences"));
         assert!(err.contains("line 1"));

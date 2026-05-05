@@ -454,7 +454,9 @@ impl OAuthService {
         }
         let id = client.id.clone();
         self.clients.insert(id.clone(), client);
-        Ok(self.clients.get(&id).expect("just inserted client should exist"))
+        Ok(self.clients.get(&id).unwrap_or_else(|| {
+            unreachable!("client was just inserted with id {id}")
+        }))
     }
 
     /// List all registered client IDs.
@@ -523,10 +525,9 @@ impl OAuthService {
         );
 
         // Store code mapped to state for exchange simulation
-        self.pending_codes
-            .get_mut(&code)
-            .expect("pending code was just created above")
-            .scope = format!("{scope}:state:{state}");
+        if let Some(pending) = self.pending_codes.get_mut(&code) {
+            pending.scope = format!("{scope}:state:{state}");
+        }
 
         Ok(url)
     }

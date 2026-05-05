@@ -297,7 +297,14 @@ impl SessionPersistManager {
 
 impl Default for SessionPersistManager {
     fn default() -> Self {
-        Self::with_dir(default_storage_dir()).expect("failed to create SessionPersistManager")
+        match Self::with_dir(default_storage_dir()) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!("failed to create SessionPersistManager with default dir: {e}");
+                Self::with_dir(std::env::temp_dir().join(".shannon").join("sessions"))
+                    .expect("SessionPersistManager fallback dir must succeed")
+            }
+        }
     }
 }
 

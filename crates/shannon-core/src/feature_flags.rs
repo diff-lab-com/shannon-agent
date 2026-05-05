@@ -455,9 +455,14 @@ impl FeatureFlagManager {
         if root.as_object_mut().is_none() {
             root = serde_json::json!({"features": {}});
         }
-        let features = root
-            .as_object_mut()
-            .expect("root is guaranteed Object after above check")
+        let Some(root_map) = root.as_object_mut() else {
+            tracing::error!("feature_flags: root is not an Object after forced conversion");
+            return Err(FlagError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "root JSON is not an object",
+            )));
+        };
+        let features = root_map
             .entry("features")
             .or_insert_with(|| serde_json::Value::Object(Default::default()));
 

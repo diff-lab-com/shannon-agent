@@ -613,7 +613,14 @@ impl SessionRecovery {
 
 impl Default for SessionRecovery {
     fn default() -> Self {
-        Self::with_dir(default_sessions_base_dir()).expect("failed to create SessionRecovery")
+        match Self::with_dir(default_sessions_base_dir()) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!("failed to create SessionRecovery with default dir: {e}");
+                Self::with_dir(std::env::temp_dir().join(".shannon").join("sessions"))
+                    .expect("SessionRecovery fallback dir must succeed")
+            }
+        }
     }
 }
 

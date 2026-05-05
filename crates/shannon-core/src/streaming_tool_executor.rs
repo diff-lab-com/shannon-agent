@@ -418,7 +418,9 @@ impl StreamingToolExecutor {
         );
 
         // Mark the erroring tool as failed
-        self.fail_tool(error_tool_id, reason).await.ok();
+        if let Err(e) = self.fail_tool(error_tool_id, reason).await {
+            tracing::debug!("Failed to mark tool as failed: {e}");
+        }
 
         // Mark all other non-completed tools as failed (sibling abort)
         let mut tools = self.tools.lock().await;

@@ -13,6 +13,24 @@ use std::collections::HashMap;
 use std::process::Stdio;
 use tokio::process::Command;
 
+// ---------------------------------------------------------------------------
+// Error types
+// ---------------------------------------------------------------------------
+
+/// Errors that can occur during path validation.
+#[derive(Debug, thiserror::Error)]
+pub enum PathValidationError {
+    /// The path contains a traversal pattern (e.g. `../`).
+    #[error("Path traversal detected in: {0}")]
+    Traversal(String),
+    /// The path is not in the configured allow-list.
+    #[error("Path not in allowed list: {0}")]
+    NotAllowed(String),
+    /// The path points to a protected system directory.
+    #[error("System path modification blocked: {0}")]
+    SystemPath(String),
+}
+
 /// Security level for command execution
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SecurityLevel {
@@ -229,7 +247,7 @@ pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
 }
 
 /// Validate a path is safe for execution
-pub fn validate_path(path: &str, allowed_paths: &[String]) -> Result<(), String> {
+pub fn validate_path(path: &str, allowed_paths: &[String]) -> Result<(), PathValidationError> {
     // Normalize the path
     let normalized = if path.starts_with('~') {
         // Expand home directory (simplified)
@@ -252,7 +270,7 @@ pub fn validate_path(path: &str, allowed_paths: &[String]) -> Result<(), String>
     // Check for path traversal in normalized path
     for pattern in PATH_TRAVERSAL_PATTERNS {
         if normalized.contains(pattern) {
-            return Err(format!("Path traversal detected in: {path}"));
+            return Err(PathValidationError::Traversal(path.to_string()));
         }
     }
 
@@ -263,7 +281,7 @@ pub fn validate_path(path: &str, allowed_paths: &[String]) -> Result<(), String>
         });
 
         if !is_allowed {
-            return Err(format!("Path not in allowed list: {path}"));
+            return Err(PathValidationError::NotAllowed(path.to_string()));
         }
     }
 
@@ -277,7 +295,7 @@ pub fn validate_path(path: &str, allowed_paths: &[String]) -> Result<(), String>
     for prefix in dangerous_prefixes {
         if normalized.starts_with(prefix) {
             // Only allow read operations on system paths
-            return Err(format!("System path modification blocked: {path}"));
+            return Err(PathValidationError::SystemPath(path.to_string()));
         }
     }
 

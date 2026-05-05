@@ -356,7 +356,9 @@ pub fn topological_sort(
                 .entry(dep.as_str())
                 .or_default()
                 .push(agent.name.as_str());
-            *in_degree.get_mut(agent.name.as_str()).expect("in_degree entry exists for all agents") += 1;
+            *in_degree.get_mut(agent.name.as_str()).unwrap_or_else(|| {
+                unreachable!("in_degree entry initialized for all agents above")
+            }) += 1;
         }
     }
 
@@ -376,7 +378,9 @@ pub fn topological_sort(
 
         if let Some(children) = dependents.get(name) {
             for &child in children {
-                let deg = in_degree.get_mut(child).expect("in_degree entry exists for all agents");
+                let deg = in_degree.get_mut(child).unwrap_or_else(|| {
+                    unreachable!("in_degree entry initialized for all agents above")
+                });
                 *deg -= 1;
                 if *deg == 0 {
                     queue.push_back(child);

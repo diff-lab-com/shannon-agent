@@ -59,7 +59,7 @@ pub mod pty;
 
 // Re-exports for convenience
 pub use file::{ReadTool, WriteTool, EditTool, GlobTool, FileOperation};
-pub use system::{SystemTool, ShellCommand, SleepTool, BashTool, PowerShellTool, DockerSandbox, DockerSandboxConfig, SandboxMode};
+pub use system::{SystemTool, ShellCommand, SleepTool, BashTool, PowerShellTool, DockerSandbox, DockerSandboxConfig, SandboxMode, PathValidationError};
 pub use git::{GitBranchTool, GitDiffTool, GitLogTool, GitStashTool, GitSafetyTool, AutoCommitTool};
 pub use github::{GhIssueListTool, GhIssueViewTool, GhPrCreateTool, GhPrListTool, GhPrViewTool};
 pub use web::{WebFetchTool, WebSearchTool, WebOperation};
@@ -103,7 +103,7 @@ pub use lsp_diagnostics::{
 };
 pub use grep::GrepTool;
 pub use ask_user::{
-    AskUserQuestionTool, AskUserInput, Question, QuestionOption, QuestionAnswer,
+    AskUserQuestionTool, AskUserInput, AskUserError, Question, QuestionOption, QuestionAnswer,
     QuestionHandler, SharedQuestionHandler, TerminalQuestionHandler,
     MockQuestionHandler, ErrorQuestionHandler,
 };

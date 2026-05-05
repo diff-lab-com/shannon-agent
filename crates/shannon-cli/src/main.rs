@@ -988,7 +988,9 @@ fn run_headless_query(
                                 .into_iter()
                                 .map(|t| Box::new(t) as Box<dyn shannon_core::tools::Tool>)
                                 .collect();
-                            tools.register_batch(boxed).ok();
+                            if let Err(e) = tools.register_batch(boxed) {
+                                eprintln!("  Warning: failed to register tools from '{}': {e}", result.server_name);
+                            }
                             eprintln!(
                                 "  Registered {} tool(s) from '{}'",
                                 tool_count, result.server_name
@@ -1560,32 +1562,32 @@ fn run_team_agent_mode(
         let agent_name_owned = name.to_string();
         tools.register(Box::new(shannon_agents::RemoteTeamTaskListTool::new(
             coordinator_channel.clone(),
-        ))).ok();
+        ))).unwrap_or_else(|e| eprintln!("Warning: tool registration failed: {e}"));
         tools.register(Box::new(shannon_agents::RemoteTeamTaskClaimTool::new(
             coordinator_channel.clone(),
             agent_name_owned.clone(),
-        ))).ok();
+        ))).unwrap_or_else(|e| eprintln!("Warning: tool registration failed: {e}"));
         tools.register(Box::new(shannon_agents::RemoteTeamNotifyIdleTool::new(
             coordinator_channel.clone(),
             agent_name_owned.clone(),
-        ))).ok();
+        ))).unwrap_or_else(|e| eprintln!("Warning: tool registration failed: {e}"));
         tools.register(Box::new(shannon_agents::RemoteSendMessageTool::new(
             coordinator_channel.clone(),
             agent_name_owned.clone(),
-        ))).ok();
+        ))).unwrap_or_else(|e| eprintln!("Warning: tool registration failed: {e}"));
         tools.register(Box::new(shannon_agents::RemoteTeamTaskCreateTool::new(
             coordinator_channel.clone(),
-        ))).ok();
+        ))).unwrap_or_else(|e| eprintln!("Warning: tool registration failed: {e}"));
         tools.register(Box::new(shannon_agents::RemoteTeamTaskUpdateTool::new(
             coordinator_channel.clone(),
             agent_name_owned.clone(),
-        ))).ok();
+        ))).unwrap_or_else(|e| eprintln!("Warning: tool registration failed: {e}"));
         tools.register(Box::new(shannon_agents::RemoteTeamTaskGetTool::new(
             coordinator_channel.clone(),
-        ))).ok();
+        ))).unwrap_or_else(|e| eprintln!("Warning: tool registration failed: {e}"));
         tools.register(Box::new(shannon_agents::RemoteTeamManifestTool::new(
             coordinator_channel.clone(),
-        ))).ok();
+        ))).unwrap_or_else(|e| eprintln!("Warning: tool registration failed: {e}"));
         let coordinator_channel_for_loop = coordinator_channel.clone();
 
         // Apply tool access restrictions from agent definition

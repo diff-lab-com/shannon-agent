@@ -15,6 +15,40 @@ use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
+// Error types
+// ---------------------------------------------------------------------------
+
+/// Errors that can occur during user question interactions.
+#[derive(Debug, thiserror::Error)]
+pub enum AskUserError {
+    /// An I/O error occurred while reading from or writing to the terminal.
+    #[error("{0}")]
+    Io(String),
+    /// No input was received from the user.
+    #[error("No input received")]
+    NoInput,
+    /// No valid selection was made (e.g. empty multi-select).
+    #[error("No valid selection made")]
+    NoSelection,
+    /// The user's selection index was out of range.
+    #[error("Invalid selection {index}. Choose 1-{max} or {other} for Other.")]
+    InvalidSelection {
+        /// The invalid index the user provided.
+        index: usize,
+        /// The maximum valid option index.
+        max: usize,
+        /// The "Other" option index (max + 1).
+        other: usize,
+    },
+    /// The mock handler has no answers configured.
+    #[error("MockQuestionHandler has no answers configured")]
+    MockNoAnswers,
+    /// A custom error from a handler implementation.
+    #[error("{0}")]
+    Handler(String),
+}
+
+// ---------------------------------------------------------------------------
 // Data types
 // ---------------------------------------------------------------------------
 
@@ -80,7 +114,7 @@ pub struct QuestionAnswer {
 #[async_trait]
 pub trait QuestionHandler: Send + Sync {
     /// Present a question to the user and return the selected answer(s).
-    async fn ask_question(&self, question: &Question) -> Result<Vec<String>, String>;
+    async fn ask_question(&self, question: &Question) -> Result<Vec<String>, AskUserError>;
 }
 
 /// Shared question handler that can be injected into the tool.
@@ -107,7 +141,7 @@ impl Default for TerminalQuestionHandler {
 
 #[async_trait]
 impl QuestionHandler for TerminalQuestionHandler {
-    async fn ask_question(&self, question: &Question) -> Result<Vec<String>, String> {
+    async fn ask_question(&self, question: &Question) -> Result<Vec<String>, AskUserError> {
         // Print header chip if present
         if !question.header.is_empty() {
             let display_header = if question.header.len() > 12 {
@@ -124,14 +158,14 @@ impl QuestionHandler for TerminalQuestionHandler {
         // Free-form text (no options)
         if question.options.is_empty() {
             print!("> ");
-            io::stdout().flush().map_err(|e| e.to_string())?;
+            io::stdout().flush().map_err(|e| AskUserError::Io(e.to_string()))?;
             let stdin = io::stdin();
             let line = stdin
                 .lock()
                 .lines()
                 .next()
-                .ok_or_else(|| "No input received".to_string())?
-                .map_err(|e| e.to_string())?;
+                .ok_or_else(|| AskUserError::NoInput)?
+                .map_err(|e| AskUserError::Io(e.to_string()))?;
             return Ok(vec![line.trim().to_string()]);
         }
 
@@ -152,15 +186,15 @@ impl QuestionHandler for TerminalQuestionHandler {
             ""
         };
         print!("Your choice{prompt_suffix}: ");
-        io::stdout().flush().map_err(|e| e.to_string())?;
+        io::stdout().flush().map_err(|e| AskUserError::Io(e.to_string()))?;
 
         let stdin = io::stdin();
         let raw = stdin
             .lock()
             .lines()
             .next()
-            .ok_or_else(|| "No input received".to_string())?
-            .map_err(|e| e.to_string())?;
+            .ok_or_else(|| AskUserError::NoInput)?
+            .map_err(|e| AskUserError::Io(e.to_string()))?;
         let input = raw.trim();
 
         // Parse selection(s)
@@ -175,7 +209,7 @@ impl QuestionHandler for TerminalQuestionHandler {
                 selected.push(label);
             }
             if selected.is_empty() {
-                return Err("No valid selection made".to_string());
+                return Err(AskUserError::NoSelection);
             }
             Ok(selected)
         } else {
@@ -193,7 +227,7 @@ impl QuestionHandler for TerminalQuestionHandler {
 fn resolve_single_choice(
     input: &str,
     options: &[QuestionOption],
-) -> Result<String, String> {
+) -> Result<String, AskUserError> {
     // Try numeric index first
     if let Ok(idx) = input.parse::<usize>() {
         if idx >= 1 && idx <= options.len() {
@@ -203,12 +237,11 @@ fn resolve_single_choice(
         if idx == options.len() + 1 {
             return prompt_free_text();
         }
-        return Err(format!(
-            "Invalid selection {}. Choose 1-{} or {} for Other.",
-            idx,
-            options.len(),
-            options.len() + 1
-        ));
+        return Err(AskUserError::InvalidSelection {
+            index: idx,
+            max: options.len(),
+            other: options.len() + 1,
+        });
     }
 
     // Try exact label match (case-insensitive)
@@ -229,16 +262,16 @@ fn resolve_single_choice(
 }
 
 /// Prompt the user for free-form text on a new line.
-fn prompt_free_text() -> Result<String, String> {
+fn prompt_free_text() -> Result<String, AskUserError> {
     print!("Enter your answer: ");
-    io::stdout().flush().map_err(|e| e.to_string())?;
+    io::stdout().flush().map_err(|e| AskUserError::Io(e.to_string()))?;
     let stdin = io::stdin();
     let line = stdin
         .lock()
         .lines()
         .next()
-        .ok_or_else(|| "No input received".to_string())?
-        .map_err(|e| e.to_string())?;
+        .ok_or_else(|| AskUserError::NoInput)?
+        .map_err(|e| AskUserError::Io(e.to_string()))?;
     Ok(line.trim().to_string())
 }
 
@@ -414,9 +447,9 @@ impl MockQuestionHandler {
 
 #[async_trait]
 impl QuestionHandler for MockQuestionHandler {
-    async fn ask_question(&self, _question: &Question) -> Result<Vec<String>, String> {
+    async fn ask_question(&self, _question: &Question) -> Result<Vec<String>, AskUserError> {
         if self.answers.is_empty() {
-            return Err("MockQuestionHandler has no answers configured".to_string());
+            return Err(AskUserError::MockNoAnswers);
         }
         // Always return the first answer (simplest mock behaviour)
         Ok(self.answers[0].clone())
@@ -430,8 +463,8 @@ pub struct ErrorQuestionHandler {
 
 #[async_trait]
 impl QuestionHandler for ErrorQuestionHandler {
-    async fn ask_question(&self, _question: &Question) -> Result<Vec<String>, String> {
-        Err(self.error_message.clone())
+    async fn ask_question(&self, _question: &Question) -> Result<Vec<String>, AskUserError> {
+        Err(AskUserError::Handler(self.error_message.clone()))
     }
 }
 

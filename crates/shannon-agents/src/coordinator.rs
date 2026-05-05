@@ -507,12 +507,18 @@ impl AgentCoordinator {
                             "Created isolated worktree for agent"
                         );
                         // Store worktree path in teammate metadata
-                        let agent = team.members.get(&agent_name)
-                            .expect("agent must exist — we just created its worktree");
-                        agent.set_metadata("worktree_path".to_string(),
-                            serde_json::json!(session.path.to_string_lossy().to_string())).await;
-                        agent.set_metadata("worktree_branch".to_string(),
-                            serde_json::json!(session.branch_name)).await;
+                        if let Some(agent) = team.members.get(&agent_name) {
+                            agent.set_metadata("worktree_path".to_string(),
+                                serde_json::json!(session.path.to_string_lossy().to_string())).await;
+                            agent.set_metadata("worktree_branch".to_string(),
+                                serde_json::json!(session.branch_name)).await;
+                        } else {
+                            tracing::warn!(
+                                team = %team_name,
+                                agent = %agent_name,
+                                "agent not found in team after worktree creation, skipping metadata"
+                            );
+                        }
                     }
                     Err(e) => {
                         tracing::warn!(

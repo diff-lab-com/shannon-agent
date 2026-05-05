@@ -829,7 +829,9 @@ impl PermissionClassifier {
             let worst = hits
                 .iter()
                 .max_by_key(|p| p.risk_level)
-                .expect("hits is non-empty");
+                .unwrap_or_else(|| {
+                    unreachable!("hits is non-empty (checked above)")
+                });
 
             let decision = if worst.risk_level >= RiskLevel::High {
                 RuleDecision::Deny

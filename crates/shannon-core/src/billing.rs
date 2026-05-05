@@ -257,7 +257,11 @@ impl BillingManager {
         let now = Utc::now();
         let start = NaiveDateTime::new(
             NaiveDate::from_ymd_opt(now.year(), now.month(), 1).unwrap_or(now.date_naive()),
-            chrono::NaiveTime::from_hms_opt(0, 0, 0).expect("midnight is always a valid time"),
+            chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap_or_else(|| {
+                tracing::error!("chrono could not construct midnight; using fallback");
+                chrono::NaiveTime::from_num_seconds_from_midnight_opt(0, 0)
+                    .unwrap_or_else(|| chrono::NaiveTime::MIN)
+            }),
         ).and_utc();
         let end = now;
         self.summarize_period(start, end)
@@ -309,7 +313,11 @@ impl BillingManager {
         let now = Utc::now();
         let start = NaiveDateTime::new(
             NaiveDate::from_ymd_opt(now.year(), now.month(), 1).unwrap_or(now.date_naive()),
-            chrono::NaiveTime::from_hms_opt(0, 0, 0).expect("midnight is always a valid time"),
+            chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap_or_else(|| {
+                tracing::error!("chrono could not construct midnight; using fallback");
+                chrono::NaiveTime::from_num_seconds_from_midnight_opt(0, 0)
+                    .unwrap_or_else(|| chrono::NaiveTime::MIN)
+            }),
         ).and_utc();
 
         let mut daily: HashMap<String, DailyUsage> = HashMap::new();

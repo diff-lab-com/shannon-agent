@@ -395,7 +395,9 @@ impl ActivityManager {
                 to: ActivityStatus::Completed, // representative error
             });
         }
-        let activity = self.activities.remove(id).expect("activity existence verified above");
+        let activity = self.activities.remove(id).unwrap_or_else(|| {
+            unreachable!("activity {id} existence verified above")
+        });
         self.update_terminal_title();
         Ok(activity)
     }

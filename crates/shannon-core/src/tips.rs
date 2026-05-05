@@ -179,7 +179,9 @@ impl TipManager {
         // Sort by priority descending (highest first).
         candidates.sort_by(|a, b| b.priority.partial_cmp(&a.priority).unwrap_or(std::cmp::Ordering::Equal));
 
-        let tip = candidates.into_iter().next().expect("candidates non-empty checked above").clone();
+        let tip = candidates.into_iter().next().unwrap_or_else(|| {
+            unreachable!("candidates was checked to be non-empty above")
+        }).clone();
         self.mark_shown(&tip.id);
         Some(tip)
     }
