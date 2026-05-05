@@ -48,6 +48,7 @@ impl StatusBarWidget {
         progress_bar: Option<&crate::widgets::progress::ProgressBarWidget>,
         theme: &Theme,
         approval_mode: Option<&str>,
+        token_breakdown: Option<(u64, u64)>,
     ) {
         let mut left: Vec<Span<'static>> = Vec::new();
         let mut right: Vec<Span<'static>> = Vec::new();
@@ -112,6 +113,16 @@ impl StatusBarWidget {
             } else {
                 left.push(Span::styled(
                     format_tokens(used),
+                    Style::default().fg(theme.secondary),
+                ));
+            }
+        }
+
+        // ── Zone 3b: Token breakdown ──
+        if let Some((input, output)) = token_breakdown {
+            if input > 0 || output > 0 {
+                left.push(Span::styled(
+                    format!(" {}↑ {}↓", format_tokens(input), format_tokens(output)),
                     Style::default().fg(theme.secondary),
                 ));
             }

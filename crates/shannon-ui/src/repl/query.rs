@@ -251,7 +251,6 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                 }
                 Ok(QueryEvent::Usage { input_tokens, output_tokens, cost_usd: _, .. }) => {
                     if let Ok(mut s) = ss.lock() { s.tokens = (input_tokens, output_tokens); }
-                    // Status text stays as "Working" — tokens/cost shown in dedicated status bar zones
                 }
                 Ok(QueryEvent::Cost { total_cost_usd, input_tokens, output_tokens, .. }) => {
                     tokens_in_turn = input_tokens + output_tokens;
@@ -386,6 +385,8 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                 let (input, output) = s.tokens;
                 if input > 0 || output > 0 {
                     repl.state.tokens_used = pre_stream_tokens + input + output;
+                    repl.state.input_tokens = input;
+                    repl.state.output_tokens = output;
                 }
 
                 // Update tool count in real-time during streaming
@@ -437,6 +438,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                     state.focus_mode, state.fullscreen_mode,
                     None, &[], None,
                     None, None, None,
+                    None,
                 );
                 if state.multi_progress_visible {
                     let mp_height = 3u16.min(f.area().height.saturating_sub(10));

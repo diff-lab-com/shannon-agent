@@ -49,6 +49,12 @@ pub struct ReplState {
     pub selected_provider: Option<shannon_core::api::LlmProvider>,
     /// Total tokens used
     pub tokens_used: u64,
+    /// Detailed token breakdown: input tokens
+    pub input_tokens: u64,
+    /// Detailed token breakdown: output tokens
+    pub output_tokens: u64,
+    /// Detailed token breakdown: cached tokens
+    pub cached_tokens: u64,
     /// Total cost in USD accumulated across all queries
     pub total_cost_usd: f64,
     /// Working directory for the session
@@ -320,6 +326,9 @@ impl Default for ReplState {
             model: Some("claude-sonnet-4-20250514".to_string()),
             selected_provider: None,
             tokens_used: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            cached_tokens: 0,
             total_cost_usd: 0.0,
             working_directory: cwd,
             welcome_active: false,
