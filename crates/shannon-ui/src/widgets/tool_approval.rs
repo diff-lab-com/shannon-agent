@@ -65,6 +65,10 @@ pub struct ToolApprovalWidget {
     pub decision: ApprovalDecision,
     pub selected_option: usize,
     pub auto_approve_rules: Vec<AutoApproveRule>,
+    /// Optional diff preview for file edit operations
+    pub diff_content: Option<String>,
+    /// Scroll offset for diff content
+    pub diff_scroll: usize,
 }
 
 /// Number of options presented to the user
@@ -78,14 +82,18 @@ impl ToolApprovalWidget {
             decision: ApprovalDecision::Pending,
             selected_option: 0,
             auto_approve_rules: Vec::new(),
+            diff_content: None,
+            diff_scroll: 0,
         }
     }
 
     /// Show a new approval request
-    pub fn show_request(&mut self, request: ToolApprovalRequest) {
+    pub fn show_request(&mut self, request: ToolApprovalRequest, diff: Option<String>) {
         self.request = Some(request);
         self.decision = ApprovalDecision::Pending;
         self.selected_option = 0;
+        self.diff_content = diff;
+        self.diff_scroll = 0;
     }
 
     /// Dismiss the current request
@@ -93,6 +101,8 @@ impl ToolApprovalWidget {
         self.request = None;
         self.decision = ApprovalDecision::Pending;
         self.selected_option = 0;
+        self.diff_content = None;
+        self.diff_scroll = 0;
     }
 
     /// Whether a request is currently being shown
@@ -143,6 +153,18 @@ impl ToolApprovalWidget {
                 }
                 None
             }
+            KeyCode::Char('j') | KeyCode::Down => {
+                if self.diff_content.is_some() {
+                    self.diff_scroll = self.diff_scroll.saturating_add(1);
+                }
+                None
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if self.diff_content.is_some() {
+                    self.diff_scroll = self.diff_scroll.saturating_sub(1);
+                }
+                None
+            }
             KeyCode::Enter => {
                 let decision = match self.selected_option {
                     0 => ApprovalDecision::AllowOnce,
@@ -163,9 +185,10 @@ impl ToolApprovalWidget {
             None => return,
         };
 
-        // Compute centered overlay rect
-        let overlay_w = 60.min(area.width);
-        let overlay_h = 12.min(area.height);
+        // Compute centered overlay rect — larger when diff is present
+        let overlay_w = (if self.diff_content.is_some() { 80 } else { 60 }).min(area.width);
+        let max_overlay_h = if self.diff_content.is_some() { area.height * 80 / 100 } else { area.height };
+        let overlay_h = (if self.diff_content.is_some() { 24 } else { 12 }).min(max_overlay_h.max(12));
         let x = area.x + (area.width.saturating_sub(overlay_w)) / 2;
         let y = area.y + (area.height.saturating_sub(overlay_h)) / 2;
         let overlay_area = Rect {
@@ -225,6 +248,40 @@ impl ToolApprovalWidget {
             }
         }
 
+        // Diff preview (if present)
+        if let Some(ref diff) = self.diff_content {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("Diff Preview (j/k to scroll):", Style::default()
+                    .fg(theme.primary).add_modifier(Modifier::BOLD)),
+            ]));
+
+            let diff_lines: Vec<&str> = diff.lines().collect();
+            let available = 8; // max diff lines to show
+            let start = self.diff_scroll.min(diff_lines.len().saturating_sub(1));
+            let end = (start + available).min(diff_lines.len());
+            for line in &diff_lines[start..end] {
+                let color = if line.starts_with('+') && !line.starts_with("+++") {
+                    theme.success
+                } else if line.starts_with('-') && !line.starts_with("---") {
+                    theme.error
+                } else if line.starts_with("@@") {
+                    theme.accent
+                } else {
+                    theme.text_dim
+                };
+                // Truncate long diff lines to fit
+                let display: String = line.chars().take(content_width).collect();
+                lines.push(Line::from(vec![Span::styled(display, Style::default().fg(color))]));
+            }
+            if end < diff_lines.len() {
+                lines.push(Line::from(vec![Span::styled(
+                    format!("  ... {} more lines", diff_lines.len() - end),
+                    Style::default().fg(theme.text_dim),
+                )]));
+            }
+        }
+
         lines.push(Line::from(""));
 
         // Options row
@@ -267,7 +324,11 @@ impl ToolApprovalWidget {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::styled(
-                "1/2/3 or \u{2190}/\u{2192} to select, Enter to confirm, Esc to deny",
+                if self.diff_content.is_some() {
+                    "1/2/3 select, Enter confirm, j/k scroll diff, Esc deny"
+                } else {
+                    "1/2/3 or \u{2190}/\u{2192} to select, Enter to confirm, Esc to deny"
+                },
                 Style::default().fg(theme.text_dim),
             ),
         ]));
@@ -347,7 +408,7 @@ mod tests {
             description: "rm -rf /".into(),
             risk_level: RiskLevel::High,
             detail: None,
-        });
+        }, None);
         assert!(w.request.is_some());
         assert!(w.is_active());
         assert_eq!(w.selected_option, 0);
@@ -361,7 +422,7 @@ mod tests {
             description: "ls".into(),
             risk_level: RiskLevel::Low,
             detail: None,
-        });
+        }, None);
 
         let decision = w.handle_key(KeyEvent::new(KeyCode::Char('1'), crossterm::event::KeyModifiers::NONE));
         assert_eq!(decision, Some(ApprovalDecision::AllowOnce));
@@ -378,7 +439,7 @@ mod tests {
             description: "ls".into(),
             risk_level: RiskLevel::Low,
             detail: None,
-        });
+        }, None);
 
         let decision = w.handle_key(KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE));
         assert_eq!(decision, Some(ApprovalDecision::Deny));
@@ -392,7 +453,7 @@ mod tests {
             description: "save file".into(),
             risk_level: RiskLevel::Medium,
             detail: None,
-        });
+        }, None);
 
         // Move right twice to reach "Deny"
         assert_eq!(w.handle_key(KeyEvent::new(KeyCode::Right, crossterm::event::KeyModifiers::NONE)), None);
@@ -410,6 +471,8 @@ mod tests {
             request: None,
             decision: ApprovalDecision::Pending,
             selected_option: 0,
+            diff_content: None,
+            diff_scroll: 0,
             auto_approve_rules: vec![
                 AutoApproveRule {
                     tool_name: "bash".into(),
@@ -437,7 +500,7 @@ mod tests {
             description: "ls".into(),
             risk_level: RiskLevel::Low,
             detail: None,
-        });
+        }, None);
         assert!(w.is_active());
         w.dismiss();
         assert!(!w.is_active());

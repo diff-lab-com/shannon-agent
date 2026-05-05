@@ -1193,6 +1193,7 @@ impl Repl {
                             risk_level: risk,
                             detail: None,
                         },
+                        permission_req.prompt.diff_preview.clone(),
                     );
                 }
             }

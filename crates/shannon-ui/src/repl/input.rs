@@ -251,6 +251,19 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             }
             Ok(())
         }
+        KeyCode::Char('@') => {
+            // Open fuzzy file picker
+            let files = collect_project_files(&repl.state.working_directory);
+            let items: Vec<crate::widgets::select::SelectItem<String>> = files.into_iter()
+                .map(|f| crate::widgets::select::SelectItem::new(f.clone(), f))
+                .collect();
+            let mut picker = crate::widgets::select::FuzzyPickerWidget::new("Pick file...".to_string())
+                .with_items(items);
+            picker.start_search();
+            repl.state.fuzzy_picker = Some(picker);
+            repl.state.file_selector_for_at = true;
+            Ok(())
+        }
         KeyCode::Char(c) => {
             repl.prompt.add_char(c);
             update_auto_completions(repl);
@@ -954,15 +967,26 @@ fn handle_fuzzy_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         KeyCode::Enter => {
             let selected = repl.state.fuzzy_picker.as_ref()
                 .and_then(|p| p.selected_value().map(|v| v.to_string()));
+            let is_file_pick = repl.state.file_selector_for_at;
             repl.state.fuzzy_picker = None;
+            repl.state.file_selector_for_at = false;
 
-            if let Some(cmd) = selected {
-                repl.prompt.set_input(cmd);
-                super::commands::submit_input(repl)?;
+            if let Some(value) = selected {
+                if is_file_pick {
+                    // Insert selected file path into prompt
+                    let current = repl.prompt.input().to_string();
+                    // Remove the trailing @ that triggered the picker
+                    let trimmed = current.trim_end_matches('@');
+                    repl.prompt.set_input(format!("{trimmed}@{value} "));
+                } else {
+                    repl.prompt.set_input(value);
+                    super::commands::submit_input(repl)?;
+                }
             }
         }
         KeyCode::Esc => {
             repl.state.fuzzy_picker = None;
+            repl.state.file_selector_for_at = false;
         }
         _ => {}
     }
@@ -1361,4 +1385,40 @@ fn handle_diff_viewer_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         _ => {}
     }
     Ok(())
+}
+
+/// Collect project files for the @ fuzzy picker.
+/// Skips hidden directories, common build/artifact dirs, and .git.
+fn collect_project_files(root: &str) -> Vec<String> {
+    let mut files = Vec::new();
+    let skip_dirs: &[&str] = &[".git", "node_modules", "target", "__pycache__", ".next", "dist", "build", ".cache"];
+
+    fn walk(dir: &std::path::Path, root: &std::path::Path, skip_dirs: &[&str], files: &mut Vec<String>, depth: usize) {
+        if depth > 8 { return; }
+        let entries = match std::fs::read_dir(dir) {
+            Ok(rd) => rd,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.starts_with('.') { continue; }
+            if path.is_dir() {
+                if skip_dirs.iter().any(|s| *s == name) { continue; }
+                walk(&path, root, skip_dirs, files, depth + 1);
+            } else {
+                if let Ok(rel) = path.strip_prefix(root) {
+                    files.push(rel.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+
+    let root_path = std::path::Path::new(root);
+    walk(root_path, root_path, skip_dirs, &mut files, 0);
+
+    // Limit to 500 files for performance
+    files.truncate(500);
+    files.sort();
+    files
 }
