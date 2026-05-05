@@ -49,6 +49,7 @@ impl StatusBarWidget {
         theme: &Theme,
         approval_mode: Option<&str>,
         token_breakdown: Option<(u64, u64)>,
+        diag_counts: Option<(usize, usize)>,
     ) {
         let mut left: Vec<Span<'static>> = Vec::new();
         let mut right: Vec<Span<'static>> = Vec::new();
@@ -171,6 +172,28 @@ impl StatusBarWidget {
                 format!("${cost:.4}"),
                 Style::default().fg(cost_color),
             ));
+        }
+
+        // ── Right zone: LSP diagnostics ──
+        if let Some((errors, warnings)) = diag_counts {
+            if errors > 0 || warnings > 0 {
+                right.push(Span::raw("  "));
+                if errors > 0 {
+                    right.push(Span::styled(
+                        format!("E:{errors}"),
+                        Style::default().fg(theme.error),
+                    ));
+                    if warnings > 0 {
+                        right.push(Span::raw(" "));
+                    }
+                }
+                if warnings > 0 {
+                    right.push(Span::styled(
+                        format!("W:{warnings}"),
+                        Style::default().fg(theme.warning),
+                    ));
+                }
+            }
         }
 
         // ── Right zone: Git branch ──

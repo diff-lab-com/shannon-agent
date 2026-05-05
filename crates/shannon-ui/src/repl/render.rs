@@ -83,6 +83,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
                 search_query.as_deref(), &search_matches, search_focused_idx,
                 None, None, None,
                 Some((state.input_tokens, state.output_tokens)),
+                Some((state.diagnostic_store.error_count(), state.diagnostic_store.warning_count())),
             );
             // Then render the active overlay
             if let Some(ref dialog) = state.active_dialog {
@@ -108,6 +109,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
                 search_query.as_deref(), &search_matches, search_focused_idx,
                 None, None, None,
                 Some((state.input_tokens, state.output_tokens)),
+                Some((state.diagnostic_store.error_count(), state.diagnostic_store.warning_count())),
             );
         }
 

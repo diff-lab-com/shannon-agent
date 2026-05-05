@@ -439,6 +439,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                     None, &[], None,
                     None, None, None,
                     None,
+                    None,
                 );
                 if state.multi_progress_visible {
                     let mp_height = 3u16.min(f.area().height.saturating_sub(10));

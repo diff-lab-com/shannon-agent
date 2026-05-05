@@ -107,6 +107,7 @@ fn render_scene(scene: &SceneData) -> String {
                 None,
                 None,
                 None,
+                None,
             );
 
             // Overlays (mutually exclusive in normal rendering order)
