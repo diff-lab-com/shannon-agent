@@ -155,6 +155,8 @@ pub struct ReplState {
     pub vim_mode: String,
     /// Whether leader key mode is active (waiting for second key after Ctrl+X)
     pub leader_active: bool,
+    /// Timestamp of last Esc press (for double-Esc detection)
+    pub last_esc_time: Option<std::time::Instant>,
     /// Active tab in the sidebar panel
     pub sidebar_tab: SidebarTab,
     /// Cached approval mode label for display (updated on mode change)
@@ -379,6 +381,7 @@ impl Default for ReplState {
             session_start: Some(std::time::Instant::now()),
             vim_mode: "INSERT".to_string(),
             leader_active: false,
+            last_esc_time: None,
             sidebar_tab: SidebarTab::default(),
             approval_mode_label: "AUTO".to_string(),
             active_agents: Vec::new(),

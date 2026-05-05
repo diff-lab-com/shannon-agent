@@ -322,6 +322,21 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                 repl.state.completion_suggestion_index = 0;
                 return Ok(());
             }
+            // Double-Esc on empty input triggers /undo
+            let now = std::time::Instant::now();
+            let input_empty = repl.prompt.input().trim().is_empty();
+            if input_empty {
+                if let Some(last) = repl.state.last_esc_time {
+                    if now.duration_since(last).as_millis() < 500 {
+                        repl.state.last_esc_time = None;
+                        super::commands::handle_command(repl, "/undo")?;
+                        return Ok(());
+                    }
+                }
+                repl.state.last_esc_time = Some(now);
+            } else {
+                repl.state.last_esc_time = None;
+            }
             let action = repl.vim_handler.process_key(key);
             handle_vim_action(repl, action);
             Ok(())

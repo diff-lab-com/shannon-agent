@@ -144,7 +144,7 @@ pub fn submit_input_with_text(repl: &mut Repl, text: &str) {
 }
 
 /// Handle a command (starts with /)
-fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
+pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
     let parsed = match repl.command_parser.parse(input) {
         Ok(p) => p,
         Err(_) => {
