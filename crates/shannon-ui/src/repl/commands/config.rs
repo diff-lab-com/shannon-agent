@@ -237,6 +237,57 @@ pub(crate) fn handle_context(repl: &mut Repl, args: &str) -> Result<()> {
         return Ok(());
     }
 
+    if trimmed == "usage" {
+        let total = repl.state.tokens_used;
+        let input = repl.state.input_tokens;
+        let output = repl.state.output_tokens;
+        let cached = repl.state.cached_tokens;
+        let other = total.saturating_sub(input + output + cached);
+
+        // Build a colored bar using Unicode block chars
+        let bar_w = 40usize;
+        let max_ctx = 200_000u64; // default context window
+        let pct = if total > 0 { (total as f64 / max_ctx as f64).min(1.0) } else { 0.0 };
+        let filled = (pct * bar_w as f64).round() as usize;
+
+        let input_w = if total > 0 { (input as f64 / max_ctx as f64 * bar_w as f64).round() as usize } else { 0 };
+        let output_w = if total > 0 { (output as f64 / max_ctx as f64 * bar_w as f64).round() as usize } else { 0 };
+        let cached_w = if total > 0 { (cached as f64 / max_ctx as f64 * bar_w as f64).round() as usize } else { 0 };
+        let other_w = filled.saturating_sub(input_w + output_w + cached_w);
+
+        let mut bar = String::from("[");
+        for _ in 0..input_w { bar.push('█'); }
+        for _ in 0..output_w { bar.push('▓'); }
+        for _ in 0..cached_w { bar.push('░'); }
+        for _ in 0..other_w { bar.push('▒'); }
+        for _ in 0..(bar_w.saturating_sub(filled)) { bar.push('·'); }
+        bar.push(']');
+
+        let fmt_tok = |t: u64| -> String {
+            if t < 1000 { format!("{t}") }
+            else if t < 1_000_000 { format!("{:.1}k", t as f64 / 1000.0) }
+            else { format!("{:.1}M", t as f64 / 1_000_000.0) }
+        };
+
+        let mut msg = String::from("Context Window Usage\n\n");
+        msg.push_str(&format!("  {} {:.1}%\n\n", bar, pct * 100.0));
+        msg.push_str(&format!("  █ Input:    {} tokens\n", fmt_tok(input)));
+        msg.push_str(&format!("  ▓ Output:   {} tokens\n", fmt_tok(output)));
+        msg.push_str(&format!("  ░ Cached:   {} tokens\n", fmt_tok(cached)));
+        if other > 0 {
+            msg.push_str(&format!("  ▒ Other:    {} tokens\n", fmt_tok(other)));
+        }
+        msg.push_str(&format!("  · Free:     {} tokens\n\n", fmt_tok(max_ctx.saturating_sub(total))));
+        msg.push_str(&format!("  Total used: {} / {} tokens\n", fmt_tok(total), fmt_tok(max_ctx)));
+
+        if pct > 0.8 {
+            msg.push_str("\n  ⚠ Context is over 80% used. Consider /compact to free space.");
+        }
+
+        repl.chat.add_message(ChatRole::System, msg);
+        return Ok(());
+    }
+
     // Show current project context info
     let cwd = std::env::current_dir().unwrap_or_default();
     let mut msg = String::from("Project Context:\n\n");
