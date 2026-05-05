@@ -122,6 +122,27 @@ pub fn submit_input(repl: &mut Repl) -> Result<()> {
     Ok(())
 }
 
+/// Submit pre-formed text as if the user typed and entered it.
+/// Used for queued follow-up messages.
+pub fn submit_input_with_text(repl: &mut Repl, text: &str) {
+    let expanded = expand_pasted_texts(text, &mut repl.state.pasted_texts);
+    repl.chat.add_message(ChatRole::User, text.to_string());
+    repl.state.turn_count += 1;
+    repl.command_history.push(&expanded);
+    repl.prompt.clear();
+    repl.state.pasted_texts.clear();
+    repl.state.paste_counter = 0;
+
+    if expanded.starts_with('/') {
+        repl.commands_run += 1;
+        if let Err(e) = handle_command(repl, &expanded) {
+            repl.chat.add_message(ChatRole::System, format!("Error: {e}"));
+        }
+    } else if let Err(e) = super::query::handle_query(repl, &expanded) {
+        repl.chat.add_message(ChatRole::System, format!("Error: {e}"));
+    }
+}
+
 /// Handle a command (starts with /)
 fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
     let parsed = match repl.command_parser.parse(input) {

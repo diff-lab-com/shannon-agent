@@ -659,6 +659,13 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
             if !loop_continued {
                 super::commands::check_ralph_iteration(repl);
             }
+
+            // Submit queued follow-up message if any
+            if let Some(queued) = repl.state.queued_message.take() {
+                if !queued.trim().is_empty() {
+                    super::commands::submit_input_with_text(repl, &queued);
+                }
+            }
         }
         Err(e) => {
             let is_cancelled = e == "cancelled";

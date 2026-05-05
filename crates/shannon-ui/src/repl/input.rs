@@ -215,6 +215,11 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             repl.chat.toggle_last_tool_fold();
             Ok(())
         }
+        // Ctrl+O: cycle view mode (Default ↔ Verbose)
+        KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            repl.cycle_view_mode();
+            Ok(())
+        }
         // Alt+F: toggle all tool messages collapsed/expanded
         KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::ALT) => {
             repl.chat.collapsed_tools = !repl.chat.collapsed_tools;
@@ -317,11 +322,22 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             Ok(())
         }
         KeyCode::Tab => {
-            if !repl.state.completion_suggestions.is_empty() {
+            if repl.state.streaming_active {
+                let input = repl.prompt.input();
+                if !input.trim().is_empty() {
+                    repl.state.queued_message = Some(input);
+                    repl.prompt.clear();
+                    repl.state.status = "Message queued (will send after current response)".to_string();
+                }
+            } else if !repl.state.completion_suggestions.is_empty() {
                 accept_completion(repl);
             } else {
                 handle_tab_completion(repl)?;
             }
+            Ok(())
+        }
+        KeyCode::BackTab => {
+            repl.cycle_approval_mode();
             Ok(())
         }
         _ => Ok(()),

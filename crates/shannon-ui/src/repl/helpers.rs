@@ -101,6 +101,15 @@ impl super::Repl {
         self.state.toast = Some((format!("  {label}  "), std::time::Instant::now()));
     }
 
+    /// Cycle view mode (Default ↔ Verbose). Bound to Ctrl+O.
+    pub fn cycle_view_mode(&mut self) {
+        self.state.view_mode = self.state.view_mode.cycle();
+        let verbose = self.state.view_mode == super::state::ViewMode::Verbose;
+        self.chat.collapsed_tools = !verbose;
+        let label = self.state.view_mode.label();
+        self.state.toast = Some((format!("  View: {label}  "), std::time::Instant::now()));
+    }
+
     /// Toggle fullscreen mode (hide ALL chrome, chat fills terminal).
     /// Bound to F11.
     pub fn toggle_fullscreen_mode(&mut self) {

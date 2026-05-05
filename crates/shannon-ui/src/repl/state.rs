@@ -12,6 +12,32 @@ use crate::{
     },
 };
 
+/// Tool output verbosity level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewMode {
+    /// Collapsed tool output (default).
+    Default,
+    /// All tool output expanded, streaming details visible.
+    Verbose,
+}
+
+impl ViewMode {
+    /// Cycle to the next mode: Default → Verbose → Default.
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Default => Self::Verbose,
+            Self::Verbose => Self::Default,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Default => "Default",
+            Self::Verbose => "Verbose",
+        }
+    }
+}
+
 /// Application state for the REPL
 #[derive(Debug, Clone)]
 pub struct ReplState {
@@ -113,6 +139,8 @@ pub struct ReplState {
     pub thinking_phase: bool,
     /// Whether streaming is currently active
     pub streaming_active: bool,
+    /// Queued message to auto-submit after current streaming completes.
+    pub queued_message: Option<String>,
     /// When the current streaming operation started
     pub streaming_start: Option<std::time::Instant>,
     /// When this session started (for duration display)
@@ -131,6 +159,8 @@ pub struct ReplState {
     pub diagnostic_store: crate::lsp_bridge::DiagnosticStore,
     /// Whether focus mode is active (header/statusbar hidden)
     pub focus_mode: bool,
+    /// Tool output verbosity level
+    pub view_mode: ViewMode,
     /// Whether fullscreen mode is active (ALL chrome hidden, chat fills terminal)
     pub fullscreen_mode: bool,
     /// Whether a chat search is active (user triggered via Ctrl+Shift+F or /search)
@@ -335,6 +365,7 @@ impl Default for ReplState {
             toast: None,
             thinking_phase: false,
             streaming_active: false,
+            queued_message: None,
             streaming_start: None,
             session_start: Some(std::time::Instant::now()),
             vim_mode: "INSERT".to_string(),
@@ -344,6 +375,7 @@ impl Default for ReplState {
             active_agents: Vec::new(),
             diagnostic_store: crate::lsp_bridge::DiagnosticStore::new(),
             focus_mode: false,
+            view_mode: ViewMode::Default,
             fullscreen_mode: false,
             chat_search_active: false,
             chat_search_query: String::new(),
