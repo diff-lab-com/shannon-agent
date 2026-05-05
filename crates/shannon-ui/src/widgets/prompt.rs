@@ -17,6 +17,8 @@ pub struct PromptWidget {
     pub(super) placeholder: String,
     /// Vim mode label for display ("INSERT" or "NORMAL")
     vim_mode: String,
+    /// Optional border color override (set via /color)
+    border_color_override: Option<ratatui::style::Color>,
 }
 
 impl PromptWidget {
@@ -26,7 +28,13 @@ impl PromptWidget {
             buffer: crate::repl_enhancement::InputBuffer::new(),
             placeholder: "Type your message...".to_string(),
             vim_mode: "INSERT".to_string(),
+            border_color_override: None,
         }
+    }
+
+    /// Set border color override (from /color command)
+    pub fn set_border_color(&mut self, color: Option<ratatui::style::Color>) {
+        self.border_color_override = color;
     }
 
     /// Set the placeholder text
@@ -221,7 +229,7 @@ impl PromptWidget {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.border))
+                    .border_style(Style::default().fg(self.border_color_override.unwrap_or(theme.border)))
                     .title(title),
             )
             .alignment(Alignment::Left);

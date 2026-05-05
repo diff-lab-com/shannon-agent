@@ -161,6 +161,8 @@ pub struct ReplState {
     pub last_esc_time: Option<std::time::Instant>,
     /// Whether the fuzzy picker is in session-resume mode
     pub session_picker_active: bool,
+    /// Custom prompt bar color (set via /color, e.g. "red", "#ff0000", "default")
+    pub prompt_bar_color: Option<String>,
     /// Active tab in the sidebar panel
     pub sidebar_tab: SidebarTab,
     /// Cached approval mode label for display (updated on mode change)
@@ -388,6 +390,7 @@ impl Default for ReplState {
             leader_active: false,
             last_esc_time: None,
             session_picker_active: false,
+            prompt_bar_color: None,
             sidebar_tab: SidebarTab::default(),
             approval_mode_label: "AUTO".to_string(),
             active_agents: Vec::new(),

@@ -584,3 +584,65 @@ pub(crate) fn handle_terminal_setup(repl: &mut Repl) -> Result<()> {
     repl.chat.add_message(ChatRole::System, report);
     Ok(())
 }
+
+/// Handle /color command — set prompt bar color per session
+pub(crate) fn handle_color(repl: &mut Repl, args: &str) -> Result<()> {
+    let color = args.trim();
+    if color.is_empty() || color == "default" || color == "reset" {
+        repl.state.prompt_bar_color = None;
+        repl.prompt.set_border_color(None);
+        repl.chat.add_message(ChatRole::System, "Prompt bar color reset to default.".to_string());
+    } else {
+        // Validate color by trying to parse it
+        let parsed = parse_color_string(color);
+        match parsed {
+            Some(c) => {
+                repl.state.prompt_bar_color = Some(color.to_string());
+                repl.prompt.set_border_color(Some(c));
+                repl.chat.add_message(ChatRole::System, format!("Prompt bar color set to {color}."));
+            }
+            None => {
+                repl.chat.add_message(ChatRole::System, format!(
+                    "Unknown color: \"{color}\". Use a named color (red, green, blue, ...) or hex (#ff0000), or \"default\" to reset."
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Parse a color string into a ratatui Color
+fn parse_color_string(s: &str) -> Option<ratatui::style::Color> {
+    use ratatui::style::Color;
+    let lower = s.to_lowercase();
+    match lower.as_str() {
+        "red" => Some(Color::Red),
+        "green" => Some(Color::Green),
+        "blue" => Some(Color::Blue),
+        "yellow" => Some(Color::Yellow),
+        "magenta" | "purple" | "pink" => Some(Color::Magenta),
+        "cyan" | "teal" => Some(Color::Cyan),
+        "white" => Some(Color::White),
+        "gray" | "grey" => Some(Color::Gray),
+        "darkgray" | "dark_grey" | "darkgrey" => Some(Color::DarkGray),
+        "lightred" | "light_red" => Some(Color::LightRed),
+        "lightgreen" | "light_green" => Some(Color::LightGreen),
+        "lightblue" | "light_blue" => Some(Color::LightBlue),
+        "lightyellow" | "light_yellow" => Some(Color::LightYellow),
+        "lightmagenta" | "light_magenta" => Some(Color::LightMagenta),
+        "lightcyan" | "light_cyan" => Some(Color::LightCyan),
+        "black" => Some(Color::Black),
+        _ => {
+            // Try hex color
+            let hex = s.trim_start_matches('#');
+            if hex.len() == 6 {
+                let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+                let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+                let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+                Some(Color::Rgb(r, g, b))
+            } else {
+                None
+            }
+        }
+    }
+}

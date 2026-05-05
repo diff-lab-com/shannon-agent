@@ -243,6 +243,7 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "effort" => session::handle_effort(repl, args)?,
             "focus" => session::handle_focus(repl, args)?,
             "accessibility" | "a11y" => config::handle_accessibility(repl, args)?,
+            "color" => config::handle_color(repl, args)?,
             "diag" => debug::handle_diag(repl, args)?,
             "commands" => hooks::handle_commands(repl, args)?,
             _ => handle_other_command(repl, cmd_name, args)?,
