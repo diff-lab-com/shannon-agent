@@ -88,19 +88,54 @@ impl Renderer {
     /// Create a new renderer
     pub fn new() -> Self {
         let syntax_set = SyntaxSet::load_defaults_newlines();
-        let theme_set = ThemeSet::load_defaults();
+        let mut theme_set = ThemeSet::load_defaults();
+
+        // Load custom .tmTheme files from user and project directories
+        let mut theme_dirs = Vec::new();
+        if let Some(home) = dirs::home_dir() {
+            theme_dirs.push(home.join(".shannon").join("themes"));
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            theme_dirs.push(cwd.join(".shannon").join("themes"));
+        }
+        for dir in &theme_dirs {
+            if dir.exists() {
+                let _ = theme_set.add_from_folder(dir);
+            }
+        }
+
+        // Determine initial theme: env var > dark/light default
+        let syntect_theme_name = std::env::var("SHANNON_SYNTAX_THEME")
+            .ok()
+            .filter(|t| theme_set.themes.contains_key(t.as_str()))
+            .unwrap_or_else(|| "base16-eighties.dark".to_string());
+
         Self {
             status_message: "Ready".to_string(),
             syntax_set,
             theme_set,
-            syntect_theme_name: "base16-eighties.dark".to_string(),
+            syntect_theme_name,
             markdown_cache: parking_lot::Mutex::new(MarkdownCache::new(128)),
         }
     }
 
     /// Sync the syntect theme with the current UI theme.
+    /// Respects SHANNON_SYNTAX_THEME env var override.
     pub fn set_theme(&mut self, theme: &crate::theme::Theme) {
+        if let Ok(ref var) = std::env::var("SHANNON_SYNTAX_THEME") {
+            if self.theme_set.themes.contains_key(var.as_str()) {
+                self.syntect_theme_name = var.clone();
+                return;
+            }
+        }
         self.syntect_theme_name = theme.syntect_theme_name().to_string();
+    }
+
+    /// List all available syntax highlighting theme names.
+    pub fn available_syntax_themes(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.theme_set.themes.keys().cloned().collect();
+        names.sort();
+        names
     }
 
     /// Render the UI
