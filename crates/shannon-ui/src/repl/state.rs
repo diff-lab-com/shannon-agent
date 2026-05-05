@@ -111,6 +111,8 @@ pub struct ReplState {
     pub theme: Theme,
     /// Accessibility mode: replace decorative chars with plain text
     pub accessibility_mode: bool,
+    /// Reduced motion: disables animations (spinner, shimmer) for accessibility
+    pub reduced_motion: bool,
     /// Configurable keybindings
     pub keybindings: crate::keybindings::KeyBindings,
     /// Whether the right sidebar panel is visible
@@ -361,6 +363,7 @@ impl Default for ReplState {
             sandbox_mode: shannon_tools::SandboxMode::Direct,
             theme: Theme::detect(),
             accessibility_mode: std::env::var("NO_GRAPHICS").is_ok() || std::env::var("ACCESSIBILITY").is_ok(),
+            reduced_motion: std::env::var("NO_COLOR").is_ok() || std::env::var("REDUCED_MOTION").is_ok() || std::env::var("NO_GRAPHICS").is_ok() || std::env::var("ACCESSIBILITY").is_ok(),
             keybindings: crate::keybindings::load_keybindings(),
             sidebar_visible: true,
             diff_viewer: None,

@@ -218,6 +218,8 @@ pub struct SpinnerWidget {
     current_frame: usize,
     message: Option<String>,
     phase: SpinnerPhase,
+    /// When true, skip animation and use static indicator
+    static_mode: bool,
 }
 
 /// Braille dots — smooth rotation (default)
@@ -240,7 +242,13 @@ impl SpinnerWidget {
             current_frame: 0,
             message: None,
             phase: SpinnerPhase::Default,
+            static_mode: false,
         }
+    }
+
+    /// Enable static mode (no animation, use fixed indicator)
+    pub fn set_static_mode(&mut self, enabled: bool) {
+        self.static_mode = enabled;
     }
 
     /// Set a custom message
@@ -275,9 +283,11 @@ impl SpinnerWidget {
         self.phase
     }
 
-    /// Advance to next frame
+    /// Advance to next frame (no-op in static mode)
     pub fn tick(&mut self) {
-        self.current_frame = (self.current_frame + 1) % self.frames.len();
+        if !self.static_mode {
+            self.current_frame = (self.current_frame + 1) % self.frames.len();
+        }
     }
 
     /// Get current frame index
@@ -285,9 +295,13 @@ impl SpinnerWidget {
         self.current_frame
     }
 
-    /// Get the current spinner character
+    /// Get the current spinner character (static "●" in static mode)
     pub fn current_char(&self) -> &'static str {
-        self.frames[self.current_frame]
+        if self.static_mode {
+            "●"
+        } else {
+            self.frames[self.current_frame]
+        }
     }
 
     /// Get the message text (if any)

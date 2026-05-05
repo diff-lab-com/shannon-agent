@@ -314,6 +314,7 @@ impl Repl {
         };
 
         repl.sync_approval_mode_label();
+        repl.state.spinner.set_static_mode(repl.state.reduced_motion);
         repl.renderer.set_theme(&repl.state.theme);
         Ok(repl)
     }
@@ -1054,6 +1055,7 @@ impl Repl {
         };
 
         repl.sync_approval_mode_label();
+        repl.state.spinner.set_static_mode(repl.state.reduced_motion);
         repl.renderer.set_theme(&repl.state.theme);
         Ok(repl)
     }
