@@ -931,10 +931,12 @@ fn handle_tool_approval_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             // Auto-approve for the rest of the session
             if let Some(ref req) = repl.state.tool_approval.request {
                 let tool_name = req.tool_name.clone();
+                // For network tools with a domain, auto-approve only that domain
+                let pattern = req.domain.clone().unwrap_or_else(|| "*".to_string());
                 repl.state.tool_approval.auto_approve_rules.push(
                     crate::widgets::tool_approval::AutoApproveRule {
                         tool_name,
-                        pattern: "*".to_string(),
+                        pattern,
                         approved: true,
                     }
                 );

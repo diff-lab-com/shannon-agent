@@ -1056,6 +1056,11 @@ impl ChatWidget {
         self.messages.back()
     }
 
+    /// Get the last assistant message (searches backwards)
+    pub fn last_assistant_message(&self) -> Option<&ChatMessage> {
+        self.messages.iter().rev().find(|m| m.role == ChatRole::Assistant)
+    }
+
     /// Remove and return the last message
     pub fn pop_last(&mut self) -> Option<ChatMessage> {
         self.messages.pop_back()

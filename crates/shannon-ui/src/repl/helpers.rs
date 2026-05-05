@@ -57,9 +57,25 @@ impl super::Repl {
         let tmp_dir = std::env::temp_dir();
         let tmp_path = tmp_dir.join("shannon-input.md");
 
-        // Write current input to temp file
+        // Build file content: prepend last assistant response as comments
         let current_input = self.prompt.input().to_string();
-        if let Err(e) = std::fs::write(&tmp_path, &current_input) {
+        let file_content = if current_input.is_empty() {
+            // Inject last assistant message as context when opening blank editor
+            let mut buf = String::new();
+            if let Some(last) = self.chat.last_assistant_message() {
+                buf.push_str("# AI's last response (for context, edit below):\n");
+                for line in last.content.lines() {
+                    buf.push_str("# ");
+                    buf.push_str(line);
+                    buf.push('\n');
+                }
+                buf.push('\n');
+            }
+            buf
+        } else {
+            current_input
+        };
+        if let Err(e) = std::fs::write(&tmp_path, &file_content) {
             self.state.toast = Some((format!("  Failed to write temp file: {e}  "), std::time::Instant::now()));
             return;
         }

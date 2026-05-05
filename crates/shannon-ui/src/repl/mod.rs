@@ -241,6 +241,28 @@ fn load_permission_rules(pm: &mut PermissionManager) {
     }
 }
 
+/// Extract a domain/URL from tool input for network-related tools.
+/// Returns the URL string if the tool is a known network tool with a URL in its input.
+fn extract_domain_from_tool(tool_name: &str, tool_input: &serde_json::Value) -> Option<String> {
+    let url_str = match tool_name {
+        "fetch" | "web_fetch" | "WebFetch" | "web-fetch" => {
+            tool_input.get("url").and_then(|v| v.as_str()).map(|s| s.to_string())
+        }
+        "web_search" | "WebSearch" | "web-search" | "tavily-search" => {
+            tool_input.get("query").and_then(|v| v.as_str()).map(|q| format!("search: {q}"))
+        }
+        _ => None,
+    };
+    // Truncate very long URLs for display
+    url_str.map(|s| {
+        if s.len() > 80 {
+            format!("{}...", &s[..77])
+        } else {
+            s
+        }
+    })
+}
+
 impl Repl {
     /// Minimal REPL for test mode — skips MCP, skills, memory, project instructions,
     /// but includes a lightweight query_engine with an unauthenticated LLM client.
@@ -1188,12 +1210,18 @@ impl Repl {
                             crate::widgets::tool_approval::RiskLevel::High
                         }
                     };
+                    // Extract domain/URL from tool input for network tools
+                    let domain = extract_domain_from_tool(
+                        &permission_req.prompt.tool_name,
+                        &permission_req.prompt.tool_input,
+                    );
                     self.state.tool_approval.show_request(
                         crate::widgets::tool_approval::ToolApprovalRequest {
                             tool_name: permission_req.prompt.tool_name.clone(),
                             description: permission_req.prompt.description.clone(),
                             risk_level: risk,
                             detail: None,
+                            domain,
                         },
                         permission_req.prompt.diff_preview.clone(),
                     );

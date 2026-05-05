@@ -48,6 +48,8 @@ pub struct ToolApprovalRequest {
     pub description: String,
     pub risk_level: RiskLevel,
     pub detail: Option<String>,
+    /// URL/domain for network tools (shown prominently in approval)
+    pub domain: Option<String>,
 }
 
 /// Auto-approval rule
@@ -228,6 +230,19 @@ impl ToolApprovalWidget {
 
         // Description (wrap to overlay width minus borders/padding)
         let content_width = (overlay_w as usize).saturating_sub(4);
+
+        // Domain/URL display for network tools
+        if let Some(ref domain) = req.domain {
+            lines.push(Line::from(vec![
+                Span::styled("URL: ", Style::default().fg(theme.text_dim)),
+                Span::styled(
+                    domain.clone(),
+                    Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+            lines.push(Line::from(""));
+        }
+
         let desc = &req.description;
         let wrapped = wrap_text(desc, content_width);
         for line in &wrapped {
@@ -408,6 +423,7 @@ mod tests {
             description: "rm -rf /".into(),
             risk_level: RiskLevel::High,
             detail: None,
+            domain: None,
         }, None);
         assert!(w.request.is_some());
         assert!(w.is_active());
@@ -422,6 +438,7 @@ mod tests {
             description: "ls".into(),
             risk_level: RiskLevel::Low,
             detail: None,
+            domain: None,
         }, None);
 
         let decision = w.handle_key(KeyEvent::new(KeyCode::Char('1'), crossterm::event::KeyModifiers::NONE));
@@ -439,6 +456,7 @@ mod tests {
             description: "ls".into(),
             risk_level: RiskLevel::Low,
             detail: None,
+            domain: None,
         }, None);
 
         let decision = w.handle_key(KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE));
@@ -453,6 +471,7 @@ mod tests {
             description: "save file".into(),
             risk_level: RiskLevel::Medium,
             detail: None,
+            domain: None,
         }, None);
 
         // Move right twice to reach "Deny"
@@ -500,6 +519,7 @@ mod tests {
             description: "ls".into(),
             risk_level: RiskLevel::Low,
             detail: None,
+            domain: None,
         }, None);
         assert!(w.is_active());
         w.dismiss();
