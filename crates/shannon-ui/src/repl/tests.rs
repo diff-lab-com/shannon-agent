@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::widgets::ChatRole;
+use shannon_core::UiAdapter;
 
 #[test]
 fn test_repl_state_default() {
@@ -3204,24 +3205,24 @@ fn test_collect_custom_commands_frontmatter_fields() {
 #[test]
 fn test_parse_frontmatter_field() {
     let yaml = "model: claude-opus-4-6\nallowed-tools: Bash, Read, Write\nagent: coder\n";
-    assert_eq!(super::parse_frontmatter_field(yaml, "model"), Some("claude-opus-4-6".to_string()));
-    assert_eq!(super::parse_frontmatter_field(yaml, "allowed-tools"), Some("Bash, Read, Write".to_string()));
-    assert_eq!(super::parse_frontmatter_field(yaml, "agent"), Some("coder".to_string()));
-    assert_eq!(super::parse_frontmatter_field(yaml, "nonexistent"), None);
+    assert_eq!(super::custom_commands::parse_frontmatter_field(yaml, "model"), Some("claude-opus-4-6".to_string()));
+    assert_eq!(super::custom_commands::parse_frontmatter_field(yaml, "allowed-tools"), Some("Bash, Read, Write".to_string()));
+    assert_eq!(super::custom_commands::parse_frontmatter_field(yaml, "agent"), Some("coder".to_string()));
+    assert_eq!(super::custom_commands::parse_frontmatter_field(yaml, "nonexistent"), None);
 }
 
 #[test]
 fn test_parse_frontmatter_field_quoted() {
     let yaml = "model: \"claude-sonnet-4-6\"\ndescription: 'A test'\n";
-    assert_eq!(super::parse_frontmatter_field(yaml, "model"), Some("claude-sonnet-4-6".to_string()));
-    assert_eq!(super::parse_frontmatter_field(yaml, "description"), Some("A test".to_string()));
+    assert_eq!(super::custom_commands::parse_frontmatter_field(yaml, "model"), Some("claude-sonnet-4-6".to_string()));
+    assert_eq!(super::custom_commands::parse_frontmatter_field(yaml, "description"), Some("A test".to_string()));
 }
 
 #[test]
 fn test_parse_frontmatter_field_empty_value() {
     let yaml = "model: \nagent:\n";
-    assert_eq!(super::parse_frontmatter_field(yaml, "model"), None);
-    assert_eq!(super::parse_frontmatter_field(yaml, "agent"), None);
+    assert_eq!(super::custom_commands::parse_frontmatter_field(yaml, "model"), None);
+    assert_eq!(super::custom_commands::parse_frontmatter_field(yaml, "agent"), None);
 }
 
 #[test]
