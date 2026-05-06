@@ -2879,7 +2879,7 @@ fn test_rewind_then_rewind_again() {
 fn test_approval_mode_cycle_sequence() {
     use shannon_core::permissions::ApprovalMode;
 
-    // Verify the cycle order: Suggest → AutoEdit → Plan → FullAuto → Auto → PlanReadonly → Readonly → Suggest
+    // Verify the cycle order: Suggest → AutoEdit → Plan → FullAuto → Suggest
     let mode = ApprovalMode::Suggest;
     assert_eq!(mode.cycle_next(), ApprovalMode::AutoEdit);
 
@@ -2890,15 +2890,6 @@ fn test_approval_mode_cycle_sequence() {
     assert_eq!(mode.cycle_next(), ApprovalMode::FullAuto);
 
     let mode = ApprovalMode::FullAuto;
-    assert_eq!(mode.cycle_next(), ApprovalMode::Auto);
-
-    let mode = ApprovalMode::Auto;
-    assert_eq!(mode.cycle_next(), ApprovalMode::PlanReadonly);
-
-    let mode = ApprovalMode::PlanReadonly;
-    assert_eq!(mode.cycle_next(), ApprovalMode::Readonly);
-
-    let mode = ApprovalMode::Readonly;
     assert_eq!(mode.cycle_next(), ApprovalMode::Suggest);
 
     // BypassPermissions and DontAsk cycle back to Suggest

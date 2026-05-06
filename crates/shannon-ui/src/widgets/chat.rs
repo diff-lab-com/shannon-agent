@@ -192,12 +192,19 @@ fn estimate_message_height(msg: &ChatMessage, collapsed: bool, width: usize) -> 
     let content = strip_ansi(&msg.content);
     let mut height = 0;
 
+    // Estimate prefix length for width calculation
+    let prefix_len = 14 + 3; // "[HH:MM:SS] XXX > " approximate
+    let text_width = width.saturating_sub(prefix_len);
+
     // Parse segments to count lines
     let segments = parse_markdown_segments(&content);
     for seg in &segments {
         match seg {
             MdSegment::Text(lines) => {
-                height += lines.len().max(1);
+                height += lines.iter()
+                    .map(|l| wrap_line(l, text_width).len().max(1))
+                    .sum::<usize>()
+                    .max(1);
             }
             MdSegment::CodeBlock { code, .. } => {
                 let code_lines = code.lines().count();
@@ -747,53 +754,52 @@ impl ChatWidget {
                 match segment {
                     MdSegment::Text(lines) => {
                         for content_line in lines {
-                            if first_line {
-                                let available = inner_width.saturating_sub(prefix_len);
-                                let text = truncate_line(content_line, available);
-                                let mut spans = vec![
-                                    Span::styled("[", Style::default().fg(theme.muted)),
-                                    Span::styled(timestamp.clone(), Style::default().fg(theme.muted)),
-                                    Span::styled("] ", Style::default().fg(theme.muted)),
-                                    Span::styled(format!("{role_prefix} > "), Style::default().fg(role_color).add_modifier(Modifier::BOLD)),
-                                ];
+                            let available = inner_width.saturating_sub(prefix_len);
+                            let wrapped = wrap_line(content_line, available);
 
-                                // Apply search highlighting if active
-                                if let Some(query) = search_query {
-                                    if !query.is_empty() {
-                                        let msg_matches = matches_by_msg.get(&msg_idx);
-                                        spans.extend(highlight_search_in_text(
-                                            &text, theme.text, query, msg_matches, focused_match_idx, true,
-                                        ));
-                                    } else {
-                                        spans.extend(parse_inline_formatting(&text, theme.text));
-                                    }
-                                } else {
-                                    spans.extend(parse_inline_formatting(&text, theme.text));
-                                }
-                                msg_lines.push(Line::from(spans));
-                                first_line = false;
-                            } else {
-                                let indent = " ".repeat(prefix_len);
-                                let available = inner_width.saturating_sub(prefix_len);
-                                let text = truncate_line(content_line, available);
-                                let mut spans = vec![
-                                    Span::styled(indent, Style::default().fg(theme.muted)),
-                                ];
+                            for wrapped_text in &wrapped {
+                                if first_line {
+                                    let mut spans = vec![
+                                        Span::styled("[", Style::default().fg(theme.muted)),
+                                        Span::styled(timestamp.clone(), Style::default().fg(theme.muted)),
+                                        Span::styled("] ", Style::default().fg(theme.muted)),
+                                        Span::styled(format!("{role_prefix} > "), Style::default().fg(role_color).add_modifier(Modifier::BOLD)),
+                                    ];
 
-                                // Apply search highlighting on continuation lines too
-                                if let Some(query) = search_query {
-                                    if !query.is_empty() {
-                                        let msg_matches = matches_by_msg.get(&msg_idx);
-                                        spans.extend(highlight_search_in_text(
-                                            &text, theme.text, query, msg_matches, focused_match_idx, false,
-                                        ));
+                                    if let Some(query) = search_query {
+                                        if !query.is_empty() {
+                                            let msg_matches = matches_by_msg.get(&msg_idx);
+                                            spans.extend(highlight_search_in_text(
+                                                wrapped_text, theme.text, query, msg_matches, focused_match_idx, true,
+                                            ));
+                                        } else {
+                                            spans.extend(parse_inline_formatting(wrapped_text, theme.text));
+                                        }
                                     } else {
-                                        spans.extend(parse_inline_formatting(&text, theme.text));
+                                        spans.extend(parse_inline_formatting(wrapped_text, theme.text));
                                     }
+                                    msg_lines.push(Line::from(spans));
+                                    first_line = false;
                                 } else {
-                                    spans.extend(parse_inline_formatting(&text, theme.text));
+                                    let indent = " ".repeat(prefix_len);
+                                    let mut spans = vec![
+                                        Span::styled(indent, Style::default().fg(theme.muted)),
+                                    ];
+
+                                    if let Some(query) = search_query {
+                                        if !query.is_empty() {
+                                            let msg_matches = matches_by_msg.get(&msg_idx);
+                                            spans.extend(highlight_search_in_text(
+                                                wrapped_text, theme.text, query, msg_matches, focused_match_idx, false,
+                                            ));
+                                        } else {
+                                            spans.extend(parse_inline_formatting(wrapped_text, theme.text));
+                                        }
+                                    } else {
+                                        spans.extend(parse_inline_formatting(wrapped_text, theme.text));
+                                    }
+                                    msg_lines.push(Line::from(spans));
                                 }
-                                msg_lines.push(Line::from(spans));
                             }
                         }
                     }
@@ -1249,9 +1255,42 @@ fn parse_inline_formatting(text: &str, base_color: ratatui::style::Color) -> Vec
     spans
 }
 
-/// Truncate a line to fit within max_chars, with ellipsis.
-fn truncate_line(s: &str, max_chars: usize) -> String {
-    truncate_to(s, max_chars)
+/// Wrap a line of text to fit within `max_chars`, returning multiple lines.
+/// Word-boundary wrapping that preserves readability.
+fn wrap_line(s: &str, max_chars: usize) -> Vec<String> {
+    if max_chars == 0 {
+        return if s.is_empty() { vec![String::new()] } else { vec![s.to_string()] };
+    }
+    if s.chars().count() <= max_chars {
+        return if s.is_empty() { vec![String::new()] } else { vec![s.to_string()] };
+    }
+
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut len = 0usize;
+
+    for word in s.split_whitespace() {
+        let wlen = word.chars().count();
+        if len == 0 {
+            current.push_str(word);
+            len = wlen;
+        } else if len + 1 + wlen <= max_chars {
+            current.push(' ');
+            current.push_str(word);
+            len += 1 + wlen;
+        } else {
+            lines.push(std::mem::take(&mut current));
+            current.push_str(word);
+            len = wlen;
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
 }
 
 /// Truncate a string to fit within `max_chars` characters, appending "…" if truncated.
