@@ -485,8 +485,8 @@ impl ChatWidget {
                 let h = estimate_message_height(messages[i], self.collapsed_tools, inner_width);
                 if rows_used + h > visible_rows { break; }
                 rows_used += h;
-                // Include 1-row separator if applicable
-                if i > 0 && messages[i - 1].role != messages[i].role {
+                // Include 1-row gap (separator or blank line) between messages
+                if i > 0 {
                     rows_used += 1;
                 }
                 end_idx = i;
@@ -499,7 +499,7 @@ impl ChatWidget {
                 let h = estimate_message_height(messages[i], self.collapsed_tools, inner_width);
                 if fwd_rows + h > visible_rows { break; }
                 fwd_rows += h;
-                if i + 1 < msg_count && messages[i].role != messages[i + 1].role {
+                if i + 1 < msg_count {
                     fwd_rows += 1;
                 }
                 fwd_idx = i;
@@ -519,16 +519,9 @@ impl ChatWidget {
                 continue;
             }
 
-            // Add separator line between messages of different roles
+            // Add gap between messages
             if msg_idx > 0 {
-                let prev_role = messages[msg_idx - 1].role;
-                if prev_role != msg.role {
-                    let sep: String = "─".repeat(inner_width.min(120));
-                    list_items.push(ListItem::new(Line::from(Span::styled(
-                        sep,
-                        Style::default().fg(theme.border_dim),
-                    ))));
-                }
+                list_items.push(ListItem::new(Line::from("")));
             }
 
             // Collapsed/folded tool messages: single-line summary with category color/icon

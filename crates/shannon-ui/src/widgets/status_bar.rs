@@ -72,6 +72,26 @@ impl StatusBarWidget {
             Style::default().fg(theme.text),
         ));
 
+        // ── Approval mode (always visible, right after status) ──
+        if let Some(mode_label) = approval_mode {
+            left.push(Span::raw(" "));
+            let mode_style = match mode_label {
+                "ASK" | "PLAN" => {
+                    Style::default().fg(theme.warning)
+                }
+                "EDIT" => Style::default().fg(theme.success),
+                "AUTO" => Style::default().fg(theme.primary),
+                "FULL" => {
+                    Style::default().fg(ratatui::style::Color::Red)
+                }
+                _ => Style::default().fg(theme.text_dim),
+            };
+            left.push(Span::styled(
+                format!("[{mode_label}]"),
+                mode_style.add_modifier(Modifier::BOLD),
+            ));
+        }
+
         // ── Zone 2: Model ──
         if let Some(m) = model {
             left.push(Span::raw("  "));
@@ -225,25 +245,7 @@ impl StatusBarWidget {
             ));
         }
 
-        // ── Right zone: Approval mode ──
-        if let Some(mode_label) = approval_mode {
-            right.push(Span::raw("  "));
-            let mode_style = match mode_label {
-                label if label == "SUGGEST" || label == "PLAN" || label == "RO" => {
-                    Style::default().fg(theme.warning)
-                }
-                "AUTO" => Style::default().fg(theme.success),
-                "FULL" => Style::default().fg(theme.primary),
-                label if label == "BYPASS" || label == "YOLO" => {
-                    Style::default().fg(ratatui::style::Color::Red)
-                }
-                _ => Style::default().fg(theme.text_dim),
-            };
-            right.push(Span::styled(
-                mode_label.to_string(),
-                mode_style.add_modifier(Modifier::BOLD),
-            ));
-        }
+        // ── Right zone: (git branch) ──
 
         // ── Combine with padding ──
         let left_w: usize = left.iter().map(|s| s.content.chars().count()).sum();

@@ -511,7 +511,7 @@ pub(crate) fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
                             perms.set_approval_mode(shannon_core::permissions::ApprovalMode::Suggest);
                         }
                     }
-                    repl.state.approval_mode_label = "SUGGEST".to_string();
+                    repl.state.approval_mode_label = "ASK".to_string();
                     repl.chat.add_message(ChatRole::System,
                         "Permission mode: **suggest** (strict)\n\
                          All potentially dangerous tools require explicit approval.".to_string());
@@ -522,7 +522,7 @@ pub(crate) fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
                             perms.set_approval_mode(shannon_core::permissions::ApprovalMode::FullAuto);
                         }
                     }
-                    repl.state.approval_mode_label = "FULL".to_string();
+                    repl.state.approval_mode_label = "AUTO".to_string();
                     repl.chat.add_message(ChatRole::System,
                         "Permission mode: **full-auto**\n\
                          All tools are automatically approved. Use with caution.".to_string());
@@ -533,7 +533,7 @@ pub(crate) fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
                             perms.set_approval_mode(shannon_core::permissions::ApprovalMode::Readonly);
                         }
                     }
-                    repl.state.approval_mode_label = "RO".to_string();
+                    repl.state.approval_mode_label = "ASK".to_string();
                     repl.chat.add_message(ChatRole::System,
                         "Permission mode: **readonly**\n\
                          Tools will only read, not modify files.".to_string());

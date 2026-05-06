@@ -5,8 +5,8 @@ use shannon_types::recover_lock;
 impl super::Repl {
     /// Cycle the approval mode and sync UI state.
     ///
-    /// Advances through: Suggest -> AutoEdit -> Plan -> FullAuto -> Readonly -> Suggest.
-    /// BypassPermissions requires a confirmation dialog before applying.
+    /// Cycles through 4 core modes: ASK → EDIT → PLAN → AUTO → ASK.
+    /// Other modes (FULL, etc.) are set explicitly via /mode.
     pub fn cycle_approval_mode(&mut self) {
         if let Some(ref query_engine) = self.query_engine {
             let current = {

@@ -565,6 +565,12 @@ pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String>
         "review" => &["HEAD~1", "main...HEAD", "--staged", "--full"],
         "history" => &["--export"],
         "export" | "save" => &["--format json", "--format markdown"],
+        "theme" => &[
+            "dark", "light", "dracula", "tokyonight", "catppuccin_mocha",
+            "gruvbox_dark", "nord", "kanagawa", "monokai", "onedark",
+            "everforest", "ayu", "flexoki", "dark_daltonized", "light_daltonized",
+            "pick",
+        ],
         _ => &[],
     };
 
@@ -1022,12 +1028,12 @@ fn handle_fuzzy_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
 
 fn handle_file_selector_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
     match key.code {
-        KeyCode::Up => {
+        KeyCode::Up | KeyCode::Char('k') => {
             if let Some(ref mut sel) = repl.state.file_selector {
                 sel.move_up();
             }
         }
-        KeyCode::Down => {
+        KeyCode::Down | KeyCode::Char('j') => {
             if let Some(ref mut sel) = repl.state.file_selector {
                 sel.move_down();
             }
@@ -1129,12 +1135,12 @@ fn handle_file_selector_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
 
 fn handle_model_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
     match key.code {
-        KeyCode::Up => {
+        KeyCode::Up | KeyCode::Char('k') => {
             if let Some(ref mut mp) = repl.state.model_picker {
                 mp.move_up();
             }
         }
-        KeyCode::Down => {
+        KeyCode::Down | KeyCode::Char('j') => {
             if let Some(ref mut mp) = repl.state.model_picker {
                 mp.move_down();
             }
@@ -1179,17 +1185,17 @@ fn handle_model_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
 
 fn handle_theme_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
     match key.code {
-        KeyCode::Up => {
+        KeyCode::Up | KeyCode::Char('k') => {
             if let Some(ref mut picker) = repl.state.theme_picker {
                 picker.move_up();
             }
         }
-        KeyCode::Down => {
+        KeyCode::Down | KeyCode::Char('j') => {
             if let Some(ref mut picker) = repl.state.theme_picker {
                 picker.move_down();
             }
         }
-        KeyCode::Char(c) => {
+        KeyCode::Char(c) if c != 'j' && c != 'k' => {
             if let Some(ref mut picker) = repl.state.theme_picker {
                 picker.add_search_char(c);
             }
@@ -1232,12 +1238,12 @@ fn handle_theme_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
 
 fn handle_multi_select_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
     match key.code {
-        KeyCode::Up => {
+        KeyCode::Up | KeyCode::Char('k') => {
             if let Some(ref mut sel) = repl.state.multi_select {
                 sel.move_up();
             }
         }
-        KeyCode::Down => {
+        KeyCode::Down | KeyCode::Char('j') => {
             if let Some(ref mut sel) = repl.state.multi_select {
                 sel.move_down();
             }

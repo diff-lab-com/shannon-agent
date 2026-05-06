@@ -146,34 +146,35 @@ impl ApprovalMode {
     }
 
     /// Cycle to the next commonly-used mode (Shift+Tab pattern).
-    /// Cycles through: Suggest → AutoEdit → Plan → FullAuto → Auto → PlanReadonly → Readonly → Suggest
-    /// Skips BypassPermissions and DontAsk (those are set explicitly via /mode).
+    /// Cycles through: Suggest → AutoEdit → Plan → FullAuto → Suggest
+    /// BypassPermissions/DontAsk/Readonly/Auto/PlanReadonly are set explicitly via /mode.
     pub fn cycle_next(self) -> Self {
         match self {
             Self::Suggest => Self::AutoEdit,
             Self::AutoEdit => Self::Plan,
             Self::Plan => Self::FullAuto,
-            Self::FullAuto => Self::Auto,
-            Self::Auto => Self::PlanReadonly,
-            Self::PlanReadonly => Self::Readonly,
-            Self::Readonly => Self::Suggest,
-            // BypassPermissions and DontAsk cycle back to Suggest
-            Self::BypassPermissions | Self::DontAsk => Self::Suggest,
+            Self::FullAuto => Self::Suggest,
+            // All other modes cycle back to Suggest (start of cycle)
+            Self::Auto
+            | Self::Readonly
+            | Self::PlanReadonly
+            | Self::BypassPermissions
+            | Self::DontAsk => Self::Suggest,
         }
     }
 
     /// Short label for display in the status bar (max ~10 chars).
     pub fn short_label(&self) -> &'static str {
         match self {
-            Self::Suggest => "SUGGEST",
+            Self::Suggest => "ASK",
+            Self::AutoEdit => "EDIT",
             Self::Plan => "PLAN",
-            Self::AutoEdit => "AUTO",
-            Self::FullAuto => "FULL",
-            Self::BypassPermissions => "BYPASS",
-            Self::DontAsk => "YOLO",
-            Self::Readonly => "RO",
-            Self::Auto => "CLASSIFY",
-            Self::PlanReadonly => "PLAN-RO",
+            Self::FullAuto => "AUTO",
+            Self::BypassPermissions => "FULL",
+            Self::DontAsk => "FULL",
+            Self::Readonly => "ASK",
+            Self::Auto => "AUTO",
+            Self::PlanReadonly => "PLAN",
         }
     }
 
@@ -2512,30 +2513,27 @@ mod tests {
 
     #[test]
     fn test_approval_mode_cycle_includes_new_modes() {
+        // cycle_next() cycles 4 modes: Suggest → AutoEdit → Plan → FullAuto → Suggest
         let modes = [ApprovalMode::Suggest,
             ApprovalMode::AutoEdit,
             ApprovalMode::Plan,
-            ApprovalMode::FullAuto,
-            ApprovalMode::Auto,
-            ApprovalMode::PlanReadonly,
-            ApprovalMode::Readonly];
+            ApprovalMode::FullAuto];
 
-        // Test cycling through all modes
         let mut current = ApprovalMode::Suggest;
         for expected in &modes[1..] {
             current = current.cycle_next();
             assert_eq!(current, *expected);
         }
 
-        // After Readonly, should cycle back to Suggest
+        // After FullAuto, should cycle back to Suggest
         current = current.cycle_next();
         assert_eq!(current, ApprovalMode::Suggest);
     }
 
     #[test]
     fn test_approval_mode_short_label_new_modes() {
-        assert_eq!(ApprovalMode::Auto.short_label(), "CLASSIFY");
-        assert_eq!(ApprovalMode::PlanReadonly.short_label(), "PLAN-RO");
+        assert_eq!(ApprovalMode::Auto.short_label(), "AUTO");
+        assert_eq!(ApprovalMode::PlanReadonly.short_label(), "PLAN");
     }
 
     #[test]

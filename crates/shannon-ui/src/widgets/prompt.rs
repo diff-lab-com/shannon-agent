@@ -8,6 +8,15 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
+use unicode_width::UnicodeWidthStr;
+
+fn display_width(s: &str) -> usize {
+    UnicodeWidthStr::width(s)
+}
+
+fn char_display_width(c: char) -> usize {
+    unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)
+}
 
 /// Input prompt widget (multi-line enabled)
 pub struct PromptWidget {
@@ -139,31 +148,39 @@ impl PromptWidget {
         }
 
         let rows: usize = input.split('\n').map(|line| {
-            let chars = line.chars().count();
-            if chars == 0 { 1 } else { chars.div_ceil(inner_width) }
+            let w = display_width(line);
+            if w == 0 { 1 } else { w.div_ceil(inner_width) }
         }).sum();
 
         let needed = (rows + 2) as u16; // +2 for top/bottom borders
         needed.clamp(MIN_PROMPT_HEIGHT, MAX_PROMPT_HEIGHT)
     }
 
-    /// Wrap a single logical line into chunks that fit within `max_width` characters.
+    /// Wrap a single logical line into chunks that fit within `max_width` display columns.
     fn wrap_line(line: &str, max_width: usize) -> Vec<String> {
         if max_width == 0 || line.is_empty() {
             return vec![line.to_string()];
         }
-        let chars: Vec<char> = line.chars().collect();
         let mut result = Vec::new();
-        let mut start = 0;
-        while start < chars.len() {
-            let end = (start + max_width).min(chars.len());
-            result.push(chars[start..end].iter().collect());
-            start = end;
+        let mut current = String::new();
+        let mut current_width = 0;
+        for c in line.chars() {
+            let w = char_display_width(c);
+            if current_width + w > max_width && !current.is_empty() {
+                result.push(std::mem::take(&mut current));
+                current_width = 0;
+            }
+            current.push(c);
+            current_width += w;
+        }
+        if !current.is_empty() || result.is_empty() {
+            result.push(current);
         }
         result
     }
 
-    /// Compute the (display_row, display_col) of the cursor, accounting for wrapping.
+    /// Compute the (display_row, display_col) of the cursor, accounting for wrapping
+    /// and Unicode display widths (CJK chars = 2 columns).
     fn cursor_display_pos(&self, inner_width: usize) -> (usize, usize) {
         let cursor_row = self.buffer.cursor_row();
         let cursor_col = self.buffer.cursor_col();
@@ -172,16 +189,32 @@ impl PromptWidget {
 
         let mut display_row: usize = 0;
         for (row_idx, line) in lines.iter().enumerate() {
+            let line_width = display_width(line);
             let wrapped_count = if line.is_empty() {
                 1
+            } else if inner_width > 0 {
+                line_width.div_ceil(inner_width)
             } else {
-                let c = line.chars().count();
-                if inner_width > 0 { c.div_ceil(inner_width) } else { 1 }
+                1
             };
 
             if row_idx == cursor_row {
-                let wrap_row = if inner_width > 0 { cursor_col / inner_width } else { 0 };
-                let wrap_col = if inner_width > 0 { cursor_col % inner_width } else { cursor_col };
+                // cursor_col is a character index; convert to display column
+                let cursor_display_col: usize = line
+                    .chars()
+                    .take(cursor_col)
+                    .map(char_display_width)
+                    .sum();
+                let wrap_row = if inner_width > 0 {
+                    cursor_display_col / inner_width
+                } else {
+                    0
+                };
+                let wrap_col = if inner_width > 0 {
+                    cursor_display_col % inner_width
+                } else {
+                    cursor_display_col
+                };
                 return (display_row + wrap_row, wrap_col);
             }
             display_row += wrapped_count;

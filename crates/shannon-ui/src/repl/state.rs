@@ -404,7 +404,7 @@ impl Default for ReplState {
             session_picker_active: false,
             prompt_bar_color: None,
             sidebar_tab: SidebarTab::default(),
-            approval_mode_label: "AUTO".to_string(),
+            approval_mode_label: "EDIT".to_string(),
             active_agents: Vec::new(),
             diagnostic_store: crate::lsp_bridge::DiagnosticStore::new(),
             focus_mode: false,

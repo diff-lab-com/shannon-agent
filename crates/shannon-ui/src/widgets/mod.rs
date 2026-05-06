@@ -173,9 +173,15 @@ impl MainLayoutWidget {
     /// Create layout with optional sidebar.
     /// When sidebar is visible and terminal is wide enough, splits the middle area horizontally.
     /// Returns (header_area, chat_area, prompt_area, status_area, sidebar_area, full_area)
-    pub fn layout_with_sidebar(area: Rect, prompt_height: u16, sidebar_visible: bool) -> (Rect, Rect, Rect, Rect, Option<Rect>, Rect) {
-        // Responsive: collapse header on very narrow terminals
-        let header_height: u16 = if area.width < COLLAPSE_HEADER_WIDTH { 1 } else { HeaderWidget::height() as u16 };
+    pub fn layout_with_sidebar(area: Rect, prompt_height: u16, sidebar_visible: bool, chat_is_empty: bool) -> (Rect, Rect, Rect, Rect, Option<Rect>, Rect) {
+        // Responsive: collapse header on very narrow terminals; hide when chat has messages
+        let header_height: u16 = if !chat_is_empty {
+            0
+        } else if area.width < COLLAPSE_HEADER_WIDTH {
+            1
+        } else {
+            HeaderWidget::height() as u16
+        };
         let effective_sidebar = sidebar_visible && area.width >= MIN_SIDEBAR_WIDTH;
 
         let (header_area, chat_area, prompt_area, status_area, full) = {
@@ -241,10 +247,10 @@ impl MainLayoutWidget {
         status: &str,
         model: Option<&str>,
         tokens_used: Option<u64>,
-        working_dir: &str,
+        _working_dir: &str,
         theme: &Theme,
     ) {
-        Self::render_complete_with_spinner(frame, chat, prompt, status, model, tokens_used, working_dir, None, None, None, theme, crate::repl::SidebarTab::default(), None, false, false, None, &[], None, None, None, None, None, None, None, None);
+        Self::render_complete_with_spinner(frame, chat, prompt, status, model, tokens_used, _working_dir, None, None, None, theme, crate::repl::SidebarTab::default(), None, false, false, None, &[], None, None, None, None, None, None, None, None);
     }
 
     /// Render the complete UI with spinner animation support
@@ -256,7 +262,7 @@ impl MainLayoutWidget {
         status: &str,
         model: Option<&str>,
         tokens_used: Option<u64>,
-        working_dir: &str,
+        _working_dir: &str,
         spinner: Option<&crate::widgets::progress::SpinnerWidget>,
         progress_bar: Option<&crate::widgets::progress::ProgressBarWidget>,
         sidebar_info: Option<&SidebarInfo>,
@@ -329,9 +335,11 @@ impl MainLayoutWidget {
             prompt.render(frame, chunks[1], theme);
         } else {
             let (header_area, chat_area, prompt_area, status_area, sidebar_area, _) =
-                Self::layout_with_sidebar(area, prompt_height, sidebar_visible);
+                Self::layout_with_sidebar(area, prompt_height, sidebar_visible, chat.is_empty());
 
-            HeaderWidget::render(frame, header_area, model, tokens_used, working_dir, theme);
+            if chat.is_empty() && header_area.height > 0 {
+                HeaderWidget::render(frame, header_area, theme);
+            }
             render_chat(frame, chat_area, theme);
             prompt.render(frame, prompt_area, theme);
             if let Some(custom) = cached_statusline {
@@ -1196,7 +1204,7 @@ mod tests {
     fn test_sidebar_layout_with_sidebar_visible() {
         let area = Rect::new(0, 0, 120, 30);
         let (_header, chat, _prompt, _status, sidebar_area, full) =
-            MainLayoutWidget::layout_with_sidebar(area, 3, true);
+            MainLayoutWidget::layout_with_sidebar(area, 3, true, true);
         assert_eq!(full, area);
         assert!(sidebar_area.is_some());
         let sb = sidebar_area.unwrap();
@@ -1209,7 +1217,7 @@ mod tests {
     fn test_sidebar_layout_hidden_when_too_narrow() {
         let area = Rect::new(0, 0, 70, 20);
         let (_, _, _, _, sidebar_area, _) =
-            MainLayoutWidget::layout_with_sidebar(area, 3, true);
+            MainLayoutWidget::layout_with_sidebar(area, 3, true, true);
         assert!(sidebar_area.is_none());
     }
 
@@ -1217,7 +1225,7 @@ mod tests {
     fn test_sidebar_layout_not_visible_when_flag_off() {
         let area = Rect::new(0, 0, 120, 30);
         let (_, _, _, _, sidebar_area, _) =
-            MainLayoutWidget::layout_with_sidebar(area, 3, false);
+            MainLayoutWidget::layout_with_sidebar(area, 3, false, true);
         assert!(sidebar_area.is_none());
     }
 

@@ -42,14 +42,14 @@ fn test_header_renders_model_and_directory() {
 
     terminal.draw(|f| {
         let area = Rect::new(0, 0, 80, 3);
-        HeaderWidget::render(f, area, Some("claude-sonnet-4"), Some(1500), "/home/user", &theme);
+        HeaderWidget::render(f, area, &theme);
     }).unwrap();
 
     let buf = terminal.backend().buffer().clone();
     let text = buffer_text(&buf, Rect::new(0, 0, 80, 3));
 
-    assert!(text.contains("claude-sonnet-4"), "header should show model name");
-    assert!(text.contains("1500") || text.contains("Tokens"), "header should show token count");
+    assert!(text.contains("Shannon"), "header should show welcome message");
+    assert!(text.contains("/help"), "header should show tip");
 }
 
 #[test]
@@ -59,12 +59,12 @@ fn test_header_handles_none_model() {
 
     terminal.draw(|f| {
         let area = Rect::new(0, 0, 80, 3);
-        HeaderWidget::render(f, area, None, None, "/tmp", &theme);
+        HeaderWidget::render(f, area, &theme);
     }).unwrap();
 
     let buf = terminal.backend().buffer().clone();
     let text = buffer_text(&buf, Rect::new(0, 0, 80, 3));
-    assert!(text.contains("/tmp"), "header should show working directory even without model");
+    assert!(text.contains("Shannon"), "header should show welcome message");
 }
 
 // ── Status Bar Widget ──────────────────────────────────────────────
@@ -226,7 +226,7 @@ fn test_narrow_terminal_no_panic() {
 
     terminal.draw(|f| {
         let area = f.area();
-        HeaderWidget::render(f, area, Some("model"), Some(0), ".", &theme);
+        HeaderWidget::render(f, area, &theme);
     }).unwrap();
 
     let mut terminal2 = test_terminal(30, 8);

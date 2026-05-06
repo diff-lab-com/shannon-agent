@@ -2910,27 +2910,27 @@ fn test_approval_mode_cycle_sequence() {
 fn test_approval_mode_short_labels() {
     use shannon_core::permissions::ApprovalMode;
 
-    assert_eq!(ApprovalMode::Suggest.short_label(), "SUGGEST");
+    assert_eq!(ApprovalMode::Suggest.short_label(), "ASK");
     assert_eq!(ApprovalMode::Plan.short_label(), "PLAN");
-    assert_eq!(ApprovalMode::AutoEdit.short_label(), "AUTO");
-    assert_eq!(ApprovalMode::FullAuto.short_label(), "FULL");
-    assert_eq!(ApprovalMode::BypassPermissions.short_label(), "BYPASS");
-    assert_eq!(ApprovalMode::DontAsk.short_label(), "YOLO");
-    assert_eq!(ApprovalMode::Readonly.short_label(), "RO");
+    assert_eq!(ApprovalMode::AutoEdit.short_label(), "EDIT");
+    assert_eq!(ApprovalMode::FullAuto.short_label(), "AUTO");
+    assert_eq!(ApprovalMode::BypassPermissions.short_label(), "FULL");
+    assert_eq!(ApprovalMode::DontAsk.short_label(), "FULL");
+    assert_eq!(ApprovalMode::Readonly.short_label(), "ASK");
 }
 
 #[test]
 fn test_approval_mode_default_is_auto() {
     use shannon_core::permissions::ApprovalMode;
 
-    // The default ApprovalMode is AutoEdit (which shows as "AUTO")
+    // The default ApprovalMode is AutoEdit (which shows as "EDIT")
     assert_eq!(ApprovalMode::default(), ApprovalMode::AutoEdit);
 }
 
 #[test]
 fn test_repl_default_approval_label() {
     let state = ReplState::default();
-    assert_eq!(state.approval_mode_label, "AUTO", "default label should match AutoEdit");
+    assert_eq!(state.approval_mode_label, "EDIT", "default label should match AutoEdit");
 }
 
 #[test]
@@ -2941,7 +2941,7 @@ fn test_repl_set_bypass_pending_action() {
     super::commands::execute_pending_action(&mut repl, "set_bypass_mode").unwrap();
 
     // Verify label updated
-    assert_eq!(repl.state.approval_mode_label, "BYPASS");
+    assert_eq!(repl.state.approval_mode_label, "FULL");
 
     // Verify PermissionManager was updated
     if let Some(ref engine) = repl.query_engine {
@@ -3062,19 +3062,19 @@ fn test_load_permission_rules_claude_settings() {
 fn test_approval_mode_label_syncs_with_permissions() {
     let mut repl = Repl::new().unwrap();
 
-    // Default should be AUTO (AutoEdit)
-    assert_eq!(repl.state.approval_mode_label, "AUTO");
+    // Default should be EDIT (AutoEdit)
+    assert_eq!(repl.state.approval_mode_label, "EDIT");
 
     // Use /mode to change to readonly
     repl.prompt.set_input("/mode readonly".to_string());
     super::commands::submit_input(&mut repl).unwrap();
 
-    assert_eq!(repl.state.approval_mode_label, "RO");
+    assert_eq!(repl.state.approval_mode_label, "ASK");
 
     // Change back to default
     repl.prompt.set_input("/mode default".to_string());
     super::commands::submit_input(&mut repl).unwrap();
-    assert_eq!(repl.state.approval_mode_label, "SUGGEST");
+    assert_eq!(repl.state.approval_mode_label, "ASK");
 }
 
 #[test]

@@ -356,9 +356,9 @@ pub fn execute_pending_action(repl: &mut Repl, action: &str) -> Result<()> {
                 let mut perms = recover_lock(query_engine.permissions().write());
                 perms.set_approval_mode(shannon_core::permissions::ApprovalMode::BypassPermissions);
                 drop(perms);
-                repl.state.approval_mode_label = "BYPASS".to_string();
-                repl.state.status = "Mode: BYPASS".to_string();
-                repl.state.toast = Some(("  Mode: BYPASS  ".to_string(), std::time::Instant::now()));
+                repl.state.approval_mode_label = "FULL".to_string();
+                repl.state.status = "Mode: FULL".to_string();
+                repl.state.toast = Some(("  Mode: FULL  ".to_string(), std::time::Instant::now()));
                 repl.chat.add_message(ChatRole::System, "Permission bypass enabled — all checks skipped.".to_string());
             }
         }
