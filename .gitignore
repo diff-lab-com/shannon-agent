@@ -112,3 +112,4 @@ lcov.info
 # 其他
 .cache/
 vendor/
+.serena/
