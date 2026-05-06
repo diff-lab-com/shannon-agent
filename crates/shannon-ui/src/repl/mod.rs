@@ -1386,7 +1386,40 @@ impl Repl {
                         MouseEventKind::ScrollDown => {
                             for _ in 0..3 { self.chat.scroll_down(); }
                         }
-                        MouseEventKind::Down(MouseButton::Left) => {}
+                        MouseEventKind::Down(MouseButton::Left) => {
+                            // Check if click is on the scrollbar
+                            if let Some(chat_area) = self.chat.last_render_area.lock().ok().and_then(|ra| *ra) {
+                                let sb_x = chat_area.right().saturating_sub(2);
+                                let sb_y_start = chat_area.top() + 1;
+                                let sb_y_end = chat_area.bottom().saturating_sub(1);
+                                if mouse.column == sb_x
+                                    && mouse.row >= sb_y_start
+                                    && mouse.row < sb_y_end
+                                    && sb_y_end > sb_y_start
+                                {
+                                    self.state.scrollbar_dragging = true;
+                                    let height = (sb_y_end - sb_y_start) as f64;
+                                    let ratio = (mouse.row - sb_y_start) as f64 / height;
+                                    self.chat.scroll_to_ratio(ratio);
+                                }
+                            }
+                        }
+                        MouseEventKind::Drag(MouseButton::Left) => {
+                            if self.state.scrollbar_dragging {
+                                if let Some(chat_area) = self.chat.last_render_area.lock().ok().and_then(|ra| *ra) {
+                                    let sb_y_start = chat_area.top() + 1;
+                                    let sb_y_end = chat_area.bottom().saturating_sub(1);
+                                    if sb_y_end > sb_y_start {
+                                        let height = (sb_y_end - sb_y_start) as f64;
+                                        let ratio = ((mouse.row as i32 - sb_y_start as i32).max(0) as f64 / height).min(1.0);
+                                        self.chat.scroll_to_ratio(ratio);
+                                    }
+                                }
+                            }
+                        }
+                        MouseEventKind::Up(MouseButton::Left) => {
+                            self.state.scrollbar_dragging = false;
+                        }
                         _ => {}
                     }
                 }

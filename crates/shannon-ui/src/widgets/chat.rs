@@ -243,6 +243,8 @@ pub struct ChatWidget {
     pub copy_feedback: Option<(usize, std::time::Instant)>,
     /// Per-message render cache (Mutex for thread-safe interior mutability)
     pub render_cache: Mutex<super::MessageRenderCache>,
+    /// Last rendered area (for scrollbar hit testing)
+    pub last_render_area: std::sync::Mutex<Option<Rect>>,
 }
 
 /// A single chat message
@@ -287,6 +289,7 @@ impl ChatWidget {
             height_cache: MessageHeightCache::new(),
             copy_feedback: None,
             render_cache: Mutex::new(super::MessageRenderCache::new(128)),
+            last_render_area: std::sync::Mutex::new(None),
         }
     }
 
@@ -431,6 +434,15 @@ impl ChatWidget {
         }
     }
 
+    /// Scroll to a fractional position (0.0 = bottom/latest, 1.0 = top/oldest).
+    /// Used by scrollbar drag interaction.
+    pub fn scroll_to_ratio(&mut self, ratio: f64) {
+        if self.messages.is_empty() { return; }
+        let max_offset = self.messages.len() - 1;
+        let offset = (ratio * max_offset as f64).round() as usize;
+        self.scroll_offset = offset.min(max_offset);
+    }
+
     /// Toggle the fold state of a tool message by index.
     pub fn toggle_fold(&mut self, index: usize) {
         if let Some(msg) = self.messages.get_mut(index) {
@@ -465,6 +477,11 @@ impl ChatWidget {
     ) {
         let mut list_items = Vec::new();
         let inner_width = area.width.saturating_sub(2) as usize; // subtract borders
+
+        // Store rendered area for scrollbar hit testing
+        if let Ok(mut ra) = self.last_render_area.lock() {
+            *ra = Some(area);
+        }
         let visible_rows = area.height.saturating_sub(2) as usize;
 
         // Build a lookup: msg_index -> list of (match_global_idx, byte_start, byte_end)
