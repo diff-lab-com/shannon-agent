@@ -847,17 +847,28 @@ impl ChatWidget {
                         let fold_threshold = 20;
                         let fold_head = 10;
                         let fold_tail = 5;
+                        let line_num_width = 7; // " 123 │ "
+                        let code_width = available.saturating_sub(line_num_width);
+                        let cont_prefix = "  → ";
 
                         if total_lines > fold_threshold {
                             // Show first fold_head lines with line numbers
                             for (i, line) in highlighted_lines.iter().enumerate().take(fold_head) {
                                 let line_num = format!("{:>4} │ ", i + 1);
-                                let mut line_spans = vec![
-                                    Span::styled(indent.clone(), Style::default().fg(theme.muted)),
-                                    Span::styled(line_num, Style::default().fg(theme.text_dim)),
-                                ];
-                                line_spans.extend(line.spans.iter().map(|s| Span::styled(s.content.to_string(), s.style)));
-                                msg_lines.push(Line::from(line_spans));
+                                let code_spans: Vec<Span<'static>> = line.spans.iter().map(|s| Span::styled(s.content.to_string(), s.style)).collect();
+                                let wrapped = wrap_code_spans(&code_spans, code_width);
+                                for (wi, wrapped_line) in wrapped.iter().enumerate() {
+                                    let mut line_spans = vec![
+                                        Span::styled(indent.clone(), Style::default().fg(theme.muted)),
+                                    ];
+                                    if wi == 0 {
+                                        line_spans.push(Span::styled(line_num.clone(), Style::default().fg(theme.text_dim)));
+                                    } else {
+                                        line_spans.push(Span::styled(cont_prefix.to_string(), Style::default().fg(theme.text_dim)));
+                                    }
+                                    line_spans.extend(wrapped_line.iter().map(|s| Span::styled(s.content.clone(), s.style)));
+                                    msg_lines.push(Line::from(line_spans));
+                                }
                             }
 
                             // Fold indicator
@@ -872,23 +883,39 @@ impl ChatWidget {
                             let tail_start = total_lines.saturating_sub(fold_tail);
                             for (i, line) in highlighted_lines[tail_start..].iter().enumerate() {
                                 let line_num = format!("{:>4} │ ", tail_start + i + 1);
-                                let mut line_spans = vec![
-                                    Span::styled(indent.clone(), Style::default().fg(theme.muted)),
-                                    Span::styled(line_num, Style::default().fg(theme.text_dim)),
-                                ];
-                                line_spans.extend(line.spans.iter().map(|s| Span::styled(s.content.to_string(), s.style)));
-                                msg_lines.push(Line::from(line_spans));
+                                let code_spans: Vec<Span<'static>> = line.spans.iter().map(|s| Span::styled(s.content.to_string(), s.style)).collect();
+                                let wrapped = wrap_code_spans(&code_spans, code_width);
+                                for (wi, wrapped_line) in wrapped.iter().enumerate() {
+                                    let mut line_spans = vec![
+                                        Span::styled(indent.clone(), Style::default().fg(theme.muted)),
+                                    ];
+                                    if wi == 0 {
+                                        line_spans.push(Span::styled(line_num.clone(), Style::default().fg(theme.text_dim)));
+                                    } else {
+                                        line_spans.push(Span::styled(cont_prefix.to_string(), Style::default().fg(theme.text_dim)));
+                                    }
+                                    line_spans.extend(wrapped_line.iter().map(|s| Span::styled(s.content.clone(), s.style)));
+                                    msg_lines.push(Line::from(line_spans));
+                                }
                             }
                         } else {
                             // Show all lines with line numbers
                             for (i, line) in highlighted_lines.iter().enumerate() {
                                 let line_num = format!("{:>4} │ ", i + 1);
-                                let mut line_spans = vec![
-                                    Span::styled(indent.clone(), Style::default().fg(theme.muted)),
-                                    Span::styled(line_num, Style::default().fg(theme.text_dim)),
-                                ];
-                                line_spans.extend(line.spans.iter().map(|s| Span::styled(s.content.to_string(), s.style)));
-                                msg_lines.push(Line::from(line_spans));
+                                let code_spans: Vec<Span<'static>> = line.spans.iter().map(|s| Span::styled(s.content.to_string(), s.style)).collect();
+                                let wrapped = wrap_code_spans(&code_spans, code_width);
+                                for (wi, wrapped_line) in wrapped.iter().enumerate() {
+                                    let mut line_spans = vec![
+                                        Span::styled(indent.clone(), Style::default().fg(theme.muted)),
+                                    ];
+                                    if wi == 0 {
+                                        line_spans.push(Span::styled(line_num.clone(), Style::default().fg(theme.text_dim)));
+                                    } else {
+                                        line_spans.push(Span::styled(cont_prefix.to_string(), Style::default().fg(theme.text_dim)));
+                                    }
+                                    line_spans.extend(wrapped_line.iter().map(|s| Span::styled(s.content.clone(), s.style)));
+                                    msg_lines.push(Line::from(line_spans));
+                                }
                             }
                         }
 
@@ -905,16 +932,18 @@ impl ChatWidget {
                         let indent_len = prefix_len;
                         let indent = " ".repeat(indent_len);
                         let available = inner_width.saturating_sub(indent_len);
-                        let header_text = truncate_to(text, available);
                         let style = match level {
                             1 => Style::default().fg(theme.primary).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
                             2 => Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
                             _ => Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
                         };
-                        msg_lines.push(Line::from(vec![
-                            Span::styled(indent, Style::default().fg(theme.muted)),
-                            Span::styled(header_text, style),
-                        ]));
+                        let wrapped = wrap_line(text, available);
+                        for wrapped_text in &wrapped {
+                            msg_lines.push(Line::from(vec![
+                                Span::styled(indent.clone(), Style::default().fg(theme.muted)),
+                                Span::styled(wrapped_text.clone(), style),
+                            ]));
+                        }
                         first_line = false;
                     }
                 }
@@ -1291,6 +1320,61 @@ fn wrap_line(s: &str, max_chars: usize) -> Vec<String> {
         lines.push(String::new());
     }
     lines
+}
+
+/// Wrap syntax-highlighted code spans to fit within `max_chars`.
+/// Splits at character boundaries, preserving span styling.
+/// Returns one or more lines, each a Vec of Spans.
+fn wrap_code_spans(spans: &[Span<'static>], max_chars: usize) -> Vec<Vec<Span<'static>>> {
+    if max_chars == 0 || spans.is_empty() {
+        return vec![spans.to_vec()];
+    }
+
+    let total: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+    if total <= max_chars {
+        return vec![spans.to_vec()];
+    }
+
+    let mut result: Vec<Vec<Span<'static>>> = Vec::new();
+    let mut current_line: Vec<Span<'static>> = Vec::new();
+    let mut remaining = max_chars;
+
+    for span in spans {
+        let char_vec: Vec<char> = span.content.chars().collect();
+        let char_count = char_vec.len();
+
+        if char_count <= remaining {
+            current_line.push(span.clone());
+            remaining -= char_count;
+            continue;
+        }
+
+        // Split this span: take what fits
+        if remaining > 0 {
+            let head: String = char_vec[..remaining].iter().collect();
+            current_line.push(Span::styled(head, span.style));
+        }
+        result.push(std::mem::take(&mut current_line));
+
+        // Process remaining chars in max_chars chunks
+        let mut pos = remaining;
+        while pos < char_count {
+            let end = std::cmp::min(pos + max_chars, char_count);
+            let chunk: String = char_vec[pos..end].iter().collect();
+            result.push(vec![Span::styled(chunk, span.style)]);
+            pos = end;
+        }
+        remaining = max_chars;
+    }
+
+    if !current_line.is_empty() {
+        result.push(current_line);
+    }
+
+    if result.is_empty() {
+        result.push(spans.to_vec());
+    }
+    result
 }
 
 /// Truncate a string to fit within `max_chars` characters, appending "…" if truncated.
