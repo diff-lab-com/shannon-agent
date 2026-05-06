@@ -1309,7 +1309,7 @@ fn parse_inline_formatting(text: &str, base_color: ratatui::style::Color) -> Vec
 }
 
 /// Wrap a line of text to fit within `max_chars`, returning multiple lines.
-/// Word-boundary wrapping that preserves readability.
+/// Word-boundary wrapping with mid-word fallback for long unbroken strings.
 fn wrap_line(s: &str, max_chars: usize) -> Vec<String> {
     if max_chars == 0 {
         return if s.is_empty() { vec![String::new()] } else { vec![s.to_string()] };
@@ -1325,12 +1325,46 @@ fn wrap_line(s: &str, max_chars: usize) -> Vec<String> {
     for word in s.split_whitespace() {
         let wlen = word.chars().count();
         if len == 0 {
-            current.push_str(word);
-            len = wlen;
+            // First word on this line — if it exceeds max_chars, break it mid-word
+            if wlen > max_chars {
+                let chars: Vec<char> = word.chars().collect();
+                let mut pos = 0;
+                while pos < chars.len() {
+                    let end = std::cmp::min(pos + max_chars, chars.len());
+                    let chunk: String = chars[pos..end].iter().collect();
+                    if pos + max_chars < chars.len() {
+                        lines.push(chunk);
+                    } else {
+                        current = chunk;
+                        len = current.chars().count();
+                    }
+                    pos = end;
+                }
+            } else {
+                current.push_str(word);
+                len = wlen;
+            }
         } else if len + 1 + wlen <= max_chars {
             current.push(' ');
             current.push_str(word);
             len += 1 + wlen;
+        } else if wlen > max_chars {
+            // Word too long even on a new line — flush current, then break mid-word
+            lines.push(std::mem::take(&mut current));
+            len = 0;
+            let chars: Vec<char> = word.chars().collect();
+            let mut pos = 0;
+            while pos < chars.len() {
+                let end = std::cmp::min(pos + max_chars, chars.len());
+                let chunk: String = chars[pos..end].iter().collect();
+                if pos + max_chars < chars.len() {
+                    lines.push(chunk);
+                } else {
+                    current = chunk;
+                    len = current.chars().count();
+                }
+                pos = end;
+            }
         } else {
             lines.push(std::mem::take(&mut current));
             current.push_str(word);
