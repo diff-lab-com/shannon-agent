@@ -889,7 +889,7 @@ mod tests {
             turn_count: 5,
             commands_run: 3,
             tokens_per_sec: Some(42.0),
-        };
+            memory_rss_kb: 0,        };
         assert_eq!(info.context_window, 200_000);
         assert_eq!(info.error_count, 1);
     }
@@ -1250,7 +1250,7 @@ mod tests {
             turn_count: 10,
             commands_run: 5,
             tokens_per_sec: Some(85.5),
-        };
+            memory_rss_kb: 0,        };
         assert_eq!(info.model.as_deref(), Some("claude-opus"));
         assert_eq!(info.tokens_used, 150_000);
         assert_eq!(info.modified_files.len(), 2);
@@ -1276,7 +1276,7 @@ mod tests {
             turn_count: 0,
             commands_run: 0,
             tokens_per_sec: None,
-        };
+            memory_rss_kb: 0,        };
         assert!(info.model.is_none());
         assert!(info.modified_files.is_empty());
     }

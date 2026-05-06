@@ -11,10 +11,10 @@ use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
 
 use ratatui::{
-    layout::Rect,
+    layout::{Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem},
+    widgets::{Block, Borders, List, ListItem, Scrollbar, ScrollbarOrientation, ScrollbarState},
     Frame,
 };
 
@@ -239,6 +239,8 @@ pub struct ChatWidget {
     pub streaming_active: bool,
     /// Cached message heights for virtual scrolling
     pub height_cache: MessageHeightCache,
+    /// Inner width from last render (for height-weighted scrollbar positioning)
+    last_inner_width: std::sync::atomic::AtomicUsize,
     /// Copy feedback: (message_index, timestamp) for showing "✓ Copied" on code blocks
     pub copy_feedback: Option<(usize, std::time::Instant)>,
     /// Per-message render cache (Mutex for thread-safe interior mutability)
@@ -287,6 +289,7 @@ impl ChatWidget {
             collapsed_tools: true,
             streaming_active: false,
             height_cache: MessageHeightCache::new(),
+            last_inner_width: std::sync::atomic::AtomicUsize::new(80),
             copy_feedback: None,
             render_cache: Mutex::new(super::MessageRenderCache::new(128)),
             last_render_area: std::sync::Mutex::new(None),
@@ -434,13 +437,39 @@ impl ChatWidget {
         }
     }
 
-    /// Scroll to a fractional position (0.0 = bottom/latest, 1.0 = top/oldest).
-    /// Used by scrollbar drag interaction.
+    /// Scroll to a fractional position (0.0 = top/oldest, 1.0 = bottom/latest).
+    /// Uses height-weighted mapping so drag feels smooth regardless of message sizes.
     pub fn scroll_to_ratio(&mut self, ratio: f64) {
         if self.messages.is_empty() { return; }
-        let max_offset = self.messages.len() - 1;
-        let offset = (ratio * max_offset as f64).round() as usize;
-        self.scroll_offset = offset.min(max_offset);
+        let msg_count = self.messages.len();
+        if msg_count == 1 {
+            self.scroll_offset = 0;
+            return;
+        }
+
+        // Compute cumulative heights to find total visual rows
+        let mut cumulative: Vec<usize> = Vec::with_capacity(msg_count);
+        let mut total_rows: usize = 0;
+        for (i, msg) in self.messages.iter().enumerate() {
+            let h = estimate_message_height(msg, self.collapsed_tools, self.last_inner_width.load(std::sync::atomic::Ordering::Relaxed));
+            total_rows += h;
+            if i + 1 < msg_count { total_rows += 1; } // gap
+            cumulative.push(total_rows);
+        }
+
+        if total_rows == 0 { return; }
+
+        // ratio 0.0 = top (oldest), 1.0 = bottom (newest)
+        let target_row = (ratio * (total_rows as f64 - 1.0)).round() as usize;
+
+        // Find message index whose cumulative height contains target_row
+        for (i, &cum) in cumulative.iter().enumerate() {
+            if cum > target_row {
+                self.scroll_offset = i;
+                return;
+            }
+        }
+        self.scroll_offset = msg_count - 1;
     }
 
     /// Toggle the fold state of a tool message by index.
@@ -477,6 +506,7 @@ impl ChatWidget {
     ) {
         let mut list_items = Vec::new();
         let inner_width = area.width.saturating_sub(2) as usize; // subtract borders
+        self.last_inner_width.store(inner_width, std::sync::atomic::Ordering::Relaxed);
 
         // Store rendered area for scrollbar hit testing
         if let Ok(mut ra) = self.last_render_area.lock() {
@@ -1053,7 +1083,14 @@ impl ChatWidget {
 
         // Render scrollbar when content overflows
         if total > visible_rows && visible_rows > 0 && area.height > 2 {
-            render_scrollbar(frame, area, theme, total, visible_rows, scroll_start);
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .thumb_style(Style::default().fg(theme.muted))
+                .track_style(Style::default().fg(theme.border));
+            let mut sb_state = ScrollbarState::new(total)
+                .viewport_content_length(visible_rows)
+                .position(scroll_start);
+            let sb_area = area.inner(Margin { vertical: 1, horizontal: 1 });
+            frame.render_stateful_widget(scrollbar, sb_area, &mut sb_state);
         }
     }
 
@@ -1433,41 +1470,6 @@ fn wrap_code_spans(spans: &[Span<'static>], max_chars: usize) -> Vec<Vec<Span<'s
         result.push(spans.to_vec());
     }
     result
-}
-
-/// Render a vertical scrollbar on the right edge of the chat area.
-fn render_scrollbar(
-    frame: &mut Frame,
-    area: Rect,
-    theme: &Theme,
-    total: usize,
-    visible_rows: usize,
-    scroll_start: usize,
-) {
-    let x = area.right().saturating_sub(2);
-    let y_top = area.top() + 1;
-    let height = area.height.saturating_sub(2) as usize;
-
-    if height == 0 || x <= area.left() { return; }
-
-    // Thumb size proportional to visible/total ratio
-    let thumb_size = ((height * visible_rows) / total).clamp(1, height);
-    let max_scroll = total.saturating_sub(visible_rows);
-    let thumb_offset = if max_scroll > 0 {
-        (height.saturating_sub(thumb_size)) * scroll_start / max_scroll
-    } else {
-        0
-    };
-
-    let buf = frame.buffer_mut();
-    for row in 0..height {
-        let (ch, style) = if row >= thumb_offset && row < thumb_offset + thumb_size {
-            ("█", Style::default().fg(theme.primary))
-        } else {
-            ("░", Style::default().fg(theme.border))
-        };
-        buf.set_string(x, y_top + row as u16, ch, style);
-    }
 }
 
 /// Truncate a string to fit within `max_chars` characters, appending "…" if truncated.

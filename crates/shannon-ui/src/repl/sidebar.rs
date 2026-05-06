@@ -3,6 +3,19 @@
 use crate::widgets::ChatRole;
 use super::state::AgentDisplay;
 
+/// Read process RSS memory in KB from /proc/self/status (Linux).
+fn read_memory_rss_kb() -> u64 {
+    let Ok(data) = std::fs::read_to_string("/proc/self/status") else { return 0 };
+    for line in data.lines() {
+        if let Some(rest) = line.strip_prefix("VmRSS:") {
+            return rest.trim().split_whitespace().next()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(0);
+        }
+    }
+    0
+}
+
 impl super::Repl {
     /// Get the current REPL state
     pub fn state(&self) -> &super::ReplState {
@@ -78,6 +91,7 @@ impl super::Repl {
                     None
                 }
             },
+            memory_rss_kb: read_memory_rss_kb(),
         })
     }
 

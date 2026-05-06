@@ -42,6 +42,8 @@ pub struct SidebarInfo {
     pub commands_run: usize,
     /// Tokens per second (if measurable)
     pub tokens_per_sec: Option<f64>,
+    /// Process RSS memory in KB (from /proc/self/status)
+    pub memory_rss_kb: u64,
 }
 
 /// Identifiable collapsible sections within sidebar tabs.
@@ -254,6 +256,18 @@ impl SidebarWidget {
                 if !self.is_collapsed(SidebarSection::Cost) {
                     let cost_str = format!("${:.4}", info.cost_usd);
                     lines.push(Line::from(Span::styled(cost_str, Style::default().fg(theme.warning))));
+                    lines.push(Line::from(""));
+                }
+
+                // Memory
+                if info.memory_rss_kb > 0 {
+                    lines.push(self.section_header("Memory", SidebarSection::Tools, theme));
+                    let mem_str = if info.memory_rss_kb >= 1_048_576 {
+                        format!("{:.1} MB", info.memory_rss_kb as f64 / 1_048_576.0)
+                    } else {
+                        format!("{:.0} KB", info.memory_rss_kb as f64 / 1_024.0)
+                    };
+                    lines.push(Line::from(Span::styled(mem_str, Style::default().fg(theme.text))));
                     lines.push(Line::from(""));
                 }
 
