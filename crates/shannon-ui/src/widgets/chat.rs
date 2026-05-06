@@ -975,6 +975,7 @@ impl ChatWidget {
         // inner height = area height minus top/bottom borders (2 rows)
         let visible_rows = area.height.saturating_sub(2) as usize;
         let total = list_items.len();
+        let mut scroll_start = 0usize;
         let items = if total > visible_rows {
             // Show the latest messages (from the bottom).
             // When scroll_offset < last message, user scrolled up → show from earlier.
@@ -984,6 +985,7 @@ impl ChatWidget {
             // scroll_offset = msg index; map to approximate line offset.
             let scroll_back = self.messages.len().saturating_sub(1).saturating_sub(self.scroll_offset);
             let start = max_start.saturating_sub(scroll_back).min(max_start);
+            scroll_start = start;
 
             // Scroll indicators
             let has_above = start > 0;
@@ -1031,6 +1033,11 @@ impl ChatWidget {
             );
 
         frame.render_widget(list, area);
+
+        // Render scrollbar when content overflows
+        if total > visible_rows && visible_rows > 0 && area.height > 2 {
+            render_scrollbar(frame, area, theme, total, visible_rows, scroll_start);
+        }
     }
 
     /// Render the chat widget (no search highlighting).
@@ -1375,6 +1382,41 @@ fn wrap_code_spans(spans: &[Span<'static>], max_chars: usize) -> Vec<Vec<Span<'s
         result.push(spans.to_vec());
     }
     result
+}
+
+/// Render a vertical scrollbar on the right edge of the chat area.
+fn render_scrollbar(
+    frame: &mut Frame,
+    area: Rect,
+    theme: &Theme,
+    total: usize,
+    visible_rows: usize,
+    scroll_start: usize,
+) {
+    let x = area.right().saturating_sub(2);
+    let y_top = area.top() + 1;
+    let height = area.height.saturating_sub(2) as usize;
+
+    if height == 0 || x <= area.left() { return; }
+
+    // Thumb size proportional to visible/total ratio
+    let thumb_size = ((height * visible_rows) / total).clamp(1, height);
+    let max_scroll = total.saturating_sub(visible_rows);
+    let thumb_offset = if max_scroll > 0 {
+        (height.saturating_sub(thumb_size)) * scroll_start / max_scroll
+    } else {
+        0
+    };
+
+    let buf = frame.buffer_mut();
+    for row in 0..height {
+        let (ch, style) = if row >= thumb_offset && row < thumb_offset + thumb_size {
+            ("█", Style::default().fg(theme.primary))
+        } else {
+            ("░", Style::default().fg(theme.border))
+        };
+        buf.set_string(x, y_top + row as u16, ch, style);
+    }
 }
 
 /// Truncate a string to fit within `max_chars` characters, appending "…" if truncated.
