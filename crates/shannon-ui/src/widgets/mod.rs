@@ -303,7 +303,7 @@ impl MainLayoutWidget {
         // Render chat with optional search highlighting
         let render_chat = |frame: &mut Frame, chat_area: Rect, theme: &Theme| {
             if search_query.is_some() && !search_matches.is_empty() {
-                chat.render_with_search(frame, chat_area, theme, search_query, search_matches, search_focused_idx);
+                chat.render_with_search(frame, chat_area, theme, search_query, search_matches, search_focused_idx, false);
             } else {
                 chat.render(frame, chat_area, theme);
             }

@@ -199,8 +199,6 @@ pub struct ReplState {
     pub onboarding_active: bool,
     /// Whether mouse capture is enabled (F8 toggles; when off, terminal handles text selection)
     pub mouse_capture_enabled: bool,
-    /// Whether user is currently dragging the scrollbar
-    pub scrollbar_dragging: bool,
     /// Tool approval overlay widget (shows when tool needs confirmation)
     pub tool_approval: ToolApprovalWidget,
     /// Attachment bar widget (shows attached files/images above prompt)
@@ -422,7 +420,6 @@ impl Default for ReplState {
             pending_notifications: Vec::new(),
             onboarding_active: false,
             mouse_capture_enabled: true,
-            scrollbar_dragging: false,
             tool_approval: ToolApprovalWidget::new(),
             attachment_bar: AttachmentBarWidget::new(5),
             command_palette: None,

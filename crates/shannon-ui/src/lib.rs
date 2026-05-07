@@ -23,6 +23,8 @@ pub mod lsp_bridge;
 pub mod a11y;
 pub mod voice;
 pub mod stream_render;
+pub mod ansi_render;
+pub mod tui;
 
 pub use repl::{Repl, ReplState};
 pub use events::{Event, EventHandler};

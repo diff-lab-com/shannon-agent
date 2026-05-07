@@ -32,10 +32,11 @@ use rust_i18n::t;
 use shannon_types::recover_lock;
 use crossterm::{
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
     backend::CrosstermBackend,
+    prelude::Widget,
     Terminal,
 };
 use std::collections::HashMap;
@@ -44,7 +45,7 @@ use std::collections::HashMap;
 type LocalServerEntry = (String, String, Vec<String>, HashMap<String, String>, Vec<String>);
 /// Type alias for remote (HTTP/SSE) MCP server config: (name, url, headers, oauth_scopes).
 type HttpServerEntry = (String, String, HashMap<String, String>, Vec<String>);
-use std::io;
+use std::io::{self, Write as IoWrite};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
@@ -1105,15 +1106,30 @@ impl Repl {
         };
 
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen)?;
         // Enable bracketed paste mode for proper multi-line paste handling
         execute!(stdout, crossterm::event::EnableBracketedPaste)?;
         // Enable mouse capture for scroll support
         execute!(stdout, crossterm::event::EnableMouseCapture)?;
+
+        // Print welcome header directly to stdout (scrolls into terminal history)
+        let welcome = format!("\n  \x1b[1;36mShannon\x1b[0m \x1b[90m— AI code assistant (type /help for commands)\x1b[0m\n\n");
+        IoWrite::write_all(&mut stdout, welcome.as_bytes())?;
+        IoWrite::flush(&mut stdout)?;
+
         let backend = CrosstermBackend::new(stdout);
-        let mut terminal = Terminal::new(backend)?;
+        // Use viewport height = screen_height - 2 to avoid ratatui's "borrow top line"
+        // code path in insert_before, which corrupts the diff buffer.
+        let term_size = crossterm::terminal::size().unwrap_or((80, 24));
+        let viewport_height = term_size.1.saturating_sub(2).max(5);
+        let mut terminal = Terminal::with_options(
+            backend,
+            ratatui::TerminalOptions {
+                viewport: ratatui::Viewport::Inline(viewport_height),
+            },
+        )?;
 
         self.running = true;
+        let mut alt_screen = false;
 
         // Show onboarding dialog on first run (no config files)
         self.check_first_run();
@@ -1261,6 +1277,43 @@ impl Repl {
             }
 
             // Draw UI
+            // Determine if a full-screen overlay is active (needs alternate screen)
+            let overlay_active = self.state.pager_active
+                || self.state.diff_viewer.is_some()
+                || self.state.show_key_hints
+                || self.state.fuzzy_picker.is_some()
+                || self.state.file_selector.is_some()
+                || self.state.model_picker.is_some()
+                || self.state.theme_picker.is_some()
+                || self.state.multi_select.is_some()
+                || self.state.command_palette.is_some()
+                || (self.state.plan.active && !self.state.plan.approved);
+
+            // Manage alternate screen transitions for overlays
+            if overlay_active && !alt_screen {
+                execute!(terminal.backend_mut(), crossterm::terminal::EnterAlternateScreen)?;
+                terminal.clear()?;
+                alt_screen = true;
+            } else if !overlay_active && alt_screen {
+                execute!(terminal.backend_mut(), crossterm::terminal::LeaveAlternateScreen)?;
+                terminal.clear()?;
+                alt_screen = false;
+            }
+
+            // Inject finalized messages into terminal scrollback (only in inline mode)
+            if !alt_screen {
+                let width = terminal.size().map(|s| s.width).unwrap_or(80);
+                let (lines, height) = self.chat.commit_to_lines(width);
+                if height > 0 {
+                    terminal.insert_before(height, |buf| {
+                        let paragraph = ratatui::widgets::Paragraph::new(lines);
+                        paragraph.render(buf.area, buf);
+                    })?;
+                    // Force full repaint: insert_before modifies screen content
+                    // outside ratatui's draw cycle, invalidating the diff buffer.
+                    terminal.clear()?;
+                }
+            }
             render::draw_frame(&mut terminal, self)?;
 
             // Handle events
@@ -1308,6 +1361,9 @@ impl Repl {
         }
 
         // Restore terminal
+        if alt_screen {
+            execute!(terminal.backend_mut(), crossterm::terminal::LeaveAlternateScreen)?;
+        }
         disable_raw_mode()?;
         execute!(
             terminal.backend_mut(),
@@ -1316,10 +1372,6 @@ impl Repl {
         execute!(
             terminal.backend_mut(),
             crossterm::event::DisableBracketedPaste
-        )?;
-        execute!(
-            terminal.backend_mut(),
-            LeaveAlternateScreen
         )?;
         terminal.show_cursor()?;
 
@@ -1376,53 +1428,8 @@ impl Repl {
                 }
                 self.state.completion_suggestions.clear();
             }
-            crate::events::Event::Mouse(mouse) => {
-                use crossterm::event::{MouseEventKind, MouseButton};
-                if self.state.mouse_capture_enabled {
-                    match mouse.kind {
-                        MouseEventKind::ScrollUp => {
-                            for _ in 0..3 { self.chat.scroll_up(); }
-                        }
-                        MouseEventKind::ScrollDown => {
-                            for _ in 0..3 { self.chat.scroll_down(); }
-                        }
-                        MouseEventKind::Down(MouseButton::Left) => {
-                            // Check if click is on the scrollbar
-                            if let Some(chat_area) = self.chat.last_render_area.lock().ok().and_then(|ra| *ra) {
-                                let sb_x = chat_area.right().saturating_sub(2);
-                                let sb_y_start = chat_area.top() + 1;
-                                let sb_y_end = chat_area.bottom().saturating_sub(1);
-                                if mouse.column == sb_x
-                                    && mouse.row >= sb_y_start
-                                    && mouse.row < sb_y_end
-                                    && sb_y_end > sb_y_start
-                                {
-                                    self.state.scrollbar_dragging = true;
-                                    let height = (sb_y_end - sb_y_start) as f64;
-                                    let ratio = (mouse.row - sb_y_start) as f64 / height;
-                                    self.chat.scroll_to_ratio(ratio);
-                                }
-                            }
-                        }
-                        MouseEventKind::Drag(MouseButton::Left) => {
-                            if self.state.scrollbar_dragging {
-                                if let Some(chat_area) = self.chat.last_render_area.lock().ok().and_then(|ra| *ra) {
-                                    let sb_y_start = chat_area.top() + 1;
-                                    let sb_y_end = chat_area.bottom().saturating_sub(1);
-                                    if sb_y_end > sb_y_start {
-                                        let height = (sb_y_end - sb_y_start) as f64;
-                                        let ratio = ((mouse.row as i32 - sb_y_start as i32).max(0) as f64 / height).min(1.0);
-                                        self.chat.scroll_to_ratio(ratio);
-                                    }
-                                }
-                            }
-                        }
-                        MouseEventKind::Up(MouseButton::Left) => {
-                            self.state.scrollbar_dragging = false;
-                        }
-                        _ => {}
-                    }
-                }
+            crate::events::Event::Mouse(_mouse) => {
+                // Terminal native scrollback handles scrolling in inline viewport mode
             }
             crate::events::Event::Tick => {
                 // Advance spinner animation during query processing

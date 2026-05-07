@@ -123,6 +123,11 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         return Ok(());
     }
 
+    // If transcript pager is active, handle pager keys
+    if repl.state.pager_active {
+        return handle_pager_input(repl, key);
+    }
+
     match key.code {
         // F1: show full keyboard shortcuts overlay
         KeyCode::F(1) => {
@@ -228,6 +233,11 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         // Alt+F: toggle all tool messages collapsed/expanded
         KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::ALT) => {
             repl.chat.collapsed_tools = !repl.chat.collapsed_tools;
+            Ok(())
+        }
+        // Ctrl+G: toggle transcript pager
+        KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            repl.toggle_pager();
             Ok(())
         }
         // Ctrl+T: toggle session tab bar visibility
@@ -1507,4 +1517,50 @@ fn collect_project_files(root: &str) -> Vec<String> {
     files.truncate(500);
     files.sort();
     files
+}
+
+/// Handle keys when the transcript pager is active.
+fn handle_pager_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
+    match key.code {
+        // Close pager
+        KeyCode::Esc | KeyCode::Char('q') => {
+            repl.state.pager_active = false;
+            Ok(())
+        }
+        // Scroll down
+        KeyCode::Down | KeyCode::Char('j') => {
+            repl.pager_scroll(1);
+            Ok(())
+        }
+        // Scroll up
+        KeyCode::Up | KeyCode::Char('k') => {
+            repl.pager_scroll(-1);
+            Ok(())
+        }
+        // Scroll to top
+        KeyCode::Char('g') => {
+            repl.pager_scroll_top();
+            Ok(())
+        }
+        // Scroll to bottom (Shift+G)
+        KeyCode::Char('G') => {
+            repl.pager_scroll_bottom();
+            Ok(())
+        }
+        // Page down
+        KeyCode::PageDown | KeyCode::Char(' ') => {
+            if let Some(h) = repl.terminal_height() {
+                repl.pager_scroll(h as isize);
+            }
+            Ok(())
+        }
+        // Page up
+        KeyCode::PageUp | KeyCode::Backspace => {
+            if let Some(h) = repl.terminal_height() {
+                repl.pager_scroll(-(h as isize));
+            }
+            Ok(())
+        }
+        _ => Ok(())
+    }
 }

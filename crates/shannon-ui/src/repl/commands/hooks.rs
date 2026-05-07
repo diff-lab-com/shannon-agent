@@ -188,14 +188,12 @@ pub(crate) fn handle_commands(repl: &mut Repl, args: &str) -> Result<()> {
                 let path = e.path.clone();
                 repl.chat.add_message(ChatRole::System, format!("Opening {} in {editor}...", path.display()));
                 // Drop terminal raw mode before spawning editor
-                crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen)?;
                 crossterm::terminal::disable_raw_mode()?;
                 let status = std::process::Command::new(&editor)
                     .arg(&path)
                     .status();
                 // Restore terminal
                 crossterm::terminal::enable_raw_mode()?;
-                crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
                 match status {
                     Ok(s) if s.success() => {
                         repl.chat.add_message(ChatRole::System, "Editor closed. Use /commands reload to apply changes.".to_string());

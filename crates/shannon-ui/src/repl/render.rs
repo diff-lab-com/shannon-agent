@@ -265,6 +265,8 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
     Ok(())
 }
 
+/// Render inline viewport: compact status bar + prompt only.
+/// Chat messages live in terminal scrollback; this viewport is just the active input area.
 /// Render permission dialog
 pub fn render_permission_dialog(
     frame: &mut ratatui::Frame,
@@ -550,7 +552,7 @@ fn render_pager_overlay(
     frame.render_widget(header, Rect { x: area.x, y: area.y, width: area.width, height: 1 });
 
     // Render chat widget content in the pager area
-    chat.render(frame, content_area, theme);
+    chat.render_full(frame, content_area, theme);
 
     // Footer bar
     let footer = Paragraph::new(Line::from(Span::styled(

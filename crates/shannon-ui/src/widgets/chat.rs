@@ -12,7 +12,7 @@ use syntect::parsing::SyntaxSet;
 
 use ratatui::{
     layout::{Margin, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Scrollbar, ScrollbarOrientation, ScrollbarState},
     Frame,
@@ -247,6 +247,8 @@ pub struct ChatWidget {
     pub render_cache: Mutex<super::MessageRenderCache>,
     /// Last rendered area (for scrollbar hit testing)
     pub last_render_area: std::sync::Mutex<Option<Rect>>,
+    /// Number of messages already committed to terminal scrollback (inline viewport mode)
+    committed_count: usize,
 }
 
 /// A single chat message
@@ -293,6 +295,7 @@ impl ChatWidget {
             copy_feedback: None,
             render_cache: Mutex::new(super::MessageRenderCache::new(128)),
             last_render_area: std::sync::Mutex::new(None),
+            committed_count: 0,
         }
     }
 
@@ -503,6 +506,7 @@ impl ChatWidget {
         search_query: Option<&str>,
         search_matches: &[(usize, usize, usize)], // (msg_index, byte_start, byte_end)
         focused_match_idx: Option<usize>,          // index into search_matches
+        show_all: bool,
     ) {
         let mut list_items = Vec::new();
         let inner_width = area.width.saturating_sub(2) as usize; // subtract borders
@@ -514,23 +518,27 @@ impl ChatWidget {
         }
         let visible_rows = area.height.saturating_sub(2) as usize;
 
-        // Build a lookup: msg_index -> list of (match_global_idx, byte_start, byte_end)
+        // Always render all messages in the viewport. committed_count only tracks
+        // what's been injected into terminal scrollback — it does NOT control display.
+        // (show_all is kept for the pager which renders on alternate screen)
+        let _committed = if show_all { 0 } else { self.committed_count };
+        let messages: Vec<&ChatMessage> = self.messages.iter().collect();
+
+        // Build a lookup: relative_msg_index -> list of (match_global_idx, byte_start, byte_end)
         let mut matches_by_msg: std::collections::HashMap<usize, Vec<(usize, usize, usize)>> =
             std::collections::HashMap::new();
         for (global_idx, &(msg_idx, start, end)) in search_matches.iter().enumerate() {
             matches_by_msg.entry(msg_idx).or_default().push((global_idx, start, end));
         }
-
-        let messages: Vec<&ChatMessage> = self.messages.iter().collect();
         let msg_count = messages.len();
 
         // Virtual scrolling: compute approximate message heights and determine
         // which messages fall within the visible window.
         let (vis_start, vis_end) = if msg_count > 0 && visible_rows > 0 {
             // Accumulate heights from the end (latest messages shown at bottom).
-            // scroll_offset = index of focused message (0 = oldest, last = newest).
-            // Default: scroll_offset = last index → show latest messages.
-            let focused = self.scroll_offset.min(msg_count - 1);
+            // scroll_offset is absolute; remap to relative index in filtered messages.
+            let rel_scroll = self.scroll_offset;
+            let focused = rel_scroll.min(msg_count - 1);
 
             // Walk backwards from focused message accumulating rows
             let mut end_idx = focused;
@@ -713,14 +721,11 @@ impl ChatWidget {
             // Build the role prefix line: "[HH:MM:SS] You > " or "[HH:MM:SS] AI > "
             // For tool messages, the prefix is "[HH:MM:SS] Tool ⚙: "
             let (_prefix_display, prefix_len) = if msg.role == ChatRole::Tool {
-                // Tool messages keep the icon + name style
-                let ts_len = timestamp.len();
-                let display_len = ts_len + 2 + 5 + 3 + 1 + 4 + 2; // "[TS] Tool ⚙: "
-                (format!("[{timestamp}] Tool \u{2699}: "), display_len)
+                let prefix = format!("[{timestamp}] Tool \u{2699}: ");
+                (prefix.clone(), prefix.chars().count())
             } else {
-                let ts_len = timestamp.len();
-                let display_len = ts_len + 2 + role_prefix.len() + 3; // "[TS] You > "
-                (format!("[{timestamp}] {role_prefix} > "), display_len)
+                let prefix = format!("[{timestamp}] {role_prefix} > ");
+                (prefix.clone(), prefix.chars().count())
             };
 
             // Strip ANSI escape codes — ratatui doesn't interpret them
@@ -1096,7 +1101,12 @@ impl ChatWidget {
 
     /// Render the chat widget (no search highlighting).
     pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        self.render_with_search(frame, area, theme, None, &[], None);
+        self.render_with_search(frame, area, theme, None, &[], None, false);
+    }
+
+    /// Render all messages including committed ones (used by transcript pager).
+    pub fn render_full(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        self.render_with_search(frame, area, theme, None, &[], None, true);
     }
 
     /// Find all occurrences of `query` in chat messages.
@@ -1163,6 +1173,152 @@ impl ChatWidget {
     /// Iterate all messages with their indices
     pub fn iter_messages(&self) -> impl Iterator<Item = (usize, &ChatMessage)> {
         self.messages.iter().enumerate()
+    }
+
+    /// Render uncommitted messages to ANSI text and mark them committed.
+    /// Returns ANSI string ready to write to stdout (for terminal scrollback).
+    /// `width` is the terminal width for line wrapping.
+    pub fn commit_to_ansi(&mut self, width: u16) -> String {
+        if self.committed_count >= self.messages.len() {
+            return String::new();
+        }
+
+        let mut output = String::new();
+        let content_width = width.saturating_sub(2) as usize;
+
+        for msg in self.messages.iter().skip(self.committed_count) {
+            let ts = msg.timestamp.format("%H:%M:%S").to_string();
+
+            // Role prefix with color
+            let (role_name, role_color) = match msg.role {
+                ChatRole::User => ("You", "\x1b[32m"),
+                ChatRole::Assistant => ("AI", "\x1b[36m"),
+                ChatRole::System => ("Sys", "\x1b[33m"),
+                ChatRole::Tool => ("Tool", "\x1b[35m"),
+            };
+            output.push_str(&format!("\x1b[90m[{ts}]\x1b[0m {role_color}{role_name}\x1b[0m"));
+
+            // Duration for tool messages
+            if msg.role == ChatRole::Tool {
+                if let Some(dur) = msg.duration_secs {
+                    output.push_str(&format!(" \x1b[90m({dur:.1}s)\x1b[0m"));
+                }
+            }
+            output.push('\n');
+
+            // Content with wrapping
+            let clean = strip_ansi(&msg.content);
+            let indent = 2;
+            let available = content_width.saturating_sub(indent);
+
+            if msg.role == ChatRole::Tool && self.collapsed_tools {
+                // Collapsed tool: first line only
+                let first_line = clean.lines().next().unwrap_or("");
+                let total_lines = clean.lines().count();
+                if total_lines <= 1 {
+                    output.push_str(&format!("  {first_line}\n"));
+                } else {
+                    output.push_str(&format!("  {first_line} \x1b[90m[+{total_lines}]\x1b[0m\n"));
+                }
+            } else {
+                for content_line in clean.lines() {
+                    let wrapped = wrap_line(content_line, available);
+                    for w in &wrapped {
+                        output.push_str(&format!("  {w}\n"));
+                    }
+                }
+            }
+
+            output.push('\n');
+        }
+
+        self.committed_count = self.messages.len();
+        output
+    }
+
+    /// Render uncommitted messages as ratatui Lines for history injection.
+    /// Returns (lines, total_height). Marks messages as committed.
+    /// Skips the last message if streaming is active (it stays in viewport).
+    pub fn commit_to_lines(&mut self, width: u16) -> (Vec<ratatui::text::Line<'static>>, u16) {
+        if self.committed_count >= self.messages.len() {
+            return (Vec::new(), 0);
+        }
+
+        // Don't commit the last message if streaming (it stays in viewport for live rendering)
+        let commit_end = if self.streaming_active && !self.messages.is_empty() {
+            self.messages.len().saturating_sub(1)
+        } else {
+            self.messages.len()
+        };
+
+        if self.committed_count >= commit_end {
+            return (Vec::new(), 0);
+        }
+
+        let mut all_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
+        let content_width = width.saturating_sub(2) as usize;
+
+        for msg in self.messages.iter().skip(self.committed_count).take(commit_end - self.committed_count) {
+            let ts = msg.timestamp.format("%H:%M:%S").to_string();
+
+            // Role prefix with style
+            let (role_name, role_style) = match msg.role {
+                ChatRole::User => ("You", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                ChatRole::Assistant => ("AI", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                ChatRole::System => ("Sys", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                ChatRole::Tool => ("Tool", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+            };
+
+            let mut header_spans = vec![
+                Span::styled(format!("[{ts}]"), Style::default().fg(Color::DarkGray)),
+                Span::raw(" "),
+                Span::styled(role_name, role_style),
+            ];
+
+            if msg.role == ChatRole::Tool {
+                if let Some(dur) = msg.duration_secs {
+                    header_spans.push(Span::styled(format!(" ({dur:.1}s)"), Style::default().fg(Color::DarkGray)));
+                }
+            }
+
+            all_lines.push(ratatui::text::Line::from(header_spans));
+
+            // Content with wrapping
+            let clean = strip_ansi(&msg.content);
+            let indent = 2;
+            let available = content_width.saturating_sub(indent);
+
+            if msg.role == ChatRole::Tool && self.collapsed_tools {
+                let first_line = clean.lines().next().unwrap_or("");
+                let total_lines = clean.lines().count();
+                if total_lines <= 1 {
+                    all_lines.push(ratatui::text::Line::from(format!("  {first_line}")));
+                } else {
+                    all_lines.push(ratatui::text::Line::from(vec![
+                        Span::raw(format!("  {first_line} ")),
+                        Span::styled(format!("[+{total_lines}]"), Style::default().fg(Color::DarkGray)),
+                    ]));
+                }
+            } else {
+                for content_line in clean.lines() {
+                    let wrapped = wrap_line(content_line, available);
+                    for w in &wrapped {
+                        all_lines.push(ratatui::text::Line::from(format!("  {w}")));
+                    }
+                }
+            }
+
+            all_lines.push(ratatui::text::Line::from(""));
+        }
+
+        self.committed_count = commit_end;
+        let height = all_lines.len() as u16;
+        (all_lines, height)
+    }
+
+    /// Reset committed count (e.g. after rewind or clear).
+    pub fn reset_committed(&mut self) {
+        self.committed_count = 0;
     }
 
     /// Rewind the conversation by removing the last `n` turns.
@@ -1347,7 +1503,7 @@ fn parse_inline_formatting(text: &str, base_color: ratatui::style::Color) -> Vec
 
 /// Wrap a line of text to fit within `max_chars`, returning multiple lines.
 /// Word-boundary wrapping with mid-word fallback for long unbroken strings.
-fn wrap_line(s: &str, max_chars: usize) -> Vec<String> {
+pub(crate) fn wrap_line(s: &str, max_chars: usize) -> Vec<String> {
     if max_chars == 0 {
         return if s.is_empty() { vec![String::new()] } else { vec![s.to_string()] };
     }
