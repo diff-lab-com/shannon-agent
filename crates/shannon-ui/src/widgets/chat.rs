@@ -1063,7 +1063,14 @@ impl ChatWidget {
             }
             sliced
         } else {
-            list_items
+            // Bottom-align messages when content fits in viewport
+            let padding = visible_rows.saturating_sub(total);
+            let mut padded = Vec::with_capacity(visible_rows);
+            for _ in 0..padding {
+                padded.push(ListItem::new(Line::from("")));
+            }
+            padded.extend(list_items);
+            padded
         };
 
         // Build scroll indicator title
