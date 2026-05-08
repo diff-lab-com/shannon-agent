@@ -332,12 +332,10 @@ impl MainLayoutWidget {
             render_chat(frame, chunks[0], theme);
             prompt.render(frame, chunks[1], theme);
         } else {
-            let (header_area, chat_area, prompt_area, status_area, sidebar_area, _) =
+            let (_header_area, chat_area, prompt_area, status_area, sidebar_area, _) =
                 Self::layout_with_sidebar(area, prompt_height, sidebar_visible, chat.is_empty());
 
-            if chat.is_empty() && header_area.height > 0 {
-                HeaderWidget::render(frame, header_area, theme);
-            }
+            // Header area reserved but not rendered — chat is the primary interface
             render_chat(frame, chat_area, theme);
             prompt.render(frame, prompt_area, theme);
             if let Some(custom) = cached_statusline {

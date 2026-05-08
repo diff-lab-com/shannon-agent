@@ -28,7 +28,6 @@ use crate::{
     },
     Result,
 };
-use rust_i18n::t;
 use shannon_types::recover_lock;
 use crossterm::{
     execute,
@@ -1094,11 +1093,15 @@ impl Repl {
         // Setup terminal
         enable_raw_mode()?;
 
-        // Panic-safety guard: ensure raw mode is disabled even if we panic.
+        // Panic-safety guard: ensure terminal is restored even if we panic.
         let _cleanup_guard = {
             struct TerminalGuard;
             impl Drop for TerminalGuard {
                 fn drop(&mut self) {
+                    let mut stdout = io::stdout();
+                    let _ = crossterm::execute!(stdout, crossterm::event::DisableMouseCapture);
+                    let _ = crossterm::execute!(stdout, crossterm::event::DisableBracketedPaste);
+                    let _ = crossterm::execute!(stdout, crossterm::cursor::Show);
                     let _ = disable_raw_mode();
                 }
             }
@@ -1111,16 +1114,9 @@ impl Repl {
         // Enable mouse capture for scroll support
         execute!(stdout, crossterm::event::EnableMouseCapture)?;
 
-        // Print welcome header directly to stdout (scrolls into terminal history)
-        let welcome = format!("\n  \x1b[1;36mShannon\x1b[0m \x1b[90m— AI code assistant (type /help for commands)\x1b[0m\n\n");
-        IoWrite::write_all(&mut stdout, welcome.as_bytes())?;
-        IoWrite::flush(&mut stdout)?;
-
         let backend = CrosstermBackend::new(stdout);
-        // Use viewport height = screen_height - 2 to avoid ratatui's "borrow top line"
-        // code path in insert_before, which corrupts the diff buffer.
         let term_size = crossterm::terminal::size().unwrap_or((80, 24));
-        let viewport_height = std::cmp::min(term_size.1 / 2, 18).max(6);
+        let viewport_height = term_size.1.saturating_sub(2).max(6);
         let mut terminal = Terminal::with_options(
             backend,
             ratatui::TerminalOptions {
@@ -1129,10 +1125,6 @@ impl Repl {
         )?;
 
         self.running = true;
-        let mut alt_screen = false;
-
-        // Show onboarding dialog on first run (no config files)
-        self.check_first_run();
 
         // Fire SessionStart hooks (Claude Code compatible lifecycle)
         if let Some(ref engine) = self.query_engine {
@@ -1148,19 +1140,6 @@ impl Repl {
                 }
             });
         }
-
-        // Show welcome message rendered through the markdown renderer
-        let welcome_md = self.renderer.render_markdown(
-            &format!("# {}\n\n{}", t!("repl.welcome"), t!("repl.welcome_help"))
-        );
-        let welcome_text: String = welcome_md.iter()
-            .flat_map(|line| line.spans.iter().map(|s| s.content.clone()))
-            .collect::<Vec<_>>()
-            .join("");
-        self.chat.add_message(
-            ChatRole::System,
-            welcome_text,
-        );
 
         // Check for updates in background to avoid blocking startup
         {
@@ -1276,33 +1255,8 @@ impl Repl {
                     format!("[Routine: {name}] {prompt}"));
             }
 
-            // Draw UI
-            // Determine if a full-screen overlay is active (needs alternate screen)
-            let overlay_active = self.state.pager_active
-                || self.state.diff_viewer.is_some()
-                || self.state.show_key_hints
-                || self.state.fuzzy_picker.is_some()
-                || self.state.file_selector.is_some()
-                || self.state.model_picker.is_some()
-                || self.state.theme_picker.is_some()
-                || self.state.multi_select.is_some()
-                || self.state.command_palette.is_some()
-                || (self.state.plan.active && !self.state.plan.approved)
-                || self.state.sidebar_visible;
-
-            // Manage alternate screen transitions for overlays
-            if overlay_active && !alt_screen {
-                execute!(terminal.backend_mut(), crossterm::terminal::EnterAlternateScreen)?;
-                terminal.clear()?;
-                alt_screen = true;
-            } else if !overlay_active && alt_screen {
-                execute!(terminal.backend_mut(), crossterm::terminal::LeaveAlternateScreen)?;
-                terminal.clear()?;
-                alt_screen = false;
-            }
-
-            // Inject finalized messages into terminal scrollback (only in inline mode)
-            if !alt_screen {
+            // Inject finalized messages into terminal scrollback
+            {
                 let width = terminal.size().map(|s| s.width).unwrap_or(80);
                 let (lines, height) = self.chat.commit_to_lines(width);
                 if height > 0 {
@@ -1310,9 +1264,6 @@ impl Repl {
                         let paragraph = ratatui::widgets::Paragraph::new(lines);
                         paragraph.render(buf.area, buf);
                     })?;
-                    // Clear after insert_before to reset diff buffer.
-                    // Only needed when new lines are committed to scrollback.
-                    terminal.clear()?;
                 }
             }
             render::draw_frame(&mut terminal, self)?;
@@ -1361,11 +1312,7 @@ impl Repl {
             }
         }
 
-        // Restore terminal
-        if alt_screen {
-            execute!(terminal.backend_mut(), crossterm::terminal::LeaveAlternateScreen)?;
-        }
-        disable_raw_mode()?;
+        // Restore terminal — disable mouse/bracketed-paste BEFORE raw mode to prevent escape leakage
         execute!(
             terminal.backend_mut(),
             crossterm::event::DisableMouseCapture
@@ -1375,6 +1322,9 @@ impl Repl {
             crossterm::event::DisableBracketedPaste
         )?;
         terminal.show_cursor()?;
+        // Flush all escape sequences while still in raw mode, then disable.
+        IoWrite::flush(terminal.backend_mut())?;
+        disable_raw_mode()?;
 
         // Print session cost summary to stdout after terminal is restored
         if let Some(ref engine) = self.query_engine {
