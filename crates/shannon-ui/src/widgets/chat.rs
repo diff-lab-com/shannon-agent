@@ -518,11 +518,14 @@ impl ChatWidget {
         }
         let visible_rows = area.height.saturating_sub(2) as usize;
 
-        // Always render all messages in the viewport. committed_count only tracks
-        // what's been injected into terminal scrollback — it does NOT control display.
-        // (show_all is kept for the pager which renders on alternate screen)
-        let _committed = if show_all { 0 } else { self.committed_count };
-        let messages: Vec<&ChatMessage> = self.messages.iter().collect();
+        // Only render uncommitted messages in the viewport.
+        // Committed messages live in terminal scrollback (injected via insert_before).
+        // show_all=true is for the transcript pager (rendered on alternate screen).
+        let messages: Vec<&ChatMessage> = if show_all {
+            self.messages.iter().collect()
+        } else {
+            self.messages.iter().skip(self.committed_count).collect()
+        };
 
         // Build a lookup: relative_msg_index -> list of (match_global_idx, byte_start, byte_end)
         let mut matches_by_msg: std::collections::HashMap<usize, Vec<(usize, usize, usize)>> =

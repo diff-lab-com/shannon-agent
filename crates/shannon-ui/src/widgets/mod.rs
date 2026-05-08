@@ -43,7 +43,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Rect},
     style::Style,
     text::Line,
-    widgets::Paragraph,
+    widgets::{Clear, Paragraph},
     Frame,
 };
 use std::collections::HashMap;
@@ -350,6 +350,9 @@ impl MainLayoutWidget {
 
             if let (Some(info), Some(sb_area)) = (sidebar_info, sidebar_area) {
                 if sb_area.width > 5 && sb_area.height > 3 {
+                    // Clear the sidebar area first to prevent old content showing through
+                    // during diff-based rendering (especially during streaming).
+                    frame.render_widget(Clear, sb_area);
                     let sidebar_widget = SidebarWidget::new();
                     sidebar_widget.render(frame, sb_area, info, theme, sidebar_tab);
                 }

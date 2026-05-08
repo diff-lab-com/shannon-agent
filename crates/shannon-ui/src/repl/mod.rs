@@ -1309,10 +1309,11 @@ impl Repl {
                         let paragraph = ratatui::widgets::Paragraph::new(lines);
                         paragraph.render(buf.area, buf);
                     })?;
-                    // Force full repaint: insert_before modifies screen content
-                    // outside ratatui's draw cycle, invalidating the diff buffer.
-                    terminal.clear()?;
                 }
+                // Always clear viewport to force full repaint. This prevents
+                // diff-based rendering artifacts when viewport content changes
+                // (e.g., streaming messages, sidebar updates).
+                terminal.clear()?;
             }
             render::draw_frame(&mut terminal, self)?;
 
