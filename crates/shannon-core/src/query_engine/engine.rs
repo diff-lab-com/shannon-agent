@@ -447,11 +447,17 @@ impl QueryEngine {
 
     /// Update the model used for API calls.
     pub fn set_model(&mut self, model: String) {
+        if let Ok(mut tracker) = self.cost_tracker.write() {
+            tracker.model_name = model.clone();
+        }
         self.client.set_model(model);
     }
 
     /// Update the model AND switch provider (including base_url).
     pub fn set_model_for_provider(&mut self, model: String, provider: LlmProvider) {
+        if let Ok(mut tracker) = self.cost_tracker.write() {
+            tracker.model_name = model.clone();
+        }
         self.client.set_model_for_provider(model, provider);
     }
 

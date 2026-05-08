@@ -331,8 +331,14 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
 
     // Poll the streaming buffer while the query runs
     {
+        let viewport_height = crossterm::terminal::size().unwrap_or((80, 24)).1.saturating_sub(2).max(6);
         let terminal_backend = CrosstermBackend::new(io::stdout());
-        let mut polling_terminal = Terminal::new(terminal_backend)?;
+        let mut polling_terminal = Terminal::with_options(
+            terminal_backend,
+            ratatui::TerminalOptions {
+                viewport: ratatui::Viewport::Inline(viewport_height),
+            },
+        )?;
         let mut buffer = StreamBuffer::new();
         let stream_start = std::time::Instant::now();
 

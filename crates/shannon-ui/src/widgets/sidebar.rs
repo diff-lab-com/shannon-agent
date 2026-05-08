@@ -49,8 +49,6 @@ pub struct SidebarInfo {
 /// Identifiable collapsible sections within sidebar tabs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SidebarSection {
-    /// Context tab: Model name
-    Model,
     /// Context tab: Context window usage
     ContextUsage,
     /// Context tab: Cost
@@ -201,15 +199,7 @@ impl SidebarWidget {
 
         match tab {
             crate::repl::SidebarTab::Context => {
-                // Model section
-                lines.push(self.section_header("Model", SidebarSection::Model, theme));
-                if !self.is_collapsed(SidebarSection::Model) {
-                    let model_name = info.model.as_deref().unwrap_or("unknown");
-                    lines.push(Line::from(Span::styled(truncate_to(model_name, w), Style::default().fg(theme.primary))));
-                    lines.push(Line::from(""));
-                }
-
-                // Context usage
+                // Context usage (model shown in status bar, no duplication)
                 lines.push(self.section_header("Context", SidebarSection::ContextUsage, theme));
                 if !self.is_collapsed(SidebarSection::ContextUsage) {
                     let tokens_str = format_tokens(info.tokens_used);
