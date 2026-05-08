@@ -1120,7 +1120,7 @@ impl Repl {
         // Use viewport height = screen_height - 2 to avoid ratatui's "borrow top line"
         // code path in insert_before, which corrupts the diff buffer.
         let term_size = crossterm::terminal::size().unwrap_or((80, 24));
-        let viewport_height = term_size.1.saturating_sub(2).max(5);
+        let viewport_height = std::cmp::min(term_size.1 / 2, 18).max(6);
         let mut terminal = Terminal::with_options(
             backend,
             ratatui::TerminalOptions {
@@ -1287,7 +1287,8 @@ impl Repl {
                 || self.state.theme_picker.is_some()
                 || self.state.multi_select.is_some()
                 || self.state.command_palette.is_some()
-                || (self.state.plan.active && !self.state.plan.approved);
+                || (self.state.plan.active && !self.state.plan.approved)
+                || self.state.sidebar_visible;
 
             // Manage alternate screen transitions for overlays
             if overlay_active && !alt_screen {

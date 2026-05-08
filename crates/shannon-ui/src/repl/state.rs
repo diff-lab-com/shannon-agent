@@ -379,7 +379,7 @@ impl Default for ReplState {
             accessibility_mode: std::env::var("NO_GRAPHICS").is_ok() || std::env::var("ACCESSIBILITY").is_ok(),
             reduced_motion: std::env::var("NO_COLOR").is_ok() || std::env::var("REDUCED_MOTION").is_ok() || std::env::var("NO_GRAPHICS").is_ok() || std::env::var("ACCESSIBILITY").is_ok(),
             keybindings: crate::keybindings::load_keybindings(),
-            sidebar_visible: true,
+            sidebar_visible: false,
             diff_viewer: None,
             interactive_hunks: Vec::new(),
             interactive_selected: 0,
