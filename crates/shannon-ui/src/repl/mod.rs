@@ -35,7 +35,6 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
-    prelude::Widget,
     Terminal,
 };
 use std::collections::HashMap;
@@ -1255,17 +1254,6 @@ impl Repl {
                     format!("[Routine: {name}] {prompt}"));
             }
 
-            // Inject finalized messages into terminal scrollback
-            {
-                let width = terminal.size().map(|s| s.width).unwrap_or(80);
-                let (lines, height) = self.chat.commit_to_lines(width);
-                if height > 0 {
-                    terminal.insert_before(height, |buf| {
-                        let paragraph = ratatui::widgets::Paragraph::new(lines);
-                        paragraph.render(buf.area, buf);
-                    })?;
-                }
-            }
             render::draw_frame(&mut terminal, self)?;
 
             // Handle events

@@ -506,7 +506,7 @@ impl ChatWidget {
         search_query: Option<&str>,
         search_matches: &[(usize, usize, usize)], // (msg_index, byte_start, byte_end)
         focused_match_idx: Option<usize>,          // index into search_matches
-        show_all: bool,
+        _show_all: bool,
     ) {
         let mut list_items = Vec::new();
         let inner_width = area.width.saturating_sub(2) as usize; // subtract borders
@@ -518,14 +518,8 @@ impl ChatWidget {
         }
         let visible_rows = area.height.saturating_sub(2) as usize;
 
-        // Only render uncommitted messages in the viewport.
-        // Committed messages live in terminal scrollback (injected via insert_before).
-        // show_all=true is for the transcript pager (rendered on alternate screen).
-        let messages: Vec<&ChatMessage> = if show_all {
-            self.messages.iter().collect()
-        } else {
-            self.messages.iter().skip(self.committed_count).collect()
-        };
+        // Show all messages in the viewport; show_all is for the transcript pager.
+        let messages: Vec<&ChatMessage> = self.messages.iter().collect();
 
         // Build a lookup: relative_msg_index -> list of (match_global_idx, byte_start, byte_end)
         let mut matches_by_msg: std::collections::HashMap<usize, Vec<(usize, usize, usize)>> =
