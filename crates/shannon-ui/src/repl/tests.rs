@@ -10,7 +10,6 @@ fn test_repl_state_default() {
     assert_eq!(state.status, "Ready");
     assert!(state.model.is_some());
     assert_eq!(state.tokens_used, 0);
-    assert!(!state.welcome_active);
     assert!(!state.working_directory.is_empty());
 }
 
@@ -27,7 +26,6 @@ fn test_repl_state_fields() {
     assert_eq!(state.status, "Ready");
     assert_eq!(state.model, Some("claude-sonnet-4-20250514".to_string()));
     assert_eq!(state.tokens_used, 0);
-    assert!(!state.welcome_active);
 
     state.status = "Processing".to_string();
     state.model = Some("gpt-4".to_string());
@@ -48,7 +46,6 @@ fn test_repl_state_clone() {
     assert_eq!(cloned.model, state.model);
     assert_eq!(cloned.tokens_used, state.tokens_used);
     assert_eq!(cloned.working_directory, state.working_directory);
-    assert_eq!(cloned.welcome_active, state.welcome_active);
 }
 
 #[test]
@@ -56,7 +53,6 @@ fn test_repl_creation() {
     let repl = Repl::new();
     assert!(repl.is_ok());
     if let Ok(r) = repl {
-        assert!(!r.state().welcome_active);
         assert!(r.query_engine.is_some());
     }
 }
@@ -81,32 +77,20 @@ fn test_repl_quit_command() {
 }
 
 #[test]
-fn test_repl_quit_with_activity_shows_dialog() {
+fn test_repl_confirm_dialog_clear_chat() {
     let mut repl = Repl::new().unwrap();
     repl.running = true;
-    repl.commands_run = 1;
-    repl.show_confirm_dialog("End Session?", "You have unsaved activity. Quit anyway?", "quit");
+    repl.show_confirm_dialog("Clear Chat", "Clear all messages? This cannot be undone.", "clear_chat");
     assert!(repl.running);
     assert!(repl.state.active_dialog.is_some());
-    assert_eq!(repl.state.pending_dialog_action.as_deref(), Some("quit"));
+    assert_eq!(repl.state.pending_dialog_action.as_deref(), Some("clear_chat"));
 }
 
 #[test]
-fn test_repl_exit_with_tools_shows_dialog() {
+fn test_repl_confirm_dialog_clear_chat_confirm() {
     let mut repl = Repl::new().unwrap();
     repl.running = true;
-    repl.tools_invoked = 3;
-    repl.show_confirm_dialog("End Session?", "You have unsaved activity. Quit anyway?", "quit");
-    assert!(repl.running);
-    assert!(repl.state.active_dialog.is_some());
-}
-
-#[test]
-fn test_repl_confirm_dialog_quit() {
-    let mut repl = Repl::new().unwrap();
-    repl.running = true;
-    repl.commands_run = 1;
-    repl.show_confirm_dialog("End Session?", "You have unsaved activity. Quit anyway?", "quit");
+    repl.show_confirm_dialog("Clear Chat", "Clear all messages? This cannot be undone.", "clear_chat");
     assert!(repl.state.active_dialog.is_some());
 
     // Navigate to "Confirm" button and press Enter
@@ -120,7 +104,6 @@ fn test_repl_confirm_dialog_quit() {
         crossterm::event::KeyModifiers::NONE,
     );
     crate::repl::input::handle_input(&mut repl, enter_key).unwrap();
-    assert!(!repl.running);
     assert!(repl.state.active_dialog.is_none());
 }
 
@@ -128,8 +111,7 @@ fn test_repl_confirm_dialog_quit() {
 fn test_repl_confirm_dialog_escape_cancels() {
     let mut repl = Repl::new().unwrap();
     repl.running = true;
-    repl.commands_run = 1;
-    repl.show_confirm_dialog("End Session?", "You have unsaved activity. Quit anyway?", "quit");
+    repl.show_confirm_dialog("Clear Chat", "Clear all messages? This cannot be undone.", "clear_chat");
     assert!(repl.state.active_dialog.is_some());
 
     let key = crossterm::event::KeyEvent::new(

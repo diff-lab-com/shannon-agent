@@ -5,7 +5,6 @@ pub mod progress;
 pub mod dialog;
 pub mod diff_viewer;
 pub mod header;
-pub mod welcome;
 pub mod status_bar;
 pub mod chat;
 pub mod prompt;
@@ -18,7 +17,6 @@ pub mod command_palette;
 
 // Re-exports for convenient access
 pub use header::HeaderWidget;
-pub use welcome::WelcomeWidget;
 pub use status_bar::StatusBarWidget;
 pub use chat::{ChatWidget, ChatMessage, ChatRole};
 pub use prompt::PromptWidget;

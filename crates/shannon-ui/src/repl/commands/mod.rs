@@ -288,18 +288,7 @@ fn handle_clear(repl: &mut Repl) -> Result<()> {
 }
 
 fn handle_quit(repl: &mut Repl) -> Result<()> {
-    let had_activity = repl.commands_run > 0
-        || repl.tools_invoked > 0
-        || repl.current_turn > 0;
-    if had_activity {
-        repl.show_confirm_dialog(
-            "End Session?",
-            "You have unsaved activity. Quit anyway?",
-            "quit",
-        );
-    } else {
-        repl.running = false;
-    }
+    repl.running = false;
     Ok(())
 }
 

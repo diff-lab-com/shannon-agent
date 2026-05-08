@@ -166,9 +166,8 @@ impl Renderer {
     }
 
     /// Render the main content area
-    fn render_main_content(&self, frame: &mut Frame, area: Rect) {
-        let theme = Theme::detect();
-        widgets::WelcomeWidget::render(frame, area, &theme);
+    fn render_main_content(&self, _frame: &mut Frame, _area: Rect) {
+        // Welcome screen removed — chat is the primary interface
     }
 
     /// Update the status message

@@ -59,8 +59,6 @@ pub struct ReplState {
     pub total_cost_usd: f64,
     /// Working directory for the session
     pub working_directory: String,
-    /// Welcome screen active
-    pub welcome_active: bool,
     /// Active permission dialog (if any)
     pub permission_dialog: Option<shannon_core::permissions::PermissionPrompt>,
     /// Permission response channel sender (if dialog is active)
@@ -350,7 +348,6 @@ impl Default for ReplState {
             cached_tokens: 0,
             total_cost_usd: 0.0,
             working_directory: cwd,
-            welcome_active: false,
             permission_dialog: None,
             permission_response_tx: None,
             active_dialog: None,
