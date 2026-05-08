@@ -1098,7 +1098,6 @@ impl Repl {
             impl Drop for TerminalGuard {
                 fn drop(&mut self) {
                     let mut stdout = io::stdout();
-                    let _ = crossterm::execute!(stdout, crossterm::event::DisableMouseCapture);
                     let _ = crossterm::execute!(stdout, crossterm::event::DisableBracketedPaste);
                     let _ = crossterm::execute!(stdout, crossterm::cursor::Show);
                     let _ = disable_raw_mode();
@@ -1110,8 +1109,6 @@ impl Repl {
         let mut stdout = io::stdout();
         // Enable bracketed paste mode for proper multi-line paste handling
         execute!(stdout, crossterm::event::EnableBracketedPaste)?;
-        // Enable mouse capture for scroll support
-        execute!(stdout, crossterm::event::EnableMouseCapture)?;
 
         let backend = CrosstermBackend::new(stdout);
         let term_size = crossterm::terminal::size().unwrap_or((80, 24));
@@ -1300,11 +1297,7 @@ impl Repl {
             }
         }
 
-        // Restore terminal — disable mouse/bracketed-paste BEFORE raw mode to prevent escape leakage
-        execute!(
-            terminal.backend_mut(),
-            crossterm::event::DisableMouseCapture
-        )?;
+        // Restore terminal — disable bracketed-paste BEFORE raw mode to prevent escape leakage
         execute!(
             terminal.backend_mut(),
             crossterm::event::DisableBracketedPaste
@@ -1366,9 +1359,6 @@ impl Repl {
                     self.prompt.insert_text(&content);
                 }
                 self.state.completion_suggestions.clear();
-            }
-            crate::events::Event::Mouse(_mouse) => {
-                // Terminal native scrollback handles scrolling in inline viewport mode
             }
             crate::events::Event::Tick => {
                 // Advance spinner animation during query processing
