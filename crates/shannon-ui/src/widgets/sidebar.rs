@@ -57,6 +57,8 @@ pub enum SidebarSection {
     Cost,
     /// Context tab: Tools invoked
     Tools,
+    /// Context tab: Memory usage
+    Memory,
     /// Context / Perf tab: File changes
     Changes,
     /// Context tab: LSP diagnostics
@@ -261,7 +263,7 @@ impl SidebarWidget {
 
                 // Memory
                 if info.memory_rss_kb > 0 {
-                    lines.push(self.section_header("Memory", SidebarSection::Tools, theme));
+                    lines.push(self.section_header("Memory", SidebarSection::Memory, theme));
                     let mem_str = if info.memory_rss_kb >= 1_048_576 {
                         format!("{:.1} MB", info.memory_rss_kb as f64 / 1_048_576.0)
                     } else {

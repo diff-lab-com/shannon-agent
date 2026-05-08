@@ -8,6 +8,7 @@ use std::sync::LazyLock;
 use parking_lot::Mutex;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
+use unicode_width::UnicodeWidthChar;
 use syntect::parsing::SyntaxSet;
 
 use ratatui::{
@@ -1498,67 +1499,71 @@ fn parse_inline_formatting(text: &str, base_color: ratatui::style::Color) -> Vec
     spans
 }
 
-/// Wrap a line of text to fit within `max_chars`, returning multiple lines.
+/// Wrap a line of text to fit within `max_cols` terminal columns, returning multiple lines.
+/// Uses Unicode display width so CJK characters (2 columns each) are handled correctly.
 /// Word-boundary wrapping with mid-word fallback for long unbroken strings.
-pub(crate) fn wrap_line(s: &str, max_chars: usize) -> Vec<String> {
-    if max_chars == 0 {
+pub(crate) fn wrap_line(s: &str, max_cols: usize) -> Vec<String> {
+    if max_cols == 0 {
         return if s.is_empty() { vec![String::new()] } else { vec![s.to_string()] };
     }
-    if s.chars().count() <= max_chars {
+    if unicode_width(s) <= max_cols {
         return if s.is_empty() { vec![String::new()] } else { vec![s.to_string()] };
     }
 
     let mut lines = Vec::new();
     let mut current = String::new();
-    let mut len = 0usize;
+    let mut col = 0usize;
 
     for word in s.split_whitespace() {
-        let wlen = word.chars().count();
-        if len == 0 {
-            // First word on this line — if it exceeds max_chars, break it mid-word
-            if wlen > max_chars {
-                let chars: Vec<char> = word.chars().collect();
-                let mut pos = 0;
-                while pos < chars.len() {
-                    let end = std::cmp::min(pos + max_chars, chars.len());
-                    let chunk: String = chars[pos..end].iter().collect();
-                    if pos + max_chars < chars.len() {
-                        lines.push(chunk);
-                    } else {
-                        current = chunk;
-                        len = current.chars().count();
+        let wcol = unicode_width(word);
+        if col == 0 {
+            if wcol > max_cols {
+                // Break mid-word
+                let mut buf = String::new();
+                let mut buf_col = 0;
+                for ch in word.chars() {
+                    let cw = unicode_width_char(ch);
+                    if buf_col + cw > max_cols {
+                        lines.push(std::mem::take(&mut buf));
+                        buf_col = 0;
                     }
-                    pos = end;
+                    buf.push(ch);
+                    buf_col += cw;
+                }
+                if !buf.is_empty() {
+                    current = buf;
+                    col = buf_col;
                 }
             } else {
                 current.push_str(word);
-                len = wlen;
+                col = wcol;
             }
-        } else if len + 1 + wlen <= max_chars {
+        } else if col + 1 + wcol <= max_cols {
             current.push(' ');
             current.push_str(word);
-            len += 1 + wlen;
-        } else if wlen > max_chars {
-            // Word too long even on a new line — flush current, then break mid-word
+            col += 1 + wcol;
+        } else if wcol > max_cols {
             lines.push(std::mem::take(&mut current));
-            len = 0;
-            let chars: Vec<char> = word.chars().collect();
-            let mut pos = 0;
-            while pos < chars.len() {
-                let end = std::cmp::min(pos + max_chars, chars.len());
-                let chunk: String = chars[pos..end].iter().collect();
-                if pos + max_chars < chars.len() {
-                    lines.push(chunk);
-                } else {
-                    current = chunk;
-                    len = current.chars().count();
+            col = 0;
+            let mut buf = String::new();
+            let mut buf_col = 0;
+            for ch in word.chars() {
+                let cw = unicode_width_char(ch);
+                if buf_col + cw > max_cols {
+                    lines.push(std::mem::take(&mut buf));
+                    buf_col = 0;
                 }
-                pos = end;
+                buf.push(ch);
+                buf_col += cw;
+            }
+            if !buf.is_empty() {
+                current = buf;
+                col = buf_col;
             }
         } else {
             lines.push(std::mem::take(&mut current));
             current.push_str(word);
-            len = wlen;
+            col = wcol;
         }
     }
     if !current.is_empty() {
@@ -1568,6 +1573,16 @@ pub(crate) fn wrap_line(s: &str, max_chars: usize) -> Vec<String> {
         lines.push(String::new());
     }
     lines
+}
+
+/// Return the Unicode display width of a string (CJK = 2 columns).
+fn unicode_width(s: &str) -> usize {
+    s.chars().map(unicode_width_char).sum()
+}
+
+/// Return the Unicode display width of a single character.
+fn unicode_width_char(ch: char) -> usize {
+    UnicodeWidthChar::width(ch).unwrap_or(0)
 }
 
 /// Wrap syntax-highlighted code spans to fit within `max_chars`.
