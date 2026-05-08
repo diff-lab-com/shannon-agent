@@ -3,6 +3,7 @@
 use super::*;
 use crate::widgets::ChatRole;
 use shannon_core::UiAdapter;
+use std::io::IsTerminal;
 
 #[test]
 fn test_repl_state_default() {
@@ -1983,6 +1984,11 @@ fn test_repl_image_nonexistent_file() {
 
 #[test]
 fn test_repl_image_with_real_png() {
+    // Skip in headless/CI environments without a TTY
+    if std::io::stdout().is_terminal() == false {
+        eprintln!("Skipping: no TTY available");
+        return;
+    }
     // Create a minimal valid PNG file for testing
     let tmp_dir = std::env::temp_dir().join("shannon_test_image");
     let _ = std::fs::create_dir_all(&tmp_dir);
