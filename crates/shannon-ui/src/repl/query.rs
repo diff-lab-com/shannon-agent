@@ -508,6 +508,22 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
         if stream_start.elapsed().as_secs() >= 30 {
             let _ = std::io::Write::write_all(&mut std::io::stderr(), b"\x07");
         }
+
+        // Commit completed messages to terminal scrollback via insert_before.
+        // This moves them above the viewport so chat and sidebar text can be
+        // selected independently with the mouse.
+        {
+            let term_width = crossterm::terminal::size().unwrap_or((80, 24)).0;
+            let (lines, _height) = repl.chat.commit_to_lines(term_width);
+            if !lines.is_empty() {
+                let _ = polling_terminal.insert_before(_height, |buf: &mut ratatui::buffer::Buffer| {
+                    use ratatui::widgets::Widget;
+                    let area = buf.area;
+                    let paragraph = ratatui::widgets::Paragraph::new(lines);
+                    paragraph.render(area, buf);
+                });
+            }
+        }
     }
 
     shannon_core::prevent_sleep::stop_prevent_sleep();

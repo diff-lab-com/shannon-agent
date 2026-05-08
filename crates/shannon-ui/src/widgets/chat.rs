@@ -520,7 +520,11 @@ impl ChatWidget {
         let visible_rows = area.height.saturating_sub(2) as usize;
 
         // Show all messages in the viewport; show_all is for the transcript pager.
-        let messages: Vec<&ChatMessage> = self.messages.iter().collect();
+        let messages: Vec<&ChatMessage> = if _show_all {
+            self.messages.iter().collect()
+        } else {
+            self.messages.iter().skip(self.committed_count).collect()
+        };
 
         // Build a lookup: relative_msg_index -> list of (match_global_idx, byte_start, byte_end)
         let mut matches_by_msg: std::collections::HashMap<usize, Vec<(usize, usize, usize)>> =
