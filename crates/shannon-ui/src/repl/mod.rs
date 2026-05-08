@@ -1310,11 +1310,10 @@ impl Repl {
                         let paragraph = ratatui::widgets::Paragraph::new(lines);
                         paragraph.render(buf.area, buf);
                     })?;
+                    // Clear after insert_before to reset diff buffer.
+                    // Only needed when new lines are committed to scrollback.
+                    terminal.clear()?;
                 }
-                // Always clear viewport to force full repaint. This prevents
-                // diff-based rendering artifacts when viewport content changes
-                // (e.g., streaming messages, sidebar updates).
-                terminal.clear()?;
             }
             render::draw_frame(&mut terminal, self)?;
 
