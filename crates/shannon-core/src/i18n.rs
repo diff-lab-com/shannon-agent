@@ -20,8 +20,8 @@ pub use rust_i18n::t;
 
 /// Set the active locale for translations.
 ///
-/// Valid values include `"en"` (English) and `"zh"` (Simplified Chinese).
-/// Falls back to English if the requested locale is unavailable.
+/// Valid values include `"en"`, `"zh"`, `"hi"`, `"es"`, `"fr"`, `"ar"`, `"bn"`,
+/// `"pt"`, `"ru"`, `"ja"`. Falls back to English if the requested locale is unavailable.
 pub fn set_locale(lang: &str) {
     rust_i18n::set_locale(lang);
 }
@@ -81,5 +81,13 @@ mod tests {
         assert!(!t!("repl.chat_cleared", locale = "en").is_empty());
         assert!(!t!("status.ready", locale = "en").is_empty());
         assert!(!t!("cli.about", locale = "en").is_empty());
+    }
+
+    #[test]
+    fn test_all_locales_resolve() {
+        for lang in ["en", "zh", "hi", "es", "fr", "ar", "bn", "pt", "ru", "ja"] {
+            let msg = t!("repl.chat_cleared", locale = lang);
+            assert!(!msg.is_empty(), "locale '{lang}' returned empty for repl.chat_cleared");
+        }
     }
 }
