@@ -122,6 +122,10 @@ impl super::Repl {
                 self.chat.add_message(role, text);
             }
 
+            // Mark all restored messages as committed so they don't
+            // occupy the viewport (they're history, not active content).
+            self.chat.mark_all_committed();
+
             // Restore in query engine
             if let Some(ref mut engine) = self.query_engine {
                 engine.replace_conversation(data.messages);

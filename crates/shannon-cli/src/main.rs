@@ -2003,6 +2003,17 @@ fn main() -> Result<()> {
         None | Some(Commands::Version { .. }) | Some(Commands::Config { .. }) | Some(Commands::Serve { .. }) | Some(Commands::Screenshot { .. }) => CliConfig::default(),
     };
 
+    // Initialize tracing if debug mode enabled
+    if config.debug {
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive("info".parse().unwrap())
+            )
+            .init();
+    }
+
     // Execute commands with explicit config
     match cli.command {
         None => {

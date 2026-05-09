@@ -510,9 +510,14 @@ impl ChatWidget {
         }
 
         // Compute content height to right-size the chat border.
-        // The border wraps tightly around the content; blank space goes above the border.
+        // When messages are committed to scrollback, use the full area to avoid
+        // a gap between scrollback content and the viewport border.
         let content_h = self.uncommitted_content_height(inner_width as u16);
-        let needed_h = (content_h.saturating_add(2)).max(3).min(area.height);
+        let needed_h = if self.committed_count > 0 {
+            area.height // full area when earlier messages are in scrollback
+        } else {
+            (content_h.saturating_add(2)).max(3).min(area.height)
+        };
         let chat_area = Rect {
             x: area.x,
             y: area.y + area.height.saturating_sub(needed_h),

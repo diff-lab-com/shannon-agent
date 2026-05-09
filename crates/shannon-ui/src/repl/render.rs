@@ -543,10 +543,12 @@ fn render_pager_overlay(
         height: area.height.saturating_sub(pager_header + pager_footer),
     };
 
-    // Header bar
+    // Header bar with message count
+    let msg_count = chat.message_count();
     let header = Paragraph::new(Line::from(vec![
         Span::styled(" TRANSCRIPT ", Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
-        Span::styled("─ j/k: scroll  g/G: top/bottom  q/Esc: close ", Style::default().fg(theme.text_dim)),
+        Span::styled(format!("({msg_count} messages) "), Style::default().fg(theme.text_dim)),
+        Span::styled("─ j/k: scroll  g/G: top/bottom  /: search  q/Esc: close ", Style::default().fg(theme.text_dim)),
     ]))
     .style(Style::default().bg(theme.context_bar_bg));
     frame.render_widget(header, Rect { x: area.x, y: area.y, width: area.width, height: 1 });

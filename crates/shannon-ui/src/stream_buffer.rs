@@ -17,6 +17,10 @@ pub struct StreamBuffer {
     needs_render: bool,
     smooth_count: u64,
     catchup_count: u64,
+    /// Whether any pending chunk contained a newline (for newline-gated rendering).
+    has_newline: bool,
+    /// Length of accumulated_text at last drain (to detect new newlines).
+    last_drain_len: usize,
 }
 
 impl Default for StreamBuffer {
@@ -34,12 +38,17 @@ impl StreamBuffer {
             needs_render: false,
             smooth_count: 0,
             catchup_count: 0,
+            has_newline: false,
+            last_drain_len: 0,
         }
     }
 
     pub fn push_chunk(&mut self, text: &str) {
         if text.is_empty() {
             return;
+        }
+        if text.contains('\n') {
+            self.has_newline = true;
         }
         let now = Instant::now();
         self.pending_chunks.push_back((text.to_string(), now));
@@ -94,6 +103,20 @@ impl StreamBuffer {
         Some(result)
     }
 
+    /// Whether the accumulated text has new newlines since the last call to
+    /// `take_newline_flag()`. Used for newline-gated rendering optimization.
+    pub fn has_newline_since_drain(&self) -> bool {
+        self.has_newline
+    }
+
+    /// Consume the newline flag (call after checking it for rendering decisions).
+    pub fn take_newline_flag(&mut self) -> bool {
+        let flag = self.has_newline;
+        self.has_newline = false;
+        self.last_drain_len = self.accumulated_text.len();
+        flag
+    }
+
     pub fn current_mode(&self) -> StreamMode {
         self.mode
     }
@@ -113,6 +136,8 @@ impl StreamBuffer {
         self.needs_render = false;
         self.smooth_count = 0;
         self.catchup_count = 0;
+        self.has_newline = false;
+        self.last_drain_len = 0;
     }
 }
 

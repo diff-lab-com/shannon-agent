@@ -4,10 +4,10 @@
 
 **A high-performance AI-assisted coding tool, rewritten in Rust**
 
-[![Rust](https://img.shields.io/badge/rust-1.75+-orange.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-2341-brightgreen.svg)
-[![Lines](https://img.shields.io/badge/code-78K-blue.svg)
+[![Tests](https://img.shields.io/badge/tests-803-brightgreen.svg)
+[![Lines](https://img.shields.io/badge/code-220K-blue.svg)
 
 [中文文档](#中文文档)
 
@@ -40,6 +40,15 @@ Shannon Code is a feature-rich, type-safe AI-assisted coding tool written entire
 - **Type safety** — a strong type system catches bugs before runtime
 - **Concurrency** — native `async/await` support for parallel operations
 - **Cross-platform** — compile once, run on Linux, macOS, and Windows
+
+---
+
+## Binaries
+
+Shannon Code ships two binaries:
+
+- **`shannon`** — The main interactive CLI. Provides the terminal REPL, processes user input, streams LLM responses, and orchestrates tool calls. This is what you run day-to-day.
+- **`shannon-agent`** — An out-of-process agent worker. Communicates via JSON-RPC over stdin/stdout. Used internally by `shannon` for multi-agent orchestration — when the main process needs to dispatch work to a separate agent (e.g., parallel research, code review), it spawns `shannon-agent` as a child process. You don't typically run this directly.
 
 ---
 
@@ -90,13 +99,18 @@ Shannon Code is a feature-rich, type-safe AI-assisted coding tool written entire
 - Diff visualization with colored output
 - Virtual scroll and progress indicators
 
+### Internationalization (i18n)
+- Multi-language UI support via `rust-i18n`
+- 10 languages: English, Chinese, Hindi, Spanish, French, Arabic, Bengali, Portuguese, Russian, Japanese
+- Community-contributable locale files in `locales/` directory
+
 ---
 
 ## Quick Start
 
 ### Prerequisites
 
-- **Rust** 1.75+
+- **Rust** 1.85+ (edition 2024)
 - **Operating System**: Linux / macOS / Windows
 - **Memory**: 4 GB+ recommended
 - **API Key**: Anthropic API key (or compatible endpoint)
@@ -160,10 +174,16 @@ shannon-code/
 │   ├── shannon-ui/            # Terminal UI: REPL, widgets, rendering
 │   ├── shannon-mcp/           # MCP protocol: transport, server, client
 │   ├── shannon-commands/      # Slash commands: built-in command registry
-│   ├── shannon-skills/       # Skills framework: discovery, loading, execution
+│   ├── shannon-skills/        # Skills framework: discovery, loading, execution
 │   ├── shannon-types/         # Shared type definitions
-│   └── shannon-cli/           # CLI entry point
+│   ├── shannon-tool-interface/# Tool trait definitions
+│   ├── shannon-codegen/       # Code generation utilities
+│   ├── shannon-cli/           # CLI entry point (shannon binary)
+│   └── shannon-agent/         # Out-of-process agent (JSON-RPC over stdin/stdout)
 ├── skills/                    # Bundled skill definitions
+├── locales/                   # i18n translation files (en, zh, hi, es, fr, ar, bn, pt, ru, ja)
+├── scripts/
+│   └── release.sh             # Cross-platform release script
 ├── Cargo.toml                 # Workspace configuration
 ├── Cargo.lock                 # Dependency lock file
 ├── LICENSE
@@ -178,8 +198,8 @@ shannon-code/
 # Debug build
 cargo build
 
-# Run all tests (2,341 tests)
-cargo test --workspace
+# Run all tests (single-threaded to avoid env contention)
+cargo test --workspace -- --test-threads=1
 
 # Run a specific module's tests
 cargo test -p shannon-core -- tool_execution
@@ -203,15 +223,34 @@ cargo new --lib shannon-new-feature
 
 Then add it to the workspace in the root `Cargo.toml`.
 
+### Release Builds
+
+```bash
+# Build for current platform
+./scripts/release.sh
+
+# Build for all platforms (requires cross-rs or docker)
+./scripts/release.sh --all
+
+# Build for a specific target
+./scripts/release.sh --target x86_64-unknown-linux-gnu
+
+# Override version string
+./scripts/release.sh --version 0.2.0
+```
+
+Artifacts are placed in `target/dist/` as `.tar.gz` (Linux/macOS) or `.zip` (Windows).
+
 ---
 
 ## Statistics
 
 | Metric | Value |
 |--------|-------|
-| Total lines of code | ~78,000 |
-| Number of tests | ~2,341 |
-| Number of crates | 9 |
+| Total lines of code | ~220,000 |
+| Number of tests | ~803 |
+| Number of crates | 12 |
+| Supported languages | 10 (en, zh, hi, es, fr, ar, bn, pt, ru, ja) |
 | Supported platforms | Linux, macOS, Windows |
 
 ---
@@ -295,7 +334,7 @@ Shannon Code 是一个功能丰富、类型安全的 AI 辅助编程工具，完
 
 ### 环境要求
 
-- **Rust** 1.75+
+- **Rust** 1.85+ (edition 2024)
 - **操作系统**：Linux / macOS / Windows
 - **内存**：建议 4GB 以上
 - **API 密钥**：Anthropic API 密钥（或兼容端点）

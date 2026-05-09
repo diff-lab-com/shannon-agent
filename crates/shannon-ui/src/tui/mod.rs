@@ -23,11 +23,62 @@ use ratatui::{
     Frame, Terminal, TerminalOptions, Viewport,
 };
 
+/// Detected terminal multiplexer environment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Multiplexer {
+    None,
+    Tmux,
+    Zellij,
+    Screen,
+}
+
+impl Multiplexer {
+    fn detect() -> Self {
+        if std::env::var("TMUX").is_ok() {
+            return Self::Tmux;
+        }
+        if std::env::var("ZELLIJ").is_ok() || std::env::var("ZELLIJ_SESSION_NAME").is_ok() {
+            return Self::Zellij;
+        }
+        if std::env::var("TERM").as_deref() == Ok("screen") || std::env::var("STY").is_ok() {
+            return Self::Screen;
+        }
+        Self::None
+    }
+
+    /// Whether the terminal likely supports OSC 52 clipboard.
+    pub fn supports_osc52(self) -> bool {
+        matches!(self, Self::Tmux | Self::Zellij)
+    }
+
+    /// Whether alternate screen is already managed by the multiplexer.
+    pub fn manages_alt_screen(self) -> bool {
+        matches!(self, Self::Tmux)
+    }
+}
+
+/// Detected terminal environment capabilities.
+#[derive(Debug, Clone, Copy)]
+pub struct TerminalEnv {
+    pub multiplexer: Multiplexer,
+    pub truecolor: bool,
+}
+
+impl TerminalEnv {
+    fn detect() -> Self {
+        let multiplexer = Multiplexer::detect();
+        let colorterm = std::env::var("COLORTERM").unwrap_or_default();
+        let truecolor = colorterm == "truecolor" || colorterm == "24bit";
+        Self { multiplexer, truecolor }
+    }
+}
+
 /// Custom TUI wrapper that manages the terminal lifecycle.
 pub struct Tui {
     terminal: Terminal<CrosstermBackend<io::Stdout>>,
     pending_history: Vec<ratatui::text::Line<'static>>,
     alt_screen_active: bool,
+    env: TerminalEnv,
 }
 
 impl Tui {
@@ -63,6 +114,7 @@ impl Tui {
             terminal,
             pending_history: Vec::new(),
             alt_screen_active: false,
+            env: TerminalEnv::detect(),
         })
     }
 
@@ -86,6 +138,7 @@ impl Tui {
             terminal,
             pending_history: Vec::new(),
             alt_screen_active: false,
+            env: TerminalEnv::detect(),
         })
     }
 
@@ -98,6 +151,11 @@ impl Tui {
     pub fn viewport_area(&self) -> Rect {
         let s = self.terminal.size().unwrap_or_else(|_| ratatui::layout::Size::new(80, 24));
         Rect::new(0, 0, s.width, s.height)
+    }
+
+    /// Detected terminal environment (multiplexer, color capabilities).
+    pub fn env(&self) -> &TerminalEnv {
+        &self.env
     }
 
     /// Get screen size as (width, height).
@@ -174,6 +232,27 @@ impl Tui {
             EnableBracketedPaste,
             EnableMouseCapture,
         )?;
+        Ok(())
+    }
+
+    /// Write text to clipboard via OSC 52 escape sequence.
+    /// Only works if the terminal/multiplexer supports it.
+    pub fn set_clipboard_osc52(&mut self, text: &str) -> io::Result<()> {
+        if !self.env.multiplexer.supports_osc52() {
+            return Err(io::Error::new(io::ErrorKind::Unsupported, "OSC 52 not supported"));
+        }
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+        // OSC 52: c=clipboard, p=primary
+        let seq = format!("\x1b]52;c;{}\x07", encoded);
+        self.terminal.backend_mut().write_all(seq.as_bytes())?;
+        self.terminal.backend_mut().flush()?;
+        Ok(())
+    }
+
+    /// Clear only from cursor to end of screen (cheaper than full clear).
+    pub fn clear_to_end(&mut self) -> io::Result<()> {
+        execute!(self.terminal.backend_mut(), crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown))?;
         Ok(())
     }
 

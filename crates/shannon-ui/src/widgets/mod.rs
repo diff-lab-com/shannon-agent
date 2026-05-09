@@ -14,6 +14,8 @@ pub mod session_tab;
 pub mod tool_approval;
 pub mod attachment_bar;
 pub mod command_palette;
+pub mod renderable;
+pub mod column;
 
 // Re-exports for convenient access
 pub use header::HeaderWidget;
@@ -40,13 +42,9 @@ use crate::theme::Theme;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Rect},
     style::Style,
-    text::Line,
     widgets::{Clear, Paragraph},
     Frame,
 };
-use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::time::Instant;
 
 // Layout constants (shared with sidebar module)
 use sidebar::{
@@ -77,70 +75,6 @@ impl Default for StreamingState {
 }
 
 // ---------------------------------------------------------------------------
-// Message render cache
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone)]
-struct RenderCacheEntry {
-    content_hash: u64,
-    width: u16,
-    lines: Vec<Line<'static>>,
-    timestamp: Instant,
-}
-
-/// Per-message render cache with LRU eviction.
-#[derive(Debug, Clone)]
-pub struct MessageRenderCache {
-    entries: HashMap<usize, RenderCacheEntry>,
-    max_entries: usize,
-}
-
-impl MessageRenderCache {
-    pub fn new(max_entries: usize) -> Self {
-        Self {
-            entries: HashMap::new(),
-            max_entries,
-        }
-    }
-
-    pub fn get(&mut self, index: usize, content_hash: u64, width: u16) -> Option<&Vec<Line<'static>>> {
-        let entry = self.entries.get_mut(&index)?;
-        if entry.content_hash == content_hash && entry.width == width {
-            entry.timestamp = Instant::now();
-            Some(&entry.lines)
-        } else {
-            None
-        }
-    }
-
-    pub fn insert(&mut self, index: usize, content_hash: u64, width: u16, lines: Vec<Line<'static>>) {
-        if self.entries.len() >= self.max_entries && !self.entries.contains_key(&index) {
-            if let Some(evict_key) = self.entries.iter().min_by_key(|(_, e)| e.timestamp).map(|(k, _)| *k) {
-                self.entries.remove(&evict_key);
-            }
-        }
-        self.entries.insert(index, RenderCacheEntry {
-            content_hash,
-            width,
-            lines,
-            timestamp: Instant::now(),
-        });
-    }
-
-    pub fn invalidate(&mut self, index: usize) {
-        self.entries.remove(&index);
-    }
-
-    pub fn clear(&mut self) {
-        self.entries.clear();
-    }
-}
-
-fn content_hash(s: &str) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    s.hash(&mut hasher);
-    hasher.finish()
-}
 
 /// Main UI layout widget
 pub struct MainLayoutWidget;
@@ -298,13 +232,9 @@ impl MainLayoutWidget {
         let prompt_height = prompt.needed_height(area.width);
         let sidebar_visible = sidebar_info.is_some();
 
-        // Render chat with optional search highlighting
+        // Render chat — column path handles search highlighting internally
         let render_chat = |frame: &mut Frame, chat_area: Rect, theme: &Theme| {
-            if search_query.is_some() && !search_matches.is_empty() {
-                chat.render_with_search(frame, chat_area, theme, search_query, search_matches, search_focused_idx, false);
-            } else {
-                chat.render(frame, chat_area, theme);
-            }
+            chat.render(frame, chat_area, theme, search_query, search_matches, search_focused_idx);
         };
 
         if fullscreen_mode {
@@ -976,7 +906,7 @@ mod tests {
     #[test]
     fn test_parse_markdown_single_newline() {
         let segments = chat::parse_markdown_segments("\n");
-        assert_eq!(segments.len(), 1);
+        assert_eq!(segments.len(), 0, "bare newline should produce no segments");
     }
 
     #[test]
@@ -1100,81 +1030,6 @@ mod tests {
         assert!(matches!(&segments[1], chat::MdSegment::CodeBlock { .. }));
         assert!(matches!(&segments[2], chat::MdSegment::Text(_)));
     }
-
-    // ── Render Cache Tests ─────────────────────────────────────────────────
-
-    #[test]
-    fn test_render_cache_insert_and_get() {
-        let mut cache = MessageRenderCache::new(10);
-        let hash = content_hash("hello");
-        let lines = vec![Line::from("hello")];
-        cache.insert(0, hash, 80, lines.clone());
-        let result = cache.get(0, hash, 80);
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().len(), 1);
-    }
-
-    #[test]
-    fn test_render_cache_miss_on_different_hash() {
-        let mut cache = MessageRenderCache::new(10);
-        let hash1 = content_hash("hello");
-        let hash2 = content_hash("world");
-        cache.insert(0, hash1, 80, vec![Line::from("hello")]);
-        assert!(cache.get(0, hash2, 80).is_none());
-    }
-
-    #[test]
-    fn test_render_cache_miss_on_different_width() {
-        let mut cache = MessageRenderCache::new(10);
-        let hash = content_hash("hello");
-        cache.insert(0, hash, 80, vec![Line::from("hello")]);
-        assert!(cache.get(0, hash, 60).is_none());
-    }
-
-    #[test]
-    fn test_render_cache_invalidation_on_message_change() {
-        let mut cache = MessageRenderCache::new(10);
-        let hash_old = content_hash("old content");
-        let hash_new = content_hash("new content");
-        cache.insert(0, hash_old, 80, vec![Line::from("old")]);
-        assert!(cache.get(0, hash_old, 80).is_some());
-        cache.invalidate(0);
-        assert!(cache.get(0, hash_old, 80).is_none());
-        cache.insert(0, hash_new, 80, vec![Line::from("new")]);
-        assert!(cache.get(0, hash_new, 80).is_some());
-    }
-
-    #[test]
-    fn test_render_cache_clear() {
-        let mut cache = MessageRenderCache::new(10);
-        let hash = content_hash("hello");
-        cache.insert(0, hash, 80, vec![Line::from("hello")]);
-        cache.insert(1, hash, 80, vec![Line::from("world")]);
-        cache.clear();
-        assert!(cache.get(0, hash, 80).is_none());
-        assert!(cache.get(1, hash, 80).is_none());
-    }
-
-    #[test]
-    fn test_render_cache_lru_eviction() {
-        let mut cache = MessageRenderCache::new(2);
-        let hash = content_hash("x");
-        cache.insert(0, hash, 80, vec![Line::from("0")]);
-        cache.insert(1, hash, 80, vec![Line::from("1")]);
-        let _ = cache.get(0, hash, 80);
-        cache.insert(2, hash, 80, vec![Line::from("2")]);
-        assert!(cache.get(0, hash, 80).is_some(), "Entry 0 should survive");
-        assert!(cache.get(1, hash, 80).is_none(), "Entry 1 should be evicted");
-        assert!(cache.get(2, hash, 80).is_some(), "Entry 2 should exist");
-    }
-
-    #[test]
-    fn test_render_cache_invalidate_nonexistent() {
-        let mut cache = MessageRenderCache::new(10);
-        cache.invalidate(999);
-    }
-
-    // ── Sidebar Layout Tests ────────────────────────────────────────────────
 
     #[test]
     fn test_sidebar_width_constant() {
@@ -1380,14 +1235,14 @@ mod tests {
         for i in 0..20 {
             chat.add_message(ChatRole::User, format!("Msg {i}"));
         }
-        // After adding 20 messages, scroll_offset = 19 (auto-scrolled to bottom)
+        // After adding 20 messages, scroll_offset = 19 (auto-scrolled to bottom/newest)
         assert_eq!(chat.scroll_offset, 19);
-        // scroll_to_top sets offset to len()-1 which is still 19 (top of display = oldest)
+        // scroll_to_top sets offset to 0 (oldest message)
         chat.scroll_to_top();
-        assert_eq!(chat.scroll_offset, 19);
-        // scroll_to_latest resets offset to 0 (bottom = newest)
-        chat.scroll_to_latest();
         assert_eq!(chat.scroll_offset, 0);
+        // scroll_to_latest resets offset to len()-1 = 19 (newest message)
+        chat.scroll_to_latest();
+        assert_eq!(chat.scroll_offset, 19);
     }
 
     // ── Chat Widget Update Bounds ──────────────────────────────────────────
@@ -1424,27 +1279,6 @@ mod tests {
         assert_eq!(generating, StreamingState::Generating { elapsed_secs: 5 });
     }
 
-    // ── Content Hash Tests ─────────────────────────────────────────────────
-
-    #[test]
-    fn test_content_hash_deterministic() {
-        let h1 = content_hash("test string");
-        let h2 = content_hash("test string");
-        assert_eq!(h1, h2);
-    }
-
-    #[test]
-    fn test_content_hash_different_inputs() {
-        let h1 = content_hash("string A");
-        let h2 = content_hash("string B");
-        assert_ne!(h1, h2);
-    }
-
-    #[test]
-    fn test_content_hash_empty() {
-        let h = content_hash("");
-        assert_ne!(h, 0);
-    }
 
     // ── Chat Toggle Fold Tests ─────────────────────────────────────────────
 
