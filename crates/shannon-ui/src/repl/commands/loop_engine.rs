@@ -84,7 +84,7 @@ pub(crate) fn handle_loop(repl: &mut Repl, args: &str) -> Result<()> {
         "[Loop iteration 1] Task: {task}\n\nPlease work on this task. After completing, summarize what you did and what remains."
     );
     repl.prompt.set_input(prompt);
-    super::submit_input(repl)?;
+    super::submit_input(repl, None)?;
 
     Ok(())
 }
@@ -122,7 +122,7 @@ pub(crate) fn check_loop_iteration(repl: &mut Repl) -> bool {
     repl.prompt.set_input(prompt);
 
     // Submit next iteration
-    if super::submit_input(repl).is_err() {
+    if super::submit_input(repl, None).is_err() {
         repl.state.loop_state = None;
         return false;
     }
@@ -229,7 +229,7 @@ pub(crate) fn handle_ralph(repl: &mut Repl, args: &str) -> Result<()> {
         keywords.join(", ")
     );
     repl.prompt.set_input(prompt);
-    super::submit_input(repl)?;
+    super::submit_input(repl, None)?;
 
     Ok(())
 }
@@ -290,7 +290,7 @@ pub(crate) fn check_ralph_iteration(repl: &mut Repl) -> bool {
     );
     repl.prompt.set_input(prompt);
 
-    if super::submit_input(repl).is_err() {
+    if super::submit_input(repl, None).is_err() {
         repl.state.ralph_state = None;
         return false;
     }

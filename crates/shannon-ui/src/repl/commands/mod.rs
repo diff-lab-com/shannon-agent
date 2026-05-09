@@ -86,7 +86,7 @@ fn expand_pasted_texts(
 }
 
 /// Submit the current input
-pub fn submit_input(repl: &mut Repl) -> Result<()> {
+pub fn submit_input(repl: &mut Repl, terminal: Option<&mut super::query::Term>) -> Result<()> {
     let raw_input = repl.prompt.input().to_string();
 
     if raw_input.trim().is_empty() {
@@ -116,7 +116,7 @@ pub fn submit_input(repl: &mut Repl) -> Result<()> {
         repl.commands_run += 1;
         handle_command(repl, &expanded)?;
     } else {
-        super::query::handle_query(repl, &expanded)?;
+        super::query::handle_query(repl, &expanded, terminal)?;
     }
 
     Ok(())
@@ -138,7 +138,7 @@ pub fn submit_input_with_text(repl: &mut Repl, text: &str) {
         if let Err(e) = handle_command(repl, &expanded) {
             repl.chat.add_message(ChatRole::System, format!("Error: {e}"));
         }
-    } else if let Err(e) = super::query::handle_query(repl, &expanded) {
+    } else if let Err(e) = super::query::handle_query(repl, &expanded, None) {
         repl.chat.add_message(ChatRole::System, format!("Error: {e}"));
     }
 }
@@ -316,7 +316,7 @@ fn handle_other_command(repl: &mut Repl, cmd_name: &str, args: &str) -> Result<(
                     prompt = prompt.replace("$DATE", &chrono::Local::now().format("%Y-%m-%d").to_string());
                     prompt = prompt.replace("$TIME", &chrono::Local::now().format("%H:%M:%S").to_string());
                     repl.chat.add_message(ChatRole::System, format!("Running /{cmd_name}..."));
-                    super::query::handle_query(repl, &prompt)?;
+                    super::query::handle_query(repl, &prompt, None)?;
                 } else {
                     repl.chat.add_message(ChatRole::System, format!("/{cmd_name} — {}", prompt_cmd.base.description));
                 }

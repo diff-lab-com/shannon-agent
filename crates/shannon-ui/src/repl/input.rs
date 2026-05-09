@@ -41,7 +41,7 @@ fn open_external_editor(content: &str) -> std::result::Result<String, Box<dyn st
 }
 
 /// Handle keyboard input — dispatches to the appropriate sub-handler.
-pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
+pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super::query::Term>) -> Result<()> {
     // Dismiss onboarding overlay on user interaction
     if repl.state.onboarding_active {
         match key.code {
@@ -210,7 +210,7 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             } else if !repl.state.completion_suggestions.is_empty() {
                 accept_completion(repl);
             } else {
-                super::commands::submit_input(repl)?;
+                super::commands::submit_input(repl, terminal)?;
             }
             Ok(())
         }
@@ -240,9 +240,9 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             repl.toggle_pager();
             Ok(())
         }
-        // Ctrl+T: toggle session tab bar visibility
+        // Ctrl+T: toggle transcript pager (alternative keybinding)
         KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            repl.state.session_tab.toggle_visibility();
+            repl.toggle_pager();
             Ok(())
         }
         // Ctrl+W: close current session tab
@@ -408,7 +408,7 @@ fn handle_vim_action(repl: &mut Repl, action: VimAction) {
             repl.prompt.backspace();
         }
         VimAction::SubmitInput => {
-            if let Err(e) = super::commands::submit_input(repl) {
+            if let Err(e) = super::commands::submit_input(repl, None) {
                 repl.chat.add_message(ChatRole::System, format!("Input error: {e}"));
             }
         }
@@ -925,7 +925,7 @@ fn handle_command_palette_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         Some(Some(cmd)) => {
             repl.state.command_palette = None;
             repl.prompt.set_input(cmd);
-            super::commands::submit_input(repl)?;
+            super::commands::submit_input(repl, None)?;
         }
         Some(None) => {
             repl.state.command_palette = None;
@@ -1023,7 +1023,7 @@ fn handle_fuzzy_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                     super::commands::handle_command(repl, &format!("/resume {value}"))?;
                 } else {
                     repl.prompt.set_input(value);
-                    super::commands::submit_input(repl)?;
+                    super::commands::submit_input(repl, None)?;
                 }
             }
         }
@@ -1559,6 +1559,21 @@ fn handle_pager_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             if let Some(h) = repl.terminal_height() {
                 repl.pager_scroll(-(h as isize));
             }
+            Ok(())
+        }
+        // Search within pager
+        KeyCode::Char('/') => {
+            repl.state.chat_search_active = true;
+            repl.state.chat_search_query.clear();
+            Ok(())
+        }
+        // Next/prev search match
+        KeyCode::Char('n') => {
+            repl.chat_search_next();
+            Ok(())
+        }
+        KeyCode::Char('N') => {
+            repl.chat_search_prev();
             Ok(())
         }
         _ => Ok(())

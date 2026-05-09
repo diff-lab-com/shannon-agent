@@ -92,7 +92,7 @@ pub(crate) fn handle_image_paste(repl: &mut Repl, prompt_args: &str) -> Result<(
             );
             repl.chat.add_message(ChatRole::System, t!("commands.image.clipboard_sent").to_string());
 
-            super::super::query::handle_query(repl, "Please analyze the image I just shared from my clipboard.")?;
+            super::super::query::handle_query(repl, "Please analyze the image I just shared from my clipboard.", None)?;
         }
         _ => {
             repl.chat.add_message(ChatRole::System,
@@ -203,7 +203,7 @@ pub(crate) fn handle_image_url(repl: &mut Repl, input: &str) -> Result<()> {
                 preview_lines,
             );
 
-            super::super::query::handle_query(repl, "Please analyze the image I just shared from the URL.")?;
+            super::super::query::handle_query(repl, "Please analyze the image I just shared from the URL.", None)?;
         }
         Err(e) => {
             repl.chat.add_message(ChatRole::System,
@@ -326,7 +326,7 @@ pub(crate) fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
     repl.chat.add_message(ChatRole::System, t!("commands.image.image_sent").to_string());
 
     // Trigger query processing
-    super::super::query::handle_query(repl, &format!("Please analyze the image I just shared: {}", file_path.display()))?;
+    super::super::query::handle_query(repl, &format!("Please analyze the image I just shared: {}", file_path.display()), None)?;
     Ok(())
 }
 

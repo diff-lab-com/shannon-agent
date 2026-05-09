@@ -35,7 +35,8 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
-    Terminal,
+    Terminal, TerminalOptions,
+    Viewport,
 };
 use std::collections::HashMap;
 
@@ -1112,11 +1113,11 @@ impl Repl {
 
         let backend = CrosstermBackend::new(stdout);
         let term_size = crossterm::terminal::size().unwrap_or((80, 24));
-        let viewport_height = term_size.1.saturating_sub(2).max(6);
+        let viewport_h = term_size.1.saturating_sub(2).max(6);
         let mut terminal = Terminal::with_options(
             backend,
-            ratatui::TerminalOptions {
-                viewport: ratatui::Viewport::Inline(viewport_height),
+            TerminalOptions {
+                viewport: Viewport::Inline(viewport_h),
             },
         )?;
 
@@ -1255,7 +1256,7 @@ impl Repl {
 
             // Handle events
             if let Some(event) = self.events.next()? {
-                self.handle_event(event);
+                self.handle_event(event, Some(&mut terminal));
             }
         }
 
@@ -1336,10 +1337,10 @@ impl Repl {
     }
 
     /// Handle individual events
-    fn handle_event(&mut self, event: crate::events::Event) {
+    fn handle_event(&mut self, event: crate::events::Event, terminal: Option<&mut query::Term>) {
         match event {
             crate::events::Event::Input(key) => {
-                if let Err(e) = input::handle_input(self, key) {
+                if let Err(e) = input::handle_input(self, key, terminal) {
                     // Display error in UI chat instead of stderr to prevent escape sequence leakage
                     self.chat.add_message(
                         ChatRole::System,
@@ -1414,14 +1415,14 @@ impl Repl {
 
         if input.starts_with('/') {
             // Handle commands in pipe mode
-            commands::submit_input(self)?;
+            commands::submit_input(self, None)?;
             // Output last system/assistant message
             if let Some(msg) = self.chat.last_message() {
                 println!("{}", msg.content);
             }
         } else {
             // Process as AI query
-            query::handle_query(self, &input)?;
+            query::handle_query(self, &input, None)?;
             // Output the assistant response
             if let Some(msg) = self.chat.last_message() {
                 if msg.role == ChatRole::Assistant {

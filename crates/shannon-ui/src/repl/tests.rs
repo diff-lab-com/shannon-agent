@@ -99,12 +99,12 @@ fn test_repl_confirm_dialog_clear_chat_confirm() {
         crossterm::event::KeyCode::Right,
         crossterm::event::KeyModifiers::NONE,
     );
-    crate::repl::input::handle_input(&mut repl, right_key).unwrap();
+    crate::repl::input::handle_input(&mut repl, right_key, None).unwrap();
     let enter_key = crossterm::event::KeyEvent::new(
         crossterm::event::KeyCode::Enter,
         crossterm::event::KeyModifiers::NONE,
     );
-    crate::repl::input::handle_input(&mut repl, enter_key).unwrap();
+    crate::repl::input::handle_input(&mut repl, enter_key, None).unwrap();
     assert!(repl.state.active_dialog.is_none());
 }
 
@@ -119,7 +119,7 @@ fn test_repl_confirm_dialog_escape_cancels() {
         crossterm::event::KeyCode::Esc,
         crossterm::event::KeyModifiers::NONE,
     );
-    crate::repl::input::handle_input(&mut repl, key).unwrap();
+    crate::repl::input::handle_input(&mut repl, key, None).unwrap();
     assert!(repl.running);
     assert!(repl.state.active_dialog.is_none());
 }
@@ -128,7 +128,7 @@ fn test_repl_confirm_dialog_escape_cancels() {
 fn test_repl_help_command() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     assert!(!repl.chat.is_empty());
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Shannon Code Commands"));
@@ -140,7 +140,7 @@ fn test_repl_help_command() {
 fn test_repl_model_show_dialog() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/model".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     assert!(repl.state.model_picker.is_some());
 }
 
@@ -148,7 +148,7 @@ fn test_repl_model_show_dialog() {
 fn test_repl_model_set_command() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/model gpt-4o".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     assert_eq!(repl.state.model, Some("gpt-4o".to_string()));
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Model set to: gpt-4o"));
@@ -159,7 +159,7 @@ fn test_repl_init_command() {
     let mut repl = Repl::new().unwrap();
     let msg_count_before = repl.chat.len();
     repl.prompt.set_input("/init".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     assert_eq!(repl.chat.len(), msg_count_before + 2); // user msg + system response
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Project initialized"));
@@ -170,7 +170,7 @@ fn test_repl_init_command() {
 fn test_repl_init_detects_git() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/init".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Git repository: detected") || last_msg.contains("Git repository: not found"));
 }
@@ -180,7 +180,7 @@ fn test_repl_unknown_command() {
     let mut repl = Repl::new().unwrap();
     let msg_count_before = repl.chat.len();
     repl.prompt.set_input("/unknown_command_xyz".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     assert_eq!(repl.chat.len(), msg_count_before + 2);
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Unknown command"));
@@ -188,7 +188,7 @@ fn test_repl_unknown_command() {
     assert!(last_msg.contains("/help"));
     repl.running = true;
     repl.prompt.set_input("/unknown_command_xyz2".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     assert!(repl.running);
 }
 
@@ -198,7 +198,7 @@ fn test_repl_unknown_command() {
 fn test_sessions_command_empty() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/sessions".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     // With no saved sessions, the picker should be inactive and a chat message shown
     // OR if sessions exist, the fuzzy picker should be open
     let has_chat_msg = repl.chat.last_message()
@@ -212,7 +212,7 @@ fn test_sessions_command_empty() {
 fn test_sessions_command_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("/sessions"));
     assert!(last_msg.contains("/resume"));
@@ -223,7 +223,7 @@ fn test_sessions_command_in_help() {
 fn test_resume_command_no_args() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/resume".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Usage: /resume"));
 }
@@ -232,7 +232,7 @@ fn test_resume_command_no_args() {
 fn test_resume_command_invalid_uuid() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/resume not-a-uuid".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Invalid session identifier"));
 }
@@ -242,7 +242,7 @@ fn test_resume_command_invalid_number() {
     let mut repl = Repl::new().unwrap();
     repl.last_session_list.clear();
     repl.prompt.set_input("/resume 1".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Invalid session number") || last_msg.contains("Session not found"));
 }
@@ -251,7 +251,7 @@ fn test_resume_command_invalid_number() {
 fn test_history_command() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/history".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Current session stats"));
     assert!(last_msg.contains("Messages:"));
@@ -265,7 +265,7 @@ fn test_history_command_after_messages() {
     repl.chat.add_message(ChatRole::Assistant, "hi there".to_string());
     repl.state.tokens_used = 500;
     repl.prompt.set_input("/history".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Current session stats"));
     assert!(last_msg.contains("Messages:"));
@@ -275,7 +275,7 @@ fn test_history_command_after_messages() {
 fn test_history_export_no_path() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/history --export".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Usage: /history --export"));
 }
@@ -328,7 +328,7 @@ fn test_history_shows_commands_and_tools() {
     repl.commands_run = 5;
     repl.tools_invoked = 3;
     repl.prompt.set_input("/history".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Commands run: 6"));
     assert!(last_msg.contains("Tools invoked: 3"));
@@ -466,7 +466,7 @@ fn test_tab_complete_command_from_partial() {
         crossterm::event::KeyCode::Tab,
         crossterm::event::KeyModifiers::NONE,
     );
-    crate::repl::input::handle_input(&mut repl, tab_key).unwrap();
+    crate::repl::input::handle_input(&mut repl, tab_key, None).unwrap();
     let completed = repl.prompt.input().to_string();
     assert_eq!(completed, "/help");
 }
@@ -479,7 +479,7 @@ fn test_tab_complete_no_match() {
         crossterm::event::KeyCode::Tab,
         crossterm::event::KeyModifiers::NONE,
     );
-    crate::repl::input::handle_input(&mut repl, tab_key).unwrap();
+    crate::repl::input::handle_input(&mut repl, tab_key, None).unwrap();
     // Should remain unchanged — no matching command
     assert_eq!(repl.prompt.input(), "/zzzzz");
 }
@@ -492,7 +492,7 @@ fn test_tab_complete_empty_input_shows_commands() {
         crossterm::event::KeyCode::Tab,
         crossterm::event::KeyModifiers::NONE,
     );
-    crate::repl::input::handle_input(&mut repl, tab_key).unwrap();
+    crate::repl::input::handle_input(&mut repl, tab_key, None).unwrap();
     // Should complete to some command (first in sorted order)
     let completed = repl.prompt.input().to_string();
     assert!(completed.starts_with('/'));
@@ -506,7 +506,7 @@ fn test_tab_complete_suggestions_populated() {
         crossterm::event::KeyCode::Tab,
         crossterm::event::KeyModifiers::NONE,
     );
-    crate::repl::input::handle_input(&mut repl, tab_key).unwrap();
+    crate::repl::input::handle_input(&mut repl, tab_key, None).unwrap();
     // Suggestions should contain matching commands
     let suggestions = &repl.state.completion_suggestions;
     assert!(!suggestions.is_empty());
@@ -521,7 +521,7 @@ fn test_tab_complete_suggestions_cleared_on_type() {
         crossterm::event::KeyCode::Tab,
         crossterm::event::KeyModifiers::NONE,
     );
-    crate::repl::input::handle_input(&mut repl, tab_key).unwrap();
+    crate::repl::input::handle_input(&mut repl, tab_key, None).unwrap();
     assert!(!repl.state.completion_suggestions.is_empty());
 
     // Now type a character — suggestions should clear
@@ -529,7 +529,7 @@ fn test_tab_complete_suggestions_cleared_on_type() {
         crossterm::event::KeyCode::Char('x'),
         crossterm::event::KeyModifiers::NONE,
     );
-    crate::repl::input::handle_input(&mut repl, char_key).unwrap();
+    crate::repl::input::handle_input(&mut repl, char_key, None).unwrap();
     assert!(repl.state.completion_suggestions.is_empty());
 }
 
@@ -548,7 +548,7 @@ fn test_backspace_updates_auto_completions() {
         crossterm::event::KeyCode::Backspace,
         crossterm::event::KeyModifiers::NONE,
     );
-    crate::repl::input::handle_input(&mut repl, bs_key).unwrap();
+    crate::repl::input::handle_input(&mut repl, bs_key, None).unwrap();
     // Suggestions should be refreshed (possibly different count), not stale
     assert!(!repl.state.completion_suggestions.is_empty());
 }
@@ -563,11 +563,11 @@ fn test_tab_complete_cycles_through_matches() {
         crossterm::event::KeyModifiers::NONE,
     );
     let first = {
-        crate::repl::input::handle_input(&mut repl, tab_key).unwrap();
+        crate::repl::input::handle_input(&mut repl, tab_key, None).unwrap();
         repl.prompt.input().to_string()
     };
     let second = {
-        crate::repl::input::handle_input(&mut repl, tab_key).unwrap();
+        crate::repl::input::handle_input(&mut repl, tab_key, None).unwrap();
         repl.prompt.input().to_string()
     };
     // After cycling through all candidates, it should come back to the first
@@ -798,7 +798,7 @@ fn test_repl_clear_command() {
     assert!(repl.chat.is_empty());
 
     repl.prompt.set_input("/clear".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     // After clear: original messages removed, "Chat cleared." added
     assert!(!repl.chat.is_empty());
     let last_msg = &repl.chat.last_message().unwrap().content;
@@ -860,7 +860,7 @@ fn test_repl_adapter_confirm_not_supported() {
 fn test_repl_doctor_command() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/doctor".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Diagnostics") || last_msg.contains("PASS") || last_msg.contains("FAIL"));
 }
@@ -869,7 +869,7 @@ fn test_repl_doctor_command() {
 fn test_repl_doctor_check_alias() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/check".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Diagnostics") || last_msg.contains("PASS") || last_msg.contains("FAIL"));
 }
@@ -878,7 +878,7 @@ fn test_repl_doctor_check_alias() {
 fn test_repl_doctor_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("/doctor"));
 }
@@ -889,7 +889,7 @@ fn test_repl_doctor_in_help() {
 fn test_repl_compact_status() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/compact status".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Context Analysis"));
     assert!(last_msg.contains("Estimated tokens"));
@@ -900,7 +900,7 @@ fn test_repl_compact_status() {
 fn test_repl_compact_no_conversation() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/compact".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     // With no conversation history beyond the initial messages, compact should
     // report no change or compact successfully
     let last_msg = &repl.chat.last_message().unwrap().content;
@@ -915,7 +915,7 @@ fn test_repl_compact_no_conversation() {
 fn test_repl_compact_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("/compact"));
 }
@@ -942,7 +942,7 @@ fn test_repl_compact_tab_completion_prefix() {
 fn test_repl_cost_command() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/cost".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Cost Summary"));
     assert!(last_msg.contains("Model:"));
@@ -962,7 +962,7 @@ fn test_repl_cost_with_usage() {
         }
     }
     repl.prompt.set_input("/cost".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("5.0k"));
     assert!(last_msg.contains("$"));
@@ -972,7 +972,7 @@ fn test_repl_cost_with_usage() {
 fn test_repl_cost_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("/cost"));
 }
@@ -983,7 +983,7 @@ fn test_repl_cost_in_help() {
 fn test_repl_team_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/team".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("/team create"));
     assert!(last_msg.contains("/team add"));
@@ -997,7 +997,7 @@ fn test_repl_team_help() {
 fn test_repl_team_help_subcommand() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/team help".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("/team create"));
 }
@@ -1006,7 +1006,7 @@ fn test_repl_team_help_subcommand() {
 fn test_repl_team_create_no_name() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/team create".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Usage: /team create"));
 }
@@ -1015,7 +1015,7 @@ fn test_repl_team_create_no_name() {
 fn test_repl_team_add_no_args() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/team add".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Usage: /team add"));
 }
@@ -1024,7 +1024,7 @@ fn test_repl_team_add_no_args() {
 fn test_repl_team_task_no_args() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/team task".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Usage: /team task"));
 }
@@ -1033,7 +1033,7 @@ fn test_repl_team_task_no_args() {
 fn test_repl_team_add_without_create() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/team add myteam agent1".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("No team created") || last_msg.contains("team create"));
 }
@@ -1042,7 +1042,7 @@ fn test_repl_team_add_without_create() {
 fn test_repl_team_task_without_create() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/team task myteam do stuff".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("No team created") || last_msg.contains("team create"));
 }
@@ -1051,7 +1051,7 @@ fn test_repl_team_task_without_create() {
 fn test_repl_team_assign_without_create() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/team assign myteam".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("No team created") || last_msg.contains("team create"));
 }
@@ -1060,7 +1060,7 @@ fn test_repl_team_assign_without_create() {
 fn test_repl_team_list_without_create() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/team list".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     // list should show empty or no teams message
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(!last_msg.is_empty());
@@ -1070,7 +1070,7 @@ fn test_repl_team_list_without_create() {
 fn test_repl_team_shutdown_without_create() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/team shutdown".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("No active team") || last_msg.contains("shutdown"));
 }
@@ -1081,7 +1081,7 @@ fn test_repl_team_shutdown_without_create() {
 fn test_repl_permissions_status() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/permissions".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Permission Status"));
     assert!(last_msg.contains("Registered policies"));
@@ -1091,7 +1091,7 @@ fn test_repl_permissions_status() {
 fn test_repl_permissions_status_subcommand() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/permissions status".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Permission Status"));
 }
@@ -1100,14 +1100,14 @@ fn test_repl_permissions_status_subcommand() {
 fn test_repl_permissions_allow_tool() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/permissions allow Bash".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("always allowed"));
     assert!(last_msg.contains("Bash"));
 
     // Verify it shows in status
     repl.prompt.set_input("/permissions status".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let status_msg = &repl.chat.last_message().unwrap().content;
     assert!(status_msg.contains("Always allowed"));
     assert!(status_msg.contains("Bash"));
@@ -1117,14 +1117,14 @@ fn test_repl_permissions_allow_tool() {
 fn test_repl_permissions_deny_tool() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/permissions deny FileWrite".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("always denied"));
     assert!(last_msg.contains("FileWrite"));
 
     // Verify it shows in status
     repl.prompt.set_input("/permissions status".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let status_msg = &repl.chat.last_message().unwrap().content;
     assert!(status_msg.contains("Always denied"));
     assert!(status_msg.contains("FileWrite"));
@@ -1134,7 +1134,7 @@ fn test_repl_permissions_deny_tool() {
 fn test_repl_permissions_allow_no_tool() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/permissions allow".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Usage: /permissions allow"));
 }
@@ -1143,7 +1143,7 @@ fn test_repl_permissions_allow_no_tool() {
 fn test_repl_permissions_deny_no_tool() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/permissions deny".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Usage: /permissions deny"));
 }
@@ -1153,17 +1153,17 @@ fn test_repl_permissions_reset() {
     let mut repl = Repl::new().unwrap();
     // Allow a tool first
     repl.prompt.set_input("/permissions allow Bash".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
 
     // Reset
     repl.prompt.set_input("/permissions reset".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("cleared") || last_msg.contains("removed"));
 
     // Verify status shows no overrides
     repl.prompt.set_input("/permissions status".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let status_msg = &repl.chat.last_message().unwrap().content;
     assert!(status_msg.contains("No tool-level overrides"));
 }
@@ -1172,7 +1172,7 @@ fn test_repl_permissions_reset() {
 fn test_repl_permissions_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/permissions help".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("/permissions status"));
     assert!(last_msg.contains("/permissions allow"));
@@ -1184,7 +1184,7 @@ fn test_repl_permissions_help() {
 fn test_repl_permissions_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("/permissions"));
 }
@@ -1193,7 +1193,7 @@ fn test_repl_permissions_in_help() {
 fn test_repl_permissions_alias_perms() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/perms".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Permission Status"));
 }
@@ -1202,7 +1202,7 @@ fn test_repl_permissions_alias_perms() {
 fn test_repl_permissions_alias_perm() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/perm".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Permission Status"));
 }
@@ -1227,7 +1227,7 @@ fn test_repl_permissions_tab_completion_prefix() {
 fn test_repl_permissions_shows_policies() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/permissions status".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     // Default policies should be registered
     assert!(msg.contains("Bash"));
@@ -1239,13 +1239,13 @@ fn test_repl_permissions_allow_then_deny_same_tool() {
     let mut repl = Repl::new().unwrap();
     // Allow then deny the same tool
     repl.prompt.set_input("/permissions allow Bash".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     repl.prompt.set_input("/permissions deny Bash".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
 
     // Should show in denied, not allowed
     repl.prompt.set_input("/permissions status".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("Always denied"));
     assert!(msg.contains("Bash"));
@@ -1258,7 +1258,7 @@ fn test_repl_permissions_allow_then_deny_same_tool() {
 fn test_repl_plan_create() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/plan add user authentication".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Plan created"));
     assert!(last_msg.contains("user authentication"));
@@ -1272,7 +1272,7 @@ fn test_repl_plan_create() {
 fn test_repl_plan_status_no_plan() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/plan status".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("No active plan"));
 }
@@ -1281,9 +1281,9 @@ fn test_repl_plan_status_no_plan() {
 fn test_repl_plan_status_with_plan() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/plan fix login bug".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     repl.prompt.set_input("/plan status".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Plan:"));
     assert!(last_msg.contains("login bug"));
@@ -1295,9 +1295,9 @@ fn test_repl_plan_status_with_plan() {
 fn test_repl_plan_approve() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/plan refactor database layer".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     repl.prompt.set_input("/plan approve".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("approved"));
     assert!(repl.state.plan.approved);
@@ -1308,7 +1308,7 @@ fn test_repl_plan_approve() {
 fn test_repl_plan_approve_no_plan() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/plan approve".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("No active plan"));
 }
@@ -1317,10 +1317,10 @@ fn test_repl_plan_approve_no_plan() {
 fn test_repl_plan_reject() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/plan add caching".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     assert!(repl.state.plan.active);
     repl.prompt.set_input("/plan reject".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("rejected"));
     assert!(!repl.state.plan.active);
@@ -1331,7 +1331,7 @@ fn test_repl_plan_reject() {
 fn test_repl_plan_reject_no_plan() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/plan reject".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("No active plan"));
 }
@@ -1340,9 +1340,9 @@ fn test_repl_plan_reject_no_plan() {
 fn test_repl_plan_done() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/plan implement feature X".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     repl.prompt.set_input("/plan done".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("completed"));
     assert!(!repl.state.plan.active);
@@ -1353,7 +1353,7 @@ fn test_repl_plan_done() {
 fn test_repl_plan_done_no_plan() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/plan done".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("No active plan"));
 }
@@ -1362,7 +1362,7 @@ fn test_repl_plan_done_no_plan() {
 fn test_repl_plan_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/plan help".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("/plan <description>"));
     assert!(last_msg.contains("/plan status"));
@@ -1375,7 +1375,7 @@ fn test_repl_plan_help() {
 fn test_repl_plan_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("/plan"));
 }
@@ -1438,7 +1438,7 @@ fn test_repl_plan_generate_steps_default() {
 fn test_repl_plan_no_input() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/plan".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("No active plan") || last_msg.contains("Usage"));
 }
@@ -1475,7 +1475,7 @@ fn test_completion_suggestion_index_tracks_arrow_keys() {
         crossterm::event::KeyCode::Down,
         crossterm::event::KeyModifiers::NONE,
     );
-    crate::repl::input::handle_input(&mut repl, down_key).unwrap();
+    crate::repl::input::handle_input(&mut repl, down_key, None).unwrap();
     assert!(repl.state.completion_suggestion_index > 0 || repl.state.completion_suggestions.len() == 1);
 
     // Tab should accept the selection and dismiss popup
@@ -1483,7 +1483,7 @@ fn test_completion_suggestion_index_tracks_arrow_keys() {
         crossterm::event::KeyCode::Tab,
         crossterm::event::KeyModifiers::NONE,
     );
-    crate::repl::input::handle_input(&mut repl, tab_key).unwrap();
+    crate::repl::input::handle_input(&mut repl, tab_key, None).unwrap();
     assert!(repl.state.completion_suggestions.is_empty());
 }
 
@@ -1555,7 +1555,7 @@ fn test_repl_state_status_variants() {
 fn test_repl_web_search_no_args() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/web-search".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Usage: /web-search"));
 }
@@ -1564,7 +1564,7 @@ fn test_repl_web_search_no_args() {
 fn test_repl_websearch_alias_no_args() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/websearch".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Usage: /web-search"));
 }
@@ -1573,7 +1573,7 @@ fn test_repl_websearch_alias_no_args() {
 fn test_repl_web_search_with_query() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/web-search Rust async".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     // Will either show results or an error about missing API key
     assert!(
@@ -1587,7 +1587,7 @@ fn test_repl_web_search_with_query() {
 fn test_repl_web_search_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("/web-search"));
 }
@@ -1605,7 +1605,7 @@ fn test_repl_web_search_tab_completion() {
 fn test_repl_review_no_changes() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/review".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Code Review"));
 }
@@ -1614,7 +1614,7 @@ fn test_repl_review_no_changes() {
 fn test_repl_review_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("/review"));
 }
@@ -1639,7 +1639,7 @@ fn test_repl_review_tab_completion_prefix() {
 fn test_repl_local_models() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/local-models".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Local Model Detection"));
     assert!(last_msg.contains("Ollama"));
@@ -1650,7 +1650,7 @@ fn test_repl_local_models() {
 fn test_repl_local_alias() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/local".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Local Model Detection"));
 }
@@ -1659,7 +1659,7 @@ fn test_repl_local_alias() {
 fn test_repl_local_models_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("/local-models"));
 }
@@ -1676,7 +1676,7 @@ fn test_repl_local_models_tab_completion() {
 fn test_repl_diff_overview() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/diff".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Diff Overview"));
     assert!(last_msg.contains("Unstaged"));
@@ -1687,7 +1687,7 @@ fn test_repl_diff_overview() {
 fn test_repl_diff_overview_flag() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/diff --overview".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Diff Overview"));
 }
@@ -1696,7 +1696,7 @@ fn test_repl_diff_overview_flag() {
 fn test_repl_diff_staged() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/diff --staged".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     // Should show either "No changes found" or a diff
     assert!(!last_msg.is_empty());
@@ -1706,7 +1706,7 @@ fn test_repl_diff_staged() {
 fn test_repl_diff_stat() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/diff --stat".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(!last_msg.is_empty());
 }
@@ -1746,7 +1746,7 @@ fn test_format_change_bar() {
 fn test_repl_ci_status() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/ci".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     // Will show either runs or a message about gh not installed
     assert!(!last_msg.is_empty());
@@ -1756,7 +1756,7 @@ fn test_repl_ci_status() {
 fn test_repl_ci_status_subcommand() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/ci status".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(!last_msg.is_empty());
 }
@@ -1765,7 +1765,7 @@ fn test_repl_ci_status_subcommand() {
 fn test_repl_ci_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/ci help".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("/ci status"));
     assert!(last_msg.contains("/ci runs"));
@@ -1778,7 +1778,7 @@ fn test_repl_ci_help() {
 fn test_repl_ci_view_no_args() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/ci view".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Usage: /ci view"));
 }
@@ -1787,7 +1787,7 @@ fn test_repl_ci_view_no_args() {
 fn test_repl_ci_trigger_no_args() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/ci trigger".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Usage: /ci trigger"));
 }
@@ -1796,7 +1796,7 @@ fn test_repl_ci_trigger_no_args() {
 fn test_repl_ci_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("/ci"));
 }
@@ -1805,7 +1805,7 @@ fn test_repl_ci_in_help() {
 fn test_repl_ci_alias_gh_actions() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/gh-actions".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(!last_msg.is_empty());
 }
@@ -1833,7 +1833,7 @@ fn test_repl_ci_tab_completion_prefix() {
 fn test_repl_hooks_command_no_config() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/hooks".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     assert!(!repl.chat.is_empty());
     let last_msg = &repl.chat.last_message().unwrap().content;
     // Either shows configured hooks or "No hooks configured" message
@@ -1844,7 +1844,7 @@ fn test_repl_hooks_command_no_config() {
 fn test_repl_hooks_path_subcommand() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/hooks path".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     assert!(!repl.chat.is_empty());
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("User:") || last_msg.contains("Project:") || last_msg.contains("path"));
@@ -1854,7 +1854,7 @@ fn test_repl_hooks_path_subcommand() {
 fn test_repl_hooks_reload_subcommand() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/hooks reload".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     assert!(!repl.chat.is_empty());
     let last_msg = &repl.chat.last_message().unwrap().content;
     // Reload either succeeds or shows error about missing config
@@ -1872,7 +1872,7 @@ fn test_repl_hooks_in_help() {
 fn test_repl_hooks_command_recognized() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/hooks".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     // Should not show "Unknown command" message
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(!last_msg.contains("Unknown command"), "/hooks should be a recognized command");
@@ -1884,7 +1884,7 @@ fn test_repl_hooks_command_recognized() {
 fn test_repl_remember_no_args() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/remember".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Usage"), "/remember with no args should show usage");
 }
@@ -1893,7 +1893,7 @@ fn test_repl_remember_no_args() {
 fn test_repl_remember_saves_memory() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/remember Test memory for integration test".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Remembered") || last_msg.contains("store not"), "Should confirm memory saved or report missing store");
 }
@@ -1902,7 +1902,7 @@ fn test_repl_remember_saves_memory() {
 fn test_repl_recall_lists_memories() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/recall".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     // Either shows memories or says none found
     assert!(last_msg.contains("memory") || last_msg.contains("Memory") || last_msg.contains("No memories") || last_msg.contains("store not"));
@@ -1912,7 +1912,7 @@ fn test_repl_recall_lists_memories() {
 fn test_repl_recall_with_query() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/recall test query".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     assert!(!repl.chat.is_empty());
 }
 
@@ -1920,7 +1920,7 @@ fn test_repl_recall_with_query() {
 fn test_repl_forget_no_args() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/forget".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Usage"), "/forget with no args should show usage");
 }
@@ -1929,7 +1929,7 @@ fn test_repl_forget_no_args() {
 fn test_repl_forget_nonexistent() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/forget nonexistent123".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("No memory") || last_msg.contains("not found") || last_msg.contains("store not"));
 }
@@ -1938,7 +1938,7 @@ fn test_repl_forget_nonexistent() {
 fn test_repl_memory_stats() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/memory".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Memory") || last_msg.contains("Total") || last_msg.contains("store"));
 }
@@ -1957,7 +1957,7 @@ fn test_repl_memory_commands_in_help() {
 fn test_repl_remember_alias_mem() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/mem Alias test memory".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Remembered") || last_msg.contains("store not"), "/mem should work as alias");
 }
@@ -1968,7 +1968,7 @@ fn test_repl_remember_alias_mem() {
 fn test_repl_image_no_args() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/image".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Usage"), "/image with no args should show usage");
 }
@@ -1977,7 +1977,7 @@ fn test_repl_image_no_args() {
 fn test_repl_image_nonexistent_file() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/image /nonexistent/path/fake.png".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("not found") || last_msg.contains("File not found"), "Should report missing file");
 }
@@ -2011,7 +2011,7 @@ fn test_repl_image_with_real_png() {
     let mut repl = Repl::new().unwrap();
     let input = format!("/image {} What is this?", png_path.display());
     repl.prompt.set_input(input);
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     // Should at least not crash and should add a message
     assert!(!repl.chat.is_empty());
 
@@ -2029,7 +2029,7 @@ fn test_repl_image_unsupported_format() {
     let mut repl = Repl::new().unwrap();
     let input = format!("/image {}", txt_path.display());
     repl.prompt.set_input(input);
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Unsupported") || last_msg.contains("not found") || last_msg.contains("format"),
         "Should report unsupported format");
@@ -2048,7 +2048,7 @@ fn test_repl_image_in_help() {
 fn test_repl_img_alias() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/img".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Usage"), "/img should work as alias for /image");
 }
@@ -2059,7 +2059,7 @@ fn test_repl_img_alias() {
 fn test_repl_mode_shows_current() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/mode".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Current approval mode"), "/mode should show current mode");
     assert!(last_msg.contains("default"), "/mode should list available modes");
@@ -2072,14 +2072,14 @@ fn test_repl_mode_shows_current() {
 fn test_repl_mode_sets_mode() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/mode full-auto".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Approval mode set to"), "/mode <name> should confirm the change");
     assert!(last_msg.contains("full-auto"), "should mention the new mode");
 
     // Verify it persists by checking again
     repl.prompt.set_input("/mode".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("full-auto *"), "full-auto should be marked as current");
 }
@@ -2088,7 +2088,7 @@ fn test_repl_mode_sets_mode() {
 fn test_repl_mode_invalid() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/mode invalid".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Unknown mode"), "/mode invalid should show error");
     assert!(last_msg.contains("default"), "should list valid modes");
@@ -2098,7 +2098,7 @@ fn test_repl_mode_invalid() {
 fn test_repl_mode_suggest_alias() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/mode ask".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("default"), "'ask' should map to 'default' mode");
 }
@@ -2116,7 +2116,7 @@ fn test_repl_mode_in_help() {
 fn test_repl_context_shows_status() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/context".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     // Should at least show the context status header
     assert!(
@@ -2129,7 +2129,7 @@ fn test_repl_context_shows_status() {
 fn test_repl_context_reload() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/context reload".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(
         last_msg.contains("reload") || last_msg.contains("Context") || last_msg.contains("Loaded"),
@@ -2150,7 +2150,7 @@ fn test_repl_context_in_help() {
 fn test_repl_undo_no_checkpoints() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/undo".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(
         last_msg.contains("No checkpoints") || last_msg.contains("Undo failed"),
@@ -2162,7 +2162,7 @@ fn test_repl_undo_no_checkpoints() {
 fn test_repl_undo_list_empty() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/undo list".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(
         last_msg.contains("No checkpoints"),
@@ -2174,7 +2174,7 @@ fn test_repl_undo_list_empty() {
 fn test_repl_undo_invalid_index() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/undo 0".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(
         last_msg.contains("Revert failed") || last_msg.contains("Invalid"),
@@ -2201,7 +2201,7 @@ fn test_repl_checkpoint_manager_enabled() {
 fn test_repl_notify_shows_status() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/notify".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(
         last_msg.contains("Notifications") || last_msg.contains("notifications"),
@@ -2214,7 +2214,7 @@ fn test_repl_notify_enable() {
     let mut repl = Repl::new().unwrap();
     assert!(!repl.notifications_enabled, "should start disabled");
     repl.prompt.set_input("/notify on".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     assert!(repl.notifications_enabled, "/notify on should enable");
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("enabled"), "should confirm enabled");
@@ -2225,7 +2225,7 @@ fn test_repl_notify_disable() {
     let mut repl = Repl::new().unwrap();
     repl.notifications_enabled = true;
     repl.prompt.set_input("/notify off".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     assert!(!repl.notifications_enabled, "/notify off should disable");
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("disabled"), "should confirm disabled");
@@ -2242,7 +2242,7 @@ fn test_repl_notify_in_help() {
 fn test_repl_create_pr_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/create-pr --help".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(
         last_msg.contains("GitHub pull request") || last_msg.contains("create-pr"),
@@ -2261,7 +2261,7 @@ fn test_repl_create_pr_in_help() {
 fn test_repl_create_pr_help_flag() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/create-pr help".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(
         last_msg.contains("--draft") || last_msg.contains("--base"),
@@ -2275,7 +2275,7 @@ fn test_repl_create_pr_help_flag() {
 fn test_repl_patch_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/patch --help".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(
         last_msg.contains("search/replace") && last_msg.contains("---"),
@@ -2287,7 +2287,7 @@ fn test_repl_patch_help() {
 fn test_repl_patch_no_separator() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/patch Cargo.toml old_text new_text".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(
         last_msg.contains("---"),
@@ -2299,7 +2299,7 @@ fn test_repl_patch_no_separator() {
 fn test_repl_patch_empty_args() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/patch".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(
         last_msg.contains("Patch") && last_msg.contains("---"),
@@ -2311,7 +2311,7 @@ fn test_repl_patch_empty_args() {
 fn test_repl_patch_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let help_text = &repl.chat.last_message().unwrap().content;
     assert!(
         help_text.contains("patch"),
@@ -2324,7 +2324,7 @@ fn test_repl_patch_in_help() {
 fn test_repl_sandbox_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/sandbox".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("Sandbox"), "should show sandbox help header");
     assert!(msg.contains("docker"), "should mention docker option");
@@ -2335,7 +2335,7 @@ fn test_repl_sandbox_help() {
 fn test_repl_sandbox_status_direct() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/sandbox status".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("direct"), "default should be direct mode");
 }
@@ -2344,7 +2344,7 @@ fn test_repl_sandbox_status_direct() {
 fn test_repl_sandbox_toggle_docker() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/sandbox docker".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("enabled"), "should confirm docker enabled");
     assert!(matches!(repl.state.sandbox_mode, shannon_tools::SandboxMode::Docker(_)));
@@ -2357,7 +2357,7 @@ fn test_repl_sandbox_toggle_direct() {
     repl.state.sandbox_mode = shannon_tools::SandboxMode::Docker(shannon_tools::DockerSandboxConfig::default());
     // Then disable
     repl.prompt.set_input("/sandbox direct".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("disabled"), "should confirm sandbox disabled");
     assert_eq!(repl.state.sandbox_mode, shannon_tools::SandboxMode::Direct);
@@ -2367,7 +2367,7 @@ fn test_repl_sandbox_toggle_direct() {
 fn test_repl_sandbox_unknown_option() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/sandbox foobar".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("Unknown"), "should report unknown option");
 }
@@ -2376,7 +2376,7 @@ fn test_repl_sandbox_unknown_option() {
 fn test_repl_sandbox_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let help_text = &repl.chat.last_message().unwrap().content;
     assert!(
         help_text.contains("sandbox"),
@@ -2390,7 +2390,7 @@ fn test_repl_sandbox_in_help() {
 fn test_repl_find_usage() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/find".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("Usage"), "empty /find should show usage");
 }
@@ -2402,7 +2402,7 @@ fn test_repl_find_no_results() {
     // so the query text appears in the user's own message. Use a query
     // that won't match anything and verify the result message format.
     repl.prompt.set_input("/find zzz_not_found_xyz".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     // The user's command message contains "zzz_not_found_xyz" so handle_find
     // will find 1 result (the command itself). Verify it shows results.
     let last = repl.chat.last_message().unwrap();
@@ -2416,7 +2416,7 @@ fn test_repl_find_with_results() {
     // Add a message that we can search for
     repl.chat.add_message(ChatRole::User, "I love Rust programming".to_string());
     repl.prompt.set_input("/find Rust".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("Found"), "should find results");
     assert!(msg.contains("Rust"), "should show matching content");
@@ -2426,7 +2426,7 @@ fn test_repl_find_with_results() {
 fn test_repl_find_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/help".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let help_text = &repl.chat.last_message().unwrap().content;
     assert!(help_text.contains("find"), "/help should list find command");
 }
@@ -2437,7 +2437,7 @@ fn test_repl_find_in_help() {
 fn test_repl_agents_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/agents".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("spawn") || msg.contains("list"), "should show agents usage");
 }
@@ -2446,7 +2446,7 @@ fn test_repl_agents_help() {
 fn test_repl_agents_spawn() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/agents spawn test-agent You are a helper".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("spawned"), "should confirm agent spawned");
 }
@@ -2456,10 +2456,10 @@ fn test_repl_agents_list() {
     let mut repl = Repl::new().unwrap();
     // First spawn an agent
     repl.prompt.set_input("/agents spawn list-test helper agent".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     // Then list
     repl.prompt.set_input("/agents list".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("list-test"), "should list spawned agent");
 }
@@ -2468,9 +2468,9 @@ fn test_repl_agents_list() {
 fn test_repl_agents_status() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/agents spawn status-check test agent".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     repl.prompt.set_input("/agents status status-check".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("status-check"), "should show agent details");
 }
@@ -2479,7 +2479,7 @@ fn test_repl_agents_status() {
 fn test_repl_agents_status_not_found() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/agents status nonexistent".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("not found"), "should report agent not found");
 }
@@ -2488,9 +2488,9 @@ fn test_repl_agents_status_not_found() {
 fn test_repl_agents_kill() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/agents spawn killme test agent".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     repl.prompt.set_input("/agents kill killme".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("killed"), "should confirm agent killed");
 }
@@ -2499,7 +2499,7 @@ fn test_repl_agents_kill() {
 fn test_repl_agents_run_bg() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/agents run-bg bg-worker do some work".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     // Check last two messages for completion
     let count = repl.chat.message_count();
     let found = (0..count.min(2)).rev().any(|i| {
@@ -2514,7 +2514,7 @@ fn test_repl_agents_run_bg() {
 fn test_repl_agents_in_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/agents help".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("spawn"), "agents help should list spawn subcommand");
     assert!(msg.contains("list"), "agents help should list list subcommand");
@@ -2526,7 +2526,7 @@ fn test_repl_agents_in_help() {
 fn test_repl_route_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/route".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("add"), "route help should show add");
     assert!(msg.contains("list"), "route help should show list");
@@ -2536,12 +2536,12 @@ fn test_repl_route_help() {
 fn test_repl_route_add_and_list() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/route add explain claude-haiku-4-5".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("Route added"), "should confirm route added");
 
     repl.prompt.set_input("/route list".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("explain"), "list should show pattern");
     assert!(msg.contains("claude-haiku-4-5"), "list should show model");
@@ -2551,14 +2551,14 @@ fn test_repl_route_add_and_list() {
 fn test_repl_route_remove() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/route add test claude-sonnet-4-6".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     repl.prompt.set_input("/route remove test".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("Removed"), "should confirm removal");
 
     repl.prompt.set_input("/route list".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("No routing rules"), "should have no rules after remove");
 }
@@ -2567,11 +2567,11 @@ fn test_repl_route_remove() {
 fn test_repl_route_clear() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/route add a model-a".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     repl.prompt.set_input("/route add b model-b".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     repl.prompt.set_input("/route clear".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("Cleared 2"), "should clear both rules");
 }
@@ -2580,9 +2580,9 @@ fn test_repl_route_clear() {
 fn test_repl_route_test_match() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/route add refactor claude-opus-4-6".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     repl.prompt.set_input("/route test refactor the auth module".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("claude-opus-4-6"), "should match and show the model");
 }
@@ -2591,7 +2591,7 @@ fn test_repl_route_test_match() {
 fn test_repl_route_test_no_match() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/route test hello world".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("no routing rules") || msg.contains("matches no routing"), "should report no match");
 }
@@ -2601,7 +2601,7 @@ fn test_repl_route_routing_state() {
     let mut repl = Repl::new().unwrap();
     // Add a route directly to state
     repl.prompt.set_input("/route add debug claude-haiku-4-5".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     // Verify the state has the route
     assert_eq!(repl.model_routes.len(), 1);
     assert_eq!(repl.model_routes[0].0, "debug");
@@ -2614,7 +2614,7 @@ fn test_repl_route_routing_state() {
 fn test_repl_mcp_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/mcp".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("list"), "mcp help should show list");
     assert!(msg.contains("add"), "mcp help should show add");
@@ -2625,12 +2625,12 @@ fn test_repl_mcp_add_and_list() {
     let _ = std::fs::remove_dir_all(".shannon-test-mcp");
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/mcp add test-server /usr/bin/test-server".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("Added") || msg.contains("Updated"), "should confirm server added");
 
     repl.prompt.set_input("/mcp list".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("test-server"), "list should show server name");
 }
@@ -2639,9 +2639,9 @@ fn test_repl_mcp_add_and_list() {
 fn test_repl_mcp_show() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/mcp add my-server /usr/bin/echo hello".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     repl.prompt.set_input("/mcp show my-server".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("my-server"), "should show server name");
     assert!(msg.contains("/usr/bin/echo"), "should show command");
@@ -2652,7 +2652,7 @@ fn test_repl_mcp_show() {
 fn test_repl_mcp_show_not_found() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/mcp show nonexistent".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("not found"), "should report server not found");
 }
@@ -2661,9 +2661,9 @@ fn test_repl_mcp_show_not_found() {
 fn test_repl_mcp_remove() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/mcp add temp-server /usr/bin/true".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     repl.prompt.set_input("/mcp remove temp-server".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("Removed"), "should confirm removal");
 }
@@ -2672,7 +2672,7 @@ fn test_repl_mcp_remove() {
 fn test_repl_mcp_path() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/mcp path".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("mcp.json"), "should show config path");
 }
@@ -2702,7 +2702,7 @@ fn test_rewind_command_default() {
     }
 
     repl.prompt.set_input("/rewind".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
 
     // System message added + 2 original messages remain
     assert_eq!(repl.chat.len(), 3); // 2 original + 1 system msg about rewind
@@ -2727,7 +2727,7 @@ fn test_rewind_command_multiple_turns() {
     repl.chat.add_message(ChatRole::Assistant, "A3".to_string());
 
     repl.prompt.set_input("/rewind 2".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
 
     // 2 original msgs remain + 1 system msg
     assert_eq!(repl.chat.len(), 3);
@@ -2741,7 +2741,7 @@ fn test_rewind_command_multiple_turns() {
 fn test_rewind_command_empty_chat() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/rewind".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
 
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("No conversation turns to rewind"));
@@ -2752,7 +2752,7 @@ fn test_rewind_command_zero() {
     let mut repl = Repl::new().unwrap();
     repl.chat.add_message(ChatRole::User, "Q1".to_string());
     repl.prompt.set_input("/rewind 0".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
 
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Usage: /rewind"));
@@ -2762,7 +2762,7 @@ fn test_rewind_command_zero() {
 fn test_rewind_command_invalid_arg() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/rewind abc".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
 
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Usage: /rewind"));
@@ -2778,7 +2778,7 @@ fn test_rewind_preserves_earlier_messages() {
     repl.chat.add_message(ChatRole::Assistant, "Second A".to_string());
 
     repl.prompt.set_input("/rewind".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
 
     // System + First Q + First A + system rewind msg = 4
     assert_eq!(repl.chat.len(), 4);
@@ -2796,7 +2796,7 @@ fn test_rewind_then_continue_conversation() {
 
     // Rewind the bad exchange
     repl.prompt.set_input("/rewind".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     assert_eq!(repl.chat.len(), 1); // Only the system rewind msg
 
     // Add new conversation
@@ -2828,7 +2828,7 @@ fn test_rewind_syncs_engine_history() {
 
     // Rewind 1 turn
     repl.prompt.set_input("/rewind".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
 
     // Verify engine also has 2 messages (Q1 + A1)
     if let Some(ref engine) = repl.query_engine {
@@ -2850,12 +2850,12 @@ fn test_rewind_then_rewind_again() {
 
     // First rewind: remove Q3+A3
     repl.prompt.set_input("/rewind".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     assert_eq!(repl.chat.len(), 5); // Q1+A1+Q2+A2 + system rewind msg
 
     // Second rewind: remove Q2+A2 (first system msg also removed since it's past cutoff)
     repl.prompt.set_input("/rewind".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     // Q1+A1 + second system rewind msg = 3 (first system msg was in truncated range)
     assert_eq!(repl.chat.len(), 3);
     assert_eq!(repl.chat.get_message(0).unwrap().content, "Q1");
@@ -3046,13 +3046,13 @@ fn test_approval_mode_label_syncs_with_permissions() {
 
     // Use /mode to change to readonly
     repl.prompt.set_input("/mode readonly".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
 
     assert_eq!(repl.state.approval_mode_label, "ASK");
 
     // Change back to default
     repl.prompt.set_input("/mode default".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     assert_eq!(repl.state.approval_mode_label, "ASK");
 }
 
@@ -3370,7 +3370,7 @@ fn test_repl_add_dir_valid() {
     let mut repl = Repl::new().unwrap();
     let tmp = std::env::temp_dir().to_string_lossy().to_string();
     repl.prompt.set_input(format!("/add-dir {tmp}"));
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Added directory:"));
     assert!(last_msg.contains(&tmp));
@@ -3381,7 +3381,7 @@ fn test_repl_add_dir_valid() {
 fn test_repl_add_dir_not_found() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/add-dir /no/such/directory/xyz123".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Directory not found:"));
     assert!(last_msg.contains("/no/such/directory/xyz123"));
@@ -3392,7 +3392,7 @@ fn test_repl_add_dir_file_not_dir() {
     let mut repl = Repl::new().unwrap();
     // Use /etc/passwd — a known file that exists on Linux
     repl.prompt.set_input("/add-dir /etc/passwd".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Not a directory:"));
 }
@@ -3403,11 +3403,11 @@ fn test_repl_add_dir_duplicate() {
     let tmp = std::env::temp_dir().to_string_lossy().to_string();
     // Add it once
     repl.prompt.set_input(format!("/add-dir {tmp}"));
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     assert!(repl.state.extra_dirs.iter().any(|d| d == &tmp));
     // Add it again
     repl.prompt.set_input(format!("/add-dir {tmp}"));
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("already added:"));
     // Should still be exactly 1 entry
@@ -3418,7 +3418,7 @@ fn test_repl_add_dir_duplicate() {
 fn test_repl_add_dir_no_args() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/add-dir".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Usage: /add-dir <path>"));
 }
@@ -3429,7 +3429,7 @@ fn test_repl_add_dir_no_args() {
 fn test_repl_rename_set() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/rename My Session".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     assert_eq!(repl.state.session_title, Some("My Session".to_string()));
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Session renamed to: My Session"));
@@ -3441,7 +3441,7 @@ fn test_repl_rename_show_current() {
     // Set a title first
     repl.state.session_title = Some("Test Title".to_string());
     repl.prompt.set_input("/rename".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Current session: Test Title"));
     assert!(last_msg.contains("Usage: /rename <new-name>"));
@@ -3452,7 +3452,7 @@ fn test_repl_rename_no_title() {
     let mut repl = Repl::new().unwrap();
     assert!(repl.state.session_title.is_none());
     repl.prompt.set_input("/rename".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("No custom session name set"));
     assert!(last_msg.contains("Usage: /rename <new-name>"));
@@ -3465,7 +3465,7 @@ fn test_repl_rename_reset() {
     repl.state.session_title = Some("Before Reset".to_string());
     // Now reset it
     repl.prompt.set_input("/rename reset".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     assert!(repl.state.session_title.is_none());
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Session name reset to default"));
@@ -3483,7 +3483,7 @@ fn test_repl_copy_nth_response() {
 
     // /copy 2 should copy the 2nd from end = "second response"
     repl.prompt.set_input("/copy 2".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     // In test env clipboard is likely unavailable; content goes to temp file
     assert!(
@@ -3501,7 +3501,7 @@ fn test_repl_copy_out_of_range() {
 
     // /copy 99 — only 2 responses exist
     repl.prompt.set_input("/copy 99".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Only 2 assistant response"));
     assert!(last_msg.contains("/copy 1"));
@@ -3513,7 +3513,7 @@ fn test_repl_copy_zero() {
     repl.chat.add_message(ChatRole::Assistant, "some response".to_string());
 
     repl.prompt.set_input("/copy 0".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Invalid index"));
 }
@@ -3537,7 +3537,7 @@ fn test_repl_compact_with_focus_instructions() {
     }
 
     repl.prompt.set_input("/compact authentication logic".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     // The focus branch prints a "Focus compact" message first, then the result
     assert!(
@@ -3553,12 +3553,12 @@ fn test_repl_plan_off() {
     let mut repl = Repl::new().unwrap();
     // First create a plan so it's active
     repl.prompt.set_input("/plan implement search feature".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     assert!(repl.state.plan.active);
 
     // Now deactivate
     repl.prompt.set_input("/plan off".to_string());
-    super::commands::submit_input(&mut repl).unwrap();
+    super::commands::submit_input(&mut repl, None).unwrap();
     assert!(!repl.state.plan.active, "plan.active should be false after /plan off");
     assert!(!repl.state.plan.approved, "plan.approved should be false after /plan off");
     if let Ok(flag) = repl.plan_mode_flag.read() {

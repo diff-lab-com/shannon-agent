@@ -68,7 +68,10 @@ impl Default for StreamingState {
 }
 
 /// Handle a query (send to AI)
-pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
+/// Type alias for the TUI terminal used by the REPL.
+pub(crate) type Term = Terminal<CrosstermBackend<io::Stdout>>;
+
+pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term>) -> Result<()> {
     repl.state.status = t!("status.processing").to_string();
     repl.state.active_tool = None;
     repl.state.query_steps_done = 0;
@@ -331,14 +334,6 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
 
     // Poll the streaming buffer while the query runs
     {
-        let viewport_height = crossterm::terminal::size().unwrap_or((80, 24)).1.saturating_sub(2).max(6);
-        let terminal_backend = CrosstermBackend::new(io::stdout());
-        let mut polling_terminal = Terminal::with_options(
-            terminal_backend,
-            ratatui::TerminalOptions {
-                viewport: ratatui::Viewport::Inline(viewport_height),
-            },
-        )?;
         let mut buffer = StreamBuffer::new();
         let stream_start = std::time::Instant::now();
 
@@ -367,9 +362,11 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
             }
 
             if buffer.needs_render() {
+                let has_newline = buffer.has_newline_since_drain();
                 let _ = buffer.drain_for_render();
                 let rendered = repl.output_renderer.render_streaming(buffer.accumulated_text());
-                repl.chat.update_message(assistant_msg_index, rendered);
+                repl.chat.update_streaming_message(assistant_msg_index, rendered, has_newline);
+                buffer.take_newline_flag();
             }
 
             repl.state.status = current_status.clone();
@@ -436,14 +433,16 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
 
             // Render the UI during streaming
             repl.state.spinner.tick();
+
             let chat = &repl.chat;
             let prompt = &repl.prompt;
             let state = repl.state.clone();
-            let spinner = &repl.state.spinner;
-            let pb = if repl.state.progress_bar_visible { Some(&repl.state.progress_bar) } else { None };
             let sidebar_info = repl.sidebar_info();
 
-            polling_terminal.draw(|f| {
+            if let Some(ref mut term) = terminal {
+            term.draw(|f| {
+                let spinner = &state.spinner;
+                let pb = if state.progress_bar_visible { Some(&state.progress_bar) } else { None };
                 crate::widgets::MainLayoutWidget::render_complete_with_spinner(
                     f, chat, prompt, &state.status,
                     state.model.as_deref(), Some(state.tokens_used),
@@ -468,6 +467,7 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
                     state.multi_progress.render(f, mp_area);
                 }
             })?;
+            } // end if let Some(ref mut term) = terminal
 
             if query_finished { break; }
 
@@ -509,21 +509,11 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
             let _ = std::io::Write::write_all(&mut std::io::stderr(), b"\x07");
         }
 
-        // Commit completed messages to terminal scrollback via insert_before.
-        // This moves them above the viewport so chat and sidebar text can be
-        // selected independently with the mouse.
-        {
-            let term_width = crossterm::terminal::size().unwrap_or((80, 24)).0;
-            let (lines, _height) = repl.chat.commit_to_lines(term_width);
-            if !lines.is_empty() {
-                let _ = polling_terminal.insert_before(_height, |buf: &mut ratatui::buffer::Buffer| {
-                    use ratatui::widgets::Widget;
-                    let area = buf.area;
-                    let paragraph = ratatui::widgets::Paragraph::new(lines);
-                    paragraph.render(area, buf);
-                });
-            }
-        }
+        // NOTE: We intentionally do NOT call commit_to_lines + insert_before here.
+        // Using insert_before on the polling terminal shifts its viewport position,
+        // and when the main terminal takes over it doesn't know about the shift,
+        // causing duplicate content on screen. All messages are rendered in the
+        // viewport via ColumnRenderable virtual scrolling instead.
     }
 
     shannon_core::prevent_sleep::stop_prevent_sleep();
@@ -578,8 +568,9 @@ pub fn handle_query(repl: &mut Repl, input: &str) -> Result<()> {
             repl.current_turn += 1;
 
             // Record per-turn checkpoint with file change tracking
-            let prompt_preview = if input.len() > 80 {
-                format!("{}...", &input[..80])
+            let prompt_preview = if input.chars().count() > 80 {
+                let truncated: String = input.chars().take(80).collect();
+                format!("{truncated}...")
             } else {
                 input.to_string()
             };
