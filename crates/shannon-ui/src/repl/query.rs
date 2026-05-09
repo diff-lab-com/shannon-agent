@@ -1,5 +1,7 @@
 //! REPL AI query handling and streaming display
 
+use ratatui::prelude::Widget;
+
 /// Rotating phrases shown during the thinking phase, cycled every 2 seconds.
 const THINKING_PHRASES: &[&str] = &[
     "Thinking",
@@ -509,11 +511,18 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
             let _ = std::io::Write::write_all(&mut std::io::stderr(), b"\x07");
         }
 
-        // NOTE: We intentionally do NOT call commit_to_lines + insert_before here.
-        // Using insert_before on the polling terminal shifts its viewport position,
-        // and when the main terminal takes over it doesn't know about the shift,
-        // causing duplicate content on screen. All messages are rendered in the
-        // viewport via ColumnRenderable virtual scrolling instead.
+        // Commit completed messages to terminal scrollback.
+        // With a single terminal, insert_before is safe — no duplicate rendering.
+        if let Some(ref mut term) = terminal {
+            let inner_width = repl.chat.last_inner_width();
+            let (lines, height) = repl.chat.commit_to_lines(inner_width);
+            if height > 0 {
+                term.insert_before(height, |buf| {
+                    let paragraph = ratatui::widgets::Paragraph::new(lines);
+                    paragraph.render(buf.area, buf);
+                })?;
+            }
+        }
     }
 
     shannon_core::prevent_sleep::stop_prevent_sleep();

@@ -240,6 +240,16 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
             repl.toggle_pager();
             Ok(())
         }
+        // PageUp: scroll chat up
+        KeyCode::PageUp => {
+            for _ in 0..5 { repl.chat.scroll_up(); }
+            Ok(())
+        }
+        // PageDown: scroll chat down
+        KeyCode::PageDown => {
+            for _ in 0..5 { repl.chat.scroll_down(); }
+            Ok(())
+        }
         // Ctrl+T: toggle transcript pager (alternative keybinding)
         KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             repl.toggle_pager();
@@ -437,6 +447,21 @@ fn handle_vim_action(repl: &mut Repl, action: VimAction) {
         }
         VimAction::ClearInput => {
             repl.prompt.clear();
+        }
+        VimAction::Scroll { direction, count } => {
+            use crate::vim::ScrollDirection;
+            for _ in 0..count.max(1) {
+                match direction {
+                    ScrollDirection::Up => repl.chat.scroll_up(),
+                    ScrollDirection::Down => repl.chat.scroll_down(),
+                    ScrollDirection::HalfPageUp | ScrollDirection::FullPageUp => {
+                        for _ in 0..10 { repl.chat.scroll_up(); }
+                    }
+                    ScrollDirection::HalfPageDown | ScrollDirection::FullPageDown => {
+                        for _ in 0..10 { repl.chat.scroll_down(); }
+                    }
+                }
+            }
         }
         _ => {}
     }
