@@ -4,7 +4,7 @@ use crate::{
     widgets::ChatRole,
     Result,
 };
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use crate::vim::{Direction, VimAction};
 use rust_i18n::t;
 
@@ -37,6 +37,23 @@ fn open_external_editor(content: &str) -> std::result::Result<String, Box<dyn st
         Ok(std::fs::read_to_string(&path)?)
     } else {
         Err("Editor exited with error".into())
+    }
+}
+
+/// Handle mouse events — scroll wheel to navigate chat history.
+pub fn handle_mouse(repl: &mut Repl, mouse: MouseEvent) {
+    match mouse.kind {
+        MouseEventKind::ScrollUp => {
+            for _ in 0..3 {
+                repl.chat.scroll_up();
+            }
+        }
+        MouseEventKind::ScrollDown => {
+            for _ in 0..3 {
+                repl.chat.scroll_down();
+            }
+        }
+        _ => {}
     }
 }
 
@@ -240,14 +257,26 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
             repl.toggle_pager();
             Ok(())
         }
-        // PageUp: scroll chat up
+        // PageUp: scroll chat up by viewport height
         KeyCode::PageUp => {
-            for _ in 0..5 { repl.chat.scroll_up(); }
+            let page = repl.chat.chat_viewport_height() as usize;
+            repl.chat.scroll_up_by(page.saturating_sub(2).max(1));
             Ok(())
         }
-        // PageDown: scroll chat down
+        // PageDown: scroll chat down by viewport height
         KeyCode::PageDown => {
-            for _ in 0..5 { repl.chat.scroll_down(); }
+            let page = repl.chat.chat_viewport_height() as usize;
+            repl.chat.scroll_down_by(page.saturating_sub(2).max(1));
+            Ok(())
+        }
+        // Home: jump to top of chat
+        KeyCode::Home => {
+            repl.chat.scroll_to_top();
+            Ok(())
+        }
+        // End: jump to bottom (latest message)
+        KeyCode::End => {
+            repl.chat.scroll_to_latest();
             Ok(())
         }
         // Ctrl+T: toggle transcript pager (alternative keybinding)
@@ -450,15 +479,22 @@ fn handle_vim_action(repl: &mut Repl, action: VimAction) {
         }
         VimAction::Scroll { direction, count } => {
             use crate::vim::ScrollDirection;
+            let vh = repl.chat.chat_viewport_height() as usize;
             for _ in 0..count.max(1) {
                 match direction {
                     ScrollDirection::Up => repl.chat.scroll_up(),
                     ScrollDirection::Down => repl.chat.scroll_down(),
-                    ScrollDirection::HalfPageUp | ScrollDirection::FullPageUp => {
-                        for _ in 0..10 { repl.chat.scroll_up(); }
+                    ScrollDirection::HalfPageUp => {
+                        repl.chat.scroll_up_by(vh / 2);
                     }
-                    ScrollDirection::HalfPageDown | ScrollDirection::FullPageDown => {
-                        for _ in 0..10 { repl.chat.scroll_down(); }
+                    ScrollDirection::HalfPageDown => {
+                        repl.chat.scroll_down_by(vh / 2);
+                    }
+                    ScrollDirection::FullPageUp => {
+                        repl.chat.scroll_up_by(vh.saturating_sub(2).max(1));
+                    }
+                    ScrollDirection::FullPageDown => {
+                        repl.chat.scroll_down_by(vh.saturating_sub(2).max(1));
                     }
                 }
             }

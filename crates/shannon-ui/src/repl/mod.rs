@@ -1361,6 +1361,11 @@ impl Repl {
                 }
                 self.state.completion_suggestions.clear();
             }
+            crate::events::Event::Mouse(mouse) => {
+                if self.state.mouse_capture_enabled {
+                    input::handle_mouse(self, mouse);
+                }
+            }
             crate::events::Event::Tick => {
                 // Advance spinner animation during query processing
                 if self.state.status != "Ready" {

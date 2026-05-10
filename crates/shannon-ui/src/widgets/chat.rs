@@ -338,6 +338,28 @@ impl ChatWidget {
         self.committed_count = self.messages.len();
     }
 
+    /// Return the inner height of the chat area from the last render, with fallback.
+    pub fn chat_viewport_height(&self) -> u16 {
+        self.last_render_area.lock()
+            .ok()
+            .and_then(|ra| ra.map(|r| r.height.saturating_sub(2)))
+            .unwrap_or(20)
+    }
+
+    /// Scroll up by `n` lines.
+    pub fn scroll_up_by(&mut self, n: usize) {
+        for _ in 0..n {
+            self.scroll_up();
+        }
+    }
+
+    /// Scroll down by `n` lines.
+    pub fn scroll_down_by(&mut self, n: usize) {
+        for _ in 0..n {
+            self.scroll_down();
+        }
+    }
+
     /// Scroll up by one line. Scrolls within the current cell first,
     /// then moves to the previous message and scrolls to its bottom.
     /// Respects `committed_count` — won't scroll into committed messages.
@@ -525,12 +547,20 @@ impl ChatWidget {
             frame.render_widget(ratatui::widgets::Clear, above);
         }
 
-        // Draw bordered block with title
-        let is_at_bottom = self.messages.is_empty() || self.scroll_offset >= self.messages.len().saturating_sub(1);
-        let title = if !self.messages.is_empty() && !is_at_bottom {
-            format!(" Chat ({}/{}) ", self.scroll_offset + 1, self.messages.len())
-        } else {
+        // Draw bordered block with title showing scroll position
+        let total = self.messages.len();
+        let is_at_bottom = total == 0 || self.scroll_offset >= total.saturating_sub(1);
+        let title = if total == 0 {
             " Chat ".to_string()
+        } else if is_at_bottom {
+            format!(" Chat {total} ")
+        } else {
+            let pct = if total > 1 {
+                (self.scroll_offset * 100) / (total - 1)
+            } else {
+                100
+            };
+            format!(" Chat [{pct}%] {}/{} ", self.scroll_offset + 1, total)
         };
         let block = ratatui::widgets::Block::default()
             .borders(ratatui::widgets::Borders::ALL)

@@ -1,6 +1,6 @@
 //! Event handling for terminal UI
 
-use crossterm::event::{self, Event as CrosstermEvent, KeyEvent};
+use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, MouseEvent};
 use std::io;
 use std::time::Duration;
 
@@ -10,6 +10,8 @@ pub enum Event {
     Input(KeyEvent),
     /// Bracketed paste event (multi-line text pasted from terminal)
     Paste(String),
+    /// Mouse event (scroll wheel, click, etc.)
+    Mouse(MouseEvent),
     /// Tick event for periodic updates
     Tick,
 }
@@ -44,6 +46,7 @@ impl EventHandler {
                 match event::read()? {
                     CrosstermEvent::Key(key) => return Ok(Some(Event::Input(key))),
                     CrosstermEvent::Paste(content) => return Ok(Some(Event::Paste(content))),
+                    CrosstermEvent::Mouse(mouse) => return Ok(Some(Event::Mouse(mouse))),
                     // Ignore other event types (resize, focus)
                     _ => {
                         drained += 1;
