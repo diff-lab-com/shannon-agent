@@ -143,7 +143,7 @@ impl MainLayoutWidget {
         _working_dir: &str,
         theme: &Theme,
     ) {
-        Self::render_complete_with_spinner(frame, chat, prompt, status, model, tokens_used, _working_dir, None, None, None, theme, crate::repl::SidebarTab::default(), None, false, false, None, &[], None, None, None, None, None, None, None, None);
+        Self::render_complete_with_spinner(frame, chat, prompt, status, model, tokens_used, _working_dir, None, None, None, theme, crate::repl::SidebarTab::default(), None, false, false, None, &[], None, None, None, None, None, None, None, None, true);
     }
 
     /// Render the complete UI with spinner animation support
@@ -174,6 +174,7 @@ impl MainLayoutWidget {
         diag_counts: Option<(usize, usize)>,
         cached_statusline: Option<&str>,
         rate_limit: Option<(u32, u32)>,
+        auto_follow: bool,
     ) {
         let area = frame.area();
 
@@ -195,7 +196,7 @@ impl MainLayoutWidget {
 
         // Render chat — column path handles search highlighting internally
         let render_chat = |frame: &mut Frame, chat_area: Rect, theme: &Theme| {
-            chat.render(frame, chat_area, theme, search_query, search_matches, search_focused_idx);
+            chat.render(frame, chat_area, theme, search_query, search_matches, search_focused_idx, auto_follow);
         };
 
         if fullscreen_mode {

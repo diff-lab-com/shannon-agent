@@ -11,6 +11,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    prelude::Widget,
 };
 use std::io;
 
@@ -18,6 +19,16 @@ use super::Repl;
 
 /// Draw the main REPL frame, dispatching to the appropriate overlay.
 pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &mut Repl) -> Result<()> {
+    // Flush pending scrollback lines into terminal history
+    if !repl.chat.pending_scrollback.is_empty() {
+        let lines = std::mem::take(&mut repl.chat.pending_scrollback);
+        let height = lines.len() as u16;
+        terminal.insert_before(height, |buf| {
+            let paragraph = ratatui::widgets::Paragraph::new(lines);
+            paragraph.render(buf.area, buf);
+        })?;
+    }
+
     let chat = &repl.chat;
     let prompt = &repl.prompt;
     // Borrow state instead of cloning — the closure only reads, never mutates.
@@ -87,6 +98,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
                 Some((state.diagnostic_store.error_count(), state.diagnostic_store.warning_count())),
                 state.cached_statusline.as_deref(),
                 state.rate_limit_5h,
+                state.auto_follow,
             );
             // Then render the active overlay
             if let Some(ref dialog) = state.active_dialog {
@@ -117,6 +129,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
                 Some((state.diagnostic_store.error_count(), state.diagnostic_store.warning_count())),
                 state.cached_statusline.as_deref(),
                 state.rate_limit_5h,
+                state.auto_follow,
             );
         }
 
@@ -181,7 +194,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
 
         // Overlay pager when active
         if state.pager_active {
-            render_pager_overlay(f, f.area(), chat, &state.theme);
+            render_pager_overlay(f, f.area(), chat, &state.theme, state.pager_scroll);
         }
 
         // Overlay onboarding dialog on first run (skip when other overlays are active)
@@ -529,6 +542,7 @@ fn render_pager_overlay(
     area: Rect,
     chat: &crate::widgets::ChatWidget,
     theme: &Theme,
+    pager_scroll: usize,
 ) {
     // Clear the entire area
     frame.render_widget(Clear, area);
@@ -554,7 +568,7 @@ fn render_pager_overlay(
     frame.render_widget(header, Rect { x: area.x, y: area.y, width: area.width, height: 1 });
 
     // Render chat widget content in the pager area
-    chat.render_full(frame, content_area, theme);
+    chat.render_full(frame, content_area, theme, pager_scroll);
 
     // Footer bar
     let footer = Paragraph::new(Line::from(Span::styled(

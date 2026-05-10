@@ -46,9 +46,13 @@ pub fn handle_mouse(repl: &mut Repl, mouse: MouseEvent) {
     match mouse.kind {
         MouseEventKind::ScrollUp => {
             repl.chat.scroll_up_by(step);
+            repl.state.auto_follow = false;
         }
         MouseEventKind::ScrollDown => {
             repl.chat.scroll_down_by(step);
+            if repl.chat.is_at_bottom() {
+                repl.state.auto_follow = true;
+            }
         }
         _ => {}
     }
@@ -256,22 +260,28 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
         KeyCode::PageUp => {
             let page = repl.chat.chat_viewport_height() as usize;
             repl.chat.scroll_up_by(page.saturating_sub(2).max(1));
+            repl.state.auto_follow = false;
             Ok(())
         }
         // PageDown: scroll chat down by viewport height
         KeyCode::PageDown => {
             let page = repl.chat.chat_viewport_height() as usize;
             repl.chat.scroll_down_by(page.saturating_sub(2).max(1));
+            if repl.chat.is_at_bottom() {
+                repl.state.auto_follow = true;
+            }
             Ok(())
         }
         // Home: jump to top of chat
         KeyCode::Home => {
             repl.chat.scroll_to_top();
+            repl.state.auto_follow = false;
             Ok(())
         }
         // End: jump to bottom (latest message)
         KeyCode::End => {
             repl.chat.scroll_to_latest();
+            repl.state.auto_follow = true;
             Ok(())
         }
         // Ctrl+T: toggle transcript pager (alternative keybinding)

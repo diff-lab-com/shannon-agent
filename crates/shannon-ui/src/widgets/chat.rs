@@ -145,6 +145,8 @@ pub struct ChatWidget {
     committed_width: std::sync::atomic::AtomicU16,
     /// Column-based render path (exact-height virtual scrolling)
     column: super::column::ColumnRenderable,
+    /// Lines buffered for scrollback insertion on next draw_frame()
+    pub pending_scrollback: Vec<ratatui::text::Line<'static>>,
 }
 
 /// A single chat message
@@ -192,6 +194,7 @@ impl ChatWidget {
             committed_count: 0,
             committed_width: std::sync::atomic::AtomicU16::new(0),
             column: super::column::ColumnRenderable::new(),
+            pending_scrollback: Vec::new(),
         }
     }
 
@@ -518,6 +521,7 @@ impl ChatWidget {
         search_query: Option<&str>,
         search_matches: &[(usize, usize, usize)],
         search_focused_idx: Option<usize>,
+        auto_follow: bool,
     ) {
         tracing::debug!(
             "ChatWidget::render msgs={} committed={} scroll_offset={} area={}x{} streaming={}",
@@ -545,6 +549,11 @@ impl ChatWidget {
                 100
             };
             format!(" [{pct}%] {}/{} ", self.scroll_offset + 1, total)
+        };
+        let label = if !auto_follow && !is_at_bottom && total > 0 {
+            format!("{label}↑")
+        } else {
+            label
         };
         let sep = format!("─{label}{}", "─".repeat(area.width as usize - label.len() - 1));
         let sep_line = ratatui::widgets::Paragraph::new(ratatui::text::Line::from(vec![
@@ -575,7 +584,7 @@ impl ChatWidget {
 
     /// Render all messages including committed ones (used by transcript pager).
     /// Does NOT update last_inner_width/last_render_area — those belong to the main viewport.
-    pub fn render_full(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub fn render_full(&self, frame: &mut Frame, area: Rect, theme: &Theme, scroll: usize) {
         let block = ratatui::widgets::Block::default()
             .borders(ratatui::widgets::Borders::ALL)
             .border_style(ratatui::style::Style::default().fg(theme.border))
@@ -585,7 +594,7 @@ impl ChatWidget {
 
         let buf = frame.buffer_mut();
         // start=0 renders all messages including committed (for transcript pager)
-        self.column.render(inner, buf, theme, self.scroll_offset, 0, None);
+        self.column.render(inner, buf, theme, scroll, 0, None);
     }
 
     /// Find all occurrences of `query` in chat messages.
@@ -685,6 +694,17 @@ impl ChatWidget {
             total = total.saturating_add(self.column.cell_height(i, inner_width));
         }
         total
+    }
+
+    /// Whether the viewport is showing the latest messages (auto-follow eligible).
+    pub fn is_at_bottom(&self) -> bool {
+        if self.messages.is_empty() {
+            return true;
+        }
+        let uncommitted = self.messages.len().saturating_sub(self.committed_count);
+        // At bottom if scrolled to last message, or all uncommitted messages fit
+        self.scroll_offset >= self.messages.len().saturating_sub(1)
+            || uncommitted <= 1
     }
 
     /// Iterate all messages with their indices

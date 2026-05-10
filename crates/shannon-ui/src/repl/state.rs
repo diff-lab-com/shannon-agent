@@ -189,6 +189,8 @@ pub struct ReplState {
     pub pager_active: bool,
     /// Scroll position for the transcript pager (line offset from top)
     pub pager_scroll: usize,
+    /// Whether to auto-scroll to bottom during streaming
+    pub auto_follow: bool,
     /// Turn counter for context visualization
     pub turn_count: usize,
     /// Recent background task notifications (message + timestamp)
@@ -413,6 +415,7 @@ impl Default for ReplState {
             chat_search_total_matches: 0,
             pager_active: false,
             pager_scroll: 0,
+            auto_follow: true,
             turn_count: 0,
             pending_notifications: Vec::new(),
             onboarding_active: false,

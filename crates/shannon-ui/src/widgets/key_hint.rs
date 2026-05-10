@@ -37,8 +37,9 @@ impl KeyHintWidget {
     pub fn render(frame: &mut Frame, area: Rect, theme: &Theme, context: &HintContext) {
         let hints = match context {
             HintContext::Normal => vec![
+                ("PgUp/Dn", "Scroll"),
+                ("Ctrl+G", "Pager"),
                 ("Ctrl+S", "Sidebar"),
-                ("Ctrl+F", "Focus"),
                 ("?", "Help"),
                 ("q", "Quit"),
             ],
@@ -47,6 +48,8 @@ impl KeyHintWidget {
                 ("Esc", "Cancel"),
                 ("Ctrl+C", "Clear"),
                 ("Tab", "Complete"),
+                ("PgUp/Dn", "Scroll"),
+                ("Ctrl+G", "Pager"),
             ],
             HintContext::VimNormal => vec![
                 ("i", "Insert"),

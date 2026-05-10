@@ -368,6 +368,9 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                 let rendered = repl.output_renderer.render_streaming(buffer.accumulated_text());
                 repl.chat.update_streaming_message(assistant_msg_index, rendered, has_newline);
                 buffer.take_newline_flag();
+                if repl.state.auto_follow {
+                    repl.chat.scroll_to_latest();
+                }
             }
 
             repl.state.status = current_status.clone();
@@ -456,6 +459,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                     None,
                     None,
                     None,
+                    state.auto_follow,
                 );
                 if state.multi_progress_visible {
                     let mp_height = 3u16.min(f.area().height.saturating_sub(10));
@@ -510,9 +514,15 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
             let _ = std::io::Write::write_all(&mut std::io::stderr(), b"\x07");
         }
 
-        // Note: scrollback commit is intentionally disabled for inline viewport mode.
-        // The column renderer handles all messages with virtual scrolling,
-        // so history is always visible inside the chat border without insert_before.
+        // Commit completed turns to terminal scrollback
+        let width = repl.chat.last_render_area.lock()
+            .ok()
+            .and_then(|ra| ra.map(|r| r.width))
+            .unwrap_or(80);
+        let (lines, _height) = repl.chat.commit_to_lines(width);
+        if !lines.is_empty() {
+            repl.chat.pending_scrollback = lines;
+        }
     }
 
     shannon_core::prevent_sleep::stop_prevent_sleep();
