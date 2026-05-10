@@ -1,6 +1,5 @@
 //! REPL AI query handling and streaming display
 
-use ratatui::prelude::Widget;
 
 /// Rotating phrases shown during the thinking phase, cycled every 2 seconds.
 const THINKING_PHRASES: &[&str] = &[
@@ -511,18 +510,9 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
             let _ = std::io::Write::write_all(&mut std::io::stderr(), b"\x07");
         }
 
-        // Commit completed messages to terminal scrollback.
-        // With a single terminal, insert_before is safe — no duplicate rendering.
-        if let Some(ref mut term) = terminal {
-            let inner_width = repl.chat.last_inner_width();
-            let (lines, height) = repl.chat.commit_to_lines(inner_width);
-            if height > 0 {
-                term.insert_before(height, |buf| {
-                    let paragraph = ratatui::widgets::Paragraph::new(lines);
-                    paragraph.render(buf.area, buf);
-                })?;
-            }
-        }
+        // Note: scrollback commit is intentionally disabled for inline viewport mode.
+        // The column renderer handles all messages with virtual scrolling,
+        // so history is always visible inside the chat border without insert_before.
     }
 
     shannon_core::prevent_sleep::stop_prevent_sleep();

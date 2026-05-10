@@ -144,7 +144,7 @@ impl ColumnRenderable {
     /// `area` — viewport rect
     /// `scroll_offset` — index of the focused message (absolute index in cells)
     /// `start` — first cell index to consider (e.g., committed_count)
-    fn layout(&self, area: Rect, scroll_offset: usize, start: usize) -> LayoutResult {
+    fn layout(&self, area: Rect, scroll_offset: usize, start: usize, top_align: bool) -> LayoutResult {
         if self.cells.is_empty() || area.height == 0 || start >= self.cells.len() {
             return LayoutResult { visible: Vec::new() };
         }
@@ -184,9 +184,14 @@ impl ColumnRenderable {
         }
 
         // Build visible cell rects from vis_start to vis_end.
-        // Bottom-align when content fits within the viewport (Codex-style).
+        // Top-align when committed messages exist (content flows after scrollback);
+        // bottom-align otherwise (Codex-style anchoring near input bar).
         let mut visible = Vec::new();
-        let pad_top = (viewport_h.saturating_sub(rows_used)) as u16;
+        let pad_top = if top_align {
+            0
+        } else {
+            (viewport_h.saturating_sub(rows_used)) as u16
+        };
         let mut y = area.y + pad_top;
 
         for i in vis_start..=vis_end {
@@ -229,7 +234,7 @@ impl ColumnRenderable {
         // but we need this to erase gaps between cells)
         Clear.render(area, buf);
 
-        let layout = self.layout(area, scroll_offset, start);
+        let layout = self.layout(area, scroll_offset, start, start > 0);
 
         tracing::debug!(
             "ColumnRenderable::render cells={} start={} offset={} area={}x{} visible={}",
@@ -330,7 +335,7 @@ mod tests {
         col.push(MessageCell::new(test_message(ChatRole::User, "Hello"), false));
 
         let area = Rect::new(0, 0, 80, 24);
-        let layout = col.layout(area, 0, 0);
+        let layout = col.layout(area, 0, 0, false);
 
         assert_eq!(layout.visible.len(), 1, "single message should produce one visible cell");
         assert_eq!(layout.visible[0].1, 0, "cell index should be 0");
@@ -349,7 +354,7 @@ mod tests {
 
         let area = Rect::new(0, 0, 80, 24);
         // scroll_offset = 49 means focused on latest message (index 49)
-        let layout = col.layout(area, 49, 0);
+        let layout = col.layout(area, 49, 0, false);
 
         assert!(layout.visible.len() < 50, "should not render all 50 messages");
         assert!(layout.visible.len() > 0, "should render some messages");
@@ -365,7 +370,7 @@ mod tests {
         }
 
         let area = Rect::new(0, 0, 80, 24);
-        let layout = col.layout(area, 10, 0);
+        let layout = col.layout(area, 10, 0, false);
 
         assert!(layout.visible.len() > 0);
         let indices: Vec<usize> = layout.visible.iter().map(|(_, i)| *i).collect();
@@ -417,7 +422,7 @@ mod tests {
 
         // Use a very small viewport so the cell overflows
         let area = Rect::new(0, 0, 80, 5);
-        let layout = col.layout(area, 0, 0);
+        let layout = col.layout(area, 0, 0, false);
 
         assert_eq!(layout.visible.len(), 1, "should have one visible cell");
         let (cell_rect, _) = layout.visible[0];
