@@ -133,6 +133,8 @@ pub struct ReplState {
     pub incremental_search_query: String,
     /// Match index within search results
     pub incremental_search_match_index: usize,
+    /// Total number of matches for current search query
+    pub incremental_search_match_count: usize,
     /// Input saved before entering incremental search (restored on cancel)
     pub incremental_search_saved_input: String,
     /// Stored pasted texts awaiting submission: (paste_number, content)
@@ -425,6 +427,7 @@ impl Default for ReplState {
             incremental_search_active: false,
             incremental_search_query: String::new(),
             incremental_search_match_index: 0,
+            incremental_search_match_count: 0,
             incremental_search_saved_input: String::new(),
             pasted_texts: std::collections::HashMap::new(),
             paste_counter: 0,

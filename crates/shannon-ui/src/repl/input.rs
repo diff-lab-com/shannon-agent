@@ -239,6 +239,7 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
             repl.state.incremental_search_active = true;
             repl.state.incremental_search_query.clear();
             repl.state.incremental_search_match_index = 0;
+            repl.state.incremental_search_match_count = 0;
             repl.state.incremental_search_saved_input = repl.prompt.input().to_string();
             Ok(())
         }
@@ -1618,19 +1619,17 @@ fn collect_project_files(root: &str) -> Vec<String> {
 /// Handle keys when incremental history search (Ctrl+R) is active.
 fn handle_incremental_search_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
     match key.code {
-        // Esc: cancel search, restore original input
         KeyCode::Esc => {
             repl.state.incremental_search_active = false;
             repl.state.incremental_search_query.clear();
             repl.state.incremental_search_match_index = 0;
+            repl.state.incremental_search_match_count = 0;
             repl.prompt.set_input(std::mem::take(&mut repl.state.incremental_search_saved_input));
             Ok(())
         }
-        // Enter: accept current match and put it in the prompt
         KeyCode::Enter => {
             let matches = repl.command_history.search_history(&repl.state.incremental_search_query);
             let chosen = if matches.is_empty() {
-                // No match — accept the query itself
                 std::mem::take(&mut repl.state.incremental_search_query)
             } else {
                 let idx = repl.state.incremental_search_match_index.min(matches.len() - 1);
@@ -1639,13 +1638,14 @@ fn handle_incremental_search_input(repl: &mut Repl, key: KeyEvent) -> Result<()>
             repl.state.incremental_search_active = false;
             repl.state.incremental_search_query.clear();
             repl.state.incremental_search_match_index = 0;
+            repl.state.incremental_search_match_count = 0;
             repl.state.incremental_search_saved_input.clear();
             repl.prompt.set_input(chosen);
             Ok(())
         }
-        // Ctrl+R again: cycle to next match
         KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             let matches = repl.command_history.search_history(&repl.state.incremental_search_query);
+            repl.state.incremental_search_match_count = matches.len();
             if !matches.is_empty() {
                 repl.state.incremental_search_match_index =
                     (repl.state.incremental_search_match_index + 1) % matches.len();
@@ -1653,19 +1653,18 @@ fn handle_incremental_search_input(repl: &mut Repl, key: KeyEvent) -> Result<()>
             }
             Ok(())
         }
-        // Up/Down: navigate matches
         KeyCode::Up => {
             let matches = repl.command_history.search_history(&repl.state.incremental_search_query);
-            if !matches.is_empty() {
-                if repl.state.incremental_search_match_index > 0 {
-                    repl.state.incremental_search_match_index -= 1;
-                }
+            repl.state.incremental_search_match_count = matches.len();
+            if !matches.is_empty() && repl.state.incremental_search_match_index > 0 {
+                repl.state.incremental_search_match_index -= 1;
                 repl.prompt.set_input(matches[repl.state.incremental_search_match_index].to_string());
             }
             Ok(())
         }
         KeyCode::Down => {
             let matches = repl.command_history.search_history(&repl.state.incremental_search_query);
+            repl.state.incremental_search_match_count = matches.len();
             if !matches.is_empty() {
                 repl.state.incremental_search_match_index =
                     (repl.state.incremental_search_match_index + 1).min(matches.len() - 1);
@@ -1673,12 +1672,11 @@ fn handle_incremental_search_input(repl: &mut Repl, key: KeyEvent) -> Result<()>
             }
             Ok(())
         }
-        // Backspace: remove last char from query
         KeyCode::Backspace => {
             repl.state.incremental_search_query.pop();
             repl.state.incremental_search_match_index = 0;
-            // Update prompt with first match
             let matches = repl.command_history.search_history(&repl.state.incremental_search_query);
+            repl.state.incremental_search_match_count = matches.len();
             if let Some(first) = matches.first() {
                 repl.prompt.set_input(first.to_string());
             } else {
@@ -1686,11 +1684,11 @@ fn handle_incremental_search_input(repl: &mut Repl, key: KeyEvent) -> Result<()>
             }
             Ok(())
         }
-        // Regular char: append to query and update match
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             repl.state.incremental_search_query.push(c);
             repl.state.incremental_search_match_index = 0;
             let matches = repl.command_history.search_history(&repl.state.incremental_search_query);
+            repl.state.incremental_search_match_count = matches.len();
             if let Some(first) = matches.first() {
                 repl.prompt.set_input(first.to_string());
             } else {

@@ -531,15 +531,30 @@ fn render_history_search_overlay(
         Color::Yellow
     };
 
+    let match_info = if state.incremental_search_match_count > 0 {
+        format!(
+            " ({}/{})",
+            state.incremental_search_match_index + 1,
+            state.incremental_search_match_count
+        )
+    } else if !state.incremental_search_query.is_empty() {
+        " (no match)".to_string()
+    } else {
+        String::new()
+    };
+
     let lines = vec![
         Line::from(vec![
             Span::styled(" Ctrl+R ", Style::default().fg(Color::Black).bg(Color::Cyan)),
             Span::styled(" reverse-i-search  ", Style::default().fg(Color::DarkGray)),
             Span::styled(&query_display, Style::default().fg(query_color).add_modifier(Modifier::BOLD)),
             Span::styled("▌", Style::default().fg(Color::Cyan)),
+            Span::styled(match_info, Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(vec![
             Span::styled(" ↑↓ navigate  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Ctrl+R", Style::default().fg(Color::Cyan)),
+            Span::styled(" next  ", Style::default().fg(Color::DarkGray)),
             Span::styled("Enter", Style::default().fg(Color::Green)),
             Span::styled(" accept  ", Style::default().fg(Color::DarkGray)),
             Span::styled("Esc", Style::default().fg(Color::Red)),
