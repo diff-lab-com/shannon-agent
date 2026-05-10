@@ -86,20 +86,24 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             || state.theme_picker.is_some()
         {
             // Render base layout first
-            crate::widgets::MainLayoutWidget::render_complete_with_spinner(
-                f, chat, prompt, &display_status,
-                state.model.as_deref(), Some(state.tokens_used),
-                &state.working_directory, Some(&state.spinner), pb, sidebar_ref, &state.theme, state.sidebar_tab,
-                Some(&state.approval_mode_label),
-                state.focus_mode, state.fullscreen_mode,
-                search_query.as_deref(), &search_matches, search_focused_idx,
-                None, None, None,
-                Some((state.input_tokens, state.output_tokens)),
-                Some((state.diagnostic_store.error_count(), state.diagnostic_store.warning_count())),
-                state.cached_statusline.as_deref(),
-                state.rate_limit_5h,
-                state.auto_follow,
-            );
+            {
+                let ctx_window = state.model.as_ref()
+                    .map(|m| shannon_core::model_registry::context_window_for(m) as u64);
+                crate::widgets::MainLayoutWidget::render_complete_with_spinner(
+                    f, chat, prompt, &display_status,
+                    state.model.as_deref(), Some(state.tokens_used),
+                    &state.working_directory, Some(&state.spinner), pb, sidebar_ref, &state.theme, state.sidebar_tab,
+                    Some(&state.approval_mode_label),
+                    state.focus_mode, state.fullscreen_mode,
+                    search_query.as_deref(), &search_matches, search_focused_idx,
+                    ctx_window, Some(state.total_cost_usd), None,
+                    Some((state.input_tokens, state.output_tokens)),
+                    Some((state.diagnostic_store.error_count(), state.diagnostic_store.warning_count())),
+                    state.cached_statusline.as_deref(),
+                    state.rate_limit_5h,
+                    state.auto_follow,
+                );
+            }
             // Then render the active overlay
             if let Some(ref dialog) = state.active_dialog {
                 dialog.render(f, f.area());
@@ -117,6 +121,8 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
                 tp.render(f, f.area());
             }
         } else {
+            let ctx_window = state.model.as_ref()
+                .map(|m| shannon_core::model_registry::context_window_for(m) as u64);
             crate::widgets::MainLayoutWidget::render_complete_with_spinner(
                 f, chat, prompt, &display_status,
                 state.model.as_deref(), Some(state.tokens_used),
@@ -124,7 +130,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
                 Some(&state.approval_mode_label),
                 state.focus_mode, state.fullscreen_mode,
                 search_query.as_deref(), &search_matches, search_focused_idx,
-                None, None, None,
+                ctx_window, Some(state.total_cost_usd), None,
                 Some((state.input_tokens, state.output_tokens)),
                 Some((state.diagnostic_store.error_count(), state.diagnostic_store.warning_count())),
                 state.cached_statusline.as_deref(),
