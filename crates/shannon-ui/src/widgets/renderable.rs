@@ -45,8 +45,8 @@ pub struct SearchParams<'a> {
 impl SearchParams<'_> {
     /// Whether the focused search match falls within this cell.
     pub fn focused_in_cell(&self) -> bool {
-        self.focused_idx.map_or(false, |fi| {
-            self.matches.get(fi).map_or(false, |&(mi, _, _)| mi == self.cell_index)
+        self.focused_idx.is_some_and(|fi| {
+            self.matches.get(fi).is_some_and(|&(mi, _, _)| mi == self.cell_index)
         })
     }
 }
@@ -249,7 +249,7 @@ impl MessageCell {
                 };
                 let mut badge_spans = vec![
                     Span::styled(format!("  {status_icon} "), Style::default().fg(status_color)),
-                    Span::styled(format!("{dur_str}"), Style::default().fg(theme.muted)),
+                    Span::styled(dur_str, Style::default().fg(theme.muted)),
                 ];
                 // Exit code display
                 if let Some(code) = msg.exit_code {

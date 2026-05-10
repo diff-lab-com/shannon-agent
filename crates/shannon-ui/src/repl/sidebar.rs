@@ -8,7 +8,7 @@ fn read_memory_rss_kb() -> u64 {
     let Ok(data) = std::fs::read_to_string("/proc/self/status") else { return 0 };
     for line in data.lines() {
         if let Some(rest) = line.strip_prefix("VmRSS:") {
-            return rest.trim().split_whitespace().next()
+            return rest.split_whitespace().next()
                 .and_then(|v| v.parse::<u64>().ok())
                 .unwrap_or(0);
         }
