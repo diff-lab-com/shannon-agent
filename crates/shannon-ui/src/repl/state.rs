@@ -232,6 +232,14 @@ pub struct ReplState {
     /// Rate limit info from API response headers
     pub rate_limit_5h: Option<(u32, u32)>, // (used, total)
     pub rate_limit_7d: Option<(u32, u32)>, // (used, total)
+    /// Token output rate during streaming (tokens/sec)
+    pub streaming_token_rate: f64,
+    /// When the first output token arrived during streaming (for rate calculation)
+    pub streaming_output_start: Option<std::time::Instant>,
+    /// Desktop notification sent for current query
+    pub desktop_notified: bool,
+    /// Persisted UI state for session restore (fold states, scroll, view mode)
+    pub persisted_ui_state: Option<PersistedUiState>,
 }
 
 /// State for the autonomous loop iteration engine.
@@ -264,6 +272,36 @@ pub struct RalphState {
     pub iteration: usize,
     /// Whether the loop is active
     pub active: bool,
+}
+
+/// Persisted UI state saved across sessions for restore.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PersistedUiState {
+    /// Collapsed tool message indices
+    pub collapsed_tools: bool,
+    /// View mode (Default or Verbose)
+    pub view_mode: String,
+    /// Theme name
+    pub theme_name: String,
+    /// Scroll offset (message index)
+    pub scroll_offset: usize,
+    /// Focus mode
+    pub focus_mode: bool,
+    /// Fullscreen mode
+    pub fullscreen_mode: bool,
+}
+
+impl Default for PersistedUiState {
+    fn default() -> Self {
+        Self {
+            collapsed_tools: true,
+            view_mode: "Default".to_string(),
+            theme_name: "dark".to_string(),
+            scroll_offset: 0,
+            focus_mode: false,
+            fullscreen_mode: false,
+        }
+    }
 }
 
 /// Tabs available in the sidebar panel
@@ -437,6 +475,10 @@ impl Default for ReplState {
             statusline_last_update: None,
             rate_limit_5h: None,
             rate_limit_7d: None,
+            streaming_token_rate: 0.0,
+            streaming_output_start: None,
+            desktop_notified: false,
+            persisted_ui_state: None,
         }
     }
 }

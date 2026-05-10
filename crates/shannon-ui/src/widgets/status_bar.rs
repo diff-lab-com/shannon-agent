@@ -153,6 +153,9 @@ impl StatusBarWidget {
             }
         }
 
+        // Token output rate during streaming (shown in status text by query.rs)
+        let _ = spinner; // used by caller for animation phase
+
         // Tool progress bar
         if let Some(pb) = progress_bar {
             let pct = pb.percentage();

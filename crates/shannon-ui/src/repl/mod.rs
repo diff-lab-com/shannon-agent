@@ -1132,6 +1132,9 @@ impl Repl {
             self.command_history = ReplHistory::load_from_file(&history_path, 500);
         }
 
+        // Restore persisted UI state from previous session
+        self.load_ui_state();
+
         // Fire SessionStart hooks (Claude Code compatible lifecycle)
         if let Some(ref engine) = self.query_engine {
             let session_id = engine.session_id().to_string();
@@ -1316,6 +1319,9 @@ impl Repl {
                 }
             }
         }
+
+        // Persist UI state for next session
+        self.save_ui_state();
 
         // Restore terminal — disable bracketed-paste BEFORE raw mode to prevent escape leakage
         execute!(

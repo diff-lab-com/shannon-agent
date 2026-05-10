@@ -215,14 +215,13 @@ impl super::Repl {
         self.state.pager_scroll = 0;
     }
 
-    /// Scroll the pager by `delta` lines (negative = up, positive = down).
+    /// Scroll the pager by `delta` messages (negative = up, positive = down).
     pub fn pager_scroll(&mut self, delta: isize) {
         let total = self.chat.message_count();
-        if let Some(area_height) = self.terminal_height() {
-            let max_scroll = total.saturating_sub(area_height);
-            let new = self.state.pager_scroll as isize + delta;
-            self.state.pager_scroll = new.clamp(0, max_scroll as isize) as usize;
-        }
+        if total == 0 { return; }
+        let max_scroll = total.saturating_sub(1);
+        let new = self.state.pager_scroll as isize + delta;
+        self.state.pager_scroll = new.clamp(0, max_scroll as isize) as usize;
     }
 
     /// Scroll pager to top.
@@ -233,15 +232,7 @@ impl super::Repl {
     /// Scroll pager to bottom.
     pub fn pager_scroll_bottom(&mut self) {
         let total = self.chat.message_count();
-        if let Some(area_height) = self.terminal_height() {
-            self.state.pager_scroll = total.saturating_sub(area_height);
-        }
-    }
-
-    /// Get the terminal height (content area, excluding borders).
-    pub(crate) fn terminal_height(&self) -> Option<usize> {
-        // Approximate: use 80% of terminal height for content
-        crossterm::terminal::size().ok().map(|(_, h)| (h as usize).saturating_sub(6))
+        self.state.pager_scroll = total.saturating_sub(1);
     }
 
     /// Check if project instruction files have changed and hot-reload them.
@@ -338,5 +329,72 @@ impl super::Repl {
             self.state.cached_statusline = Some(output);
         }
         self.state.statusline_last_update = Some(std::time::Instant::now());
+    }
+
+    /// Save UI state to ~/.shannon/ui_state.json for session restore.
+    pub(crate) fn save_ui_state(&mut self) {
+        let state = super::state::PersistedUiState {
+            collapsed_tools: self.state.view_mode == super::state::ViewMode::Default,
+            view_mode: self.state.view_mode.label().to_string(),
+            theme_name: self.state.theme.name.clone(),
+            scroll_offset: self.chat.scroll_offset,
+            focus_mode: self.state.focus_mode,
+            fullscreen_mode: self.state.fullscreen_mode,
+        };
+
+        let path = dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join(".shannon")
+            .join("ui_state.json");
+
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match serde_json::to_string_pretty(&state) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&path, json) {
+                    tracing::debug!("Failed to save UI state: {e}");
+                }
+            }
+            Err(e) => tracing::debug!("Failed to serialize UI state: {e}"),
+        }
+    }
+
+    /// Load UI state from ~/.shannon/ui_state.json and apply to current session.
+    pub(crate) fn load_ui_state(&mut self) {
+        let path = dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join(".shannon")
+            .join("ui_state.json");
+
+        let data = match std::fs::read_to_string(&path) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+
+        let state: super::state::PersistedUiState = match serde_json::from_str(&data) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::debug!("Failed to parse UI state: {e}");
+                return;
+            }
+        };
+
+        self.state.view_mode = match state.view_mode.as_str() {
+            "Verbose" => super::state::ViewMode::Verbose,
+            _ => super::state::ViewMode::Default,
+        };
+        self.state.focus_mode = state.focus_mode;
+        self.state.fullscreen_mode = state.fullscreen_mode;
+
+        // Restore theme if name matches a known theme
+        if !state.theme_name.is_empty() && state.theme_name != self.state.theme.name {
+            if let Some(theme) = crate::theme::Theme::named(&state.theme_name) {
+                self.state.theme = theme;
+                self.renderer.set_theme(&self.state.theme);
+            }
+        }
+
+        self.state.persisted_ui_state = Some(state);
     }
 }

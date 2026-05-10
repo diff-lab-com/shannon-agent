@@ -370,7 +370,8 @@ impl ChatWidget {
 
     /// Scroll up by one line. Scrolls within the current cell first,
     /// then moves to the previous message and scrolls to its bottom.
-    /// Respects `committed_count` — won't scroll into committed messages.
+    /// Scroll up by one line. Scrolls within the current cell first,
+    /// then moves to the previous message and scrolls to its bottom.
     pub fn scroll_up(&mut self) {
         if self.messages.is_empty() {
             return;
@@ -379,7 +380,7 @@ impl ChatWidget {
         let scroll_y = self.column.cell_scroll(self.scroll_offset);
         if scroll_y > 0 {
             self.column.set_cell_scroll(self.scroll_offset, scroll_y - 1);
-        } else if self.scroll_offset > self.committed_count {
+        } else if self.scroll_offset > 0 {
             self.scroll_offset -= 1;
             // Scroll the previous cell to its bottom for continuous scrolling
             let width = self.last_inner_width.load(std::sync::atomic::Ordering::Relaxed) as u16;
@@ -450,19 +451,18 @@ impl ChatWidget {
         }
     }
 
-    /// Scroll to oldest message (top of uncommitted range)
+    /// Scroll to oldest message (index 0)
     pub fn scroll_to_top(&mut self) {
         if self.messages.is_empty() { return; }
-        self.scroll_offset = self.committed_count.min(self.messages.len() - 1);
+        self.scroll_offset = 0;
         self.column.set_cell_scroll(self.scroll_offset, 0);
     }
 
     /// Scroll to a fractional position (0.0 = top/oldest, 1.0 = bottom/latest).
     /// Uses height-weighted mapping so drag feels smooth regardless of message sizes.
-    /// Only considers uncommitted messages.
     pub fn scroll_to_ratio(&mut self, ratio: f64) {
         if self.messages.is_empty() { return; }
-        let start = self.committed_count;
+        let start = 0;
         let msg_count = self.messages.len();
         if start >= msg_count { return; }
         let visible_count = msg_count - start;
@@ -584,7 +584,7 @@ impl ChatWidget {
                 })
             }
         });
-        self.column.render(inner, buf, theme, self.scroll_offset, self.committed_count, search.as_ref());
+        self.column.render(inner, buf, theme, self.scroll_offset, 0, search.as_ref());
     }
 
     /// Render all messages including committed ones (used by transcript pager).

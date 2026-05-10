@@ -342,6 +342,9 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
         repl.state.streaming_active = true;
         repl.state.thinking_phase = true;
         repl.state.streaming_start = Some(stream_start);
+        repl.state.streaming_token_rate = 0.0;
+        repl.state.streaming_output_start = None;
+        repl.state.desktop_notified = false;
         repl.chat.streaming_active = true;
 
         loop {
@@ -373,14 +376,16 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                 }
             }
 
-            repl.state.status = current_status.clone();
-
             // Thinking indicator: fixed-width label while model thinks
             let is_thinking = streaming.lock().map(|s| s.thinking_phase).unwrap_or(false);
             repl.state.thinking_phase = is_thinking;
             if is_thinking {
                 let phase_idx = (stream_start.elapsed().as_secs() / 2) as usize % THINKING_PHRASES.len();
                 repl.state.status = THINKING_PHRASES[phase_idx].to_string();
+            } else if repl.state.streaming_token_rate > 0.0 {
+                repl.state.status = format!("{} \u{00b7} {:.0} tok/s", current_status, repl.state.streaming_token_rate);
+            } else {
+                repl.state.status = current_status.clone();
             }
 
             // Toast for long operations (>5s)
@@ -402,6 +407,14 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                     repl.state.tokens_used = pre_stream_tokens + input + output;
                     repl.state.input_tokens = input;
                     repl.state.output_tokens = output;
+                    // Track token output rate
+                    if output > 0 {
+                        let output_start = repl.state.streaming_output_start.get_or_insert_with(std::time::Instant::now);
+                        let elapsed = output_start.elapsed().as_secs_f64();
+                        if elapsed > 0.1 {
+                            repl.state.streaming_token_rate = output as f64 / elapsed;
+                        }
+                    }
                 }
 
                 // Update tool count in real-time during streaming
@@ -502,6 +515,8 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
         repl.state.streaming_active = false;
         repl.state.thinking_phase = false;
         repl.state.streaming_start = None;
+        repl.state.streaming_token_rate = 0.0;
+        repl.state.streaming_output_start = None;
         // Transfer rate limit from streaming state
         if let Ok(s) = streaming.lock() {
             repl.state.rate_limit_5h = s.rate_limit;
@@ -509,9 +524,19 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
         repl.chat.streaming_active = false;
         repl.state.toast = None;
         repl.notify("Response complete");
-        // Send terminal bell for long-running tasks (>30s)
+        // Send terminal bell + desktop notification for long-running tasks (>30s)
         if stream_start.elapsed().as_secs() >= 30 {
             let _ = std::io::Write::write_all(&mut std::io::stderr(), b"\x07");
+            if !repl.state.desktop_notified && repl.notifications_enabled {
+                repl.state.desktop_notified = true;
+                let _ = repl.notifier.notify(&shannon_core::notifier::Notification {
+                    title: "Shannon".to_string(),
+                    body: "Task completed".to_string(),
+                    level: shannon_core::notifier::NotificationLevel::Info,
+                    id: uuid::Uuid::new_v4().to_string(),
+                    timestamp: chrono::Utc::now(),
+                });
+            }
         }
 
         // Commit completed turns to terminal scrollback

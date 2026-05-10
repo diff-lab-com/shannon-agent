@@ -234,6 +234,14 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
                 repl.prompt.insert_newline();
             } else if !repl.state.completion_suggestions.is_empty() {
                 accept_completion(repl);
+            } else if repl.state.streaming_active {
+                let input = repl.prompt.input().trim().to_string();
+                if !input.is_empty() {
+                    repl.state.queued_message = Some(input);
+                    repl.prompt.clear();
+                    repl.state.status = "Message queued (will send after current response)".to_string();
+                    repl.state.toast = Some(("Queued".to_string(), std::time::Instant::now()));
+                }
             } else {
                 super::commands::submit_input(repl, terminal)?;
             }
@@ -1622,18 +1630,14 @@ fn handle_pager_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             repl.pager_scroll_bottom();
             Ok(())
         }
-        // Page down
+        // Page down (scroll by ~half viewport in messages)
         KeyCode::PageDown | KeyCode::Char(' ') => {
-            if let Some(h) = repl.terminal_height() {
-                repl.pager_scroll(h as isize);
-            }
+            repl.pager_scroll(5);
             Ok(())
         }
         // Page up
         KeyCode::PageUp | KeyCode::Backspace => {
-            if let Some(h) = repl.terminal_height() {
-                repl.pager_scroll(-(h as isize));
-            }
+            repl.pager_scroll(-5);
             Ok(())
         }
         // Search within pager
