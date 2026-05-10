@@ -1,4 +1,8 @@
 //! Right sidebar panel showing session metadata
+//!
+//! Currently disabled — sidebar is hidden, info moved to 2-line status bar.
+
+#![allow(dead_code)]
 
 use crate::theme::Theme;
 use ratatui::{

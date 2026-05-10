@@ -126,9 +126,13 @@ impl MessageCell {
         *self.cached_lines.lock() = None;
     }
 
-    /// Build styled lines for this message (public access to build_lines).
+    /// Build styled lines for this message, with trailing blank line for spacing.
     pub fn lines(&self, width: u16, theme: &Theme) -> Vec<Line<'static>> {
-        self.build_lines(width, theme, None)
+        let mut l = self.build_lines(width, theme, None);
+        if !l.is_empty() {
+            l.push(Line::from(""));
+        }
+        l
     }
 
     /// Replace the message content (e.g., during streaming updates).
@@ -495,7 +499,7 @@ impl Renderable for MessageCell {
     fn render(&self, area: Rect, buf: &mut ratatui::buffer::Buffer, theme: &Theme) {
         Clear.render(area, buf);
 
-        let lines = self.build_lines(area.width, theme, None);
+        let lines = self.lines(area.width, theme);
         let paragraph = Paragraph::new(lines);
         paragraph.render(area, buf);
     }
@@ -509,7 +513,7 @@ impl Renderable for MessageCell {
     ) {
         Clear.render(area, buf);
 
-        let lines = self.build_lines(area.width, theme, None);
+        let lines = self.lines(area.width, theme);
         let paragraph = Paragraph::new(lines).scroll((scroll_y, 0));
         paragraph.render(area, buf);
     }
@@ -528,7 +532,7 @@ impl Renderable for MessageCell {
         // Use Paragraph::line_count for accurate height (handles remaining wrapping
         // of long code lines or headers that build_lines doesn't pre-wrap).
         let paragraph = Paragraph::new(lines);
-        let height = paragraph.line_count(width) as u16;
+        let height = paragraph.line_count(width) as u16 + 1; // +1 for inter-message spacing
 
         self.cached_width.store(width, Ordering::Relaxed);
         self.cached_height.store(height, Ordering::Relaxed);
@@ -617,7 +621,7 @@ mod tests {
         msg.tool_name = Some("bash".to_string());
         let cell = MessageCell::new(msg, true);
         let h = cell.desired_height(80);
-        assert_eq!(h, 1, "collapsed tool should be 1 line, got {h}");
+        assert_eq!(h, 2, "collapsed tool should be 1 line + spacing, got {h}");
     }
 
     #[test]

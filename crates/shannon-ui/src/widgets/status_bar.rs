@@ -32,8 +32,8 @@ impl StatusBarWidget {
 
     /// Render enhanced status bar with spinner animation and zone-based layout.
     ///
-    /// Layout: `⣷ Working  model  [████░░░░] 3.2k/128k  $0.0167  master  AUTO`
-    /// All zones are left-to-right with single-space gaps — no separators.
+    /// Expects a 2-line area. Line 1: spinner, status, model, context, cost.
+    /// Line 2: files, tools, duration, diagnostics, rate limit, git branch.
     #[allow(clippy::too_many_arguments)]
     pub fn render_with_spinner(
         frame: &mut Frame,
@@ -51,11 +51,19 @@ impl StatusBarWidget {
         token_breakdown: Option<(u64, u64)>,
         diag_counts: Option<(usize, usize)>,
         rate_limit: Option<(u32, u32)>,
+        files_info: Option<(usize, usize, usize)>,
+        tools_invoked: Option<usize>,
+        session_duration: Option<u64>,
     ) {
+        // Split area into 2 lines
+        let line1 = Rect::new(area.x, area.y, area.width, 1);
+        let line2 = Rect::new(area.x, area.y + 1, area.width, 1);
+
+        // ── LINE 1: spinner, status, model, context, progress, cost ──
         let mut left: Vec<Span<'static>> = Vec::new();
         let mut right: Vec<Span<'static>> = Vec::new();
 
-        // ── Zone 1: Spinner + status ──
+        // Spinner + status
         if let Some(sp) = spinner {
             if status != "Ready" {
                 let frame_str = sp.current_char().to_string();
@@ -66,24 +74,19 @@ impl StatusBarWidget {
                 left.push(Span::raw(" "));
             }
         }
-        // Status text (fixed-width phase labels: "Working", "Thinking", "Streaming", "Ready")
         left.push(Span::styled(
             status.to_string(),
             Style::default().fg(theme.text),
         ));
 
-        // ── Approval mode (always visible, right after status) ──
+        // Approval mode
         if let Some(mode_label) = approval_mode {
             left.push(Span::raw(" "));
             let mode_style = match mode_label {
-                "ASK" | "PLAN" => {
-                    Style::default().fg(theme.warning)
-                }
+                "ASK" | "PLAN" => Style::default().fg(theme.warning),
                 "EDIT" => Style::default().fg(theme.success),
                 "AUTO" => Style::default().fg(theme.primary),
-                "FULL" => {
-                    Style::default().fg(ratatui::style::Color::Red)
-                }
+                "FULL" => Style::default().fg(ratatui::style::Color::Red),
                 _ => Style::default().fg(theme.text_dim),
             };
             left.push(Span::styled(
@@ -92,7 +95,7 @@ impl StatusBarWidget {
             ));
         }
 
-        // ── Zone 2: Model ──
+        // Model
         if let Some(m) = model {
             left.push(Span::raw("  "));
             left.push(Span::styled(
@@ -101,7 +104,7 @@ impl StatusBarWidget {
             ));
         }
 
-        // ── Zone 3: Context window usage ──
+        // Context window
         if let Some(used) = tokens_used {
             left.push(Span::raw("  "));
             if let Some(max) = max_tokens {
@@ -140,7 +143,7 @@ impl StatusBarWidget {
             }
         }
 
-        // ── Zone 3b: Token breakdown ──
+        // Token breakdown
         if let Some((input, output)) = token_breakdown {
             if input > 0 || output > 0 {
                 left.push(Span::styled(
@@ -150,7 +153,7 @@ impl StatusBarWidget {
             }
         }
 
-        // ── Zone 4: Tool progress bar (replaces context bar zone when active) ──
+        // Tool progress bar
         if let Some(pb) = progress_bar {
             let pct = pb.percentage();
             if pct > 0.0 {
@@ -179,7 +182,7 @@ impl StatusBarWidget {
             }
         }
 
-        // ── Right zone: Cost ──
+        // Cost (right-aligned)
         if let Some(cost) = cost_usd {
             right.push(Span::raw("  "));
             let cost_color = if cost < 0.01 {
@@ -195,21 +198,56 @@ impl StatusBarWidget {
             ));
         }
 
-        // ── Right zone: LSP diagnostics ──
+        // Render line 1
+        render_line(frame, line1, left, right, theme);
+
+        // ── LINE 2: files, tools, duration, diagnostics, rate limit, git ──
+        let mut left2: Vec<Span<'static>> = Vec::new();
+        let mut right2: Vec<Span<'static>> = Vec::new();
+
+        // Files modified
+        if let Some((count, additions, deletions)) = files_info {
+            if count > 0 {
+                left2.push(Span::styled(
+                    format!(" {count}f (+{additions}/-{deletions})"),
+                    Style::default().fg(theme.secondary),
+                ));
+            }
+        }
+
+        // Tools invoked
+        if let Some(tools) = tools_invoked {
+            if tools > 0 {
+                left2.push(Span::styled(
+                    format!("  \u{1f527}{tools}"),
+                    Style::default().fg(theme.secondary),
+                ));
+            }
+        }
+
+        // Session duration
+        if let Some(secs) = session_duration {
+            left2.push(Span::styled(
+                format!("  {}", format_duration(secs)),
+                Style::default().fg(theme.text_dim),
+            ));
+        }
+
+        // Diagnostics
         if let Some((errors, warnings)) = diag_counts {
             if errors > 0 || warnings > 0 {
-                right.push(Span::raw("  "));
+                right2.push(Span::raw("  "));
                 if errors > 0 {
-                    right.push(Span::styled(
+                    right2.push(Span::styled(
                         format!("E:{errors}"),
                         Style::default().fg(theme.error),
                     ));
                     if warnings > 0 {
-                        right.push(Span::raw(" "));
+                        right2.push(Span::raw(" "));
                     }
                 }
                 if warnings > 0 {
-                    right.push(Span::styled(
+                    right2.push(Span::styled(
                         format!("W:{warnings}"),
                         Style::default().fg(theme.warning),
                     ));
@@ -217,7 +255,7 @@ impl StatusBarWidget {
             }
         }
 
-        // ── Right zone: Rate limit usage ──
+        // Rate limit
         if let Some((used, total)) = rate_limit {
             if total > 0 {
                 let pct = used as f64 / total as f64;
@@ -228,44 +266,24 @@ impl StatusBarWidget {
                 } else {
                     theme.error
                 };
-                right.push(Span::raw("  "));
-                right.push(Span::styled(
+                right2.push(Span::raw("  "));
+                right2.push(Span::styled(
                     format!("RL:{used}/{total}"),
                     Style::default().fg(color),
                 ));
             }
         }
 
-        // ── Right zone: Git branch ──
+        // Git branch
         if let Some(branch) = git_branch {
-            right.push(Span::raw("  "));
-            right.push(Span::styled(
+            right2.push(Span::raw("  "));
+            right2.push(Span::styled(
                 format!("{} {}", branch_icon(), branch),
                 Style::default().fg(theme.primary),
             ));
         }
 
-        // ── Right zone: (git branch) ──
-
-        // ── Combine with padding ──
-        let left_w: usize = left.iter().map(|s| s.content.chars().count()).sum();
-        let right_w: usize = right.iter().map(|s| s.content.chars().count()).sum();
-        let total = left_w + right_w;
-        let available = area.width as usize;
-        let padding = available.saturating_sub(total);
-
-        if !right.is_empty() && padding > 0 {
-            left.push(Span::raw(" ".repeat(padding)));
-            left.extend(right);
-        } else if left_w < available {
-            left.push(Span::raw(" ".repeat(available.saturating_sub(left_w))));
-        }
-
-        let paragraph = Paragraph::new(Line::from(left))
-            .style(Style::default().bg(theme.context_bar_bg))
-            .alignment(Alignment::Left);
-
-        frame.render_widget(paragraph, area);
+        render_line(frame, line2, left2, right2, theme);
     }
 
     /// Render a custom statusline from a user-configured shell script.
@@ -304,7 +322,41 @@ fn format_tokens(tokens: u64) -> String {
     }
 }
 
+/// Format duration in seconds as "Xm Ys" or "Ys".
+fn format_duration(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else {
+        let m = secs / 60;
+        let s = secs % 60;
+        format!("{m}m {s}s")
+    }
+}
+
 /// Git branch icon (Powerline symbol).
 fn branch_icon() -> &'static str {
     "\u{E0A0}"
+}
+
+/// Render a single status line with left/right zones and padding.
+fn render_line(frame: &mut Frame, area: Rect, left: Vec<Span<'static>>, right: Vec<Span<'static>>, theme: &Theme) {
+    let left_w: usize = left.iter().map(|s| s.content.chars().count()).sum();
+    let right_w: usize = right.iter().map(|s| s.content.chars().count()).sum();
+    let total = left_w + right_w;
+    let available = area.width as usize;
+    let padding = available.saturating_sub(total);
+
+    let mut spans = left;
+    if !right.is_empty() && padding > 0 {
+        spans.push(Span::raw(" ".repeat(padding)));
+        spans.extend(right);
+    } else if left_w < available {
+        spans.push(Span::raw(" ".repeat(available.saturating_sub(left_w))));
+    }
+
+    let paragraph = Paragraph::new(Line::from(spans))
+        .style(Style::default().bg(theme.context_bar_bg))
+        .alignment(Alignment::Left);
+
+    frame.render_widget(paragraph, area);
 }

@@ -524,50 +524,37 @@ impl ChatWidget {
             self.messages.len(), self.committed_count, self.scroll_offset,
             area.width, area.height, self.streaming_active
         );
-        let inner_width = area.width.saturating_sub(2) as usize;
+        let inner_width = area.width as usize;
         self.last_inner_width.store(inner_width, std::sync::atomic::Ordering::Relaxed);
 
         if let Ok(mut ra) = self.last_render_area.lock() {
             *ra = Some(area);
         }
 
-        // Right-size the chat border to fit uncommitted content tightly.
-        let content_h = self.uncommitted_content_height(inner_width as u16);
-        let needed_h = (content_h.saturating_add(2)).max(3).min(area.height);
-        let chat_area = Rect {
-            x: area.x,
-            y: area.y + area.height.saturating_sub(needed_h),
-            width: area.width,
-            height: needed_h,
-        };
-
-        // Clear area above chat border to prevent stale content
-        if chat_area.y > area.y {
-            let above = Rect::new(area.x, area.y, area.width, chat_area.y - area.y);
-            frame.render_widget(ratatui::widgets::Clear, above);
-        }
-
-        // Draw bordered block with title showing scroll position
+        // Thin top separator with scroll position info
         let total = self.messages.len();
         let is_at_bottom = total == 0 || self.scroll_offset >= total.saturating_sub(1);
-        let title = if total == 0 {
+        let label = if total == 0 {
             " Chat ".to_string()
         } else if is_at_bottom {
-            format!(" Chat {total} ")
+            format!(" {total} ")
         } else {
             let pct = if total > 1 {
                 (self.scroll_offset * 100) / (total - 1)
             } else {
                 100
             };
-            format!(" Chat [{pct}%] {}/{} ", self.scroll_offset + 1, total)
+            format!(" [{pct}%] {}/{} ", self.scroll_offset + 1, total)
         };
-        let block = ratatui::widgets::Block::default()
-            .borders(ratatui::widgets::Borders::ALL)
-            .border_style(ratatui::style::Style::default().fg(theme.border))
-            .title(title);
-        let inner = block.inner(chat_area);
-        frame.render_widget(block, chat_area);
+        let sep = format!("─{label}{}", "─".repeat(area.width as usize - label.len() - 1));
+        let sep_line = ratatui::widgets::Paragraph::new(ratatui::text::Line::from(vec![
+            ratatui::text::Span::styled(sep, ratatui::style::Style::default().fg(theme.border)),
+        ]));
+        let sep_area = Rect::new(area.x, area.y, area.width, 1);
+        frame.render_widget(sep_line, sep_area);
+
+        // Content area starts below separator, uses full width (no side borders)
+        let inner = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
 
         // Render visible cells using ColumnRenderable
         let buf = frame.buffer_mut();

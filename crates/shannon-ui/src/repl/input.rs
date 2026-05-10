@@ -42,16 +42,13 @@ fn open_external_editor(content: &str) -> std::result::Result<String, Box<dyn st
 
 /// Handle mouse events — scroll wheel to navigate chat history.
 pub fn handle_mouse(repl: &mut Repl, mouse: MouseEvent) {
+    let step = (repl.chat.chat_viewport_height() as usize / 4).max(3);
     match mouse.kind {
         MouseEventKind::ScrollUp => {
-            for _ in 0..3 {
-                repl.chat.scroll_up();
-            }
+            repl.chat.scroll_up_by(step);
         }
         MouseEventKind::ScrollDown => {
-            for _ in 0..3 {
-                repl.chat.scroll_down();
-            }
+            repl.chat.scroll_down_by(step);
         }
         _ => {}
     }
@@ -172,9 +169,7 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
             Ok(())
         }
         KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            repl.state.sidebar_visible = !repl.state.sidebar_visible;
-            let label = if repl.state.sidebar_visible { "Sidebar ON" } else { "Sidebar OFF" };
-            repl.state.toast = Some((format!("  {label}  "), std::time::Instant::now()));
+            // Sidebar disabled — no-op
             Ok(())
         }
         KeyCode::Left if key.modifiers.contains(KeyModifiers::CONTROL) => {

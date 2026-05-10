@@ -48,7 +48,6 @@ use ratatui::{
 
 // Layout constants (shared with sidebar module)
 use sidebar::{
-    MIN_MAIN_WIDTH_VAL as MIN_MAIN_WIDTH,
     MIN_SIDEBAR_WIDTH_VAL as MIN_SIDEBAR_WIDTH,
     COLLAPSE_HEADER_WIDTH_VAL as COLLAPSE_HEADER_WIDTH,
     MIN_TERMINAL_WIDTH_VAL as MIN_TERMINAL_WIDTH,
@@ -85,12 +84,11 @@ impl MainLayoutWidget {
     pub fn layout(area: Rect, prompt_height: u16) -> (Rect, Rect, Rect, Rect, Rect) {
         let chunks = ratatui::layout::Layout::default()
             .direction(Direction::Vertical)
-            .margin(1)
             .constraints([
                 Constraint::Length(HeaderWidget::height() as u16), // Header bar
                 Constraint::Min(0),              // Chat area (flexible)
                 Constraint::Length(prompt_height), // Input prompt (dynamic)
-                Constraint::Length(1),            // Status bar (compressed single line)
+                Constraint::Length(2),            // Status bar (2 lines)
             ])
             .split(area);
 
@@ -114,59 +112,22 @@ impl MainLayoutWidget {
         } else {
             HeaderWidget::height() as u16
         };
-        let effective_sidebar = sidebar_visible && area.width >= MIN_SIDEBAR_WIDTH;
+        let _effective_sidebar = sidebar_visible && area.width >= MIN_SIDEBAR_WIDTH;
 
         let (header_area, chat_area, prompt_area, status_area, full) = {
             let chunks = ratatui::layout::Layout::default()
                 .direction(Direction::Vertical)
-                .margin(1)
                 .constraints([
                     Constraint::Length(header_height),
                     Constraint::Min(0),
                     Constraint::Length(prompt_height),
-                    Constraint::Length(1),
+                    Constraint::Length(2),
                 ])
                 .split(area);
             (chunks[0], chunks[1], chunks[2], chunks[3], area)
         };
 
-        if effective_sidebar && SidebarWidget::fits(area.width) {
-            // Split the vertical strip (header + chat + prompt) horizontally
-            // The sidebar spans header + chat rows
-            let sidebar_h = SidebarWidget::width();
-            let _main_width = area.width.saturating_sub(sidebar_h);
-
-            // Re-split the whole area with sidebar
-            let h_chunks = ratatui::layout::Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Min(MIN_MAIN_WIDTH),
-                    Constraint::Length(sidebar_h),
-                ])
-                .split(area);
-
-            // Now re-do the vertical layout on the left chunk
-            let v_chunks = ratatui::layout::Layout::default()
-                .direction(Direction::Vertical)
-                .margin(1)
-                .constraints([
-                    Constraint::Length(header_height),
-                    Constraint::Min(0),
-                    Constraint::Length(prompt_height),
-                    Constraint::Length(1),
-                ])
-                .split(h_chunks[0]);
-
-            let sidebar_area = ratatui::layout::Rect {
-                x: h_chunks[1].x,
-                y: h_chunks[1].y + 1, // account for margin
-                width: h_chunks[1].width,
-                height: h_chunks[1].height.saturating_sub(2), // top+bottom margin
-            };
-
-            return (v_chunks[0], v_chunks[1], v_chunks[2], v_chunks[3], Some(sidebar_area), full);
-        }
-
+        // Sidebar disabled — always return None
         (header_area, chat_area, prompt_area, status_area, None, full)
     }
 
@@ -271,7 +232,10 @@ impl MainLayoutWidget {
             if let Some(custom) = cached_statusline {
                 StatusBarWidget::render_custom(frame, status_area, custom, theme);
             } else {
-                StatusBarWidget::render_with_spinner(frame, status_area, status, model, tokens_used, max_tokens, cost_usd, git_branch, spinner, progress_bar, theme, approval_mode, token_breakdown, diag_counts, rate_limit);
+                let files_info = sidebar_info.map(|si| (si.modified_files.len(), si.total_additions, si.total_deletions));
+                let tools_invoked = sidebar_info.map(|si| si.tools_invoked);
+                let session_duration = sidebar_info.map(|si| si.session_duration_secs);
+                StatusBarWidget::render_with_spinner(frame, status_area, status, model, tokens_used, max_tokens, cost_usd, git_branch, spinner, progress_bar, theme, approval_mode, token_breakdown, diag_counts, rate_limit, files_info, tools_invoked, session_duration);
             }
 
             if let (Some(info), Some(sb_area)) = (sidebar_info, sidebar_area) {
@@ -458,18 +422,18 @@ mod tests {
         let (header, chat, prompt, status, full) = MainLayoutWidget::layout(area, 3);
 
         // Header should be at top with height 3
-        assert_eq!(header.y, 1); // margin(1)
+        assert_eq!(header.y, 0);
         assert_eq!(header.height, 3);
 
         // Chat should be below header and be flexible
-        assert_eq!(chat.y, 4); // margin(1) + header(3)
+        assert_eq!(chat.y, 3); // header(3)
         assert!(chat.height > 0); // Flexible size
 
         // Prompt should be below chat with height 3
         assert_eq!(prompt.height, 3);
 
-        // Status should be at bottom with height 1 (compressed)
-        assert_eq!(status.height, 1);
+        // Status should be at bottom with height 2
+        assert_eq!(status.height, 2);
 
         // Full area should match input area
         assert_eq!(full, area);
@@ -492,10 +456,10 @@ mod tests {
         let area = Rect::new(0, 0, 100, 20);
         let (header, _, prompt, status, _) = MainLayoutWidget::layout(area, 3);
 
-        // Header and prompt have fixed heights; status bar is 1 line (compressed)
+        // Header and prompt have fixed heights; status bar is 2 lines
         assert_eq!(header.height, 3);
         assert_eq!(prompt.height, 3);
-        assert_eq!(status.height, 1);
+        assert_eq!(status.height, 2);
     }
 
     #[test]
@@ -503,10 +467,10 @@ mod tests {
         let area = Rect::new(0, 0, 100, 20);
         let (header, _, _, _, _) = MainLayoutWidget::layout(area, 3);
 
-        // Check that margin(1) is applied
-        assert_eq!(header.x, 1);
-        assert_eq!(header.y, 1);
-        assert!(header.width < 100); // Reduced by margin
+        // No outer margin — full width
+        assert_eq!(header.x, 0);
+        assert_eq!(header.y, 0);
+        assert_eq!(header.width, 100); // Full width
     }
 
     // ── Chat Message Tests ─────────────────────────────────────────────
@@ -1057,14 +1021,11 @@ mod tests {
     #[test]
     fn test_sidebar_layout_with_sidebar_visible() {
         let area = Rect::new(0, 0, 120, 30);
-        let (_header, chat, _prompt, _status, sidebar_area, full) =
+        let (_header, _chat, _prompt, _status, sidebar_area, full) =
             MainLayoutWidget::layout_with_sidebar(area, 3, true, true);
         assert_eq!(full, area);
-        assert!(sidebar_area.is_some());
-        let sb = sidebar_area.unwrap();
-        assert!(sb.width > 0);
-        assert!(sb.height > 0);
-        assert!(chat.width < area.width);
+        // Sidebar is disabled — always returns None
+        assert!(sidebar_area.is_none());
     }
 
     #[test]
