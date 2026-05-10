@@ -244,7 +244,7 @@ impl Tui {
         use base64::Engine;
         let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
         // OSC 52: c=clipboard, p=primary
-        let seq = format!("\x1b]52;c;{}\x07", encoded);
+        let seq = format!("\x1b]52;c;{encoded}\x07");
         self.terminal.backend_mut().write_all(seq.as_bytes())?;
         self.terminal.backend_mut().flush()?;
         Ok(())
