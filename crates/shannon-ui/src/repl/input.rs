@@ -1597,12 +1597,10 @@ fn collect_project_files(root: &str) -> Vec<String> {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if name.starts_with('.') { continue; }
             if path.is_dir() {
-                if skip_dirs.iter().any(|s| *s == name) { continue; }
+                if skip_dirs.contains(&name) { continue; }
                 walk(&path, root, skip_dirs, files, depth + 1);
-            } else {
-                if let Ok(rel) = path.strip_prefix(root) {
-                    files.push(rel.to_string_lossy().to_string());
-                }
+            } else if let Ok(rel) = path.strip_prefix(root) {
+                files.push(rel.to_string_lossy().to_string());
             }
         }
     }
