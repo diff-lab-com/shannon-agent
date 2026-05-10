@@ -183,6 +183,22 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             f.render_widget(toast, toast_area);
         }
 
+        // Streaming queue hint — show "Enter=queue" near the prompt when streaming
+        if state.streaming_active && state.queued_message.is_none() {
+            let hint = " \u{2191}\u{2193} scroll \u{00b7} Enter = queue after response \u{00b7} Esc = stop ";
+            let hint_width = hint.chars().count() as u16;
+            let x = f.area().x + 2;
+            let y = f.area().bottom().saturating_sub(5);
+            let w = hint_width.min(f.area().width.saturating_sub(4));
+            let hint_area = ratatui::layout::Rect { x, y, width: w, height: 1 };
+            let hint_text: String = hint.chars().take(w as usize).collect();
+            let hint_paragraph = Paragraph::new(hint_text)
+                .style(ratatui::style::Style::default()
+                    .fg(state.theme.muted)
+                    .bg(state.theme.context_bar_bg));
+            f.render_widget(hint_paragraph, hint_area);
+        }
+
         // Overlay history search bar when Ctrl+R active
         if state.incremental_search_active {
             render_history_search_overlay(f, f.area(), state);
