@@ -970,7 +970,7 @@ pub(super) fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
                 heading_text.push_str(&text);
             }
             Event::Text(text) if in_list => {
-                let text_str = if in_strikethrough { format!("~{}~", text) } else { text.to_string() };
+                let text_str = if in_strikethrough { format!("~{text}~") } else { text.to_string() };
                 // Collect text into the last list item or a new one
                 let lines: Vec<&str> = text_str.lines().collect();
                 for (i, line) in lines.iter().enumerate() {
@@ -989,13 +989,13 @@ pub(super) fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
                 }
             }
             Event::Text(text) if in_blockquote => {
-                let text_str = if in_strikethrough { format!("~{}~", text) } else { text.to_string() };
+                let text_str = if in_strikethrough { format!("~{text}~") } else { text.to_string() };
                 for line in text_str.lines() {
                     blockquote_lines.push(line.to_string());
                 }
             }
             Event::Text(text) => {
-                let text_str = if in_strikethrough { format!("~{}~", text) } else { text.to_string() };
+                let text_str = if in_strikethrough { format!("~{text}~") } else { text.to_string() };
                 current_text.extend(text_str.lines().map(|l| l.to_string()));
             }
             Event::SoftBreak | Event::HardBreak => {
@@ -1383,7 +1383,7 @@ pub(super) fn highlight_search_in_text(
     let mut match_char_ranges: Vec<(usize, usize)> = Vec::new();
     let mut ci = 0;
     while ci + qlen <= text_lower.len() {
-        if &text_lower[ci..ci + qlen] == &query_lower[..] {
+        if text_lower[ci..ci + qlen] == query_lower[..] {
             match_char_ranges.push((ci, ci + qlen));
             ci += qlen;
         } else {
