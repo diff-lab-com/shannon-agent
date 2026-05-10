@@ -1123,6 +1123,15 @@ impl Repl {
 
         self.running = true;
 
+        // Load persistent command history from ~/.shannon/history.jsonl
+        {
+            let history_path = dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".shannon")
+                .join("history.jsonl");
+            self.command_history = ReplHistory::load_from_file(&history_path, 500);
+        }
+
         // Fire SessionStart hooks (Claude Code compatible lifecycle)
         if let Some(ref engine) = self.query_engine {
             let session_id = engine.session_id().to_string();
@@ -1182,7 +1191,8 @@ impl Repl {
             }
 
             // Check for permission requests (non-blocking)
-            if self.state.permission_dialog.is_none() {
+            // Defer showing permission dialogs during streaming to avoid interrupting reading
+            if self.state.permission_dialog.is_none() && !self.state.streaming_active {
                 if let Ok(permission_req) = self.permission_req_rx.try_recv() {
                     // Store the permission prompt and response channel
                     self.state.permission_dialog = Some(permission_req.prompt.clone());
@@ -1258,6 +1268,15 @@ impl Repl {
             if let Some(event) = self.events.next()? {
                 self.handle_event(event, Some(&mut terminal));
             }
+        }
+
+        // Save command history to ~/.shannon/history.jsonl
+        {
+            let history_path = dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".shannon")
+                .join("history.jsonl");
+            self.command_history.save_to_file(&history_path);
         }
 
         // Fire SessionEnd hooks before shutting down
@@ -1400,6 +1419,18 @@ impl Repl {
 
                 // Refresh custom statusline (throttled internally)
                 self.refresh_statusline();
+            }
+            crate::events::Event::Resize(_cols, _rows) => {
+                // Reflow committed scrollback if terminal width changed
+                let width = _cols;
+                if self.chat.needs_reflow(width) {
+                    let (lines, _height) = self.chat.re_render_committed(width);
+                    if !lines.is_empty() {
+                        self.chat.pending_scrollback = lines;
+                    }
+                }
+                // Force cells to recompute height on next render
+                self.chat.invalidate_all_cells();
             }
         }
     }

@@ -315,6 +315,39 @@ impl ReplHistory {
     pub fn cursor(&self) -> isize {
         self.cursor
     }
+
+    /// Save history to a JSONL file. Appends entries that don't already exist at the end of the file.
+    pub fn save_to_file(&self, path: &std::path::Path) {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        // Write all entries as JSONL (one JSON string per line)
+        let mut lines = Vec::with_capacity(self.entries.len());
+        for entry in &self.entries {
+            if let Ok(json) = serde_json::to_string(entry) {
+                lines.push(json);
+            }
+        }
+        let content = lines.join("\n");
+        let _ = std::fs::write(path, content);
+    }
+
+    /// Load history from a JSONL file, taking the last `limit` entries.
+    pub fn load_from_file(path: &std::path::Path, limit: usize) -> Self {
+        let mut history = Self::new(1000);
+        if let Ok(content) = std::fs::read_to_string(path) {
+            let mut loaded: VecDeque<String> = content
+                .lines()
+                .filter_map(|line| serde_json::from_str::<String>(line).ok())
+                .collect();
+            // Keep only last `limit` entries
+            while loaded.len() > limit {
+                loaded.pop_front();
+            }
+            history.entries = loaded;
+        }
+        history
+    }
 }
 
 // ---------------------------------------------------------------------------

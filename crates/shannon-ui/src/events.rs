@@ -14,6 +14,8 @@ pub enum Event {
     Mouse(MouseEvent),
     /// Tick event for periodic updates
     Tick,
+    /// Terminal resize event (new cols, new rows)
+    Resize(u16, u16),
 }
 
 /// Event handler for terminal events
@@ -47,7 +49,8 @@ impl EventHandler {
                     CrosstermEvent::Key(key) => return Ok(Some(Event::Input(key))),
                     CrosstermEvent::Paste(content) => return Ok(Some(Event::Paste(content))),
                     CrosstermEvent::Mouse(mouse) => return Ok(Some(Event::Mouse(mouse))),
-                    // Ignore other event types (resize, focus)
+                    CrosstermEvent::Resize(cols, rows) => return Ok(Some(Event::Resize(cols, rows))),
+                    // Ignore other event types (focus)
                     _ => {
                         drained += 1;
                         continue;

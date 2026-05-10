@@ -169,6 +169,8 @@ pub struct ChatMessage {
     pub spinner_frame: usize,
     /// Whether this tool message is individually folded (expanded when false)
     pub folded: bool,
+    /// Exit code from tool execution (None if not applicable or not captured)
+    pub exit_code: Option<i32>,
 }
 
 /// Role of the chat message sender
@@ -211,6 +213,7 @@ impl ChatWidget {
             duration_secs: None,
             spinner_frame: 0,
             folded: true,
+            exit_code: None,
         };
 
         let index = self.messages.len();
@@ -246,6 +249,7 @@ impl ChatWidget {
             duration_secs: None,
             spinner_frame: 0,
             folded: true,
+            exit_code: None,
         };
 
         let index = self.messages.len();
@@ -316,6 +320,7 @@ impl ChatWidget {
             duration_secs,
             spinner_frame: 0,
             folded: true,
+            exit_code: None,
         };
         let index = self.messages.len();
         self.messages.push_back(message.clone());
@@ -763,6 +768,11 @@ impl ChatWidget {
     pub fn needs_reflow(&self, current_width: u16) -> bool {
         let cw = self.committed_width.load(std::sync::atomic::Ordering::Relaxed);
         cw > 0 && cw != current_width && self.committed_count > 0
+    }
+
+    /// Invalidate all cell height caches (e.g., after terminal resize).
+    pub fn invalidate_all_cells(&self) {
+        self.column.invalidate_all();
     }
 
     /// Re-render all committed messages at a new width for scrollback reflow.

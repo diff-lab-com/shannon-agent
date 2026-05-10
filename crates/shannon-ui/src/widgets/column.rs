@@ -124,6 +124,13 @@ impl ColumnRenderable {
         self.cell_allocated.lock().get(&cell_index).copied().unwrap_or(0)
     }
 
+    /// Invalidate cached heights for all cells (e.g., after terminal resize).
+    pub fn invalidate_all(&self) {
+        for cell in &self.cells {
+            cell.invalidate_cache();
+        }
+    }
+
     /// Compute total height of all cells at the given width.
     #[allow(dead_code)]
     fn total_height(&self, width: u16) -> u16 {
@@ -303,6 +310,7 @@ mod tests {
             duration_secs: None,
             spinner_frame: 0,
             folded: true,
+            exit_code: None,
         }
     }
 

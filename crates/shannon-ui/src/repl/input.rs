@@ -193,7 +193,16 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
             Ok(())
         }
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            repl.running = false;
+            let input = repl.prompt.input().trim().to_string();
+            if !input.is_empty() {
+                // Stash draft to history so Up-arrow recovers it
+                repl.command_history.push(&input);
+                repl.prompt.set_input(String::new());
+                repl.state.completion_suggestions.clear();
+                repl.state.completion_suggestion_index = 0;
+            } else {
+                repl.running = false;
+            }
             Ok(())
         }
         KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {

@@ -247,10 +247,20 @@ impl MessageCell {
                 } else {
                     ("\u{2713}", theme.success)
                 };
-                lines.push(Line::from(vec![
+                let mut badge_spans = vec![
                     Span::styled(format!("  {status_icon} "), Style::default().fg(status_color)),
                     Span::styled(format!("{dur_str}"), Style::default().fg(theme.muted)),
-                ]));
+                ];
+                // Exit code display
+                if let Some(code) = msg.exit_code {
+                    if code != 0 {
+                        badge_spans.push(Span::styled(
+                            format!(" exit={code}"),
+                            Style::default().fg(theme.error),
+                        ));
+                    }
+                }
+                lines.push(Line::from(badge_spans));
             }
 
             // Error messages get a red-tinted rendering
@@ -299,41 +309,91 @@ impl MessageCell {
 
             // Bash output: detect $ prefix lines and render command distinctly
             if cat == ToolCategory::Bash {
+                let row_budget: usize = if cat == ToolCategory::Agent { 3 } else { 10 };
                 let mut in_output = false;
-                for raw_line in content.lines() {
-                    if raw_line.trim().is_empty() { continue; }
-                    // Lines starting with $ are commands
-                    if raw_line.trim_start().starts_with('$') || raw_line.starts_with("> Using: bash") {
-                        let cmd = raw_line.trim_start().trim_start_matches('$').trim_start();
-                        lines.push(Line::from(vec![
-                            Span::styled("  $ ", Style::default().fg(theme.tool_bash).add_modifier(Modifier::BOLD)),
-                            Span::styled(cmd.to_string(), Style::default().fg(theme.tool_bash)),
-                        ]));
-                        in_output = true;
-                    } else if in_output {
-                        let wrapped = wrap_line(raw_line, tool_width.saturating_sub(2));
-                        for wl in wrapped {
-                            lines.push(Line::from(vec![
-                                Span::styled("  ", Style::default()),
-                                Span::styled(wl, Style::default().fg(theme.text_dim)),
-                            ]));
+                let all_lines: Vec<String> = content.lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .flat_map(|raw_line| {
+                        if raw_line.trim_start().starts_with('$') || raw_line.starts_with("> Using: bash") {
+                            let cmd = raw_line.trim_start().trim_start_matches('$').trim_start();
+                            vec![format!("  $ {cmd}")]
+                        } else {
+                            wrap_line(raw_line, tool_width.saturating_sub(2))
                         }
-                    } else {
-                        let wrapped = wrap_line(raw_line, tool_width);
-                        for wl in wrapped {
-                            lines.push(Line::from(Span::styled(wl, Style::default().fg(theme.text_dim))));
+                    })
+                    .collect();
+
+                if all_lines.len() > row_budget {
+                    let head = row_budget / 2;
+                    let tail = row_budget - head;
+                    for line in &all_lines[..head] {
+                        lines.push(Line::from(Span::styled(line.clone(), Style::default().fg(theme.text_dim))));
+                    }
+                    let hidden = all_lines.len() - row_budget;
+                    lines.push(Line::from(Span::styled(
+                        format!("  ... +{hidden} lines (Alt+F to expand)"),
+                        Style::default().fg(theme.muted),
+                    )));
+                    for line in &all_lines[all_lines.len().saturating_sub(tail)..] {
+                        lines.push(Line::from(Span::styled(line.clone(), Style::default().fg(theme.text_dim))));
+                    }
+                } else {
+                    for raw_line in content.lines() {
+                        if raw_line.trim().is_empty() { continue; }
+                        if raw_line.trim_start().starts_with('$') || raw_line.starts_with("> Using: bash") {
+                            let cmd = raw_line.trim_start().trim_start_matches('$').trim_start();
+                            lines.push(Line::from(vec![
+                                Span::styled("  $ ", Style::default().fg(theme.tool_bash).add_modifier(Modifier::BOLD)),
+                                Span::styled(cmd.to_string(), Style::default().fg(theme.tool_bash)),
+                            ]));
+                            in_output = true;
+                        } else if in_output {
+                            let wrapped = wrap_line(raw_line, tool_width.saturating_sub(2));
+                            for wl in wrapped {
+                                lines.push(Line::from(vec![
+                                    Span::styled("  ", Style::default()),
+                                    Span::styled(wl, Style::default().fg(theme.text_dim)),
+                                ]));
+                            }
+                        } else {
+                            let wrapped = wrap_line(raw_line, tool_width);
+                            for wl in wrapped {
+                                lines.push(Line::from(Span::styled(wl, Style::default().fg(theme.text_dim))));
+                            }
                         }
                     }
                 }
                 return lines;
             }
 
-            // Generic expanded tool: show content with tool icon
-            for raw_line in content.lines() {
-                if raw_line.trim().is_empty() { continue; }
-                let wrapped = wrap_line(raw_line, tool_width);
-                for wl in wrapped {
-                    lines.push(Line::from(Span::styled(wl, Style::default().fg(theme.text_dim))));
+            // Generic expanded tool: show content with row-aware truncation
+            let row_budget: usize = if cat == ToolCategory::Agent { 3 } else { 10 };
+            let all_lines: Vec<String> = content.lines()
+                .filter(|l| !l.trim().is_empty())
+                .flat_map(|l| wrap_line(l, tool_width))
+                .collect();
+
+            if all_lines.len() > row_budget {
+                let head = row_budget / 2;
+                let tail = row_budget - head;
+                for line in &all_lines[..head] {
+                    lines.push(Line::from(Span::styled(line.clone(), Style::default().fg(theme.text_dim))));
+                }
+                let hidden = all_lines.len() - row_budget;
+                lines.push(Line::from(Span::styled(
+                    format!("  ... +{hidden} lines (Alt+F to expand)"),
+                    Style::default().fg(theme.muted),
+                )));
+                for line in &all_lines[all_lines.len().saturating_sub(tail)..] {
+                    lines.push(Line::from(Span::styled(line.clone(), Style::default().fg(theme.text_dim))));
+                }
+            } else {
+                for raw_line in content.lines() {
+                    if raw_line.trim().is_empty() { continue; }
+                    let wrapped = wrap_line(raw_line, tool_width);
+                    for wl in wrapped {
+                        lines.push(Line::from(Span::styled(wl, Style::default().fg(theme.text_dim))));
+                    }
                 }
             }
             return lines;
@@ -572,6 +632,7 @@ mod tests {
             duration_secs: None,
             spinner_frame: 0,
             folded: true,
+            exit_code: None,
         }
     }
 
