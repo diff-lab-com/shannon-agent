@@ -247,34 +247,35 @@ impl MessageCell {
             let tool_width = inner_width.saturating_sub(4).max(20);
             let cat = tool_category(tool_label);
             let content = strip_ansi(&msg.content);
+            let border_w = inner_width.clamp(10, 60);
 
-            // Duration badge
-            if let Some(dur) = msg.duration_secs {
+            // Top border: ╭─ toolname ── ✓ duration ──╮
+            let (status_icon, status_color) = if msg.is_error {
+                ("\u{2717}", theme.error)
+            } else {
+                ("\u{2713}", theme.success)
+            };
+            let _ = status_color; // used below in bottom border
+            let dur_part = if let Some(dur) = msg.duration_secs {
                 let dur_str = if dur >= 60.0 {
                     format!("{}m{:.0}s", dur as u64 / 60, dur % 60.0)
                 } else {
                     format!("{dur:.1}s")
                 };
-                let (status_icon, status_color) = if msg.is_error {
-                    ("\u{2717}", theme.error)
-                } else {
-                    ("\u{2713}", theme.success)
-                };
-                let mut badge_spans = vec![
-                    Span::styled(format!("  {status_icon} "), Style::default().fg(status_color)),
-                    Span::styled(dur_str, Style::default().fg(theme.muted)),
-                ];
-                // Exit code display
+                let mut p = format!(" {status_icon} {dur_str}");
                 if let Some(code) = msg.exit_code {
-                    if code != 0 {
-                        badge_spans.push(Span::styled(
-                            format!(" exit={code}"),
-                            Style::default().fg(theme.error),
-                        ));
-                    }
+                    if code != 0 { p = format!(" {status_icon} {dur_str} exit={code}"); }
                 }
-                lines.push(Line::from(badge_spans));
-            }
+                p
+            } else {
+                String::new()
+            };
+            let inner = format!("─ {tool_label}{dur_part} ─");
+            let remaining = border_w.saturating_sub(2 + inner.len()).saturating_sub(1);
+            let top = format!("╭{inner}{}╮", "─".repeat(remaining));
+            lines.push(Line::from(vec![
+                Span::styled(top, Style::default().fg(theme.border_dim)),
+            ]));
 
             // Error messages get a red-tinted rendering
             if msg.is_error {
@@ -283,11 +284,13 @@ impl MessageCell {
                     let wrapped = wrap_line(raw_line, tool_width);
                     for wl in wrapped {
                         lines.push(Line::from(vec![
-                            Span::styled("  ", Style::default()),
+                            Span::styled("│ ", Style::default().fg(theme.border_dim)),
                             Span::styled(wl, Style::default().fg(theme.error)),
                         ]));
                     }
                 }
+                let bottom = format!("╰{}╯", "─".repeat(border_w.saturating_sub(2)));
+                lines.push(Line::from(Span::styled(bottom, Style::default().fg(theme.border_dim))));
                 add_role_gutter(&mut lines, gutter_color);
                 return lines;
             }
@@ -311,13 +314,16 @@ impl MessageCell {
                         ("", theme.text_dim)
                     };
                     lines.push(Line::from(vec![
-                        Span::styled(format!(" {prefix}"), Style::default().fg(color)),
+                        Span::styled("│", Style::default().fg(theme.border_dim)),
+                        Span::styled(prefix.to_string(), Style::default().fg(color)),
                         Span::styled(
                             if prefix.is_empty() { raw_line.to_string() } else { raw_line[1..].to_string() },
                             Style::default().fg(color),
                         ),
                     ]));
                 }
+                let bottom = format!("╰{}╯", "─".repeat(border_w.saturating_sub(2)));
+                lines.push(Line::from(Span::styled(bottom, Style::default().fg(theme.border_dim))));
                 add_role_gutter(&mut lines, gutter_color);
                 return lines;
             }
@@ -331,7 +337,7 @@ impl MessageCell {
                     .flat_map(|raw_line| {
                         if raw_line.trim_start().starts_with('$') || raw_line.starts_with("> Using: bash") {
                             let cmd = raw_line.trim_start().trim_start_matches('$').trim_start();
-                            vec![format!("  $ {cmd}")]
+                            vec![format!("│ $ {cmd}")]
                         } else {
                             wrap_line(raw_line, tool_width.saturating_sub(2))
                         }
@@ -346,7 +352,7 @@ impl MessageCell {
                     }
                     let hidden = all_lines.len() - row_budget;
                     lines.push(Line::from(Span::styled(
-                        format!("  ... +{hidden} lines (Alt+F to expand)"),
+                        format!("│ ... +{hidden} lines (Alt+F to expand)"),
                         Style::default().fg(theme.muted),
                     )));
                     for line in &all_lines[all_lines.len().saturating_sub(tail)..] {
@@ -358,7 +364,8 @@ impl MessageCell {
                         if raw_line.trim_start().starts_with('$') || raw_line.starts_with("> Using: bash") {
                             let cmd = raw_line.trim_start().trim_start_matches('$').trim_start();
                             lines.push(Line::from(vec![
-                                Span::styled("  $ ", Style::default().fg(theme.tool_bash).add_modifier(Modifier::BOLD)),
+                                Span::styled("│ ", Style::default().fg(theme.border_dim)),
+                                Span::styled("$ ", Style::default().fg(theme.tool_bash).add_modifier(Modifier::BOLD)),
                                 Span::styled(cmd.to_string(), Style::default().fg(theme.tool_bash)),
                             ]));
                             in_output = true;
@@ -366,18 +373,23 @@ impl MessageCell {
                             let wrapped = wrap_line(raw_line, tool_width.saturating_sub(2));
                             for wl in wrapped {
                                 lines.push(Line::from(vec![
-                                    Span::styled("  ", Style::default()),
+                                    Span::styled("│ ", Style::default().fg(theme.border_dim)),
                                     Span::styled(wl, Style::default().fg(theme.text_dim)),
                                 ]));
                             }
                         } else {
                             let wrapped = wrap_line(raw_line, tool_width);
                             for wl in wrapped {
-                                lines.push(Line::from(Span::styled(wl, Style::default().fg(theme.text_dim))));
+                                lines.push(Line::from(vec![
+                                    Span::styled("│ ", Style::default().fg(theme.border_dim)),
+                                    Span::styled(wl, Style::default().fg(theme.text_dim)),
+                                ]));
                             }
                         }
                     }
                 }
+                let bottom = format!("╰{}╯", "─".repeat(border_w.saturating_sub(2)));
+                lines.push(Line::from(Span::styled(bottom, Style::default().fg(theme.border_dim))));
                 add_role_gutter(&mut lines, gutter_color);
                 return lines;
             }
@@ -393,25 +405,36 @@ impl MessageCell {
                 let head = row_budget / 2;
                 let tail = row_budget - head;
                 for line in &all_lines[..head] {
-                    lines.push(Line::from(Span::styled(line.clone(), Style::default().fg(theme.text_dim))));
+                    lines.push(Line::from(vec![
+                        Span::styled("│ ", Style::default().fg(theme.border_dim)),
+                        Span::styled(line.clone(), Style::default().fg(theme.text_dim)),
+                    ]));
                 }
                 let hidden = all_lines.len() - row_budget;
                 lines.push(Line::from(Span::styled(
-                    format!("  ... +{hidden} lines (Alt+F to expand)"),
+                    format!("│ ... +{hidden} lines (Alt+F to expand)"),
                     Style::default().fg(theme.muted),
                 )));
                 for line in &all_lines[all_lines.len().saturating_sub(tail)..] {
-                    lines.push(Line::from(Span::styled(line.clone(), Style::default().fg(theme.text_dim))));
+                    lines.push(Line::from(vec![
+                        Span::styled("│ ", Style::default().fg(theme.border_dim)),
+                        Span::styled(line.clone(), Style::default().fg(theme.text_dim)),
+                    ]));
                 }
             } else {
                 for raw_line in content.lines() {
                     if raw_line.trim().is_empty() { continue; }
                     let wrapped = wrap_line(raw_line, tool_width);
                     for wl in wrapped {
-                        lines.push(Line::from(Span::styled(wl, Style::default().fg(theme.text_dim))));
+                        lines.push(Line::from(vec![
+                            Span::styled("│ ", Style::default().fg(theme.border_dim)),
+                            Span::styled(wl, Style::default().fg(theme.text_dim)),
+                        ]));
                     }
                 }
             }
+            let bottom = format!("╰{}╯", "─".repeat(border_w.saturating_sub(2)));
+            lines.push(Line::from(Span::styled(bottom, Style::default().fg(theme.border_dim))));
             add_role_gutter(&mut lines, gutter_color);
             return lines;
         }
