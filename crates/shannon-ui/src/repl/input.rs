@@ -157,6 +157,11 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
             repl.state.show_key_hints = true;
             Ok(())
         }
+        // ?: show help when prompt is empty (avoids conflict with typing)
+        KeyCode::Char('?') if repl.prompt.input().trim().is_empty() => {
+            repl.state.show_key_hints = true;
+            Ok(())
+        }
         // F8: toggle mouse capture (when off, terminal handles text selection/copy)
         KeyCode::F(8) => {
             repl.state.mouse_capture_enabled = !repl.state.mouse_capture_enabled;
