@@ -72,8 +72,17 @@ impl SessionTabWidget {
             let actual_index = start + i;
             let is_active = actual_index == self.active_index;
 
-            let title = if session.title.len() > tab_width - 2 {
-                format!(" {}… ", &session.title[..tab_width - 3])
+            let title_w = unicode_width::UnicodeWidthStr::width(session.title.as_str());
+            let title = if title_w > tab_width - 2 {
+                let max_w = tab_width.saturating_sub(3);
+                let mut len = 0;
+                let truncated: String = session.title.chars()
+                    .take_while(|c| {
+                        let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
+                        if len + cw > max_w { false } else { len += cw; true }
+                    })
+                    .collect();
+                format!(" {truncated}… ")
             } else {
                 format!(" {} ", session.title)
             };

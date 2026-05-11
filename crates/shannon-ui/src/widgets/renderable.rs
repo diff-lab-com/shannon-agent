@@ -450,7 +450,7 @@ impl MessageCell {
 
                     let old_ln = if inc_old { format!("{old_line:>ln_width$}") } else { "    ".to_string() };
                     let new_ln = if inc_new { format!("{new_line:>ln_width$}") } else { "    ".to_string() };
-                    let text = if prefix == " " { raw_line.to_string() } else { raw_line[1..].to_string() };
+                    let text = if prefix == " " || raw_line.is_empty() { raw_line.to_string() } else { raw_line[1..].to_string() };
 
                     lines.push(Line::from(vec![
                         Span::styled("│", Style::default().fg(theme.border_dim)),
@@ -853,7 +853,7 @@ impl MessageCell {
                         *w = (*w).min(40);
                     }
                     // Limit total width
-                    let total: usize = widths.iter().sum::<usize>() + (col_count - 1) * 3 + 4;
+                    let total: usize = widths.iter().sum::<usize>() + col_count.saturating_sub(1) * 3 + 4;
                     let budget = inner_width.min(100);
                     if total > budget && col_count > 0 {
                         let scale = budget as f64 / total as f64;
