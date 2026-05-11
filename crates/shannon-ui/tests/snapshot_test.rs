@@ -37,33 +37,33 @@ fn buffer_text(buf: &Buffer, area: Rect) -> String {
 
 #[test]
 fn test_header_renders_model_and_directory() {
-    let mut terminal = test_terminal(80, 3);
+    let mut terminal = test_terminal(80, 5);
     let theme = Theme::default_dark();
 
     terminal.draw(|f| {
-        let area = Rect::new(0, 0, 80, 3);
+        let area = Rect::new(0, 0, 80, 5);
         HeaderWidget::render(f, area, &theme);
     }).unwrap();
 
     let buf = terminal.backend().buffer().clone();
-    let text = buffer_text(&buf, Rect::new(0, 0, 80, 3));
+    let text = buffer_text(&buf, Rect::new(0, 0, 80, 5));
 
     assert!(text.contains("Shannon"), "header should show welcome message");
-    assert!(text.contains("/help"), "header should show tip");
+    assert!(text.contains("/help"), "header should show key hints");
 }
 
 #[test]
 fn test_header_handles_none_model() {
-    let mut terminal = test_terminal(80, 3);
+    let mut terminal = test_terminal(80, 5);
     let theme = Theme::default_dark();
 
     terminal.draw(|f| {
-        let area = Rect::new(0, 0, 80, 3);
+        let area = Rect::new(0, 0, 80, 5);
         HeaderWidget::render(f, area, &theme);
     }).unwrap();
 
     let buf = terminal.backend().buffer().clone();
-    let text = buffer_text(&buf, Rect::new(0, 0, 80, 3));
+    let text = buffer_text(&buf, Rect::new(0, 0, 80, 5));
     assert!(text.contains("Shannon"), "header should show welcome message");
 }
 

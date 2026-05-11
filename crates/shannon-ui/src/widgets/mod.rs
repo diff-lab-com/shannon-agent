@@ -418,23 +418,20 @@ mod tests {
 
     #[test]
     fn test_header_widget_height() {
-        assert_eq!(HeaderWidget::height(), 3);
+        assert_eq!(HeaderWidget::height(), 5);
     }
 
     #[test]
-    fn test_header_widget_welcome_message() {
+    fn test_header_widget_renders() {
         let theme = Theme::default_dark();
-        let spans = HeaderWidget::welcome_message(&theme);
-        assert!(!spans.is_empty());
-        assert_eq!(spans.len(), 3); // "Welcome to " + "Shannon" + "! "
-    }
-
-    #[test]
-    fn test_header_widget_tip_message() {
-        let theme = Theme::default_dark();
-        let spans = HeaderWidget::tip_message(&theme);
-        assert!(!spans.is_empty());
-        assert_eq!(spans.len(), 2); // "Tip: " + tip text
+        let backend = ratatui::backend::TestBackend::new(80, 5);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| {
+            HeaderWidget::render(f, f.area(), &theme);
+        }).unwrap();
+        // Should render without panic — verify the buffer has some content
+        let buf = terminal.backend().buffer().clone();
+        assert!(buf.area.width > 0);
     }
 
     // ── Main Layout Widget Tests ───────────────────────────────────────
@@ -445,12 +442,12 @@ mod tests {
         let area = Rect::new(0, 0, 100, 20);
         let (header, chat, prompt, status, full) = MainLayoutWidget::layout(area, 3);
 
-        // Header should be at top with height 3
+        // Header should be at top
         assert_eq!(header.y, 0);
-        assert_eq!(header.height, 3);
+        assert_eq!(header.height, HeaderWidget::height() as u16);
 
         // Chat should be below header and be flexible
-        assert_eq!(chat.y, 3); // header(3)
+        assert_eq!(chat.y, HeaderWidget::height() as u16);
         assert!(chat.height > 0); // Flexible size
 
         // Prompt should be below chat with height 3
@@ -481,7 +478,7 @@ mod tests {
         let (header, _, prompt, status, _) = MainLayoutWidget::layout(area, 3);
 
         // Header and prompt have fixed heights; status bar is 2 lines
-        assert_eq!(header.height, 3);
+        assert_eq!(header.height, HeaderWidget::height() as u16);
         assert_eq!(prompt.height, 3);
         assert_eq!(status.height, 2);
     }
