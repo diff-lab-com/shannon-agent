@@ -152,9 +152,9 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         }
 
         // Overlay toast notification if active
-        if let Some((ref msg, started)) = state.toast {
-            let elapsed = started.elapsed().as_secs();
-            let toast_text = format!(" {msg} ({elapsed}s) ");
+        let toast_visible = state.toast.is_some();
+        if let Some((ref msg, _started)) = state.toast {
+            let toast_text = format!(" {msg} ");
             let toast_width = toast_text.chars().count() as u16;
             let y = f.area().bottom().saturating_sub(5);
             let x = f.area().x + 1;
@@ -170,11 +170,13 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         }
 
         // Streaming queue hint — show "Enter=queue" near the prompt when streaming
+        // Offset down by 1 when toast is visible to avoid overlap
         if state.streaming_active && state.queued_message.is_none() {
             let hint = " ↑↓ scroll · Enter = queue after response · Esc = stop ";
             let hint_width = hint.chars().count() as u16;
             let x = f.area().x + 2;
-            let y = f.area().bottom().saturating_sub(5);
+            let y_offset = if toast_visible { 4 } else { 5 };
+            let y = f.area().bottom().saturating_sub(y_offset);
             let w = hint_width.min(f.area().width.saturating_sub(4));
             let hint_area = ratatui::layout::Rect { x, y, width: w, height: 1 };
             let hint_text: String = hint.chars().take(w as usize).collect();
