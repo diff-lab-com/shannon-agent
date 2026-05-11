@@ -84,7 +84,7 @@ pub(crate) fn handle_image_paste(repl: &mut Repl, prompt_args: &str) -> Result<(
             engine.add_user_message_blocks(blocks);
             // Generate inline image preview from clipboard bytes
             let preview_config = crate::terminal_image::ImageRenderConfig::default();
-            let preview_lines = crate::terminal_image::render_image_bytes(&bytes, &preview_config);
+            let preview_lines = crate::terminal_image::render_image_bytes(&bytes, &preview_config, &repl.state.theme);
             repl.chat.add_message_with_image(
                 ChatRole::User,
                 "[Image pasted from clipboard]".to_string(),
@@ -196,7 +196,7 @@ pub(crate) fn handle_image_url(repl: &mut Repl, input: &str) -> Result<()> {
 
             // Generate inline image preview
             let preview_config = crate::terminal_image::ImageRenderConfig::default();
-            let preview_lines = crate::terminal_image::render_image_bytes(&bytes, &preview_config);
+            let preview_lines = crate::terminal_image::render_image_bytes(&bytes, &preview_config, &repl.state.theme);
             repl.chat.add_message_with_image(
                 ChatRole::User,
                 format!("[Image from URL: {url}]"),
@@ -317,7 +317,7 @@ pub(crate) fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
     engine.add_user_message_blocks(blocks);
     // Generate inline image preview
     let preview_config = crate::terminal_image::ImageRenderConfig::default();
-    let preview_lines = crate::terminal_image::render_image_bytes(&bytes, &preview_config);
+    let preview_lines = crate::terminal_image::render_image_bytes(&bytes, &preview_config, &repl.state.theme);
     repl.chat.add_message_with_image(
         ChatRole::User,
         format!("[Image attached: {}]", file_path.display()),

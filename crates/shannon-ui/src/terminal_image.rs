@@ -9,6 +9,7 @@
 //! Kitty terminal. Falls back to half-block encoding for other terminals.
 
 use base64::Engine;
+use crate::theme::Theme;
 use image::{DynamicImage, GenericImageView, Rgba};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
@@ -114,13 +115,14 @@ pub fn render_image_base64(
     base64_data: &str,
     media_type: &str,
     config: &ImageRenderConfig,
+    theme: &Theme,
 ) -> Vec<Line<'static>> {
     let decoded = match base64::engine::general_purpose::STANDARD.decode(base64_data) {
         Ok(d) => d,
         Err(e) => {
             return vec![Line::from(Span::styled(
                 format!("[Image decode error: {e}]"),
-                Style::default().fg(Color::Red),
+                Style::default().fg(theme.error),
             ))];
         }
     };
@@ -130,12 +132,12 @@ pub fn render_image_base64(
         None => {
             return vec![Line::from(Span::styled(
                 format!("[Unsupported image format: {media_type}]"),
-                Style::default().fg(Color::Red),
+                Style::default().fg(theme.error),
             ))];
         }
     };
 
-    render_halfblock_image(&img, config)
+    render_halfblock_image(&img, config, theme)
 }
 
 /// Render image bytes into ratatui `Line` objects.
@@ -145,25 +147,26 @@ pub fn render_image_base64(
 pub fn render_image_bytes(
     data: &[u8],
     config: &ImageRenderConfig,
+    theme: &Theme,
 ) -> Vec<Line<'static>> {
     let img = match image::load_from_memory(data) {
         Ok(i) => i,
         Err(e) => {
             return vec![Line::from(Span::styled(
                 format!("[Image decode error: {e}]"),
-                Style::default().fg(Color::Red),
+                Style::default().fg(theme.error),
             ))];
         }
     };
 
     let protocol = detect_protocol();
     if protocol == ImageProtocol::Kitty {
-        if let Some(lines) = render_kitty_image(&img, data, config) {
+        if let Some(lines) = render_kitty_image(&img, data, config, theme) {
             return lines;
         }
     }
 
-    render_halfblock_image(&img, config)
+    render_halfblock_image(&img, config, theme)
 }
 
 /// Decode image bytes with explicit media type hint.
@@ -191,7 +194,7 @@ fn decode_image(data: &[u8], media_type: &str) -> Option<DynamicImage> {
 ///
 /// Each character cell represents 2 vertical pixels using the upper
 /// half-block character (▀) with foreground = top pixel, background = bottom pixel.
-fn render_halfblock_image(img: &DynamicImage, config: &ImageRenderConfig) -> Vec<Line<'static>> {
+fn render_halfblock_image(img: &DynamicImage, config: &ImageRenderConfig, theme: &Theme) -> Vec<Line<'static>> {
     let (orig_w, orig_h) = img.dimensions();
 
     // Calculate target dimensions
@@ -220,7 +223,7 @@ fn render_halfblock_image(img: &DynamicImage, config: &ImageRenderConfig) -> Vec
     if pixel_width == 0 || pixel_height == 0 {
         return vec![Line::from(Span::styled(
             "[Image too small to render]",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.text_dim),
         ))];
     }
 
@@ -262,7 +265,7 @@ fn render_halfblock_image(img: &DynamicImage, config: &ImageRenderConfig) -> Vec
     let meta = format!("[{orig_w}x{orig_h} image]");
     lines.push(Line::from(Span::styled(
         meta,
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.text_dim),
     )));
 
     lines
@@ -277,11 +280,11 @@ fn rgba_to_ratatui_color(px: Rgba<u8>) -> Color {
 /// Generate a placeholder line for an image that cannot be rendered inline.
 ///
 /// Useful when image data is too large or terminal doesn't support rendering.
-pub fn image_placeholder(width: u32, height: u32, media_type: &str) -> Line<'static> {
+pub fn image_placeholder(width: u32, height: u32, media_type: &str, theme: &Theme) -> Line<'static> {
     let label = format!("[{width}x{height} {media_type}]");
     Line::from(vec![
-        Span::styled(" 🖼 ", Style::default().fg(Color::Cyan)),
-        Span::styled(label, Style::default().fg(Color::DarkGray)),
+        Span::styled(" 🖼 ", Style::default().fg(theme.accent)),
+        Span::styled(label, Style::default().fg(theme.text_dim)),
     ])
 }
 
@@ -376,6 +379,7 @@ fn render_kitty_image(
     img: &DynamicImage,
     raw_data: &[u8],
     config: &ImageRenderConfig,
+    theme: &Theme,
 ) -> Option<Vec<Line<'static>>> {
     let (orig_w, orig_h) = img.dimensions();
 
@@ -422,7 +426,7 @@ fn render_kitty_image(
     // Metadata line
     lines.push(Line::from(Span::styled(
         format!("[{orig_w}x{orig_h} via Kitty]"),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.text_dim),
     )));
 
     Some(lines)
@@ -516,7 +520,7 @@ mod tests {
     #[test]
     fn test_render_image_base64_invalid_data() {
         let config = ImageRenderConfig::default();
-        let lines = render_image_base64("not-valid-base64!!!", "image/png", &config);
+        let lines = render_image_base64("not-valid-base64!!!", "image/png", &config, &Theme::default_dark());
         assert!(!lines.is_empty());
         // Should contain error message
         let text: String = lines
@@ -543,7 +547,7 @@ mod tests {
             max_height: 4,
             preserve_aspect: true,
         };
-        let lines = render_image_base64(&b64, "image/png", &config);
+        let lines = render_image_base64(&b64, "image/png", &config, &Theme::default_dark());
 
         // Should have at least 2 rows of half-block chars + metadata line
         assert!(lines.len() >= 2);
@@ -568,13 +572,13 @@ mod tests {
             max_height: 8,
             preserve_aspect: true,
         };
-        let lines = render_image_bytes(&buf, &config);
+        let lines = render_image_bytes(&buf, &config, &Theme::default_dark());
         assert!(!lines.is_empty());
     }
 
     #[test]
     fn test_image_placeholder() {
-        let line = image_placeholder(640, 480, "image/png");
+        let line = image_placeholder(640, 480, "image/png", &Theme::default_dark());
         assert!(!line.spans.is_empty());
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert!(text.contains("640"));
@@ -605,7 +609,7 @@ mod tests {
             max_height: 50,
             preserve_aspect: true,
         };
-        let lines = render_image_bytes(&buf, &config);
+        let lines = render_image_bytes(&buf, &config, &Theme::default_dark());
 
         // With aspect ratio preserved: 40 chars wide, ~20 pixel rows = ~10 char rows + metadata
         // 200/100 = 2:1 ratio, so pixel_height = 40 * 100/200 = 20, char_height = 10
@@ -629,7 +633,7 @@ mod tests {
             max_height: 30,
             preserve_aspect: true,
         };
-        let lines = render_image_bytes(&buf, &config);
+        let lines = render_image_bytes(&buf, &config, &Theme::default_dark());
         // Should be capped at max_height char rows + metadata
         assert!(lines.len() <= 32); // 30 char rows + metadata + tolerance
     }
