@@ -96,4 +96,5 @@
 - **LSP diagnostics** — error/warning counts in status bar
 - **Draft history** — Up/Down navigates prior inputs
 - **RenderContext struct** — clean parameter passing (refactored from 23-arg function)
+- **Git branch in status bar** — auto-detected and refreshed every 10s
 - **Lightweight** — smaller footprint than Codex or OpenCode
