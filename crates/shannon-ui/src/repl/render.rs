@@ -134,7 +134,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
                 width: f.area().width.saturating_sub(4),
                 height: mp_height,
             };
-            state.multi_progress.render(f, mp_area);
+            state.multi_progress.render(f, mp_area, &state.theme);
         }
 
         // Overlay diff viewer if active

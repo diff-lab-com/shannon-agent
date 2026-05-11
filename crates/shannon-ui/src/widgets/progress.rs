@@ -2,6 +2,7 @@
 //!
 //! Provides progress bars with various styles and animations
 
+use crate::theme::Theme;
 use ratatui::{
     layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
@@ -111,7 +112,7 @@ impl ProgressBarWidget {
     }
 
     /// Render the progress bar
-    pub fn render(&self, frame: &mut Frame, area: Rect) {
+    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let width = self.width.unwrap_or(area.width.saturating_sub(4)) as usize;
         let filled = (self.progress * width as f64) as usize;
         let _empty = width.saturating_sub(filled);
@@ -121,11 +122,11 @@ impl ProgressBarWidget {
         // Title line
         if let Some(ref title) = self.title {
             content.push(Line::from(vec![
-                Span::styled(title, Style::default().fg(Color::White)),
+                Span::styled(title, Style::default().fg(theme.text)),
                 Span::raw(" "),
                 Span::styled(
                     format!("{:.1}%", self.percentage()),
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
                 ),
             ]));
             content.push(Line::from(""));
@@ -174,7 +175,7 @@ impl ProgressBarWidget {
             content.push(Line::from(vec![
                 Span::styled(
                     format!("{:.1}%", self.percentage()),
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
                 ),
             ]));
         }
@@ -183,7 +184,7 @@ impl ProgressBarWidget {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan))
+                    .border_style(Style::default().fg(theme.accent))
             )
             .alignment(Alignment::Center)
             .wrap(Wrap { trim: true });
@@ -310,18 +311,18 @@ impl SpinnerWidget {
     }
 
     /// Render the spinner
-    pub fn render(&self, frame: &mut Frame, area: Rect) {
+    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let spinner = self.frames[self.current_frame];
 
         let content = if let Some(ref msg) = self.message {
             Line::from(vec![
-                Span::styled(spinner, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(spinner, Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
                 Span::raw(" "),
-                Span::styled(msg, Style::default().fg(Color::White)),
+                Span::styled(msg, Style::default().fg(theme.text)),
             ])
         } else {
             Line::from(vec![
-                Span::styled(spinner, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(spinner, Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
             ])
         };
 
@@ -329,7 +330,7 @@ impl SpinnerWidget {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan))
+                    .border_style(Style::default().fg(theme.accent))
             )
             .alignment(Alignment::Center);
 
@@ -410,7 +411,7 @@ impl MultiProgressWidget {
     }
 
     /// Render the multi-progress widget
-    pub fn render(&self, frame: &mut Frame, area: Rect) {
+    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let mut content = Vec::new();
 
         let bar_width = 30_usize; // Fixed width for individual bars
@@ -424,7 +425,7 @@ impl MultiProgressWidget {
             if self.show_labels {
                 line.push(Span::styled(
                     format!("{label:20} "),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(theme.text),
                 ));
             }
 
@@ -433,13 +434,13 @@ impl MultiProgressWidget {
                 let char = if i < filled { "█" } else { "░" };
                 line.push(Span::styled(
                     char,
-                    Style::default().fg(if i < filled { *color } else { Color::DarkGray }),
+                    Style::default().fg(if i < filled { *color } else { theme.text_dim }),
                 ));
             }
 
             line.push(Span::styled(
                 format!(" {:5.1}%", progress * 100.0),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme.accent),
             ));
 
             content.push(Line::from(line));
@@ -449,7 +450,7 @@ impl MultiProgressWidget {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan))
+                    .border_style(Style::default().fg(theme.accent))
                     .title(" Progress ")
             )
             .wrap(Wrap { trim: false });

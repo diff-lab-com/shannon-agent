@@ -481,7 +481,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                         width: f.area().width.saturating_sub(4),
                         height: mp_height,
                     };
-                    state.multi_progress.render(f, mp_area);
+                    state.multi_progress.render(f, mp_area, &state.theme);
                 }
             })?;
             } // end if let Some(ref mut term) = terminal
