@@ -1249,7 +1249,7 @@ impl Repl {
                     } else {
                         progress.clamp(0.0, 1.0)
                     };
-                    self.state.multi_progress.add_or_update(&tool_name, pct, ratatui::style::Color::Cyan);
+                    self.state.multi_progress.add_or_update(&tool_name, pct, self.state.theme.accent);
                 }
             }
 
