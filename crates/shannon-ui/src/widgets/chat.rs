@@ -591,6 +591,8 @@ impl ChatWidget {
                     ratatui::text::Span::styled(" Send   ", ratatui::style::Style::default().fg(theme.muted)),
                     ratatui::text::Span::styled("Tab", ratatui::style::Style::default().fg(theme.accent)),
                     ratatui::text::Span::styled(" Queue   ", ratatui::style::Style::default().fg(theme.muted)),
+                    ratatui::text::Span::styled("Ctrl+E", ratatui::style::Style::default().fg(theme.accent)),
+                    ratatui::text::Span::styled(" Editor   ", ratatui::style::Style::default().fg(theme.muted)),
                     ratatui::text::Span::styled("Ctrl+G", ratatui::style::Style::default().fg(theme.accent)),
                     ratatui::text::Span::styled(" Pager   ", ratatui::style::Style::default().fg(theme.muted)),
                     ratatui::text::Span::styled("Ctrl+C", ratatui::style::Style::default().fg(theme.accent)),
