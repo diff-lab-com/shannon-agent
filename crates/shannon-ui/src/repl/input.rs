@@ -29,7 +29,12 @@ fn open_external_editor(content: &str) -> std::result::Result<String, Box<dyn st
     let editor = std::env::var("VISUAL")
         .or_else(|_| std::env::var("EDITOR"))
         .unwrap_or_else(|_| "vi".to_string());
-    let status = std::process::Command::new(&editor)
+    // Split editor into command + args (handles "code --wait", "vim -u NONE", etc.)
+    let mut parts = editor.split_whitespace();
+    let cmd = parts.next().unwrap_or("vi");
+    let args: Vec<&str> = parts.collect();
+    let status = std::process::Command::new(cmd)
+        .args(&args)
         .arg(&path)
         .status()?;
     if status.success() {
