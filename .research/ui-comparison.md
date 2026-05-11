@@ -63,9 +63,9 @@
 ### Critical (users notice immediately)
 1. **No side-by-side diff view** — Codex and OpenCode both render diffs visually
 2. **No syntax highlighting** — Codex and OpenCode use Chroma/tree-sitter
-3. **No render caching** — Every frame re-renders all messages
-4. **No context usage indicator** — OpenCode shows % of context window
-5. **No prompt history search** — Codex has Ctrl+R search
+3. ~~**No render caching**~~ → **Done** — Per-message cell cache with width-keyed invalidation (renderable.rs)
+4. ~~**No context usage indicator**~~ → **Done** — Visual bar in status line 1 (status_bar.rs)
+5. ~~**No prompt history search**~~ → **Done** — Ctrl+R incremental search with highlighting
 
 ### Important (improves daily workflow)
 6. **No theme picker UI** — OpenCode has Ctrl+T live theme switcher
@@ -77,15 +77,23 @@
 ### Nice to have (polish)
 11. **No ASCII art frames** — Codex has loading animations
 12. **No session compaction indicator** — OpenCode shows "Summarizing..."
-13. **No draft history navigation** — Codex restores prior drafts with Up/Down
-14. **No LSP diagnostics in status** — OpenCode shows error/warning counts
+13. ~~**No draft history navigation**~~ → **Done** — Up/Down in empty input cycles command history
+14. ~~**No LSP diagnostics in status**~~ → **Done** — Error/warning counts in status line 2
 
 ## 5. Shannon Advantages
 
-- **Scrollback insertion already implemented** (Codex-style)
-- **Full-history scrolling** (just fixed — better than Claude Code)
+- **Scrollback insertion** (Codex-style) — completed responses committed to terminal history
+- **Full-history scrolling** — PgUp/PgDn scrolls all messages including committed ones
 - **Vim mode** (matches Claude Code)
-- **Session state persistence** (just added)
-- **Desktop notifications** (just added)
-- **Token rate display** (just added)
+- **Session state persistence**
+- **Desktop notifications**
+- **Token rate display** — shows tok/s during streaming
+- **Keyboard hints** — context-aware bottom bar + F1 full overlay
+- **Toast notifications** — auto-dismiss feedback for queued messages, etc.
+- **Render caching** — per-message cell cache avoids re-layout on stable content
+- **Context usage bar** — visual progress in status bar
+- **Ctrl+R search** — incremental chat search with match highlighting
+- **LSP diagnostics** — error/warning counts in status bar
+- **Draft history** — Up/Down navigates prior inputs
+- **RenderContext struct** — clean parameter passing (refactored from 23-arg function)
 - **Lightweight** — smaller footprint than Codex or OpenCode
