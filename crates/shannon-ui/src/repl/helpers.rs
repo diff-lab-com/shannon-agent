@@ -169,15 +169,16 @@ impl super::Repl {
         }
     }
 
-    /// Navigate to the next search match.
+    /// Navigate to the next search match and scroll to it.
     pub fn chat_search_next(&mut self) {
         if self.state.chat_search_total_matches > 0 {
             self.state.chat_search_match_index =
                 (self.state.chat_search_match_index + 1) % self.state.chat_search_total_matches;
+            self.scroll_to_search_match();
         }
     }
 
-    /// Navigate to the previous search match.
+    /// Navigate to the previous search match and scroll to it.
     pub fn chat_search_prev(&mut self) {
         if self.state.chat_search_total_matches > 0 {
             self.state.chat_search_match_index = if self.state.chat_search_match_index == 0 {
@@ -185,6 +186,16 @@ impl super::Repl {
             } else {
                 self.state.chat_search_match_index - 1
             };
+            self.scroll_to_search_match();
+        }
+    }
+
+    /// Scroll the chat to the message containing the current search match.
+    fn scroll_to_search_match(&mut self) {
+        let matches = self.chat.find_search_matches(&self.state.chat_search_query);
+        if let Some(&(msg_idx, _, _)) = matches.get(self.state.chat_search_match_index) {
+            self.chat.scroll_offset = msg_idx;
+            self.state.auto_follow = false;
         }
     }
 

@@ -474,7 +474,7 @@ impl ChatWidget {
             return;
         }
 
-        // Compute cumulative heights for uncommitted messages only.
+        // Compute cumulative heights for all messages.
         // No gap lines — ColumnRenderable::layout doesn't add gaps between cells.
         let mut cumulative: Vec<usize> = Vec::with_capacity(visible_count);
         let mut total_rows: usize = 0;
@@ -486,7 +486,7 @@ impl ChatWidget {
 
         if total_rows == 0 { return; }
 
-        // ratio 0.0 = top (oldest uncommitted), 1.0 = bottom (newest)
+        // ratio 0.0 = top (oldest message), 1.0 = bottom (newest)
         let target_row = (ratio * (total_rows as f64 - 1.0)).round() as usize;
 
         // Find message index whose cumulative height contains target_row
@@ -682,23 +682,12 @@ impl ChatWidget {
     }
 
     /// Total desired height of uncommitted cells at the given inner width.
-    pub fn uncommitted_content_height(&self, inner_width: u16) -> u16 {
-        let mut total: u16 = 0;
-        for i in self.committed_count..self.messages.len() {
-            total = total.saturating_add(self.column.cell_height(i, inner_width));
-        }
-        total
-    }
-
     /// Whether the viewport is showing the latest messages (auto-follow eligible).
     pub fn is_at_bottom(&self) -> bool {
         if self.messages.is_empty() {
             return true;
         }
-        let uncommitted = self.messages.len().saturating_sub(self.committed_count);
-        // At bottom if scrolled to last message, or all uncommitted messages fit
         self.scroll_offset >= self.messages.len().saturating_sub(1)
-            || uncommitted <= 1
     }
 
     /// Iterate all messages with their indices
