@@ -957,6 +957,9 @@ fn handle_permission_dialog_input(repl: &mut Repl, key: KeyEvent) -> Result<()> 
         KeyCode::Char('a') | KeyCode::Char('A') => {
             send_permission_response(repl, PermissionChoice::AlwaysAllow);
         }
+        KeyCode::Char('e') | KeyCode::Char('E') => {
+            send_permission_response(repl, PermissionChoice::EditAndRun);
+        }
         KeyCode::Esc => {
             send_permission_response(repl, PermissionChoice::Deny);
         }
