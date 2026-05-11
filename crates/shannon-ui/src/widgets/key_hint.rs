@@ -35,11 +35,11 @@ impl KeyHintWidget {
             ],
             HintContext::Input => vec![
                 ("Enter", "Send"),
-                ("Shift+Enter", "Newline"),
                 ("Tab", "Complete"),
-                ("Ctrl+R", "Search"),
+                ("PgUp/Dn", "Scroll"),
                 ("Ctrl+E", "Editor"),
-                ("Esc", "Cancel"),
+                ("Ctrl+R", "Search"),
+                ("?", "Help"),
             ],
         };
 

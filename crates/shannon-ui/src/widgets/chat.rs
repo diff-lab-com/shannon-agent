@@ -574,8 +574,8 @@ impl ChatWidget {
 
         // Welcome screen when chat is empty
         if self.messages.is_empty() {
+            let sep_w = 28.min(inner.width.saturating_sub(4) as usize);
             let welcome_lines = vec![
-                ratatui::text::Line::from(""),
                 ratatui::text::Line::from(""),
                 ratatui::text::Line::from(vec![
                     ratatui::text::Span::styled("  Shannon", ratatui::style::Style::default().fg(theme.primary).add_modifier(ratatui::style::Modifier::BOLD)),
@@ -583,21 +583,13 @@ impl ChatWidget {
                 ]),
                 ratatui::text::Line::from(""),
                 ratatui::text::Line::from(vec![
-                    ratatui::text::Span::styled("  Type a message below to get started", ratatui::style::Style::default().fg(theme.muted)),
+                    ratatui::text::Span::styled(format!("  {}", "─".repeat(sep_w)), ratatui::style::Style::default().fg(theme.border_dim)),
                 ]),
                 ratatui::text::Line::from(""),
                 ratatui::text::Line::from(vec![
-                    ratatui::text::Span::styled("  ", ratatui::style::Style::default()),
-                    ratatui::text::Span::styled("Enter", ratatui::style::Style::default().fg(theme.secondary).add_modifier(ratatui::style::Modifier::BOLD)),
-                    ratatui::text::Span::styled(" Send   ", ratatui::style::Style::default().fg(theme.muted)),
-                    ratatui::text::Span::styled("Tab", ratatui::style::Style::default().fg(theme.secondary).add_modifier(ratatui::style::Modifier::BOLD)),
-                    ratatui::text::Span::styled(" Queue   ", ratatui::style::Style::default().fg(theme.muted)),
-                    ratatui::text::Span::styled("Ctrl+E", ratatui::style::Style::default().fg(theme.secondary).add_modifier(ratatui::style::Modifier::BOLD)),
-                    ratatui::text::Span::styled(" Editor   ", ratatui::style::Style::default().fg(theme.muted)),
-                    ratatui::text::Span::styled("Ctrl+G", ratatui::style::Style::default().fg(theme.secondary).add_modifier(ratatui::style::Modifier::BOLD)),
-                    ratatui::text::Span::styled(" Pager   ", ratatui::style::Style::default().fg(theme.muted)),
-                    ratatui::text::Span::styled("Ctrl+C", ratatui::style::Style::default().fg(theme.secondary).add_modifier(ratatui::style::Modifier::BOLD)),
-                    ratatui::text::Span::styled(" Quit", ratatui::style::Style::default().fg(theme.muted)),
+                    ratatui::text::Span::styled("  Try: ", ratatui::style::Style::default().fg(theme.muted)),
+                    ratatui::text::Span::styled("/help", ratatui::style::Style::default().fg(theme.secondary).add_modifier(ratatui::style::Modifier::BOLD)),
+                    ratatui::text::Span::styled(" for commands · describe a task · paste code", ratatui::style::Style::default().fg(theme.muted)),
                 ]),
             ];
             let welcome = ratatui::widgets::Paragraph::new(welcome_lines);
