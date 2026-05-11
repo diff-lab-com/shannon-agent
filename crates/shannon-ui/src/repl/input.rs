@@ -518,9 +518,16 @@ fn handle_vim_action(repl: &mut Repl, action: VimAction) {
                         for _ in 0..col { repl.prompt.cursor_left(); }
                     }
                     Direction::LineEnd | Direction::FileEnd => {
-                        for _ in 0..100 { repl.prompt.cursor_right(); }
+                        let len = repl.prompt.current_line_len();
+                        let col = repl.prompt.cursor_position();
+                        for _ in 0..len.saturating_sub(col) { repl.prompt.cursor_right(); }
                     }
-                    Direction::WordForward | Direction::WordBackward => {}
+                    Direction::WordForward => {
+                        repl.prompt.cursor_word_forward();
+                    }
+                    Direction::WordBackward => {
+                        repl.prompt.cursor_word_back();
+                    }
                 }
             }
         }

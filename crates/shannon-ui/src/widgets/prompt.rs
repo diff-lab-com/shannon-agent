@@ -132,6 +132,60 @@ impl PromptWidget {
         self.buffer.cursor_row()
     }
 
+    /// Get the length of the current line in characters.
+    pub fn current_line_len(&self) -> usize {
+        self.buffer.current_line().chars().count()
+    }
+
+    /// Move cursor to the start of the next word (or end of line).
+    /// Vim `w` semantics: skip punctuation, land on next word-start.
+    pub fn cursor_word_forward(&mut self) {
+        let line = self.buffer.current_line();
+        let col = self.buffer.cursor_col();
+        let chars: Vec<char> = line.chars().collect();
+        let len = chars.len();
+        if col >= len { return; }
+        let mut i = col;
+        // Skip current word (alphanumeric/underscore)
+        let at_word = i < len && (chars[i].is_alphanumeric() || chars[i] == '_');
+        if at_word {
+            while i < len && (chars[i].is_alphanumeric() || chars[i] == '_') { i += 1; }
+        } else if i < len && !chars[i].is_whitespace() {
+            // Skip punctuation
+            while i < len && !chars[i].is_alphanumeric() && chars[i] != '_' && !chars[i].is_whitespace() { i += 1; }
+        }
+        // Skip whitespace
+        while i < len && chars[i].is_whitespace() { i += 1; }
+        let steps = i.saturating_sub(col);
+        for _ in 0..steps { self.buffer.move_right(); }
+    }
+
+    /// Move cursor to the start of the previous word (or start of line).
+    /// Vim `b` semantics: move back to previous word-start.
+    pub fn cursor_word_back(&mut self) {
+        let line = self.buffer.current_line();
+        let col = self.buffer.cursor_col();
+        if col == 0 { return; }
+        let chars: Vec<char> = line.chars().collect();
+        let mut i = col;
+        // Skip whitespace backward
+        while i > 0 && chars[i - 1].is_whitespace() { i -= 1; }
+        if i == 0 {
+            let steps = col - i;
+            for _ in 0..steps { self.buffer.move_left(); }
+            return;
+        }
+        // Move back over word/punctuation
+        let at_word = chars[i - 1].is_alphanumeric() || chars[i - 1] == '_';
+        if at_word {
+            while i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '_') { i -= 1; }
+        } else {
+            while i > 0 && !chars[i - 1].is_alphanumeric() && chars[i - 1] != '_' && !chars[i - 1].is_whitespace() { i -= 1; }
+        }
+        let steps = col - i;
+        for _ in 0..steps { self.buffer.move_left(); }
+    }
+
     /// Compute how many terminal rows the prompt needs, given the available width.
     /// Returns a value clamped to [MIN_PROMPT_HEIGHT, MAX_PROMPT_HEIGHT].
     pub fn needed_height(&self, available_width: u16) -> u16 {
