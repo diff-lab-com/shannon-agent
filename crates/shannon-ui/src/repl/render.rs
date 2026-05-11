@@ -209,7 +209,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
 
         // Overlay history search bar when Ctrl+R active
         if state.incremental_search_active {
-            render_history_search_overlay(f, f.area(), state);
+            render_history_search_overlay(f, f.area(), state, &state.theme);
         }
 
         // Overlay plan review when plan is active and not yet approved
@@ -219,7 +219,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
 
         // Overlay completion suggestions popup above the prompt
         if !state.completion_suggestions.is_empty() {
-            render_completion_suggestions(f, f.area(), &state.completion_suggestions, state.completion_suggestion_index);
+            render_completion_suggestions(f, f.area(), &state.completion_suggestions, state.completion_suggestion_index, &state.theme);
         }
 
         // Overlay pager when active
@@ -452,6 +452,7 @@ pub(crate) fn render_completion_suggestions(
     area: Rect,
     suggestions: &[String],
     selected_index: usize,
+    theme: &Theme,
 ) {
     let max_visible = 8u16;
     let visible = max_visible.min(suggestions.len() as u16);
@@ -484,12 +485,12 @@ pub(crate) fn render_completion_suggestions(
             if i == selected_index {
                 Line::from(Span::styled(
                     format!("▶ {text}"),
-                    Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme.context_bar_bg).bg(theme.accent).add_modifier(Modifier::BOLD),
                 ))
             } else {
                 Line::from(Span::styled(
                     format!("  {text}"),
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(theme.accent),
                 ))
             }
         })
@@ -499,7 +500,7 @@ pub(crate) fn render_completion_suggestions(
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray))
+                .border_style(Style::default().fg(theme.text_dim))
                 .border_type(ratatui::widgets::BorderType::Rounded)
                 .title(" Completions "),
         );
@@ -512,6 +513,7 @@ fn render_history_search_overlay(
     frame: &mut ratatui::Frame,
     area: Rect,
     state: &super::ReplState,
+    theme: &Theme,
 ) {
     let bar_height = 3u16;
     let bar_width = area.width.saturating_sub(4).min(60);
@@ -534,9 +536,9 @@ fn render_history_search_overlay(
     };
 
     let query_color = if state.incremental_search_query.is_empty() {
-        Color::DarkGray
+        theme.text_dim
     } else {
-        Color::Yellow
+        theme.warning
     };
 
     let match_info = if state.incremental_search_match_count > 0 {
@@ -553,20 +555,20 @@ fn render_history_search_overlay(
 
     let lines = vec![
         Line::from(vec![
-            Span::styled(" Ctrl+R ", Style::default().fg(Color::Black).bg(Color::Cyan)),
-            Span::styled(" reverse-i-search  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" Ctrl+R ", Style::default().fg(theme.context_bar_bg).bg(theme.accent)),
+            Span::styled(" reverse-i-search  ", Style::default().fg(theme.text_dim)),
             Span::styled(&*query_display, Style::default().fg(query_color).add_modifier(Modifier::BOLD)),
-            Span::styled("▌", Style::default().fg(Color::Cyan)),
-            Span::styled(match_info, Style::default().fg(Color::DarkGray)),
+            Span::styled("▌", Style::default().fg(theme.accent)),
+            Span::styled(match_info, Style::default().fg(theme.text_dim)),
         ]),
         Line::from(vec![
-            Span::styled(" ↑↓ navigate  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("Ctrl+R", Style::default().fg(Color::Cyan)),
-            Span::styled(" next  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("Enter", Style::default().fg(Color::Green)),
-            Span::styled(" accept  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("Esc", Style::default().fg(Color::Red)),
-            Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
+            Span::styled(" ↑↓ navigate  ", Style::default().fg(theme.text_dim)),
+            Span::styled("Ctrl+R", Style::default().fg(theme.accent)),
+            Span::styled(" next  ", Style::default().fg(theme.text_dim)),
+            Span::styled("Enter", Style::default().fg(theme.success)),
+            Span::styled(" accept  ", Style::default().fg(theme.text_dim)),
+            Span::styled("Esc", Style::default().fg(theme.error)),
+            Span::styled(" cancel", Style::default().fg(theme.text_dim)),
         ]),
     ];
 
@@ -574,7 +576,7 @@ fn render_history_search_overlay(
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan))
+                .border_style(Style::default().fg(theme.accent))
                 .border_type(ratatui::widgets::BorderType::Rounded),
         );
 
@@ -876,18 +878,18 @@ fn render_chat_search_overlay(
 
     let lines = vec![
         Line::from(vec![
-            Span::styled(" Ctrl+H ", Style::default().fg(Color::Black).bg(theme.primary)),
-            Span::styled(" chat-search  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" Ctrl+H ", Style::default().fg(theme.context_bar_bg).bg(theme.primary)),
+            Span::styled(" chat-search  ", Style::default().fg(theme.text_dim)),
             Span::styled(&*query_display, Style::default().fg(query_color).add_modifier(Modifier::BOLD)),
             Span::styled("▌", Style::default().fg(theme.primary)),
         ]),
         Line::from(vec![
-            Span::styled(" ↑↓ navigate  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" ↑↓ navigate  ", Style::default().fg(theme.text_dim)),
             Span::styled(match_info, Style::default().fg(theme.secondary)),
-            Span::styled("  Enter", Style::default().fg(Color::Green)),
-            Span::styled(" accept  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("Esc", Style::default().fg(Color::Red)),
-            Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
+            Span::styled("  Enter", Style::default().fg(theme.success)),
+            Span::styled(" accept  ", Style::default().fg(theme.text_dim)),
+            Span::styled("Esc", Style::default().fg(theme.error)),
+            Span::styled(" cancel", Style::default().fg(theme.text_dim)),
         ]),
     ];
 

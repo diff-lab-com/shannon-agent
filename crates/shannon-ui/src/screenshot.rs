@@ -112,6 +112,7 @@ fn render_scene(scene: &SceneData) -> String {
                     f.area(),
                     &state.completion_suggestions,
                     state.completion_suggestion_index,
+                    &state.theme,
                 );
             }
         })
