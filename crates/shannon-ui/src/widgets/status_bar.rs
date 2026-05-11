@@ -89,6 +89,17 @@ impl StatusBarWidget {
                 left.push(Span::raw(" "));
             }
         }
+        // Status with icon
+        let (status_icon, status_color) = match status {
+            "Ready" => ("\u{25CF}", theme.success),
+            "Error" => ("\u{2717}", theme.error),
+            s if s.contains("Thinking") || s.contains("Streaming") => ("\u{25D0}", theme.primary),
+            _ => ("\u{25CB}", theme.text_dim),
+        };
+        left.push(Span::styled(
+            format!("{status_icon} "),
+            Style::default().fg(status_color),
+        ));
         left.push(Span::styled(
             status.to_string(),
             Style::default().fg(theme.text),
@@ -110,12 +121,12 @@ impl StatusBarWidget {
             ));
         }
 
-        // Model
+        // Model (pill-style)
         if let Some(m) = model {
-            left.push(Span::styled(" · ", Style::default().fg(theme.border_dim)));
+            left.push(Span::styled(" ", Style::default().fg(theme.border_dim)));
             left.push(Span::styled(
-                truncate_model(m),
-                Style::default().fg(theme.primary),
+                format!("[{}]", truncate_model(m)),
+                Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
             ));
         }
 

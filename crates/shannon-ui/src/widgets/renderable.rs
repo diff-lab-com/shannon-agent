@@ -28,8 +28,12 @@ use ratatui::style::Color;
 
 /// Prepend a colored role gutter `┃ ` to every line for visual lane separation.
 fn add_role_gutter(lines: &mut Vec<Line<'static>>, color: ratatui::style::Color) {
-    for line in lines.iter_mut() {
-        line.spans.insert(0, Span::styled("┃ ".to_string(), Style::default().fg(color)));
+    // Only add indicator to the first line
+    if let Some(first) = lines.first_mut() {
+        first.spans.insert(0, Span::styled(
+            "\u{258F} ".to_string(),
+            Style::default().fg(color),
+        ));
     }
 }
 
@@ -150,13 +154,18 @@ impl MessageCell {
     pub fn lines(&self, width: u16, theme: &Theme) -> Vec<Line<'static>> {
         let mut l = self.build_lines(width, theme, None);
         if !l.is_empty() {
-            // Thin separator line between messages
-            let sep_width = (width as usize).saturating_sub(2).min(60);
-            let sep = Line::from(Span::styled(
-                "─".repeat(sep_width),
-                Style::default().fg(theme.border_dim),
-            ));
-            l.insert(0, sep);
+            // Light separator: user messages get just a blank line, others get a short thin line
+            let msg = &self.message;
+            if msg.role == ChatRole::User {
+                l.insert(0, Line::from(""));
+            } else {
+                let sep_width = (width as usize).saturating_sub(2).min(30);
+                let sep = Line::from(Span::styled(
+                    "─".repeat(sep_width),
+                    Style::default().fg(theme.border_dim),
+                ));
+                l.insert(0, sep);
+            }
             l.push(Line::from(""));
         }
         l
@@ -274,11 +283,11 @@ impl MessageCell {
         }
 
         // ── Role prefix (will be inlined into first content line) ──
-        let (role_name, role_color) = match msg.role {
-            ChatRole::User => ("You", theme.user_msg),
-            ChatRole::Assistant => ("AI", theme.assistant_msg),
-            ChatRole::System => ("System", theme.system_msg),
-            ChatRole::Tool => ("Tool", theme.tool_msg),
+        let (role_icon, role_name, role_color) = match msg.role {
+            ChatRole::User => ("\u{25B8}", "You", theme.user_msg),
+            ChatRole::Assistant => ("\u{2726}", "AI", theme.assistant_msg),
+            ChatRole::System => ("\u{2691}", "System", theme.system_msg),
+            ChatRole::Tool => ("\u{25CF}", "Tool", theme.tool_msg),
         };
 
         let display_name = if msg.role == ChatRole::Tool {
@@ -289,9 +298,9 @@ impl MessageCell {
 
         // Build role prefix spans and compute indent width
         let role_prefix_spans = vec![
-            Span::styled(format!("{display_name} "), Style::default().fg(role_color).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("{role_icon} {display_name} "), Style::default().fg(role_color).add_modifier(Modifier::BOLD)),
         ];
-        let role_prefix_str = format!("{display_name} ");
+        let role_prefix_str = format!("{role_icon} {display_name} ");
         let role_prefix_len = unicode_width::UnicodeWidthStr::width(role_prefix_str.as_str());
 
         // ── Specialized tool output rendering ──
@@ -300,7 +309,7 @@ impl MessageCell {
             let tool_width = inner_width.saturating_sub(4).max(20);
             let cat = tool_category(tool_label);
             let content = strip_ansi(&msg.content);
-            let border_w = inner_width.clamp(10, 60);
+            let border_w = inner_width.clamp(20, 200);
 
             // Top border: ╭─ toolname ── ✓ duration ──╮
             const TOOL_SPINNER: &[&str] = &["◐", "◓", "◑", "◒"];
@@ -572,7 +581,7 @@ impl MessageCell {
                             let spans = if let Some(sp) = search {
                                 highlight_search_in_text(&wl, theme.text, sp.query, sp.focused_in_cell(), theme)
                             } else {
-                                parse_inline_formatting(&wl, theme.text)
+                                parse_inline_formatting(&wl, theme.text, theme)
                             };
                             lines.push(Line::from(spans));
                         }
@@ -580,14 +589,14 @@ impl MessageCell {
                 }
                 MdSegment::Header { level, text } => {
                     let (prefix, text_style) = match level {
-                        1 => ("━".repeat(inner_width.min(60).into()), Style::default().fg(theme.accent)),
-                        2 => ("▎".to_string(), Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
-                        _ => ("▎".to_string(), Style::default().fg(theme.primary)),
+                        1 => ("━".repeat(inner_width.min(60).into()), Style::default().fg(theme.heading)),
+                        2 => ("▎".to_string(), Style::default().fg(theme.heading).add_modifier(Modifier::BOLD)),
+                        _ => ("▎".to_string(), Style::default().fg(theme.heading)),
                     };
                     if *level == 1 {
                         // H1: text above a full-width line
-                        lines.push(Line::from(Span::styled(text.clone(), Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))));
-                        lines.push(Line::from(Span::styled(prefix, Style::default().fg(theme.accent))));
+                        lines.push(Line::from(Span::styled(text.clone(), Style::default().fg(theme.heading).add_modifier(Modifier::BOLD))));
+                        lines.push(Line::from(Span::styled(prefix, Style::default().fg(theme.heading))));
                     } else {
                         let level_prefix = "#".repeat(*level);
                         lines.push(Line::from(vec![
@@ -598,7 +607,7 @@ impl MessageCell {
                 }
                 MdSegment::CodeBlock { lang, code } => {
                     let lang_display = lang.as_deref().unwrap_or("");
-                    let sep_w = inner_width.clamp(4, 60);
+                    let sep_w = inner_width.clamp(20, 200);
                     let top = if lang_display.is_empty() {
                         format!("╭{}╮", "─".repeat(sep_w - 2))
                     } else {
@@ -645,7 +654,7 @@ impl MessageCell {
                     };
 
                     lines.extend(code_lines);
-                    let sep_w = inner_width.clamp(4, 60);
+                    let sep_w = inner_width.clamp(20, 200);
                     lines.push(Line::from(vec![
                         Span::styled(format!("╰{}╯", "─".repeat(sep_w - 2)), Style::default().fg(theme.border_dim).bg(theme.diff_context_bg)),
                     ]));
@@ -699,8 +708,8 @@ impl MessageCell {
                         let wrapped = wrap_line(line, bq_width);
                         for wl in wrapped {
                             lines.push(Line::from(vec![
-                                Span::styled("  │ ", Style::default().fg(theme.accent)),
-                                Span::styled(wl, Style::default().fg(theme.text_dim).add_modifier(Modifier::ITALIC)),
+                                Span::styled("  │ ", Style::default().fg(theme.blockquote)),
+                                Span::styled(wl, Style::default().fg(theme.italic_text).add_modifier(Modifier::ITALIC)),
                             ]));
                         }
                     }
@@ -839,7 +848,14 @@ impl MessageCell {
             apply_bg(&mut lines, bg);
         }
 
-        add_role_gutter(&mut lines, gutter_color);
+        // Add thin colored left bar to the role label line only (first line)
+        if let Some(first) = lines.first_mut() {
+            first.spans.insert(0, Span::styled(
+                "\u{258F} ".to_string(),
+                Style::default().fg(gutter_color),
+            ));
+        }
+
         lines
     }
 }
@@ -985,20 +1001,23 @@ mod tests {
 
     #[test]
     fn test_parse_inline_formatting_plain() {
-        let spans = parse_inline_formatting("hello world", Color::White);
+        let theme = crate::theme::Theme::default_dark();
+        let spans = parse_inline_formatting("hello world", Color::White, &theme);
         assert_eq!(spans.len(), 1);
     }
 
     #[test]
     fn test_parse_inline_formatting_bold() {
-        let spans = parse_inline_formatting("**bold**", Color::White);
+        let theme = crate::theme::Theme::default_dark();
+        let spans = parse_inline_formatting("**bold**", Color::White, &theme);
         assert_eq!(spans.len(), 1);
         assert!(spans[0].style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
     fn test_parse_inline_formatting_mixed() {
-        let spans = parse_inline_formatting("hello **world** end", Color::White);
+        let theme = crate::theme::Theme::default_dark();
+        let spans = parse_inline_formatting("hello **world** end", Color::White, &theme);
         assert!(spans.len() >= 3);
     }
 }

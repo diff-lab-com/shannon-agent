@@ -1176,7 +1176,7 @@ pub(super) fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
 }
 
 /// Parse inline markdown formatting (**bold**, *italic*, `code`) into styled Spans.
-pub(super) fn parse_inline_formatting(text: &str, base_color: ratatui::style::Color) -> Vec<Span<'static>> {
+pub(super) fn parse_inline_formatting(text: &str, base_color: ratatui::style::Color, theme: &crate::theme::Theme) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     let mut pos = 0;
     let bytes = text.as_bytes();
@@ -1190,7 +1190,7 @@ pub(super) fn parse_inline_formatting(text: &str, base_color: ratatui::style::Co
                 let code_text = &text[search_start..close_start];
                 spans.push(Span::styled(
                     code_text.to_string(),
-                    Style::default().fg(ratatui::style::Color::Yellow),
+                    Style::default().fg(theme.inline_code).bg(theme.inline_code_bg),
                 ));
                 pos = close_start + 1;
                 continue;
@@ -1203,7 +1203,7 @@ pub(super) fn parse_inline_formatting(text: &str, base_color: ratatui::style::Co
                 let bold_text = &text[search_start..close_start];
                 spans.push(Span::styled(
                     bold_text.to_string(),
-                    Style::default().fg(base_color).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme.bold_text).add_modifier(Modifier::BOLD),
                 ));
                 pos = close_start + 2;
                 continue;
@@ -1218,7 +1218,7 @@ pub(super) fn parse_inline_formatting(text: &str, base_color: ratatui::style::Co
                 let italic_text = &text[search_start..close_start];
                 spans.push(Span::styled(
                     italic_text.to_string(),
-                    Style::default().fg(base_color).add_modifier(Modifier::ITALIC),
+                    Style::default().fg(theme.italic_text).add_modifier(Modifier::ITALIC),
                 ));
                 pos = close_start + 1;
                 continue;
@@ -1501,14 +1501,14 @@ pub(super) fn highlight_search_in_text(
     theme: &Theme,
 ) -> Vec<Span<'static>> {
     if query.is_empty() || text.is_empty() {
-        return parse_inline_formatting(text, base_color);
+        return parse_inline_formatting(text, base_color, theme);
     }
 
     // Char-level case-insensitive search to avoid Unicode case-folding byte-length issues
     // (e.g. German ß → "ss" expands from 2 to 3 bytes)
     let query_lower: Vec<char> = query.to_lowercase().chars().collect();
     if query_lower.is_empty() {
-        return parse_inline_formatting(text, base_color);
+        return parse_inline_formatting(text, base_color, theme);
     }
 
     let text_lower: Vec<char> = text.to_lowercase().chars().collect();
@@ -1527,7 +1527,7 @@ pub(super) fn highlight_search_in_text(
     }
 
     if match_char_ranges.is_empty() {
-        return parse_inline_formatting(text, base_color);
+        return parse_inline_formatting(text, base_color, theme);
     }
 
     // Build byte-offset map: char_index → byte_offset in original text
@@ -1541,7 +1541,7 @@ pub(super) fn highlight_search_in_text(
         let start = byte_offsets.get(*cs).copied().unwrap_or(text_byte_len);
         let end = byte_offsets.get(*ce).copied().unwrap_or(text_byte_len);
         if start > last_end {
-            spans.extend(parse_inline_formatting(&text[last_end..start], base_color));
+            spans.extend(parse_inline_formatting(&text[last_end..start], base_color, theme));
         }
 
         let matched_text = &text[start..end];
@@ -1562,7 +1562,7 @@ pub(super) fn highlight_search_in_text(
 
     // Remaining text after last match
     if last_end < text_byte_len {
-        spans.extend(parse_inline_formatting(&text[last_end..], base_color));
+        spans.extend(parse_inline_formatting(&text[last_end..], base_color, theme));
     }
 
     spans
