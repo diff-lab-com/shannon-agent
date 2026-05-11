@@ -87,6 +87,11 @@ impl PromptWidget {
         self.buffer.kill_to_start()
     }
 
+    /// Delete the current line and return its content.
+    pub fn delete_current_line(&mut self) -> String {
+        self.buffer.delete_current_line()
+    }
+
     /// Clear the input
     pub fn clear(&mut self) {
         self.buffer.clear();

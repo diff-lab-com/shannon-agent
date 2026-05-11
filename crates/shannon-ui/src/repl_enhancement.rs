@@ -500,6 +500,25 @@ impl InputBuffer {
         killed
     }
 
+    /// Delete the current line and return its content. Cursor moves to
+    /// the start of the next line, or the end of the previous line if
+    /// deleting the last line. If only one line exists, clears it.
+    pub fn delete_current_line(&mut self) -> String {
+        if self.lines.len() <= 1 {
+            let content = std::mem::take(&mut self.lines[0]);
+            self.cursor_col = 0;
+            return content;
+        }
+        let content = self.lines.remove(self.cursor_row);
+        if self.cursor_row >= self.lines.len() {
+            self.cursor_row = self.lines.len() - 1;
+            self.cursor_col = self.lines[self.cursor_row].chars().count();
+        } else {
+            self.cursor_col = 0;
+        }
+        content
+    }
+
     /// Move cursor left by one character.
     pub fn move_left(&mut self) {
         if self.cursor_col > 0 {

@@ -588,9 +588,8 @@ fn handle_vim_action(repl: &mut Repl, action: VimAction) {
             }
         }
         VimAction::DeleteLine { .. } => {
-            let line = repl.prompt.current_line();
+            let line = repl.prompt.delete_current_line();
             repl.vim_handler.set_yank_buffer(line);
-            repl.prompt.clear();
         }
         VimAction::ClearInput => {
             repl.prompt.clear();
