@@ -45,67 +45,6 @@ impl super::Repl {
         }
     }
 
-    /// Open the current input in an external editor ($EDITOR / $VISUAL).
-    ///
-    /// Writes the current prompt text to a temp file, spawns the editor,
-    /// waits for it to exit, then reads the file back and updates the prompt.
-    pub fn open_external_editor(&mut self) {
-        let editor = std::env::var("VISUAL")
-            .or_else(|_| std::env::var("EDITOR"))
-            .unwrap_or_else(|_| "vi".to_string());
-
-        let tmp_dir = std::env::temp_dir();
-        let tmp_path = tmp_dir.join("shannon-input.md");
-
-        // Build file content: prepend last assistant response as comments
-        let current_input = self.prompt.input().to_string();
-        let file_content = if current_input.is_empty() {
-            // Inject last assistant message as context when opening blank editor
-            let mut buf = String::new();
-            if let Some(last) = self.chat.last_assistant_message() {
-                buf.push_str("# AI's last response (for context, edit below):\n");
-                for line in last.content.lines() {
-                    buf.push_str("# ");
-                    buf.push_str(line);
-                    buf.push('\n');
-                }
-                buf.push('\n');
-            }
-            buf
-        } else {
-            current_input
-        };
-        if let Err(e) = std::fs::write(&tmp_path, &file_content) {
-            self.state.toast = Some((format!("  Failed to write temp file: {e}  "), std::time::Instant::now()));
-            return;
-        }
-
-        // Suspend raw mode, spawn editor, wait
-        let _ = crossterm::terminal::disable_raw_mode();
-        let result = std::process::Command::new(&editor)
-            .arg(&tmp_path)
-            .status();
-        let _ = crossterm::terminal::enable_raw_mode();
-
-        match result {
-            Ok(status) if status.success() => {
-                if let Ok(new_text) = std::fs::read_to_string(&tmp_path) {
-                    let trimmed = new_text.trim_end().to_string();
-                    self.prompt.set_input(trimmed);
-                    self.state.toast = Some(("  Editor saved  ".to_string(), std::time::Instant::now()));
-                }
-            }
-            Ok(_) => {
-                self.state.toast = Some(("  Editor exited with error  ".to_string(), std::time::Instant::now()));
-            }
-            Err(e) => {
-                self.state.toast = Some((format!("  Failed to launch editor: {e}  "), std::time::Instant::now()));
-            }
-        }
-
-        let _ = std::fs::remove_file(&tmp_path);
-    }
-
     /// Toggle focus mode (hide/show header and statusbar).
     pub fn toggle_focus_mode(&mut self) {
         self.state.focus_mode = !self.state.focus_mode;

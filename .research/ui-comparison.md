@@ -99,4 +99,6 @@
 - **Git branch in status bar** — auto-detected and refreshed every 10s
 - **Scroll-to-bottom indicator** — floating "↓ N new · End = jump" when scrolled up
 - **Enter-to-queue** — Enter during streaming auto-queues follow-up message
+- **Chat search** — `/` activates search, real-time match highlighting, n/N navigation with auto-scroll
+- **Vim word movement** — `w`/`b` with proper vim semantics (word/punctuation classes)
 - **Lightweight** — smaller footprint than Codex or OpenCode

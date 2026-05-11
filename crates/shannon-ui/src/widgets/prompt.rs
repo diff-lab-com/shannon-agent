@@ -132,6 +132,11 @@ impl PromptWidget {
         self.buffer.cursor_row()
     }
 
+    /// Get the number of lines in the input buffer
+    pub fn line_count(&self) -> usize {
+        self.buffer.line_count()
+    }
+
     /// Get the length of the current line in characters.
     pub fn current_line_len(&self) -> usize {
         self.buffer.current_line().chars().count()

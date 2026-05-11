@@ -29,9 +29,8 @@ fn open_external_editor(content: &str) -> std::result::Result<String, Box<dyn st
     let editor = std::env::var("VISUAL")
         .or_else(|_| std::env::var("EDITOR"))
         .unwrap_or_else(|_| "vi".to_string());
-    let status = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(format!("{} {}", editor, path.display()))
+    let status = std::process::Command::new(&editor)
+        .arg(&path)
         .status()?;
     if status.success() {
         Ok(std::fs::read_to_string(&path)?)
@@ -226,9 +225,25 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
         KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             // External editor: Ctrl+E opens $VISUAL/$EDITOR/vi with current input
             let current = repl.prompt.input().to_string();
+            let editor_content = if current.is_empty() {
+                // Inject last assistant message as context when opening blank editor
+                let mut buf = String::new();
+                if let Some(last) = repl.chat.last_assistant_message() {
+                    buf.push_str("# AI's last response (for context, edit below):\n");
+                    for line in last.content.lines() {
+                        buf.push_str("# ");
+                        buf.push_str(line);
+                        buf.push('\n');
+                    }
+                    buf.push('\n');
+                }
+                buf
+            } else {
+                current
+            };
             // Suspend raw mode so the editor can take over the terminal
             let _ = crossterm::terminal::disable_raw_mode();
-            match open_external_editor(&current) {
+            match open_external_editor(&editor_content) {
                 Ok(edited) => {
                     // Trim trailing newline that editors often append
                     let trimmed = edited.trim_end_matches('\n').to_string();
@@ -513,11 +528,29 @@ fn handle_vim_action(repl: &mut Repl, action: VimAction) {
                     Direction::Right => repl.prompt.cursor_right(),
                     Direction::Up => repl.prompt.cursor_up(),
                     Direction::Down => repl.prompt.cursor_down(),
-                    Direction::LineStart | Direction::FileStart => {
+                    Direction::LineStart => {
                         let col = repl.prompt.cursor_position();
                         for _ in 0..col { repl.prompt.cursor_left(); }
                     }
-                    Direction::LineEnd | Direction::FileEnd => {
+                    Direction::LineEnd => {
+                        let len = repl.prompt.current_line_len();
+                        let col = repl.prompt.cursor_position();
+                        for _ in 0..len.saturating_sub(col) { repl.prompt.cursor_right(); }
+                    }
+                    Direction::FileStart => {
+                        // Move to first line first
+                        let row = repl.prompt.cursor_row();
+                        for _ in 0..row { repl.prompt.cursor_up(); }
+                        // Then move to start of line
+                        let col = repl.prompt.cursor_position();
+                        for _ in 0..col { repl.prompt.cursor_left(); }
+                    }
+                    Direction::FileEnd => {
+                        // Move to last line first
+                        let row = repl.prompt.cursor_row();
+                        let last_row = repl.prompt.line_count().saturating_sub(1);
+                        for _ in 0..last_row.saturating_sub(row) { repl.prompt.cursor_down(); }
+                        // Then move to end of line
                         let len = repl.prompt.current_line_len();
                         let col = repl.prompt.cursor_position();
                         for _ in 0..len.saturating_sub(col) { repl.prompt.cursor_right(); }
