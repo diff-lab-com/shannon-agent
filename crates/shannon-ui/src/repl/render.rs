@@ -687,7 +687,7 @@ fn render_plan_overlay(
     // Header takes 3 lines + 2 for spacing + 2 for action bar + 1 trailing
     let header_lines = 3;
     let footer_lines = 3;
-    let available_body = dialog_height as usize - header_lines - footer_lines;
+    let available_body = (dialog_height as usize).saturating_sub(header_lines + footer_lines);
 
     // Collect step lines with styling
     let mut step_lines: Vec<Line> = Vec::new();

@@ -259,8 +259,10 @@ impl ReplHistory {
     /// Navigate up in history. Returns the command at that position.
     pub fn up(&mut self) -> Option<&str> {
         if self.entries.is_empty() {
+            self.cursor = 0;
             return None;
         }
+        self.cursor = self.cursor.min(self.entries.len() as isize - 1);
         if self.cursor < (self.entries.len() as isize - 1) {
             self.cursor += 1;
         }
@@ -275,7 +277,10 @@ impl ReplHistory {
             return None;
         }
         self.cursor -= 1;
-        let idx = self.entries.len() - 1 - self.cursor as usize;
+        if self.entries.is_empty() {
+            return None;
+        }
+        let idx = self.entries.len().saturating_sub(1).saturating_sub(self.cursor as usize);
         self.entries.get(idx).map(|s| s.as_str())
     }
 

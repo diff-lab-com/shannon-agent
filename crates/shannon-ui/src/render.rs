@@ -720,7 +720,7 @@ fn render_code_block_with_border(
         }
 
         // Fold indicator
-        let folded_count = total_lines - CODE_FOLD_HEAD - CODE_FOLD_TAIL;
+        let folded_count = total_lines.saturating_sub(CODE_FOLD_HEAD).saturating_sub(CODE_FOLD_TAIL);
         let fold_msg = format!("│   ... {} lines folded ...", folded_count.max(1));
         output.push(Line::from(Span::styled(
             fold_msg,
