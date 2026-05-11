@@ -338,11 +338,18 @@ impl StatusBarWidget {
     }
 }
 
-/// Truncate model name to fit status bar.
+/// Truncate model name to fit status bar (Unicode display width aware).
 fn truncate_model(model: &str) -> String {
     const MAX_MODEL_LEN: usize = 24;
-    if model.chars().count() > MAX_MODEL_LEN {
-        let truncated: String = model.chars().take(MAX_MODEL_LEN - 1).collect();
+    let w = unicode_width::UnicodeWidthStr::width(model);
+    if w > MAX_MODEL_LEN {
+        let mut len = 0;
+        let truncated: String = model.chars()
+            .take_while(|c| {
+                let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
+                if len + cw > MAX_MODEL_LEN - 1 { false } else { len += cw; true }
+            })
+            .collect();
         format!("{truncated}…")
     } else {
         model.to_string()

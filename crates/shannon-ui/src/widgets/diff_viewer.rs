@@ -562,29 +562,44 @@ impl Entry {
     }
 }
 
-/// Truncate a file path to fit within max chars, keeping the filename
+/// Truncate a file path to fit within max display columns, keeping the filename
 fn truncate_path(path: &str, max_chars: usize) -> String {
-    if path.chars().count() <= max_chars {
+    let w = unicode_width::UnicodeWidthStr::width(path);
+    if w <= max_chars {
         return path.to_string();
     }
     // Try to keep the filename
     if let Some(slash_idx) = path.rfind('/') {
         let fname = &path[slash_idx + 1..];
-        if fname.chars().count() + 4 <= max_chars {
-            let budget = max_chars - fname.chars().count() - 4;
-            let prefix: String = path.chars().take(budget).collect();
+        let fname_w = unicode_width::UnicodeWidthStr::width(fname);
+        if fname_w + 4 <= max_chars {
+            let budget = max_chars - fname_w - 4;
+            let mut len = 0;
+            let prefix: String = path.chars()
+                .take_while(|c| {
+                    let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
+                    if len + cw > budget { false } else { len += cw; true }
+                })
+                .collect();
             return format!("{prefix}...{fname}");
         }
     }
     truncate_to(path, max_chars)
 }
 
-/// Truncate string to fit within max chars
+/// Truncate string to fit within max display columns
 fn truncate_to(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
+    let w = unicode_width::UnicodeWidthStr::width(s);
+    if w <= max_chars {
         s.to_string()
     } else if max_chars > 1 {
-        let truncated: String = s.chars().take(max_chars - 1).collect();
+        let mut len = 0;
+        let truncated: String = s.chars()
+            .take_while(|c| {
+                let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
+                if len + cw > max_chars - 1 { false } else { len += cw; true }
+            })
+            .collect();
         format!("{truncated}…")
     } else {
         "…".to_string()

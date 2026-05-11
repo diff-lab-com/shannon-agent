@@ -379,7 +379,7 @@ fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
     let mut len = 0usize;
 
     for word in text.split_whitespace() {
-        let wlen = word.chars().count();
+        let wlen = unicode_width::UnicodeWidthStr::width(word);
         if len == 0 {
             current.push_str(word);
             len = wlen;

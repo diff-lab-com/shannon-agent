@@ -93,12 +93,19 @@ const COLLAPSE_HEADER_WIDTH: u16 = 60;
 const MIN_TERMINAL_WIDTH: u16 = 30;
 const MIN_TERMINAL_HEIGHT: u16 = 8;
 
-/// Truncate a string to fit within `max_chars` characters, appending "…" if truncated.
+/// Truncate a string to fit within `max_chars` display columns, appending "…" if truncated.
 fn truncate_to(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
+    let w = unicode_width::UnicodeWidthStr::width(s);
+    if w <= max_chars {
         s.to_string()
     } else if max_chars > 1 {
-        let truncated: String = s.chars().take(max_chars - 1).collect();
+        let mut len = 0;
+        let truncated: String = s.chars()
+            .take_while(|c| {
+                let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
+                if len + cw > max_chars - 1 { false } else { len += cw; true }
+            })
+            .collect();
         format!("{truncated}…")
     } else {
         "…".to_string()

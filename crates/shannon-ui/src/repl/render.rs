@@ -629,14 +629,20 @@ fn render_pager_overlay(
 
 /// Truncate a string to fit within a visual width, appending "…" if truncated.
 fn truncate_visual(s: &str, max_len: usize) -> String {
-    if s.chars().count() <= max_len {
+    let w = unicode_width::UnicodeWidthStr::width(s);
+    if w <= max_len {
         s.to_string()
+    } else if max_len > 1 {
+        let mut len = 0;
+        let truncated: String = s.chars()
+            .take_while(|c| {
+                let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
+                if len + cw > max_len - 1 { false } else { len += cw; true }
+            })
+            .collect();
+        format!("{truncated}…")
     } else {
-        let end = s.char_indices()
-            .nth(max_len.saturating_sub(1))
-            .map(|(i, _)| i)
-            .unwrap_or(s.len());
-        format!("{}…", &s[..end])
+        "…".to_string()
     }
 }
 
