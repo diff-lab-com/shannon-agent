@@ -607,7 +607,7 @@ impl ChatWidget {
 
         // Render visible cells using ColumnRenderable
         let buf = frame.buffer_mut();
-        self.column.render(inner, buf, theme, self.scroll_offset, 0, search);
+        self.column.render(inner, buf, theme, self.scroll_offset, 0, search, self.streaming_active);
     }
 
     /// Render all messages including committed ones (used by transcript pager).
@@ -622,7 +622,7 @@ impl ChatWidget {
 
         let buf = frame.buffer_mut();
         // start=0 renders all messages including committed (for transcript pager)
-        self.column.render(inner, buf, theme, scroll, 0, None);
+        self.column.render(inner, buf, theme, scroll, 0, None, false);
     }
 
     /// Find all occurrences of `query` in chat messages.

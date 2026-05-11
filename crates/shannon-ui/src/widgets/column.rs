@@ -254,6 +254,7 @@ impl ColumnRenderable {
         scroll_offset: usize,
         start: usize,
         search: Option<&SearchParams<'_>>,
+        streaming: bool,
     ) {
         // Clear the entire viewport first (each cell also clears its own area,
         // but we need this to erase gaps between cells)
@@ -299,6 +300,35 @@ impl ColumnRenderable {
                     cell.render_scrolled(*cell_rect, buf, theme, scroll_y);
                 } else {
                     cell.render(*cell_rect, buf, theme);
+                }
+            }
+        }
+
+        // Streaming cursor: draw a blinking █ at the end of the last rendered content
+        if streaming {
+            if let Some((last_rect, _)) = layout.visible.last() {
+                let cursor_style = ratatui::style::Style::default()
+                    .fg(theme.primary)
+                    .add_modifier(ratatui::style::Modifier::REVERSED);
+                // Scan from bottom of last cell upward to find last non-empty line
+                for y in (last_rect.y..last_rect.bottom()).rev() {
+                    let mut last_content_x: Option<u16> = None;
+                    for x in (last_rect.x..last_rect.right()).rev() {
+                        if let Some(cell) = buf.cell_mut((x, y)) {
+                            if cell.symbol() != " " && cell.symbol() != "─" && cell.symbol() != "│" {
+                                last_content_x = Some(x);
+                                break;
+                            }
+                        }
+                    }
+                    if let Some(x) = last_content_x {
+                        let cursor_x = (x + 1).min(last_rect.right() - 1);
+                        if let Some(cell) = buf.cell_mut((cursor_x, y)) {
+                            cell.set_symbol("█");
+                            cell.set_style(cursor_style);
+                        }
+                        break;
+                    }
                 }
             }
         }
