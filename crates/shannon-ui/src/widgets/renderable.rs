@@ -478,7 +478,13 @@ impl MessageCell {
 
                     let old_ln = if inc_old { format!("{old_line:>ln_width$}") } else { " ".repeat(ln_width) };
                     let new_ln = if inc_new { format!("{new_line:>ln_width$}") } else { " ".repeat(ln_width) };
-                    let text = if prefix == " " || raw_line.is_empty() { raw_line.to_string() } else { raw_line[1..].to_string() };
+                    let text = if prefix == " " || raw_line.is_empty() {
+                        raw_line.to_string()
+                    } else if raw_line.is_char_boundary(1) {
+                        raw_line[1..].to_string()
+                    } else {
+                        raw_line.chars().skip(1).collect()
+                    };
 
                     lines.push(Line::from(vec![
                         Span::styled("│", Style::default().fg(status_color)),
