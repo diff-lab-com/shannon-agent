@@ -256,7 +256,9 @@ fn extract_domain_from_tool(tool_name: &str, tool_input: &serde_json::Value) -> 
     // Truncate very long URLs for display
     url_str.map(|s| {
         if s.len() > 80 {
-            format!("{}...", &s[..77])
+            let mut end = 77;
+            while !s.is_char_boundary(end) { end -= 1; }
+            format!("{}...", &s[..end])
         } else {
             s
         }

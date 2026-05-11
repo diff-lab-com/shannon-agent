@@ -456,7 +456,7 @@ pub(crate) fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
                 format!(" [{} files]", tc.files_changed.len())
             };
             let preview = tc.prompt_preview.as_deref()
-                .map(|p| if p.len() > 60 { format!("{}...", &p[..60]) } else { p.to_string() })
+                .map(|p| if p.len() > 60 { let mut end = 60; while !p.is_char_boundary(end) { end -= 1; } format!("{}...", &p[..end]) } else { p.to_string() })
                 .unwrap_or_default();
             msg.push_str(&format!(
                 "  [{}] turn {} {}{} — {}\n",

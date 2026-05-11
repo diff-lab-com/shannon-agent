@@ -43,7 +43,9 @@ pub(crate) fn handle_find(repl: &mut Repl, args: &str) -> Result<()> {
                 .filter(|c| !c.is_control())
                 .collect();
             let preview = if clean_content.len() > 200 {
-                format!("{}...", &clean_content[..200])
+                let mut end = 200;
+                while !clean_content.is_char_boundary(end) { end -= 1; }
+                format!("{}...", &clean_content[..end])
             } else {
                 clean_content
             };
