@@ -745,20 +745,20 @@ mod tests {
     #[test]
     fn test_highlight_code_with_renderer() {
         let code = "fn main() {\n    println!(\"hello\");\n}";
-        let lines = crate::render::Renderer::new().highlight_code(code, "rust");
+        let lines = crate::render::Renderer::new().highlight_code(code, "rust", &Theme::default_dark());
         assert!(!lines.is_empty());
         assert_eq!(lines.len(), 3); // One line per source line
     }
 
     #[test]
     fn test_highlight_code_empty_with_renderer() {
-        let lines = crate::render::Renderer::new().highlight_code("", "rust");
+        let lines = crate::render::Renderer::new().highlight_code("", "rust", &Theme::default_dark());
         assert!(lines.is_empty());
     }
 
     #[test]
     fn test_highlight_code_unknown_language_with_renderer() {
-        let lines = crate::render::Renderer::new().highlight_code("fn main() {}", "no_such_lang");
+        let lines = crate::render::Renderer::new().highlight_code("fn main() {}", "no_such_lang", &Theme::default_dark());
         assert!(!lines.is_empty()); // Should still render, just plain
     }
 

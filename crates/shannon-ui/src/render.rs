@@ -179,7 +179,7 @@ impl Renderer {
     ///
     /// If the language is not recognized or highlighting fails, the code is returned
     /// as plain monospaced text with a subtle background style.
-    pub fn highlight_code(&self, code: &str, language: &str) -> Vec<Line<'static>> {
+    pub fn highlight_code(&self, code: &str, language: &str, theme: &Theme) -> Vec<Line<'static>> {
         if code.is_empty() {
             return Vec::new();
         }
@@ -188,10 +188,10 @@ impl Renderer {
         let language = language.trim().to_lowercase();
 
         if let Some(syntax) = self.syntax_set.find_syntax_by_token(&language) {
-            let theme = self.theme_set.themes.get(self.syntect_theme_name.as_str())
+            let syntect_theme = self.theme_set.themes.get(self.syntect_theme_name.as_str())
                 .unwrap_or_else(|| &self.theme_set.themes["base16-eighties.dark"]);
 
-            let mut highlighter = HighlightLines::new(syntax, theme);
+            let mut highlighter = HighlightLines::new(syntax, syntect_theme);
             let mut lines = Vec::new();
 
             for line_str in code.lines() {
@@ -199,7 +199,7 @@ impl Renderer {
                     // Fallback to plain line on highlight error
                     lines.push(Line::from(Span::styled(
                         line_str.to_string(),
-                        Style::default().fg(Color::White),
+                        Style::default().fg(theme.text),
                     )));
                     continue;
                 };
@@ -225,7 +225,7 @@ impl Renderer {
                 .map(|l| {
                     Line::from(Span::styled(
                         l.to_string(),
-                        Style::default().fg(Color::White),
+                        Style::default().fg(theme.text),
                     ))
                 })
                 .collect()
@@ -321,7 +321,7 @@ impl Renderer {
                 }
                 Event::End(TagEnd::CodeBlock) => {
                     if !code_buffer.is_empty() {
-                        let highlighted = self.highlight_code(&code_buffer, &code_lang);
+                        let highlighted = self.highlight_code(&code_buffer, &code_lang, theme);
                         output.extend(render_code_block_with_border(
                             &highlighted,
                             &code_lang,
@@ -1193,14 +1193,14 @@ mod tests {
     #[test]
     fn test_highlight_code_empty() {
         let renderer = Renderer::new();
-        let lines = renderer.highlight_code("", "rust");
+        let lines = renderer.highlight_code("", "rust", &Theme::default_dark());
         assert!(lines.is_empty());
     }
 
     #[test]
     fn test_highlight_code_unknown_language() {
         let renderer = Renderer::new();
-        let lines = renderer.highlight_code("fn main() {}", "no_such_lang");
+        let lines = renderer.highlight_code("fn main() {}", "no_such_lang", &Theme::default_dark());
         assert_eq!(lines.len(), 1);
     }
 
@@ -1208,7 +1208,7 @@ mod tests {
     fn test_highlight_code_rust() {
         let renderer = Renderer::new();
         let code = "fn main() {\n    println!(\"hello\");\n}";
-        let lines = renderer.highlight_code(code, "rust");
+        let lines = renderer.highlight_code(code, "rust", &Theme::default_dark());
         // Should produce one line per source line (3 lines total)
         assert_eq!(lines.len(), 3);
     }
@@ -1217,7 +1217,7 @@ mod tests {
     fn test_highlight_code_python() {
         let renderer = Renderer::new();
         let code = "def hello():\n    print('world')";
-        let lines = renderer.highlight_code(code, "python");
+        let lines = renderer.highlight_code(code, "python", &Theme::default_dark());
         assert_eq!(lines.len(), 2);
     }
 
@@ -1225,7 +1225,7 @@ mod tests {
     fn test_highlight_code_trailing_newline() {
         let renderer = Renderer::new();
         let code = "line one\nline two\n";
-        let lines = renderer.highlight_code(code, "rust");
+        let lines = renderer.highlight_code(code, "rust", &Theme::default_dark());
         // Trailing newline should not produce an extra empty line
         assert_eq!(lines.len(), 2);
     }

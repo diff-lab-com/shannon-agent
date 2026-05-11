@@ -99,7 +99,7 @@ static SYNTAX_CACHE: LazyLock<Mutex<SyntaxCache>> = LazyLock::new(|| {
 });
 
 /// Highlight code with caching. Returns cached result if available.
-pub(super) fn highlight_code_cached(code: &str, lang: &str) -> Vec<Line<'static>> {
+pub(super) fn highlight_code_cached(code: &str, lang: &str, theme: &crate::theme::Theme) -> Vec<Line<'static>> {
     let key = SyntaxCache::compute_key(lang, code);
 
     {
@@ -109,7 +109,7 @@ pub(super) fn highlight_code_cached(code: &str, lang: &str) -> Vec<Line<'static>
         }
     }
 
-    let lines = CODE_RENDERER.highlight_code(code, lang);
+    let lines = CODE_RENDERER.highlight_code(code, lang, theme);
 
     {
         let mut cache = SYNTAX_CACHE.lock();

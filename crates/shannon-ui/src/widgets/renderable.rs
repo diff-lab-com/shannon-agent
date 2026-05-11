@@ -758,7 +758,7 @@ impl MessageCell {
                     ]));
 
                     let highlighted = if let Some(l) = lang {
-                        highlight_code_cached(code, l)
+                        highlight_code_cached(code, l, theme)
                     } else {
                         code.lines().map(|l| Line::from(l.to_string())).collect()
                     };
