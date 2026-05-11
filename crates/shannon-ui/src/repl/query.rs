@@ -463,6 +463,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                 let mut render_ctx = crate::widgets::RenderContext::new(chat, prompt, &state.theme, &state.status);
                 render_ctx.model = state.model.as_deref();
                 render_ctx.tokens_used = Some(state.tokens_used);
+                render_ctx.git_branch = state.git_branch.as_deref();
                 render_ctx.spinner = Some(spinner);
                 render_ctx.progress_bar = pb;
                 render_ctx.sidebar_info = sidebar_info.as_ref();

@@ -1123,6 +1123,9 @@ impl Repl {
 
         self.running = true;
 
+        // Detect initial git branch for status bar display
+        self.refresh_git_branch();
+
         // Load persistent command history from ~/.shannon/history.jsonl
         {
             let history_path = dirs::home_dir()

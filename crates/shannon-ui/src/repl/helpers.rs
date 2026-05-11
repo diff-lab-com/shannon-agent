@@ -278,9 +278,42 @@ impl super::Repl {
         }
     }
 
+    /// Refresh the git branch name from the working directory.
+    /// Throttled to once every 10 seconds to avoid excessive subprocess calls.
+    pub fn refresh_git_branch(&mut self) {
+        // Throttle: no need to check more than once every 10s
+        if let Some(branch) = &self.state.git_branch {
+            let _ = branch; // branch exists, just check timing
+        }
+        static LAST_CHECK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let last = LAST_CHECK.load(std::sync::atomic::Ordering::Relaxed);
+        if now.saturating_sub(last) < 10 {
+            return;
+        }
+        LAST_CHECK.store(now, std::sync::atomic::Ordering::Relaxed);
+
+        let branch = std::process::Command::new("git")
+            .args(["branch", "--show-current"])
+            .current_dir(&self.state.working_directory)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        self.state.git_branch = branch;
+    }
+
     /// Refresh the custom statusline by running the configured command.
     /// Called periodically from the main event loop (every ~5s).
     pub fn refresh_statusline(&mut self) {
+        // Always refresh git branch (lightweight, throttled implicitly)
+        self.refresh_git_branch();
+
         let Some(ref cmd) = self.state.statusline_command else { return };
 
         // Throttle to once every 5 seconds
