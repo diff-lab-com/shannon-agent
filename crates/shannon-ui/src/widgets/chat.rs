@@ -1172,14 +1172,27 @@ pub(super) fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
     segments
 }
 
-/// Parse inline markdown formatting (**bold** and *italic*) into styled Spans.
+/// Parse inline markdown formatting (**bold**, *italic*, `code`) into styled Spans.
 pub(super) fn parse_inline_formatting(text: &str, base_color: ratatui::style::Color) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     let mut pos = 0;
     let bytes = text.as_bytes();
 
     while pos < text.len() {
-        if bytes[pos] == b'*' && pos + 1 < text.len() && bytes[pos + 1] == b'*' {
+        if bytes[pos] == b'`' {
+            // `inline code`
+            let search_start = pos + 1;
+            if let Some(end) = text[search_start..].find('`') {
+                let close_start = search_start + end;
+                let code_text = &text[search_start..close_start];
+                spans.push(Span::styled(
+                    code_text.to_string(),
+                    Style::default().fg(ratatui::style::Color::Yellow),
+                ));
+                pos = close_start + 1;
+                continue;
+            }
+        } else if bytes[pos] == b'*' && pos + 1 < text.len() && bytes[pos + 1] == b'*' {
             // **bold**
             let search_start = pos + 2;
             if let Some(end) = text[search_start..].find("**") {
@@ -1208,9 +1221,9 @@ pub(super) fn parse_inline_formatting(text: &str, base_color: ratatui::style::Co
                 continue;
             }
         }
-        // Plain character — collect until next * or end
+        // Plain character — collect until next * or ` or end
         let plain_start = pos;
-        while pos < text.len() && bytes[pos] != b'*' {
+        while pos < text.len() && bytes[pos] != b'*' && bytes[pos] != b'`' {
             pos += 1;
         }
         if pos > plain_start {
@@ -1219,9 +1232,9 @@ pub(super) fn parse_inline_formatting(text: &str, base_color: ratatui::style::Co
                 Style::default().fg(base_color),
             ));
         } else {
-            // Unmatched *, treat as plain
+            // Unmatched * or `, treat as plain
             spans.push(Span::styled(
-                "*".to_string(),
+                text[pos..pos+1].to_string(),
                 Style::default().fg(base_color),
             ));
             pos += 1;
