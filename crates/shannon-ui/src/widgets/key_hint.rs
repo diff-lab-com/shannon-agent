@@ -48,6 +48,7 @@ impl KeyHintWidget {
                 ("Esc", "Cancel"),
                 ("Ctrl+C", "Clear"),
                 ("Tab", "Complete"),
+                ("Ctrl+R", "Search"),
                 ("PgUp/Dn", "Scroll"),
                 ("Ctrl+G", "Pager"),
             ],
@@ -155,8 +156,10 @@ impl KeyHintWidget {
                 ),
             ]));
 
-            // Shortcuts in two columns
-            for (i, (key, desc)) in shortcuts.iter().enumerate() {
+            // Shortcuts in two columns (step by 2)
+            let mut i = 0;
+            while i < shortcuts.len() {
+                let (key, desc) = &shortcuts[i];
                 let left_col = format!("  {key:<20} {desc:<25}");
                 let right_col = if i + 1 < shortcuts.len() {
                     let (next_key, next_desc) = &shortcuts[i + 1];
@@ -170,10 +173,7 @@ impl KeyHintWidget {
                     Span::styled(right_col, Style::default().fg(theme.text)),
                 ]));
 
-                // Skip the next one since we processed it
-                if i + 1 < shortcuts.len() {
-                    // Continue, but we'll skip in the loop by incrementing by 2
-                }
+                i += 2;
             }
             // Blank line between sections
             all_lines.push(Line::from(""));
