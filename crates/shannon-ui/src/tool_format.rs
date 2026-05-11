@@ -155,14 +155,22 @@ pub fn tool_category(tool_name: &str) -> ToolCategory {
         // Bash/shell tools
         "bash" | "sh" | "shell" | "run" | "execute" => ToolCategory::Bash,
         // Search tools
-        "grep" | "search" | "ripgrep" | "rg" | "ast-grep" | "ast_grep" => ToolCategory::Search,
+        "grep" | "search" | "ripgrep" | "rg" | "ast-grep" | "ast_grep"
+        | "glob" | "find" | "list" | "ls" => ToolCategory::Search,
         // Read-only tools
-        "read" | "glob" | "list" | "ls" | "find" | "cat" | "head" | "tail" => ToolCategory::Read,
+        "read" | "cat" | "head" | "tail" | "view" => ToolCategory::Read,
         // Write tools
-        "write" | "edit" | "create" | "delete" | "mkdir" | "mv" | "cp" => ToolCategory::Write,
+        "write" | "edit" | "create" | "delete" | "mkdir" | "mv" | "cp" | "patch" => ToolCategory::Write,
         // Agent tools
         "agent" | "subagent" | "delegate" | "task" => ToolCategory::Agent,
-        _ => ToolCategory::Read,
+        _ => {
+            // Heuristic: MCP tools typically contain double underscores or dots
+            if tool_name.contains("__") || tool_name.contains('.') {
+                ToolCategory::Agent
+            } else {
+                ToolCategory::Read
+            }
+        }
     }
 }
 

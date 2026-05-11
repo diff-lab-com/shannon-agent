@@ -328,6 +328,15 @@ impl MessageCell {
             let content = strip_ansi(&msg.content);
             let border_w = inner_width.clamp(20, 200);
 
+            // Category icon for the top border
+            let (cat_icon, cat_prefix) = match cat {
+                ToolCategory::Read => ("\u{25B8}", ""),
+                ToolCategory::Write => ("\u{270E}", ""),
+                ToolCategory::Search => ("\u{229B}", ""),
+                ToolCategory::Bash => ("", "$ "),
+                ToolCategory::Agent => ("\u{25C6}", ""),
+            };
+
             // Top border: ╭─ toolname ── ✓ duration ──╮
             const TOOL_SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
             let (status_icon, status_color) = if msg.is_error {
@@ -359,7 +368,13 @@ impl MessageCell {
             } else {
                 String::new()
             };
-            let inner = format!("─ {tool_label}{dur_part} ─");
+            let inner = if cat_icon.is_empty() && cat_prefix.is_empty() {
+                format!("─ {tool_label}{dur_part} ─")
+            } else if cat_prefix.is_empty() {
+                format!("─ {cat_icon} {tool_label}{dur_part} ─")
+            } else {
+                format!("─ {cat_prefix}{tool_label}{dur_part} ─")
+            };
             let inner_w = unicode_width::UnicodeWidthStr::width(inner.as_str());
             let remaining = border_w.saturating_sub(2 + inner_w).saturating_sub(1);
             let top = format!("╭{inner}{}╮", "─".repeat(remaining));
