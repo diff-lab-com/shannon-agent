@@ -369,7 +369,7 @@ impl MessageCell {
                         }
                         lines.push(Line::from(vec![
                             Span::styled("│ ", Style::default().fg(theme.border_dim)),
-                            Span::styled(raw_line.to_string(), Style::default().fg(theme.accent)),
+                            Span::styled(raw_line.to_string(), Style::default().fg(theme.diff_header)),
                         ]));
                         continue;
                     }
@@ -377,17 +377,17 @@ impl MessageCell {
                     if raw_line.starts_with("+++") || raw_line.starts_with("---") {
                         lines.push(Line::from(vec![
                             Span::styled("│ ", Style::default().fg(theme.border_dim)),
-                            Span::styled(raw_line.to_string(), Style::default().fg(theme.text_dim)),
+                            Span::styled(raw_line.to_string(), Style::default().fg(theme.diff_header)),
                         ]));
                         continue;
                     }
 
-                    let (prefix, color, inc_old, inc_new) = if raw_line.starts_with('+') {
-                        ("+", theme.success, false, true)
+                    let (prefix, color, ln_color, inc_old, inc_new) = if raw_line.starts_with('+') {
+                        ("+", theme.diff_added, theme.diff_line_number, false, true)
                     } else if raw_line.starts_with('-') {
-                        ("-", theme.error, true, false)
+                        ("-", theme.diff_removed, theme.diff_line_number, true, false)
                     } else {
-                        (" ", theme.text_dim, true, true)
+                        (" ", theme.diff_context, theme.diff_line_number, true, true)
                     };
 
                     if inc_old { old_line += 1; }
@@ -399,9 +399,9 @@ impl MessageCell {
 
                     lines.push(Line::from(vec![
                         Span::styled("│", Style::default().fg(theme.border_dim)),
-                        Span::styled(old_ln, Style::default().fg(theme.muted)),
+                        Span::styled(old_ln, Style::default().fg(ln_color)),
                         Span::styled(" ", Style::default()),
-                        Span::styled(new_ln, Style::default().fg(theme.muted)),
+                        Span::styled(new_ln, Style::default().fg(ln_color)),
                         Span::styled(prefix, Style::default().fg(color).add_modifier(Modifier::BOLD)),
                         Span::styled(text, Style::default().fg(color)),
                     ]));
