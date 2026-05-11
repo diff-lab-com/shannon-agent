@@ -492,7 +492,7 @@ impl MessageCell {
                     }
                     let hidden = all_lines.len() - row_budget;
                     lines.push(Line::from(Span::styled(
-                        format!("│ ... +{hidden} lines (Alt+F to expand)"),
+                        format!("│ ⋯ +{hidden} more lines"),
                         Style::default().fg(theme.muted),
                     )));
                     // Render tail lines with proper border prefix
@@ -566,7 +566,7 @@ impl MessageCell {
                 }
                 let hidden = all_lines.len() - row_budget;
                 lines.push(Line::from(Span::styled(
-                    format!("│ ... +{hidden} lines (Alt+F to expand)"),
+                    format!("│ ⋯ +{hidden} more lines"),
                     Style::default().fg(theme.muted),
                 )));
                 for line in &all_lines[all_lines.len().saturating_sub(tail)..] {
