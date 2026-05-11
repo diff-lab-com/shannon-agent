@@ -247,7 +247,7 @@ impl MessageCell {
                 ToolCategory::Write => ("\u{270E}", "", theme.tool_write),
                 ToolCategory::Search => ("\u{229B}", "", theme.tool_search),
                 ToolCategory::Bash => ("", "$ ", theme.tool_bash),
-                ToolCategory::Agent => ("\u{25C6}", "", theme.tool_read),
+                ToolCategory::Agent => ("\u{25C6}", "", theme.accent),
             };
 
             // Status icon + duration badge (spinner animation for running tools)
