@@ -364,7 +364,7 @@ impl MessageCell {
             let remaining = border_w.saturating_sub(2 + inner_w).saturating_sub(1);
             let top = format!("╭{inner}{}╮", "─".repeat(remaining));
             lines.push(Line::from(vec![
-                Span::styled(top, Style::default().fg(theme.border_dim)),
+                Span::styled(top, Style::default().fg(status_color)),
             ]));
 
             // Error messages get a red-tinted rendering
@@ -374,7 +374,7 @@ impl MessageCell {
                     let wrapped = wrap_line(raw_line, tool_width);
                     for wl in wrapped {
                         lines.push(Line::from(vec![
-                            Span::styled("│ ", Style::default().fg(theme.border_dim)),
+                            Span::styled("│ ", Style::default().fg(status_color)),
                             Span::styled(wl, Style::default().fg(theme.error)),
                         ]));
                     }
@@ -393,10 +393,38 @@ impl MessageCell {
             }) && content.lines().any(|l| l.starts_with("+++") || l.starts_with("@@"));
 
             if is_diff {
+                // Pre-scan hunk headers to determine max line number for column width
+                let mut max_ln: usize = 0;
+                for raw_line in content.lines() {
+                    if raw_line.starts_with("@@") {
+                        if let Some(rest) = raw_line.strip_prefix("@@") {
+                            let parts: Vec<&str> = rest.split_whitespace().take(2).collect();
+                            if parts.len() >= 2 {
+                                // Old range: -start,count → max is start+count
+                                if let Some(range) = parts[0].strip_prefix('-') {
+                                    let nums: Vec<&str> = range.split(',').collect();
+                                    if let Ok(start) = nums[0].parse::<usize>() {
+                                        let count = nums.get(1).and_then(|c| c.parse::<usize>().ok()).unwrap_or(1);
+                                        max_ln = max_ln.max(start + count);
+                                    }
+                                }
+                                // New range: +start,count → max is start+count
+                                if let Some(range) = parts[1].strip_prefix('+') {
+                                    let nums: Vec<&str> = range.split(',').collect();
+                                    if let Ok(start) = nums[0].parse::<usize>() {
+                                        let count = nums.get(1).and_then(|c| c.parse::<usize>().ok()).unwrap_or(1);
+                                        max_ln = max_ln.max(start + count);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                let ln_width = if max_ln > 0 { max_ln.to_string().len() } else { 4 };
+
                 // Track line numbers across hunks
                 let mut old_line: usize = 0;
                 let mut new_line: usize = 0;
-                let ln_width = 4; // "NNNN" column width
 
                 for raw_line in content.lines() {
                     // Parse hunk headers: @@ -old_start,old_count +new_start,new_count @@
@@ -414,7 +442,7 @@ impl MessageCell {
                             }
                         }
                         lines.push(Line::from(vec![
-                            Span::styled("│ ", Style::default().fg(theme.border_dim)),
+                            Span::styled("│ ", Style::default().fg(status_color)),
                             Span::styled(raw_line.to_string(), Style::default().fg(theme.diff_header)),
                         ]));
                         continue;
@@ -431,7 +459,7 @@ impl MessageCell {
                             format!("{} {}", if is_new { "→" } else { "←" }, clean_path)
                         };
                         lines.push(Line::from(vec![
-                            Span::styled("│ ", Style::default().fg(theme.border_dim)),
+                            Span::styled("│ ", Style::default().fg(status_color)),
                             Span::styled(label, Style::default().fg(theme.diff_header).add_modifier(Modifier::BOLD)),
                         ]));
                         continue;
@@ -448,12 +476,12 @@ impl MessageCell {
                     if inc_old { old_line += 1; }
                     if inc_new { new_line += 1; }
 
-                    let old_ln = if inc_old { format!("{old_line:>ln_width$}") } else { "    ".to_string() };
-                    let new_ln = if inc_new { format!("{new_line:>ln_width$}") } else { "    ".to_string() };
+                    let old_ln = if inc_old { format!("{old_line:>ln_width$}") } else { " ".repeat(ln_width) };
+                    let new_ln = if inc_new { format!("{new_line:>ln_width$}") } else { " ".repeat(ln_width) };
                     let text = if prefix == " " || raw_line.is_empty() { raw_line.to_string() } else { raw_line[1..].to_string() };
 
                     lines.push(Line::from(vec![
-                        Span::styled("│", Style::default().fg(theme.border_dim)),
+                        Span::styled("│", Style::default().fg(status_color)),
                         Span::styled(old_ln, Style::default().fg(ln_color).bg(bg)),
                         Span::styled(" ", Style::default().bg(bg)),
                         Span::styled(new_ln, Style::default().fg(ln_color).bg(bg)),
@@ -491,13 +519,13 @@ impl MessageCell {
                         if raw_line.trim_start().starts_with('$') || raw_line.starts_with("> Using: bash") {
                             let cmd = raw_line.trim_start().trim_start_matches('$').trim_start();
                             lines.push(Line::from(vec![
-                                Span::styled("│ ", Style::default().fg(theme.border_dim)),
+                                Span::styled("│ ", Style::default().fg(status_color)),
                                 Span::styled("$ ", Style::default().fg(theme.tool_bash).add_modifier(Modifier::BOLD)),
                                 Span::styled(cmd.to_string(), Style::default().fg(theme.tool_bash)),
                             ]));
                         } else {
                             lines.push(Line::from(vec![
-                                Span::styled("│ ", Style::default().fg(theme.border_dim)),
+                                Span::styled("│ ", Style::default().fg(status_color)),
                                 Span::styled(raw_line.to_string(), Style::default().fg(theme.text_dim)),
                             ]));
                         }
@@ -513,13 +541,13 @@ impl MessageCell {
                         if raw_line.trim_start().starts_with('$') || raw_line.starts_with("> Using: bash") {
                             let cmd = raw_line.trim_start().trim_start_matches('$').trim_start();
                             lines.push(Line::from(vec![
-                                Span::styled("│ ", Style::default().fg(theme.border_dim)),
+                                Span::styled("│ ", Style::default().fg(status_color)),
                                 Span::styled("$ ", Style::default().fg(theme.tool_bash).add_modifier(Modifier::BOLD)),
                                 Span::styled(cmd.to_string(), Style::default().fg(theme.tool_bash)),
                             ]));
                         } else {
                             lines.push(Line::from(vec![
-                                Span::styled("│ ", Style::default().fg(theme.border_dim)),
+                                Span::styled("│ ", Style::default().fg(status_color)),
                                 Span::styled(raw_line.to_string(), Style::default().fg(theme.text_dim)),
                             ]));
                         }
@@ -530,7 +558,7 @@ impl MessageCell {
                         if raw_line.trim_start().starts_with('$') || raw_line.starts_with("> Using: bash") {
                             let cmd = raw_line.trim_start().trim_start_matches('$').trim_start();
                             lines.push(Line::from(vec![
-                                Span::styled("│ ", Style::default().fg(theme.border_dim)),
+                                Span::styled("│ ", Style::default().fg(status_color)),
                                 Span::styled("$ ", Style::default().fg(theme.tool_bash).add_modifier(Modifier::BOLD)),
                                 Span::styled(cmd.to_string(), Style::default().fg(theme.tool_bash)),
                             ]));
@@ -539,7 +567,7 @@ impl MessageCell {
                             let wrapped = wrap_line(raw_line, tool_width.saturating_sub(2));
                             for wl in wrapped {
                                 lines.push(Line::from(vec![
-                                    Span::styled("│ ", Style::default().fg(theme.border_dim)),
+                                    Span::styled("│ ", Style::default().fg(status_color)),
                                     Span::styled(wl, Style::default().fg(theme.text_dim)),
                                 ]));
                             }
@@ -547,7 +575,7 @@ impl MessageCell {
                             let wrapped = wrap_line(raw_line, tool_width);
                             for wl in wrapped {
                                 lines.push(Line::from(vec![
-                                    Span::styled("│ ", Style::default().fg(theme.border_dim)),
+                                    Span::styled("│ ", Style::default().fg(status_color)),
                                     Span::styled(wl, Style::default().fg(theme.text_dim)),
                                 ]));
                             }
@@ -572,7 +600,7 @@ impl MessageCell {
                 let tail = row_budget - head;
                 for line in &all_lines[..head] {
                     lines.push(Line::from(vec![
-                        Span::styled("│ ", Style::default().fg(theme.border_dim)),
+                        Span::styled("│ ", Style::default().fg(status_color)),
                         Span::styled(line.clone(), Style::default().fg(theme.text_dim)),
                     ]));
                 }
@@ -583,7 +611,7 @@ impl MessageCell {
                 )));
                 for line in &all_lines[all_lines.len().saturating_sub(tail)..] {
                     lines.push(Line::from(vec![
-                        Span::styled("│ ", Style::default().fg(theme.border_dim)),
+                        Span::styled("│ ", Style::default().fg(status_color)),
                         Span::styled(line.clone(), Style::default().fg(theme.text_dim)),
                     ]));
                 }
@@ -593,7 +621,7 @@ impl MessageCell {
                     let wrapped = wrap_line(raw_line, tool_width);
                     for wl in wrapped {
                         lines.push(Line::from(vec![
-                            Span::styled("│ ", Style::default().fg(theme.border_dim)),
+                            Span::styled("│ ", Style::default().fg(status_color)),
                             Span::styled(wl, Style::default().fg(theme.text_dim)),
                         ]));
                     }
