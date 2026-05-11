@@ -204,8 +204,22 @@ impl MessageCell {
                 ToolCategory::Agent => ("\u{25C6}", "", theme.tool_read),
             };
 
-            let display = if unicode_width::UnicodeWidthStr::width(first_line) > 80 {
-                truncate_to(first_line, 80)
+            // Status icon + duration badge
+            let status_icon = if msg.is_error { "\u{2717}" } else { "\u{2713}" };
+            let status_color = if msg.is_error { theme.error } else { theme.success };
+            let dur_badge = if let Some(dur) = msg.duration_secs {
+                if dur >= 60.0 {
+                    format!(" {}m{:.0}s", dur as u64 / 60, dur % 60.0)
+                } else {
+                    format!(" {dur:.1}s")
+                }
+            } else {
+                String::new()
+            };
+
+            let display_budget = 60usize.saturating_sub(dur_badge.len());
+            let display = if unicode_width::UnicodeWidthStr::width(first_line) > display_budget {
+                truncate_to(first_line, display_budget)
             } else {
                 first_line.to_string()
             };
@@ -215,6 +229,8 @@ impl MessageCell {
                 Span::styled(format!("{icon}{tool_label} "), Style::default().fg(cat_color).add_modifier(Modifier::BOLD)),
                 Span::styled(prefix.to_string(), Style::default().fg(cat_color)),
                 Span::styled(display, Style::default().fg(theme.text_dim)),
+                Span::styled(dur_badge, Style::default().fg(theme.text_dim)),
+                Span::styled(format!(" {status_icon}"), Style::default().fg(status_color)),
             ]));
             add_role_gutter(&mut lines, gutter_color);
             return lines;
@@ -493,21 +509,28 @@ impl MessageCell {
                         code.lines().map(|l| Line::from(l.to_string())).collect()
                     };
 
+                    /// Prepend `│ ` gutter prefix to a syntax-highlighted line.
+                    fn prefix_code_line(line: Line<'static>, border_color: ratatui::style::Color) -> Line<'static> {
+                        let mut spans = vec![Span::styled("│ ".to_string(), Style::default().fg(border_color))];
+                        spans.extend(line.spans);
+                        Line::from(spans)
+                    }
+
                     let code_lines: Vec<Line<'static>> = if highlighted.len() > 20 && msg.folded && msg.role == ChatRole::Tool {
                         let mut folded = Vec::with_capacity(16);
                         for line in &highlighted[..10] {
-                            folded.push(line.clone());
+                            folded.push(prefix_code_line(line.clone(), theme.border_dim));
                         }
                         let hidden = highlighted.len() - 15;
                         folded.push(Line::from(
-                            Span::styled(format!("  ... {hidden} more lines (press 'o' to expand)"), Style::default().fg(theme.muted))
+                            Span::styled(format!("│ ... {hidden} more lines (press 'o' to expand)"), Style::default().fg(theme.muted))
                         ));
                         for line in highlighted.iter().rev().take(5).rev() {
-                            folded.push(line.clone());
+                            folded.push(prefix_code_line(line.clone(), theme.border_dim));
                         }
                         folded
                     } else {
-                        highlighted
+                        highlighted.into_iter().map(|line| prefix_code_line(line, theme.border_dim)).collect()
                     };
 
                     lines.extend(code_lines);
@@ -563,11 +586,10 @@ impl MessageCell {
                     let bq_width = content_width.saturating_sub(4).max(20);
                     for line in bq_lines {
                         let wrapped = wrap_line(line, bq_width);
-                        for (i, wl) in wrapped.iter().enumerate() {
-                            let prefix = if i == 0 { "  │ " } else { "    " };
+                        for wl in wrapped {
                             lines.push(Line::from(vec![
-                                Span::styled(prefix.to_string(), Style::default().fg(theme.accent)),
-                                Span::styled(wl.clone(), Style::default().fg(theme.text_dim).add_modifier(Modifier::ITALIC)),
+                                Span::styled("  │ ", Style::default().fg(theme.accent)),
+                                Span::styled(wl, Style::default().fg(theme.text_dim).add_modifier(Modifier::ITALIC)),
                             ]));
                         }
                     }
