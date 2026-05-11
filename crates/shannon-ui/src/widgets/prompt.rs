@@ -343,7 +343,7 @@ impl PromptWidget {
                 Some("ASK") | Some("PLAN") => theme.accent,
                 Some("EDIT") => theme.success,
                 Some("AUTO") => theme.primary,
-                Some("FULL") => ratatui::style::Color::Red,
+                Some("FULL") => theme.error,
                 _ => theme.border_dim,
             }
         });

@@ -113,7 +113,7 @@ impl StatusBarWidget {
                 "ASK" | "PLAN" => Style::default().fg(theme.warning),
                 "EDIT" => Style::default().fg(theme.success),
                 "AUTO" => Style::default().fg(theme.primary),
-                "FULL" => Style::default().fg(ratatui::style::Color::Red),
+                "FULL" => Style::default().fg(theme.error),
                 _ => Style::default().fg(theme.text_dim),
             };
             left.push(Span::styled(
