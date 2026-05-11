@@ -1284,7 +1284,30 @@ pub(super) fn parse_inline_formatting(text: &str, base_color: ratatui::style::Co
     let bytes = text.as_bytes();
 
     while pos < text.len() {
-        if bytes[pos] == b'`' {
+        if bytes[pos] == b'[' {
+            // [link text](url) — render as underlined text
+            if let Some(close_bracket) = text[pos + 1..].find(']') {
+                let link_text_end = pos + 1 + close_bracket;
+                let url_start = link_text_end + 1;
+                if url_start < text.len() && bytes[url_start] == b'(' {
+                    if let Some(close_paren) = text[url_start + 1..].find(')') {
+                        let link_text = &text[pos + 1..link_text_end];
+                        spans.push(Span::styled(
+                            link_text.to_string(),
+                            Style::default().fg(theme.link).add_modifier(Modifier::UNDERLINED),
+                        ));
+                        pos = url_start + 1 + close_paren + 1;
+                        continue;
+                    }
+                }
+            }
+            // Not a valid link — treat [ as plain text
+            spans.push(Span::styled(
+                text[pos..pos+1].to_string(),
+                Style::default().fg(base_color),
+            ));
+            pos += 1;
+        } else if bytes[pos] == b'`' {
             // `inline code`
             let search_start = pos + 1;
             if let Some(end) = text[search_start..].find('`') {
