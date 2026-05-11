@@ -114,15 +114,15 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         } else if let Some(ref input_dlg) = state.input_dialog {
             input_dlg.render(f, f.area(), &state.theme);
         } else if let Some(ref picker) = state.fuzzy_picker {
-            picker.render(f, f.area());
+            picker.render(f, f.area(), &state.theme);
         } else if let Some(ref selector) = state.file_selector {
-            selector.render(f, f.area());
+            selector.render(f, f.area(), &state.theme);
         } else if let Some(ref msel) = state.multi_select {
-            msel.render(f, f.area());
+            msel.render(f, f.area(), &state.theme);
         } else if let Some(ref mp) = state.model_picker {
-            mp.render(f, f.area());
+            mp.render(f, f.area(), &state.theme);
         } else if let Some(ref tp) = state.theme_picker {
-            tp.render(f, f.area());
+            tp.render(f, f.area(), &state.theme);
         }
 
         // Overlay multi-progress bars at the bottom if active

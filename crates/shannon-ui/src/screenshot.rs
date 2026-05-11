@@ -102,7 +102,7 @@ fn render_scene(scene: &SceneData) -> String {
 
             // Model picker
             if let Some(ref mp) = state.model_picker {
-                mp.render(f, f.area());
+                mp.render(f, f.area(), &state.theme);
             }
 
             // Completion suggestions popup

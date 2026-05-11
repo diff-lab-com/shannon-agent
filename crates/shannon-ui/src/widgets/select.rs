@@ -2,9 +2,10 @@
 //!
 //! Provides file selector, multi-select interface, and fuzzy picker components
 
+use crate::theme::Theme;
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
@@ -142,7 +143,7 @@ impl MultiSelectWidget {
     }
 
     /// Render the multi-select widget
-    pub fn render(&self, frame: &mut Frame, area: Rect) {
+    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let max_index_width = if self.items.is_empty() {
             0
         } else {
@@ -161,12 +162,12 @@ impl MultiSelectWidget {
                 let mut spans = vec![
                     Span::styled(
                         format!("{:>width$}. ", i + 1, width = max_index_width),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme.text_dim),
                     ),
                     Span::styled(
                         format!("[{check_mark}]"),
                         Style::default()
-                            .fg(if is_selected { Color::Green } else { Color::White })
+                            .fg(if is_selected { theme.success } else { theme.text })
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::raw(" "),
@@ -174,9 +175,9 @@ impl MultiSelectWidget {
                         &item.label,
                         Style::default()
                             .fg(if is_focused {
-                                Color::Cyan
+                                theme.accent
                             } else {
-                                Color::White
+                                theme.text
                             })
                             .add_modifier(if is_focused {
                                 Modifier::BOLD | Modifier::UNDERLINED
@@ -190,7 +191,7 @@ impl MultiSelectWidget {
                     spans.push(Span::raw(" "));
                     spans.push(Span::styled(
                         desc,
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme.text_dim),
                     ));
                 }
 
@@ -202,12 +203,12 @@ impl MultiSelectWidget {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan))
+                    .border_style(Style::default().fg(theme.accent))
                     .title(format!(" {} ", self.title))
             )
             .highlight_style(
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(theme.selection_bg)
                     .add_modifier(Modifier::BOLD),
             );
 
@@ -389,15 +390,15 @@ impl FileSelectorWidget {
     }
 
     /// Render the file selector
-    pub fn render(&self, frame: &mut Frame, area: Rect) {
+    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let mut content = Vec::new();
 
         // Show current path
         content.push(Line::from(vec![
-            Span::styled("Path: ", Style::default().fg(Color::Yellow)),
+            Span::styled("Path: ", Style::default().fg(theme.warning)),
             Span::styled(
                 &self.current_path,
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
             ),
         ]));
 
@@ -405,12 +406,12 @@ impl FileSelectorWidget {
         if let Some(ref f) = self.filter {
             if !f.is_empty() {
                 content.push(Line::from(vec![
-                    Span::styled("Filter: ", Style::default().fg(Color::Cyan)),
+                    Span::styled("Filter: ", Style::default().fg(theme.accent)),
                     Span::styled(
                         f.as_str(),
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                        Style::default().fg(theme.warning).add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(" (type to filter, Backspace to clear)", Style::default().fg(Color::DarkGray)),
+                    Span::styled(" (type to filter, Backspace to clear)", Style::default().fg(theme.text_dim)),
                 ]));
             }
         }
@@ -419,7 +420,7 @@ impl FileSelectorWidget {
         if !self.directories.is_empty() {
             content.push(Line::from(""));
             content.push(Line::from(vec![
-                Span::styled("Directories:", Style::default().fg(Color::Cyan)),
+                Span::styled("Directories:", Style::default().fg(theme.accent)),
             ]));
 
             for (i, dir) in self.directories.iter().enumerate() {
@@ -429,10 +430,10 @@ impl FileSelectorWidget {
                     "  "
                 };
                 content.push(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(Color::Yellow)),
+                    Span::styled(prefix, Style::default().fg(theme.warning)),
                     Span::styled(
                         format!("{dir}/"),
-                        Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD),
+                        Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
                     ),
                 ]));
             }
@@ -442,7 +443,7 @@ impl FileSelectorWidget {
         if !self.files.is_empty() {
             content.push(Line::from(""));
             content.push(Line::from(vec![
-                Span::styled("Files:", Style::default().fg(Color::Cyan)),
+                Span::styled("Files:", Style::default().fg(theme.accent)),
             ]));
 
             for (i, file) in self.files.iter().enumerate() {
@@ -452,8 +453,8 @@ impl FileSelectorWidget {
                     "  "
                 };
                 content.push(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(Color::Yellow)),
-                    Span::styled(file, Style::default().fg(Color::White)),
+                    Span::styled(prefix, Style::default().fg(theme.warning)),
+                    Span::styled(file, Style::default().fg(theme.text)),
                 ]));
             }
         }
@@ -461,18 +462,18 @@ impl FileSelectorWidget {
         // Show help text
         content.push(Line::from(""));
         content.push(Line::from(vec![
-            Span::styled("↑/↓: Navigate", Style::default().fg(Color::DarkGray)),
+            Span::styled("↑/↓: Navigate", Style::default().fg(theme.text_dim)),
             Span::raw("  "),
-            Span::styled("Tab: Switch", Style::default().fg(Color::DarkGray)),
+            Span::styled("Tab: Switch", Style::default().fg(theme.text_dim)),
             Span::raw("  "),
-            Span::styled("Enter: Select", Style::default().fg(Color::DarkGray)),
+            Span::styled("Enter: Select", Style::default().fg(theme.text_dim)),
         ]));
 
         let paragraph = Paragraph::new(content)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan))
+                    .border_style(Style::default().fg(theme.accent))
                     .title(format!(" {} ", self.title))
             )
             .wrap(Wrap { trim: false });
@@ -595,7 +596,7 @@ impl FuzzyPickerWidget {
     }
 
     /// Render the fuzzy picker
-    pub fn render(&self, frame: &mut Frame, area: Rect) {
+    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let mut content = Vec::new();
 
         // Show search bar
@@ -606,20 +607,20 @@ impl FuzzyPickerWidget {
         };
 
         content.push(Line::from(vec![
-            Span::styled(search_prefix, Style::default().fg(Color::Cyan)),
+            Span::styled(search_prefix, Style::default().fg(theme.accent)),
             Span::styled(
                 &self.search_query,
                 Style::default()
                     .fg(if self.state == PickerState::Searching {
-                        Color::Yellow
+                        theme.warning
                     } else {
-                        Color::White
+                        theme.text
                     })
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 if self.state == PickerState::Searching { "█" } else { "" },
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme.warning),
             ),
         ]));
 
@@ -638,15 +639,15 @@ impl FuzzyPickerWidget {
                     content.push(Line::from(vec![
                         Span::styled(
                             if is_selected { "→ " } else { "  " },
-                            Style::default().fg(Color::Yellow),
+                            Style::default().fg(theme.warning),
                         ),
                         Span::styled(
                             &item.label,
                             Style::default()
                                 .fg(if is_selected {
-                                    Color::Cyan
+                                    theme.accent
                                 } else {
-                                    Color::White
+                                    theme.text
                                 })
                                 .add_modifier(if is_selected {
                                     Modifier::BOLD
@@ -661,7 +662,7 @@ impl FuzzyPickerWidget {
                             Span::raw("    "),
                             Span::styled(
                                 desc,
-                                Style::default().fg(Color::DarkGray),
+                                Style::default().fg(theme.text_dim),
                             ),
                         ]));
                     }
@@ -678,13 +679,13 @@ impl FuzzyPickerWidget {
                             end,
                             self.filtered_items.len()
                         ),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme.text_dim),
                     ),
                 ]));
             }
         } else {
             content.push(Line::from(vec![
-                Span::styled("No results", Style::default().fg(Color::DarkGray)),
+                Span::styled("No results", Style::default().fg(theme.text_dim)),
             ]));
         }
 
@@ -692,7 +693,7 @@ impl FuzzyPickerWidget {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan))
+                    .border_style(Style::default().fg(theme.accent))
                     .title(format!(" {} ", self.title))
             )
             .wrap(Wrap { trim: true });
@@ -922,7 +923,7 @@ impl ModelPickerWidget {
     }
 
     /// Render the model picker as a centered dialog.
-    pub fn render(&self, frame: &mut Frame, area: Rect) {
+    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         use ratatui::widgets::Clear;
 
         let dialog_width = 52u16.min(area.width.saturating_sub(4));
@@ -951,7 +952,7 @@ impl ModelPickerWidget {
         };
         lines.push(Line::from(Span::styled(
             format!(" Select {provider_name} Model "),
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
 
@@ -964,9 +965,9 @@ impl ModelPickerWidget {
                 .flat_map(|(i, p)| {
                     let name = provider_display_name(p);
                     let style = if i == self.current_provider_idx {
-                        Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+                        Style::default().fg(theme.context_bar_bg).bg(theme.accent).add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default().fg(Color::DarkGray)
+                        Style::default().fg(theme.text_dim)
                     };
                     let bracket = if i == self.current_provider_idx {
                         format!(" [{name}] ")
@@ -984,11 +985,11 @@ impl ModelPickerWidget {
         if self.models.is_empty() {
             lines.push(Line::from(Span::styled(
                 "  No local models detected",
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                Style::default().fg(theme.text_dim).add_modifier(Modifier::ITALIC),
             )));
             lines.push(Line::from(Span::styled(
                 "  Install Ollama and run: ollama pull llama3",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_dim),
             )));
         } else {
             let end_idx = (self.scroll_offset + MAX_VISIBLE_MODELS).min(self.models.len());
@@ -1012,17 +1013,17 @@ impl ModelPickerWidget {
                 if i == self.selected_idx {
                     lines.push(Line::from(Span::styled(
                         format!("{marker}▸ {truncated}"),
-                        Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD),
+                        Style::default().fg(theme.context_bar_bg).bg(theme.accent).add_modifier(Modifier::BOLD),
                     )));
                 } else if is_current {
                     lines.push(Line::from(Span::styled(
                         format!("{marker}  {truncated}"),
-                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                        Style::default().fg(theme.success).add_modifier(Modifier::BOLD),
                     )));
                 } else {
                     lines.push(Line::from(Span::styled(
                         format!("{marker}  {truncated}"),
-                        Style::default().fg(Color::White),
+                        Style::default().fg(theme.text),
                     )));
                 }
             }
@@ -1042,7 +1043,7 @@ impl ModelPickerWidget {
             };
             lines.push(Line::from(Span::styled(
                 format!("  ctx: {ctx} tokens  |  max output: {out} tokens"),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme.warning),
             )));
         }
 
@@ -1064,14 +1065,14 @@ impl ModelPickerWidget {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             hints,
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.text_dim),
         )));
 
         let paragraph = Paragraph::new(lines)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::DarkGray))
+                    .border_style(Style::default().fg(theme.text_dim))
                     .border_type(ratatui::widgets::BorderType::Rounded),
             )
             .wrap(Wrap { trim: false });
