@@ -101,4 +101,7 @@
 - **Enter-to-queue** — Enter during streaming auto-queues follow-up message
 - **Chat search** — `/` activates search, real-time match highlighting, n/N navigation with auto-scroll
 - **Vim word movement** — `w`/`b` with proper vim semantics (word/punctuation classes)
+- **Vim multi-line navigation** — `gg`/`G` navigates across all input lines
+- **Readline keybindings** — Delete key, Ctrl+K (kill to end), Ctrl+U (kill to start), Ctrl+A (start of line)
+- **Editor context injection** — Ctrl+E on empty input shows last AI response as comments
 - **Lightweight** — smaller footprint than Codex or OpenCode
