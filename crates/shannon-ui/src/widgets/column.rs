@@ -81,6 +81,28 @@ impl ColumnRenderable {
         cell
     }
 
+    /// Remove the first cell and re-key remaining index maps.
+    pub fn pop_front(&mut self) -> Option<MessageCell> {
+        if self.cells.is_empty() {
+            return None;
+        }
+        let cell = self.cells.remove(0);
+        // Decrement all keys by 1 since indices shifted
+        let mut new_scrolls = HashMap::new();
+        let scrolls = std::mem::take(&mut self.cell_scrolls);
+        for (k, v) in scrolls {
+            if k > 0 { new_scrolls.insert(k - 1, v); }
+        }
+        self.cell_scrolls = new_scrolls;
+        let mut alloc = self.cell_allocated.lock();
+        let mut new_alloc = HashMap::new();
+        for (k, v) in alloc.drain() {
+            if k > 0 { new_alloc.insert(k - 1, v); }
+        }
+        *alloc = new_alloc;
+        Some(cell)
+    }
+
     /// Truncate to `len` cells, removing any beyond that index.
     pub fn truncate(&mut self, len: usize) {
         self.cells.truncate(len);

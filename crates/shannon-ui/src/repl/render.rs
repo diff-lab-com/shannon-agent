@@ -27,6 +27,8 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             let paragraph = ratatui::widgets::Paragraph::new(lines);
             paragraph.render(buf.area, buf);
         })?;
+        // Evict old committed messages after flush to bound memory
+        repl.chat.trim_old_committed();
     }
 
     let chat = &repl.chat;

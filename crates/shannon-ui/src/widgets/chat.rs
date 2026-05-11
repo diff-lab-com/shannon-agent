@@ -181,6 +181,12 @@ pub enum ChatRole {
     Tool,
 }
 
+/// Keep at most this many committed messages in memory. Older ones are
+/// already in terminal scrollback and can be evicted.
+const MAX_COMMITTED_RETAIN: usize = 200;
+/// Only trim when total message count exceeds this threshold.
+const TRIM_THRESHOLD: usize = 500;
+
 impl ChatWidget {
     /// Create a new chat widget
     pub fn new(capacity: usize) -> Self {
@@ -788,6 +794,34 @@ impl ChatWidget {
     /// Reset committed count (e.g. after rewind or clear).
     pub fn reset_committed(&mut self) {
         self.committed_count = 0;
+    }
+
+    /// Evict old committed messages when total count exceeds the threshold.
+    /// Committed messages are already in terminal scrollback, so removing them
+    /// only affects the full-transcript pager — the terminal still has them.
+    pub fn trim_old_committed(&mut self) {
+        if self.messages.len() <= TRIM_THRESHOLD {
+            return;
+        }
+        // How many committed messages to remove
+        let excess = self.messages.len().saturating_sub(TRIM_THRESHOLD);
+        // Don't remove more than (committed - MAX_COMMITTED_RETAIN)
+        let removable = self.committed_count.saturating_sub(MAX_COMMITTED_RETAIN);
+        let to_remove = excess.min(removable);
+        if to_remove == 0 {
+            return;
+        }
+        tracing::debug!(
+            "trim_old_committed: removing {to_remove} oldest messages (total={}, committed={})",
+            self.messages.len(), self.committed_count
+        );
+        // Drain from front
+        for _ in 0..to_remove {
+            self.messages.pop_front();
+            self.column.pop_front();
+        }
+        self.committed_count = self.committed_count.saturating_sub(to_remove);
+        self.scroll_offset = self.scroll_offset.saturating_sub(to_remove);
     }
 
     /// Rewind the conversation by removing the last `n` turns.
