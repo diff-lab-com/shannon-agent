@@ -571,6 +571,37 @@ impl ChatWidget {
         // Content area starts below separator, uses full width (no side borders)
         let inner = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
 
+        // Welcome screen when chat is empty
+        if self.messages.is_empty() {
+            let welcome_lines = vec![
+                ratatui::text::Line::from(""),
+                ratatui::text::Line::from(""),
+                ratatui::text::Line::from(vec![
+                    ratatui::text::Span::styled("  Shannon", ratatui::style::Style::default().fg(theme.accent).add_modifier(ratatui::style::Modifier::BOLD)),
+                    ratatui::text::Span::styled(" — AI Code Assistant", ratatui::style::Style::default().fg(theme.text_dim)),
+                ]),
+                ratatui::text::Line::from(""),
+                ratatui::text::Line::from(vec![
+                    ratatui::text::Span::styled("  Type a message below to get started", ratatui::style::Style::default().fg(theme.muted)),
+                ]),
+                ratatui::text::Line::from(""),
+                ratatui::text::Line::from(vec![
+                    ratatui::text::Span::styled("  ", ratatui::style::Style::default()),
+                    ratatui::text::Span::styled("Enter", ratatui::style::Style::default().fg(theme.accent)),
+                    ratatui::text::Span::styled(" Send   ", ratatui::style::Style::default().fg(theme.muted)),
+                    ratatui::text::Span::styled("Tab", ratatui::style::Style::default().fg(theme.accent)),
+                    ratatui::text::Span::styled(" Queue   ", ratatui::style::Style::default().fg(theme.muted)),
+                    ratatui::text::Span::styled("Ctrl+G", ratatui::style::Style::default().fg(theme.accent)),
+                    ratatui::text::Span::styled(" Pager   ", ratatui::style::Style::default().fg(theme.muted)),
+                    ratatui::text::Span::styled("Ctrl+C", ratatui::style::Style::default().fg(theme.accent)),
+                    ratatui::text::Span::styled(" Quit", ratatui::style::Style::default().fg(theme.muted)),
+                ]),
+            ];
+            let welcome = ratatui::widgets::Paragraph::new(welcome_lines);
+            frame.render_widget(welcome, inner);
+            return;
+        }
+
         // Render visible cells using ColumnRenderable
         let buf = frame.buffer_mut();
         self.column.render(inner, buf, theme, self.scroll_offset, 0, search);
@@ -871,15 +902,23 @@ pub(super) enum MdSegment {
     UnorderedList(Vec<String>),
     /// Ordered list items (numbered)
     OrderedList(Vec<String>),
+    /// Task list items (checkboxes): Vec of (checked, text)
+    TaskList(Vec<(bool, String)>),
     /// Blockquote lines
     Blockquote(Vec<String>),
     /// Horizontal rule (thematic break)
     HorizontalRule,
+    /// Table: (headers, rows)
+    Table { headers: Vec<String>, rows: Vec<Vec<String>> },
 }
 
 /// Parse content into markdown segments using pulldown-cmark.
 pub(super) fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
-    use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
+    use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+
+    let mut opts = Options::empty();
+    opts.insert(Options::ENABLE_TABLES);
+    opts.insert(Options::ENABLE_TASKLISTS);
 
     let mut segments = Vec::new();
     let mut current_text: Vec<String> = Vec::new();
@@ -897,6 +936,18 @@ pub(super) fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
     let mut in_strikethrough = false;
     let mut _in_link = false;
     let mut link_url: Option<String> = None;
+    // Table state
+    let mut _in_table = false;
+    let mut _in_table_head = false;
+    let mut _in_table_row = false;
+    let mut in_table_cell = false;
+    let mut table_headers: Vec<String> = Vec::new();
+    let mut table_rows: Vec<Vec<String>> = Vec::new();
+    let mut current_row: Vec<String> = Vec::new();
+    let mut current_cell = String::new();
+    // Task list detection
+    let mut is_task_list = false;
+    let mut task_items: Vec<(bool, String)> = Vec::new();
 
     let flush_text = |segments: &mut Vec<MdSegment>, text: &mut Vec<String>| {
         if !text.is_empty() {
@@ -904,7 +955,7 @@ pub(super) fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
         }
     };
 
-    for event in Parser::new(content) {
+    for event in Parser::new_ext(content, opts) {
         match event {
             Event::Start(Tag::CodeBlock(kind)) => {
                 flush_text(&mut segments, &mut current_text);
@@ -942,18 +993,41 @@ pub(super) fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
                 in_list = true;
                 list_ordered = start_number.is_some();
                 list_items.clear();
+                is_task_list = false;
+                task_items.clear();
             }
             Event::End(TagEnd::List(_)) => {
-                let items = std::mem::take(&mut list_items);
-                if list_ordered {
-                    segments.push(MdSegment::OrderedList(items));
+                if is_task_list && !task_items.is_empty() {
+                    segments.push(MdSegment::TaskList(std::mem::take(&mut task_items)));
                 } else {
-                    segments.push(MdSegment::UnorderedList(items));
+                    let items = std::mem::take(&mut list_items);
+                    if list_ordered {
+                        segments.push(MdSegment::OrderedList(items));
+                    } else {
+                        segments.push(MdSegment::UnorderedList(items));
+                    }
                 }
                 in_list = false;
+                is_task_list = false;
             }
-            Event::Start(Tag::Item) => {}
-            Event::End(TagEnd::Item) => {}
+            Event::Start(Tag::Item) => {
+                // Reset item-level state
+            }
+            Event::End(TagEnd::Item) => {
+                // Detect task list pattern: [x] or [ ] at start of last item
+                if let Some(last) = list_items.last() {
+                    let trimmed = last.trim_start();
+                    if let Some(rest) = trimmed.strip_prefix("[x] ").or_else(|| trimmed.strip_prefix("[X] ")) {
+                        is_task_list = true;
+                        task_items.push((true, rest.to_string()));
+                        list_items.pop();
+                    } else if let Some(rest) = trimmed.strip_prefix("[ ] ") {
+                        is_task_list = true;
+                        task_items.push((false, rest.to_string()));
+                        list_items.pop();
+                    }
+                }
+            }
             Event::Start(Tag::BlockQuote(_)) => {
                 flush_text(&mut segments, &mut current_text);
                 in_blockquote = true;
@@ -966,6 +1040,9 @@ pub(super) fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
             Event::Rule => {
                 flush_text(&mut segments, &mut current_text);
                 segments.push(MdSegment::HorizontalRule);
+            }
+            Event::Text(text) if in_table_cell => {
+                current_cell.push_str(&text);
             }
             Event::Text(text) if in_code => {
                 code_lines.extend(text.lines().map(|l| l.to_string()));
@@ -1046,6 +1123,44 @@ pub(super) fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
                     }
                 }
                 _in_link = false;
+            }
+            // ── Table support ──
+            Event::Start(Tag::Table(_)) => {
+                flush_text(&mut segments, &mut current_text);
+                _in_table = true;
+                table_headers.clear();
+                table_rows.clear();
+            }
+            Event::End(TagEnd::Table) => {
+                segments.push(MdSegment::Table {
+                    headers: std::mem::take(&mut table_headers),
+                    rows: std::mem::take(&mut table_rows),
+                });
+                _in_table = false;
+            }
+            Event::Start(Tag::TableHead) => {
+                _in_table_head = true;
+                current_row.clear();
+            }
+            Event::End(TagEnd::TableHead) => {
+                table_headers = std::mem::take(&mut current_row);
+                _in_table_head = false;
+            }
+            Event::Start(Tag::TableRow) => {
+                _in_table_row = true;
+                current_row.clear();
+            }
+            Event::End(TagEnd::TableRow) => {
+                table_rows.push(std::mem::take(&mut current_row));
+                _in_table_row = false;
+            }
+            Event::Start(Tag::TableCell) => {
+                in_table_cell = true;
+                current_cell.clear();
+            }
+            Event::End(TagEnd::TableCell) => {
+                current_row.push(current_cell.trim().to_string());
+                in_table_cell = false;
             }
             _ => {}
         }

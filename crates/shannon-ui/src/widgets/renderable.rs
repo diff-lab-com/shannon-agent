@@ -690,6 +690,81 @@ impl MessageCell {
                         Span::styled("─".repeat(inner_width.min(60)), Style::default().fg(theme.border_dim)),
                     ]));
                 }
+                MdSegment::TaskList(items) => {
+                    let tl_width = content_width.saturating_sub(4).max(20);
+                    for (checked, text) in items {
+                        let checkbox = if *checked {
+                            Span::styled("✓ ", Style::default().fg(theme.success))
+                        } else {
+                            Span::styled("○ ", Style::default().fg(theme.muted))
+                        };
+                        let wrapped = wrap_line(text, tl_width);
+                        for (i, wl) in wrapped.iter().enumerate() {
+                            if i == 0 {
+                                lines.push(Line::from(vec![
+                                    Span::styled("  ", Style::default()),
+                                    checkbox.clone(),
+                                    Span::styled(wl.clone(), Style::default().fg(theme.text)),
+                                ]));
+                            } else {
+                                lines.push(Line::from(vec![
+                                    Span::styled("    ", Style::default()),
+                                    Span::styled(wl.clone(), Style::default().fg(theme.text)),
+                                ]));
+                            }
+                        }
+                    }
+                }
+                MdSegment::Table { headers, rows } => {
+                    let col_count = headers.len().max(1);
+                    // Calculate column widths
+                    let mut widths = vec![0usize; col_count];
+                    for (i, h) in headers.iter().enumerate() {
+                        widths[i] = widths[i].max(unicode_width::UnicodeWidthStr::width(h.as_str()));
+                    }
+                    for row in rows {
+                        for (i, cell) in row.iter().enumerate() {
+                            if i < col_count {
+                                widths[i] = widths[i].max(unicode_width::UnicodeWidthStr::width(cell.as_str()));
+                            }
+                        }
+                    }
+                    // Limit total width
+                    let total: usize = widths.iter().sum::<usize>() + (col_count - 1) * 3 + 2;
+                    let budget = inner_width.min(80);
+                    if total > budget && col_count > 0 {
+                        let scale = budget as f64 / total as f64;
+                        for w in &mut widths {
+                            *w = (*w as f64 * scale) as usize;
+                        }
+                    }
+
+                    // Header row
+                    let mut header_parts = Vec::new();
+                    for (i, h) in headers.iter().enumerate() {
+                        let w = widths.get(i).copied().unwrap_or(0);
+                        header_parts.push(Span::styled(format!(" {:w$} ", h, w = w), Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)));
+                    }
+                    lines.push(Line::from(header_parts));
+
+                    // Separator
+                    let mut sep_parts = Vec::new();
+                    for (i, _) in headers.iter().enumerate() {
+                        let w = widths.get(i).copied().unwrap_or(0);
+                        sep_parts.push(Span::styled(format!("{}┼", "─".repeat(w + 2)), Style::default().fg(theme.border_dim)));
+                    }
+                    lines.push(Line::from(sep_parts));
+
+                    // Data rows
+                    for row in rows {
+                        let mut row_parts = Vec::new();
+                        for (i, cell) in row.iter().enumerate() {
+                            let w = widths.get(i).copied().unwrap_or(0);
+                            row_parts.push(Span::styled(format!(" {:w$} ", cell, w = w), Style::default().fg(theme.text_dim)));
+                        }
+                        lines.push(Line::from(row_parts));
+                    }
+                }
             }
         }
 
