@@ -271,7 +271,6 @@ impl MessageCell {
             } else {
                 ("\u{2713}", theme.success)
             };
-            let _ = status_color; // used below in bottom border
             let dur_part = if let Some(dur) = msg.duration_secs {
                 let dur_str = if dur >= 60.0 {
                     format!("{}m{:.0}s", dur as u64 / 60, dur % 60.0)
@@ -306,7 +305,7 @@ impl MessageCell {
                     }
                 }
                 let bottom = format!("╰{}╯", "─".repeat(border_w.saturating_sub(2)));
-                lines.push(Line::from(Span::styled(bottom, Style::default().fg(theme.border_dim))));
+                lines.push(Line::from(Span::styled(bottom, Style::default().fg(status_color))));
                 add_role_gutter(&mut lines, gutter_color);
                 return lines;
             }
@@ -339,7 +338,7 @@ impl MessageCell {
                     ]));
                 }
                 let bottom = format!("╰{}╯", "─".repeat(border_w.saturating_sub(2)));
-                lines.push(Line::from(Span::styled(bottom, Style::default().fg(theme.border_dim))));
+                lines.push(Line::from(Span::styled(bottom, Style::default().fg(status_color))));
                 add_role_gutter(&mut lines, gutter_color);
                 return lines;
             }
@@ -405,7 +404,7 @@ impl MessageCell {
                     }
                 }
                 let bottom = format!("╰{}╯", "─".repeat(border_w.saturating_sub(2)));
-                lines.push(Line::from(Span::styled(bottom, Style::default().fg(theme.border_dim))));
+                lines.push(Line::from(Span::styled(bottom, Style::default().fg(status_color))));
                 add_role_gutter(&mut lines, gutter_color);
                 return lines;
             }
@@ -450,7 +449,7 @@ impl MessageCell {
                 }
             }
             let bottom = format!("╰{}╯", "─".repeat(border_w.saturating_sub(2)));
-            lines.push(Line::from(Span::styled(bottom, Style::default().fg(theme.border_dim))));
+            lines.push(Line::from(Span::styled(bottom, Style::default().fg(status_color))));
             add_role_gutter(&mut lines, gutter_color);
             return lines;
         }
