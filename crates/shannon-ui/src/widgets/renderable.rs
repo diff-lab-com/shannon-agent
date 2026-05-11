@@ -742,8 +742,8 @@ impl MessageCell {
                     // Header row
                     let mut header_parts = Vec::new();
                     for (i, h) in headers.iter().enumerate() {
-                        let w = widths.get(i).copied().unwrap_or(0);
-                        header_parts.push(Span::styled(format!(" {:w$} ", h, w = w), Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)));
+                        let width = widths.get(i).copied().unwrap_or(0);
+                        header_parts.push(Span::styled(format!(" {h:width$} "), Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)));
                     }
                     lines.push(Line::from(header_parts));
 
@@ -759,8 +759,8 @@ impl MessageCell {
                     for row in rows {
                         let mut row_parts = Vec::new();
                         for (i, cell) in row.iter().enumerate() {
-                            let w = widths.get(i).copied().unwrap_or(0);
-                            row_parts.push(Span::styled(format!(" {:w$} ", cell, w = w), Style::default().fg(theme.text_dim)));
+                            let width = widths.get(i).copied().unwrap_or(0);
+                            row_parts.push(Span::styled(format!(" {cell:width$} "), Style::default().fg(theme.text_dim)));
                         }
                         lines.push(Line::from(row_parts));
                     }
