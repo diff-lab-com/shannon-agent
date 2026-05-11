@@ -155,7 +155,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         let toast_visible = state.toast.is_some();
         if let Some((ref msg, _started)) = state.toast {
             let toast_text = format!(" {msg} ");
-            let toast_width = toast_text.chars().count() as u16;
+            let toast_width = unicode_width::UnicodeWidthStr::width(toast_text.as_str()) as u16;
             let y = f.area().bottom().saturating_sub(5);
             let x = f.area().x + 1;
             let toast_area = ratatui::layout::Rect {
@@ -173,7 +173,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         // Offset down by 1 when toast is visible to avoid overlap
         if state.streaming_active && state.queued_message.is_none() {
             let hint = " ↑↓ scroll · Enter = queue after response · Esc = stop ";
-            let hint_width = hint.chars().count() as u16;
+            let hint_width = unicode_width::UnicodeWidthStr::width(hint) as u16;
             let x = f.area().x + 2;
             let y_offset = if toast_visible { 4 } else { 5 };
             let y = f.area().bottom().saturating_sub(y_offset);
@@ -195,7 +195,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             } else {
                 " ↓ End = jump to latest ".to_string()
             };
-            let indicator_width = indicator.chars().count() as u16;
+            let indicator_width = unicode_width::UnicodeWidthStr::width(indicator.as_str()) as u16;
             let ix = f.area().x + f.area().width.saturating_sub(indicator_width + 2);
             let iy = f.area().y + 2;
             let iw = indicator_width.min(f.area().width.saturating_sub(4));
@@ -263,7 +263,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         // Overlay fullscreen indicator in top-right corner
         if state.fullscreen_mode {
             let indicator = " [FS] ";
-            let width = indicator.chars().count() as u16;
+            let width = unicode_width::UnicodeWidthStr::width(indicator) as u16;
             let indicator_area = ratatui::layout::Rect {
                 x: f.area().right().saturating_sub(width + 1),
                 y: f.area().y,

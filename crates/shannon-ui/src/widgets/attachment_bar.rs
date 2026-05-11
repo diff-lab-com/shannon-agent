@@ -44,8 +44,16 @@ impl Attachment {
             .rsplit('/')
             .next()
             .unwrap_or(&self.path);
-        if name.chars().count() > max_len {
-            let truncated: String = name.chars().take(max_len.saturating_sub(3)).collect();
+        let name_w = unicode_width::UnicodeWidthStr::width(name);
+        if name_w > max_len {
+            let end = max_len.saturating_sub(3);
+            let mut len = 0;
+            let truncated: String = name.chars()
+                .take_while(|c| {
+                    let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
+                    if len + cw > end { false } else { len += cw; true }
+                })
+                .collect();
             format!("{truncated}...")
         } else {
             name.to_string()

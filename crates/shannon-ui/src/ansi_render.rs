@@ -33,7 +33,7 @@ pub fn lines_to_ansi(lines: &[Line<'_>], width: u16) -> String {
             out.push_str("\x1b[0m");
         }
         // Pad to width so terminal scrollback lines align
-        let content_width: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
+        let content_width: usize = line.spans.iter().map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref())).sum();
         if content_width < width as usize {
             for _ in 0..width as usize - content_width {
                 out.push(' ');

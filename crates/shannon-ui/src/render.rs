@@ -590,7 +590,7 @@ fn render_aligned_table(
     let mut col_widths = vec![0usize; col_count];
     for row in rows {
         for (i, cell) in row.iter().enumerate() {
-            let w = spans_to_string(cell).chars().count().min(TABLE_MAX_COL_WIDTH);
+            let w = unicode_width::UnicodeWidthStr::width(spans_to_string(cell).as_str()).min(TABLE_MAX_COL_WIDTH);
             col_widths[i] = col_widths[i].max(w);
         }
     }
@@ -668,7 +668,7 @@ fn render_aligned_table(
 
 /// Center-align text within a given width, padding with spaces.
 fn pad_center(text: &str, width: usize) -> String {
-    let len = text.chars().count();
+    let len = unicode_width::UnicodeWidthStr::width(text);
     if len >= width {
         return text.to_string();
     }
@@ -745,7 +745,7 @@ fn render_code_block_with_border(
     }
 
     // Footer: ╰──────────────────────╯
-    let footer_width = title_content.chars().count() + 2; // +2 for corners
+    let footer_width = unicode_width::UnicodeWidthStr::width(title_content.as_str()) + 2; // +2 for corners
     let footer = format!("╰{:─>width$}╯", "", width = footer_width);
     output.push(Line::from(Span::styled(footer, border_style)));
 

@@ -95,7 +95,7 @@ impl SessionTabWidget {
         }
 
         // New tab hint
-        if area.width as usize > spans.iter().map(|s| s.content.chars().count()).sum::<usize>() + 6 {
+        if area.width as usize > spans.iter().map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref())).sum::<usize>() + 6 {
             spans.push(Span::styled(" +", Style::default().fg(theme.primary)));
         }
 
