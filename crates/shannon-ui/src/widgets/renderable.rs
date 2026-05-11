@@ -612,7 +612,7 @@ impl MessageCell {
                         for line in &highlighted[..10] {
                             folded.push(prefix_code_line(line.clone(), theme.border_dim, code_bg));
                         }
-                        let hidden = highlighted.len() - 15;
+                        let hidden = highlighted.len().saturating_sub(16);
                         folded.push(Line::from(
                             Span::styled(format!("│ ... {hidden} more lines (press 'o' to expand)"), Style::default().fg(theme.muted).bg(code_bg))
                         ));
@@ -848,7 +848,7 @@ impl Renderable for MessageCell {
         // Use Paragraph::line_count for accurate height (handles remaining wrapping
         // of long code lines or headers that build_lines doesn't pre-wrap).
         let paragraph = Paragraph::new(lines);
-        let height = paragraph.line_count(width) as u16 + 1; // +1 for inter-message spacing
+        let height = paragraph.line_count(width) as u16 + 2; // +2 for separator line and trailing blank
 
         self.cached_width.store(width, Ordering::Relaxed);
         self.cached_height.store(height, Ordering::Relaxed);
@@ -938,7 +938,7 @@ mod tests {
         msg.tool_name = Some("bash".to_string());
         let cell = MessageCell::new(msg, true);
         let h = cell.desired_height(80);
-        assert_eq!(h, 2, "collapsed tool should be 1 line + spacing, got {h}");
+        assert_eq!(h, 3, "collapsed tool should be separator + 1 line + blank, got {h}");
     }
 
     #[test]

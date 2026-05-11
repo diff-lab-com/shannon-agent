@@ -561,7 +561,8 @@ impl ChatWidget {
         } else {
             label
         };
-        let sep = format!("─{label}{}", "─".repeat(area.width as usize - label.len() - 1));
+        let dash_count = (area.width as usize).saturating_sub(label.len()).saturating_sub(1);
+        let sep = format!("─{label}{}", "─".repeat(dash_count));
         let sep_line = ratatui::widgets::Paragraph::new(ratatui::text::Line::from(vec![
             ratatui::text::Span::styled(sep, ratatui::style::Style::default().fg(theme.border)),
         ]));
