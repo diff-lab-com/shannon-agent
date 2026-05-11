@@ -468,16 +468,43 @@ impl MessageCell {
                 if all_lines.len() > row_budget {
                     let head = row_budget / 2;
                     let tail = row_budget - head;
-                    for line in &all_lines[..head] {
-                        lines.push(Line::from(Span::styled(line.clone(), Style::default().fg(theme.text_dim))));
+                    // Render head lines with proper border prefix
+                    for raw_line in content.lines().filter(|l| !l.trim().is_empty()).take(head) {
+                        if raw_line.trim_start().starts_with('$') || raw_line.starts_with("> Using: bash") {
+                            let cmd = raw_line.trim_start().trim_start_matches('$').trim_start();
+                            lines.push(Line::from(vec![
+                                Span::styled("│ ", Style::default().fg(theme.border_dim)),
+                                Span::styled("$ ", Style::default().fg(theme.tool_bash).add_modifier(Modifier::BOLD)),
+                                Span::styled(cmd.to_string(), Style::default().fg(theme.tool_bash)),
+                            ]));
+                        } else {
+                            lines.push(Line::from(vec![
+                                Span::styled("│ ", Style::default().fg(theme.border_dim)),
+                                Span::styled(raw_line.to_string(), Style::default().fg(theme.text_dim)),
+                            ]));
+                        }
                     }
                     let hidden = all_lines.len() - row_budget;
                     lines.push(Line::from(Span::styled(
                         format!("│ ... +{hidden} lines (Alt+F to expand)"),
                         Style::default().fg(theme.muted),
                     )));
-                    for line in &all_lines[all_lines.len().saturating_sub(tail)..] {
-                        lines.push(Line::from(Span::styled(line.clone(), Style::default().fg(theme.text_dim))));
+                    // Render tail lines with proper border prefix
+                    let non_empty: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+                    for raw_line in non_empty.iter().rev().take(tail).rev() {
+                        if raw_line.trim_start().starts_with('$') || raw_line.starts_with("> Using: bash") {
+                            let cmd = raw_line.trim_start().trim_start_matches('$').trim_start();
+                            lines.push(Line::from(vec![
+                                Span::styled("│ ", Style::default().fg(theme.border_dim)),
+                                Span::styled("$ ", Style::default().fg(theme.tool_bash).add_modifier(Modifier::BOLD)),
+                                Span::styled(cmd.to_string(), Style::default().fg(theme.tool_bash)),
+                            ]));
+                        } else {
+                            lines.push(Line::from(vec![
+                                Span::styled("│ ", Style::default().fg(theme.border_dim)),
+                                Span::styled(raw_line.to_string(), Style::default().fg(theme.text_dim)),
+                            ]));
+                        }
                     }
                 } else {
                     for raw_line in content.lines() {
