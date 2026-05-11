@@ -342,7 +342,15 @@ impl PromptWidget {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(self.border_color_override.unwrap_or(theme.border)))
-                    .title(title),
+                    .title(title)
+                    .title_bottom(
+                        ratatui::text::Line::from(
+                            Span::styled(
+                                " Enter:Send  Shift+Enter:Newline  Ctrl+E:Editor ",
+                                Style::default().fg(theme.muted),
+                            )
+                        ).alignment(ratatui::layout::Alignment::Center),
+                    ),
             )
             .alignment(Alignment::Left);
 

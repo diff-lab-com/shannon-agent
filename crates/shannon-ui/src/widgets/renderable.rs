@@ -26,6 +26,13 @@ use ratatui::{
 #[cfg(test)]
 use ratatui::style::Color;
 
+/// Prepend a colored role gutter `┃ ` to every line for visual lane separation.
+fn add_role_gutter(lines: &mut Vec<Line<'static>>, color: ratatui::style::Color) {
+    for line in lines.iter_mut() {
+        line.spans.insert(0, Span::styled("┃ ".to_string(), Style::default().fg(color)));
+    }
+}
+
 // ── Search highlighting ──────────────────────────────────────────────────
 
 /// Search parameters for highlighting matches in rendered cells.
@@ -172,7 +179,13 @@ impl MessageCell {
         }
 
         let msg = &self.message;
-        let inner_width = width as usize;
+        let inner_width = width.saturating_sub(2) as usize; // reserve 2 cols for role gutter
+        let gutter_color = match msg.role {
+            ChatRole::User => theme.user_msg,
+            ChatRole::Assistant => theme.assistant_msg,
+            ChatRole::System => theme.system_msg,
+            ChatRole::Tool => theme.tool_msg,
+        };
         let mut lines: Vec<Line<'static>> = Vec::new();
 
         // ── Collapsed tool messages ──
@@ -203,6 +216,7 @@ impl MessageCell {
                 Span::styled(prefix.to_string(), Style::default().fg(cat_color)),
                 Span::styled(display, Style::default().fg(theme.text_dim)),
             ]));
+            add_role_gutter(&mut lines, gutter_color);
             return lines;
         }
 
@@ -274,6 +288,7 @@ impl MessageCell {
                         ]));
                     }
                 }
+                add_role_gutter(&mut lines, gutter_color);
                 return lines;
             }
 
@@ -303,6 +318,7 @@ impl MessageCell {
                         ),
                     ]));
                 }
+                add_role_gutter(&mut lines, gutter_color);
                 return lines;
             }
 
@@ -362,6 +378,7 @@ impl MessageCell {
                         }
                     }
                 }
+                add_role_gutter(&mut lines, gutter_color);
                 return lines;
             }
 
@@ -395,6 +412,7 @@ impl MessageCell {
                     }
                 }
             }
+            add_role_gutter(&mut lines, gutter_color);
             return lines;
         }
 
@@ -434,14 +452,17 @@ impl MessageCell {
                 }
                 MdSegment::CodeBlock { lang, code } => {
                     let lang_display = lang.as_deref().unwrap_or("");
+                    let sep_w = inner_width.clamp(4, 60);
+                    let top = if lang_display.is_empty() {
+                        format!("╭{}╮", "─".repeat(sep_w - 2))
+                    } else {
+                        let lp = format!(" {lang_display} ");
+                        let rest = (sep_w - 2).saturating_sub(lp.len() + 1);
+                        format!("╭─{lp}{}╮", "─".repeat(rest))
+                    };
                     lines.push(Line::from(vec![
-                        Span::styled("─".repeat(inner_width.min(60)), Style::default().fg(theme.border_dim)),
+                        Span::styled(top, Style::default().fg(theme.border_dim)),
                     ]));
-                    if !lang_display.is_empty() {
-                        lines.push(Line::from(vec![
-                            Span::styled(format!(" {lang_display}"), Style::default().fg(theme.muted)),
-                        ]));
-                    }
 
                     let highlighted = if let Some(l) = lang {
                         highlight_code_cached(code, l)
@@ -467,8 +488,9 @@ impl MessageCell {
                     };
 
                     lines.extend(code_lines);
+                    let sep_w = inner_width.clamp(4, 60);
                     lines.push(Line::from(vec![
-                        Span::styled("─".repeat(inner_width.min(60)), Style::default().fg(theme.border_dim)),
+                        Span::styled(format!("╰{}╯", "─".repeat(sep_w - 2)), Style::default().fg(theme.border_dim)),
                     ]));
                 }
                 MdSegment::UnorderedList(items) => {
@@ -550,6 +572,7 @@ impl MessageCell {
             *self.cached_lines.lock() = Some((width, lines.clone()));
         }
 
+        add_role_gutter(&mut lines, gutter_color);
         lines
     }
 }

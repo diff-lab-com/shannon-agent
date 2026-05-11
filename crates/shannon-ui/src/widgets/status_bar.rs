@@ -112,7 +112,7 @@ impl StatusBarWidget {
 
         // Model
         if let Some(m) = model {
-            left.push(Span::raw("  "));
+            left.push(Span::styled(" · ", Style::default().fg(theme.border_dim)));
             left.push(Span::styled(
                 truncate_model(m),
                 Style::default().fg(theme.primary),
@@ -121,7 +121,7 @@ impl StatusBarWidget {
 
         // Context window
         if let Some(used) = tokens_used {
-            left.push(Span::raw("  "));
+            left.push(Span::styled(" · ", Style::default().fg(theme.border_dim)));
             if let Some(max) = max_tokens {
                 let pct = (used as f64 / max as f64).min(1.0);
                 let bar_w = 8usize;
@@ -175,7 +175,7 @@ impl StatusBarWidget {
         if let Some(pb) = progress_bar {
             let pct = pb.percentage();
             if pct > 0.0 {
-                left.push(Span::raw("  "));
+                left.push(Span::styled(" · ", Style::default().fg(theme.border_dim)));
                 let bar_width = 12usize;
                 let filled = (pb.progress() * bar_width as f64) as usize;
                 let mut bar_str = String::from("[");
@@ -237,7 +237,11 @@ impl StatusBarWidget {
         if let Some(tools) = tools_invoked {
             if tools > 0 {
                 left2.push(Span::styled(
-                    format!("  \u{1f527}{tools}"),
+                    " · ",
+                    Style::default().fg(theme.border_dim),
+                ));
+                left2.push(Span::styled(
+                    format!("\u{1f527}{tools}"),
                     Style::default().fg(theme.secondary),
                 ));
             }
@@ -246,7 +250,11 @@ impl StatusBarWidget {
         // Session duration
         if let Some(secs) = session_duration {
             left2.push(Span::styled(
-                format!("  {}", format_duration(secs)),
+                " · ",
+                Style::default().fg(theme.border_dim),
+            ));
+            left2.push(Span::styled(
+                format_duration(secs).to_string(),
                 Style::default().fg(theme.text_dim),
             ));
         }
@@ -254,7 +262,7 @@ impl StatusBarWidget {
         // Diagnostics
         if let Some((errors, warnings)) = diag_counts {
             if errors > 0 || warnings > 0 {
-                right2.push(Span::raw("  "));
+                right2.push(Span::styled(" · ", Style::default().fg(theme.border_dim)));
                 if errors > 0 {
                     right2.push(Span::styled(
                         format!("E:{errors}"),
@@ -284,7 +292,7 @@ impl StatusBarWidget {
                 } else {
                     theme.error
                 };
-                right2.push(Span::raw("  "));
+                right2.push(Span::styled(" · ", Style::default().fg(theme.border_dim)));
                 right2.push(Span::styled(
                     format!("RL:{used}/{total}"),
                     Style::default().fg(color),
@@ -294,7 +302,7 @@ impl StatusBarWidget {
 
         // Git branch
         if let Some(branch) = git_branch {
-            right2.push(Span::raw("  "));
+            right2.push(Span::styled(" · ", Style::default().fg(theme.border_dim)));
             right2.push(Span::styled(
                 format!("{} {}", branch_icon(), branch),
                 Style::default().fg(theme.primary),
