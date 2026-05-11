@@ -156,19 +156,31 @@ impl MessageCell {
         if !l.is_empty() {
             let msg = &self.message;
             if msg.role == ChatRole::User {
-                l.insert(0, Line::from(""));
+                // User message label: dim "You 14:23"
+                let time_str = msg.timestamp.format("%H:%M").to_string();
+                l.insert(0, Line::from(vec![
+                    Span::styled(" You ", Style::default().fg(theme.user_msg).add_modifier(Modifier::BOLD)),
+                    Span::styled(time_str, Style::default().fg(theme.text_dim)),
+                ]));
             } else {
-                let sep_width = (width as usize).saturating_sub(2).min(30);
                 let sep_color = match msg.role {
                     ChatRole::Assistant => theme.assistant_msg,
                     ChatRole::Tool => theme.tool_msg,
                     ChatRole::System => theme.system_msg,
                     ChatRole::User => unreachable!(),
                 };
-                let sep = Line::from(Span::styled(
-                    "\u{2500}".repeat(sep_width),
-                    Style::default().fg(sep_color),
-                ));
+                // Separator with dimmed timestamp: "── 14:23 ──"
+                let time_str = msg.timestamp.format("%H:%M").to_string();
+                let time_w = unicode_width::UnicodeWidthStr::width(time_str.as_str());
+                let max_sep = (width as usize).saturating_sub(2).min(40);
+                let total_dash = max_sep.saturating_sub(time_w + 4); // 4 for spaces around time
+                let left_dash = total_dash / 2;
+                let right_dash = total_dash.saturating_sub(left_dash);
+                let sep = Line::from(vec![
+                    Span::styled("\u{2500}".repeat(left_dash), Style::default().fg(sep_color)),
+                    Span::styled(format!(" {time_str} "), Style::default().fg(theme.text_dim)),
+                    Span::styled("\u{2500}".repeat(right_dash), Style::default().fg(sep_color)),
+                ]);
                 l.insert(0, sep);
             }
             l.push(Line::from(""));
@@ -239,7 +251,7 @@ impl MessageCell {
             };
 
             // Status icon + duration badge (spinner animation for running tools)
-            const TOOL_SPINNER: &[&str] = &["◐", "◓", "◑", "◒"];
+            const TOOL_SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
             let (status_icon, status_color, dur_badge) = if msg.duration_secs.is_none() && !msg.is_error {
                 // Tool is still running — show spinning animation
                 let frame = TOOL_SPINNER[msg.spinner_frame % TOOL_SPINNER.len()];
@@ -317,7 +329,7 @@ impl MessageCell {
             let border_w = inner_width.clamp(20, 200);
 
             // Top border: ╭─ toolname ── ✓ duration ──╮
-            const TOOL_SPINNER: &[&str] = &["◐", "◓", "◑", "◒"];
+            const TOOL_SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
             let (status_icon, status_color) = if msg.is_error {
                 ("\u{2717}".to_string(), theme.error)
             } else if msg.duration_secs.is_none() {
