@@ -59,17 +59,19 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
 
         // Status text: use state.status directly.
         // Model, tokens, cost, git, mode are shown in dedicated status bar zones.
-        let display_status = if state.status == "Ready" && state.turn_count > 0 {
-            format!("Ready (turn {})", state.turn_count)
+        let ready_with_turns;
+        let display_status: &str = if state.status == "Ready" && state.turn_count > 0 {
+            ready_with_turns = format!("Ready (turn {})", state.turn_count);
+            &ready_with_turns
         } else {
-            state.status.clone()
+            &state.status
         };
 
         // Compute search matches if chat search is active
         let (search_query, search_matches, search_focused_idx) = if state.chat_search_active || !state.chat_search_query.is_empty() {
             let matches = chat.find_search_matches(&state.chat_search_query);
             let focused = if matches.is_empty() { None } else { Some(state.chat_search_match_index.min(matches.len() - 1)) };
-            (Some(state.chat_search_query.clone()), matches, focused)
+            (Some(state.chat_search_query.as_str()), matches, focused)
         } else {
             (None, Vec::new(), None)
         };
@@ -78,12 +80,12 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         let ctx_window = state.model.as_ref()
             .map(|m| shannon_core::model_registry::context_window_for(m) as u64);
         crate::widgets::MainLayoutWidget::render_complete_with_spinner(
-            f, chat, prompt, &display_status,
+            f, chat, prompt, display_status,
             state.model.as_deref(), Some(state.tokens_used),
             &state.working_directory, Some(&state.spinner), pb, sidebar_ref, &state.theme, state.sidebar_tab,
             Some(&state.approval_mode_label),
             state.focus_mode, state.fullscreen_mode,
-            search_query.as_deref(), &search_matches, search_focused_idx,
+            search_query, &search_matches, search_focused_idx,
             ctx_window, Some(state.total_cost_usd), None,
             Some((state.input_tokens, state.output_tokens)),
             Some((state.diagnostic_store.error_count(), state.diagnostic_store.warning_count())),
@@ -492,9 +494,9 @@ fn render_history_search_overlay(
     frame.render_widget(Clear, bar_area);
 
     let query_display = if state.incremental_search_query.is_empty() {
-        "(type to search)".to_string()
+        std::borrow::Cow::Borrowed("(type to search)")
     } else {
-        state.incremental_search_query.clone()
+        std::borrow::Cow::Borrowed(state.incremental_search_query.as_str())
     };
 
     let query_color = if state.incremental_search_query.is_empty() {
@@ -519,7 +521,7 @@ fn render_history_search_overlay(
         Line::from(vec![
             Span::styled(" Ctrl+R ", Style::default().fg(Color::Black).bg(Color::Cyan)),
             Span::styled(" reverse-i-search  ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&query_display, Style::default().fg(query_color).add_modifier(Modifier::BOLD)),
+            Span::styled(&*query_display, Style::default().fg(query_color).add_modifier(Modifier::BOLD)),
             Span::styled("▌", Style::default().fg(Color::Cyan)),
             Span::styled(match_info, Style::default().fg(Color::DarkGray)),
         ]),
@@ -819,9 +821,9 @@ fn render_chat_search_overlay(
     frame.render_widget(Clear, bar_area);
 
     let query_display = if state.chat_search_query.is_empty() {
-        "(type to search chat)".to_string()
+        std::borrow::Cow::Borrowed("(type to search chat)")
     } else {
-        state.chat_search_query.clone()
+        std::borrow::Cow::Borrowed(state.chat_search_query.as_str())
     };
 
     let query_color = if state.chat_search_query.is_empty() {
@@ -842,7 +844,7 @@ fn render_chat_search_overlay(
         Line::from(vec![
             Span::styled(" Ctrl+H ", Style::default().fg(Color::Black).bg(theme.primary)),
             Span::styled(" chat-search  ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&query_display, Style::default().fg(query_color).add_modifier(Modifier::BOLD)),
+            Span::styled(&*query_display, Style::default().fg(query_color).add_modifier(Modifier::BOLD)),
             Span::styled("▌", Style::default().fg(theme.primary)),
         ]),
         Line::from(vec![
