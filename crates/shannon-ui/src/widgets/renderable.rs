@@ -204,17 +204,33 @@ impl MessageCell {
                 ToolCategory::Agent => ("\u{25C6}", "", theme.tool_read),
             };
 
-            // Status icon + duration badge
-            let status_icon = if msg.is_error { "\u{2717}" } else { "\u{2713}" };
-            let status_color = if msg.is_error { theme.error } else { theme.success };
-            let dur_badge = if let Some(dur) = msg.duration_secs {
-                if dur >= 60.0 {
-                    format!(" {}m{:.0}s", dur as u64 / 60, dur % 60.0)
-                } else {
-                    format!(" {dur:.1}s")
-                }
+            // Status icon + duration badge (spinner animation for running tools)
+            const TOOL_SPINNER: &[&str] = &["◐", "◓", "◑", "◒"];
+            let (status_icon, status_color, dur_badge) = if msg.duration_secs.is_none() && !msg.is_error {
+                // Tool is still running — show spinning animation
+                let frame = TOOL_SPINNER[msg.spinner_frame % TOOL_SPINNER.len()];
+                let elapsed = msg.start_time.map(|st| {
+                    let secs = (chrono::Utc::now() - st).num_seconds();
+                    if secs >= 60 {
+                        format!(" {}m{}s", secs / 60, secs % 60)
+                    } else {
+                        format!(" {secs}s")
+                    }
+                }).unwrap_or_default();
+                (frame.to_string(), theme.accent, format!("{elapsed} …"))
             } else {
-                String::new()
+                let icon = if msg.is_error { "\u{2717}" } else { "\u{2713}" };
+                let color = if msg.is_error { theme.error } else { theme.success };
+                let badge = if let Some(dur) = msg.duration_secs {
+                    if dur >= 60.0 {
+                        format!(" {}m{:.0}s", dur as u64 / 60, dur % 60.0)
+                    } else {
+                        format!(" {dur:.1}s")
+                    }
+                } else {
+                    String::new()
+                };
+                (icon.to_string(), color, badge)
             };
 
             let display_budget = 60usize.saturating_sub(dur_badge.len());
@@ -230,7 +246,9 @@ impl MessageCell {
                 Span::styled(prefix.to_string(), Style::default().fg(cat_color)),
                 Span::styled(display, Style::default().fg(theme.text_dim)),
                 Span::styled(dur_badge, Style::default().fg(theme.text_dim)),
-                Span::styled(format!(" {status_icon}"), Style::default().fg(status_color)),
+                Span::styled(format!(" {status_icon}"), Style::default().fg(status_color).add_modifier(
+                    if msg.duration_secs.is_none() && !msg.is_error { Modifier::BOLD } else { Modifier::empty() }
+                )),
             ]));
             add_role_gutter(&mut lines, gutter_color);
             return lines;
@@ -266,10 +284,14 @@ impl MessageCell {
             let border_w = inner_width.clamp(10, 60);
 
             // Top border: ╭─ toolname ── ✓ duration ──╮
+            const TOOL_SPINNER: &[&str] = &["◐", "◓", "◑", "◒"];
             let (status_icon, status_color) = if msg.is_error {
-                ("\u{2717}", theme.error)
+                ("\u{2717}".to_string(), theme.error)
+            } else if msg.duration_secs.is_none() {
+                // Tool still running — animated spinner
+                (TOOL_SPINNER[msg.spinner_frame % TOOL_SPINNER.len()].to_string(), theme.accent)
             } else {
-                ("\u{2713}", theme.success)
+                ("\u{2713}".to_string(), theme.success)
             };
             let dur_part = if let Some(dur) = msg.duration_secs {
                 let dur_str = if dur >= 60.0 {
@@ -282,6 +304,13 @@ impl MessageCell {
                     if code != 0 { p = format!(" {status_icon} {dur_str} exit={code}"); }
                 }
                 p
+            } else if !msg.is_error {
+                // Running tool — show elapsed time
+                let elapsed = msg.start_time.map(|st| {
+                    let secs = (chrono::Utc::now() - st).num_seconds();
+                    if secs >= 60 { format!("{}m{}s", secs / 60, secs % 60) } else { format!("{secs}s") }
+                }).unwrap_or_default();
+                format!(" {status_icon} {elapsed} …")
             } else {
                 String::new()
             };
@@ -318,23 +347,63 @@ impl MessageCell {
             }) && content.lines().any(|l| l.starts_with("+++") || l.starts_with("@@"));
 
             if is_diff {
+                // Track line numbers across hunks
+                let mut old_line: usize = 0;
+                let mut new_line: usize = 0;
+                let ln_width = 4; // "NNNN" column width
+
                 for raw_line in content.lines() {
-                    let (prefix, color) = if raw_line.starts_with('+') && !raw_line.starts_with("+++") {
-                        ("+", theme.success)
-                    } else if raw_line.starts_with('-') && !raw_line.starts_with("---") {
-                        ("-", theme.error)
-                    } else if raw_line.starts_with('@') {
-                        ("@", theme.accent)
+                    // Parse hunk headers: @@ -old_start,old_count +new_start,new_count @@
+                    if raw_line.starts_with("@@") {
+                        if let Some(rest) = raw_line.strip_prefix("@@") {
+                            // Extract old/new start from "@@ -a,b +c,d @@"
+                            let parts: Vec<&str> = rest.split_whitespace().take(2).collect();
+                            if parts.len() >= 2 {
+                                if let Some(os) = parts[0].strip_prefix('-').and_then(|s| s.split(',').next()) {
+                                    old_line = os.parse::<usize>().unwrap_or(0).saturating_sub(1);
+                                }
+                                if let Some(ns) = parts[1].strip_prefix('+').and_then(|s| s.split(',').next()) {
+                                    new_line = ns.parse::<usize>().unwrap_or(0).saturating_sub(1);
+                                }
+                            }
+                        }
+                        lines.push(Line::from(vec![
+                            Span::styled("│ ", Style::default().fg(theme.border_dim)),
+                            Span::styled(raw_line.to_string(), Style::default().fg(theme.accent)),
+                        ]));
+                        continue;
+                    }
+                    // File headers (+++/---)
+                    if raw_line.starts_with("+++") || raw_line.starts_with("---") {
+                        lines.push(Line::from(vec![
+                            Span::styled("│ ", Style::default().fg(theme.border_dim)),
+                            Span::styled(raw_line.to_string(), Style::default().fg(theme.text_dim)),
+                        ]));
+                        continue;
+                    }
+
+                    let (prefix, color, inc_old, inc_new) = if raw_line.starts_with('+') {
+                        ("+", theme.success, false, true)
+                    } else if raw_line.starts_with('-') {
+                        ("-", theme.error, true, false)
                     } else {
-                        ("", theme.text_dim)
+                        (" ", theme.text_dim, true, true)
                     };
+
+                    if inc_old { old_line += 1; }
+                    if inc_new { new_line += 1; }
+
+                    let old_ln = if inc_old { format!("{old_line:>ln_width$}") } else { "    ".to_string() };
+                    let new_ln = if inc_new { format!("{new_line:>ln_width$}") } else { "    ".to_string() };
+                    let text = if prefix == " " { raw_line.to_string() } else { raw_line[1..].to_string() };
+
                     lines.push(Line::from(vec![
                         Span::styled("│", Style::default().fg(theme.border_dim)),
-                        Span::styled(prefix.to_string(), Style::default().fg(color)),
-                        Span::styled(
-                            if prefix.is_empty() { raw_line.to_string() } else { raw_line[1..].to_string() },
-                            Style::default().fg(color),
-                        ),
+                        Span::styled(old_ln, Style::default().fg(theme.muted)),
+                        Span::styled(" ", Style::default()),
+                        Span::styled(new_ln, Style::default().fg(theme.muted)),
+                        Span::styled(prefix, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                        Span::styled(text, Style::default().fg(color)),
                     ]));
                 }
                 let bottom = format!("╰{}╯", "─".repeat(border_w.saturating_sub(2)));
