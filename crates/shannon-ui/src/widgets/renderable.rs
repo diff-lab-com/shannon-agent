@@ -790,27 +790,23 @@ impl MessageCell {
                     }
                 }
                 MdSegment::Blockquote(bq_lines) => {
-                    // "  │ " = 4 chars prefix
+                    // "  ┃ " = 4 chars prefix with subtle background
                     let bq_width = content_width.saturating_sub(4).max(20);
+                    let bq_bg = theme.diff_context_bg;
                     for line in bq_lines {
                         let wrapped = wrap_line(line, bq_width);
                         for wl in wrapped {
                             lines.push(Line::from(vec![
-                                Span::styled("  │ ", Style::default().fg(theme.blockquote)),
-                                Span::styled(wl, Style::default().fg(theme.italic_text).add_modifier(Modifier::ITALIC)),
+                                Span::styled("  ┃ ", Style::default().fg(theme.blockquote).bg(bq_bg)),
+                                Span::styled(wl, Style::default().fg(theme.italic_text).add_modifier(Modifier::ITALIC).bg(bq_bg)),
                             ]));
                         }
                     }
                 }
                 MdSegment::HorizontalRule => {
                     let w = inner_width.min(60);
-                    let sep: String = std::iter::repeat_n("─╌", w / 4)
-                        .collect::<String>()
-                        .chars()
-                        .take(w)
-                        .collect();
                     lines.push(Line::from(vec![
-                        Span::styled(sep, Style::default().fg(theme.border_dim)),
+                        Span::styled("─".repeat(w), Style::default().fg(theme.border_dim)),
                     ]));
                 }
                 MdSegment::TaskList(items) => {
