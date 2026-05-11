@@ -84,20 +84,13 @@ fn render_scene(scene: &SceneData) -> String {
             };
 
             // Base layout — always rendered
-            let render_ctx = crate::widgets::RenderContext {
-                chat, prompt, theme: &state.theme, status: &state.status,
-                model: state.model.as_deref(),
-                tokens_used: Some(state.tokens_used),
-                max_tokens: None, cost_usd: None, git_branch: None,
-                token_breakdown: None, diag_counts: None, rate_limit: None,
-                spinner: Some(spinner), progress_bar: pb,
-                sidebar_info: None,
-                sidebar_tab: state.sidebar_tab,
-                approval_mode: Some(&state.approval_mode_label),
-                focus_mode: false, fullscreen_mode: false, auto_follow: true,
-                search_query: None, search_matches: &[], search_focused_idx: None,
-                cached_statusline: None,
-            };
+            let mut render_ctx = crate::widgets::RenderContext::new(chat, prompt, &state.theme, &state.status);
+            render_ctx.model = state.model.as_deref();
+            render_ctx.tokens_used = Some(state.tokens_used);
+            render_ctx.spinner = Some(spinner);
+            render_ctx.progress_bar = pb;
+            render_ctx.sidebar_tab = state.sidebar_tab;
+            render_ctx.approval_mode = Some(&state.approval_mode_label);
             MainLayoutWidget::render_with_ctx(f, &render_ctx);
 
             // Overlays (mutually exclusive in normal rendering order)

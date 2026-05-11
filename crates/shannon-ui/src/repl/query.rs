@@ -460,21 +460,17 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
             term.draw(|f| {
                 let spinner = &state.spinner;
                 let pb = if state.progress_bar_visible { Some(&state.progress_bar) } else { None };
-                let render_ctx = crate::widgets::RenderContext {
-                    chat, prompt, theme: &state.theme, status: &state.status,
-                    model: state.model.as_deref(),
-                    tokens_used: Some(state.tokens_used),
-                    max_tokens: None, cost_usd: None, git_branch: None,
-                    token_breakdown: None, diag_counts: None, rate_limit: None,
-                    spinner: Some(spinner), progress_bar: pb,
-                    sidebar_info: sidebar_info.as_ref(),
-                    sidebar_tab: state.sidebar_tab,
-                    approval_mode: Some(&state.approval_mode_label),
-                    focus_mode: state.focus_mode, fullscreen_mode: state.fullscreen_mode,
-                    auto_follow: state.auto_follow,
-                    search_query: None, search_matches: &[], search_focused_idx: None,
-                    cached_statusline: None,
-                };
+                let mut render_ctx = crate::widgets::RenderContext::new(chat, prompt, &state.theme, &state.status);
+                render_ctx.model = state.model.as_deref();
+                render_ctx.tokens_used = Some(state.tokens_used);
+                render_ctx.spinner = Some(spinner);
+                render_ctx.progress_bar = pb;
+                render_ctx.sidebar_info = sidebar_info.as_ref();
+                render_ctx.sidebar_tab = state.sidebar_tab;
+                render_ctx.approval_mode = Some(&state.approval_mode_label);
+                render_ctx.focus_mode = state.focus_mode;
+                render_ctx.fullscreen_mode = state.fullscreen_mode;
+                render_ctx.auto_follow = state.auto_follow;
                 crate::widgets::MainLayoutWidget::render_with_ctx(f, &render_ctx);
                 if state.multi_progress_visible {
                     let mp_height = 3u16.min(f.area().height.saturating_sub(10));

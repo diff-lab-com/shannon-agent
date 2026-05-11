@@ -115,6 +115,23 @@ pub struct RenderContext<'a> {
     pub cached_statusline: Option<&'a str>,
 }
 
+impl<'a> RenderContext<'a> {
+    /// Construct a minimal render context with all optional fields defaulted.
+    pub fn new(chat: &'a ChatWidget, prompt: &'a PromptWidget, theme: &'a Theme, status: &'a str) -> Self {
+        Self {
+            chat, prompt, theme, status,
+            model: None, tokens_used: None, max_tokens: None, cost_usd: None,
+            git_branch: None, token_breakdown: None, diag_counts: None, rate_limit: None,
+            spinner: None, progress_bar: None, sidebar_info: None,
+            sidebar_tab: crate::repl::SidebarTab::default(),
+            approval_mode: None,
+            focus_mode: false, fullscreen_mode: false, auto_follow: true,
+            search_query: None, search_matches: &[], search_focused_idx: None,
+            cached_statusline: None,
+        }
+    }
+}
+
 /// Main UI layout widget
 pub struct MainLayoutWidget;
 
@@ -183,18 +200,9 @@ impl MainLayoutWidget {
         _working_dir: &str,
         theme: &Theme,
     ) {
-        let ctx = RenderContext {
-            chat, prompt, theme, status,
-            model, tokens_used,
-            max_tokens: None, cost_usd: None, git_branch: None,
-            token_breakdown: None, diag_counts: None, rate_limit: None,
-            spinner: None, progress_bar: None, sidebar_info: None,
-            sidebar_tab: crate::repl::SidebarTab::default(),
-            approval_mode: None,
-            focus_mode: false, fullscreen_mode: false, auto_follow: true,
-            search_query: None, search_matches: &[], search_focused_idx: None,
-            cached_statusline: None,
-        };
+        let mut ctx = RenderContext::new(chat, prompt, theme, status);
+        ctx.model = model;
+        ctx.tokens_used = tokens_used;
         Self::render_with_ctx(frame, &ctx);
     }
 
