@@ -536,7 +536,11 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
                             if diff.is_empty() {
                                 repl.chat.add_message(ChatRole::System, format!("No unstaged diff for '{file}'."));
                             } else {
-                                let truncated = if diff.len() > 8000 { &diff[..8000] } else { &diff };
+                                let max = 8000;
+                                let end = if diff.len() > max {
+                                    let mut e = max; while !diff.is_char_boundary(e) { e -= 1; } e
+                                } else { diff.len() };
+                                let truncated = &diff[..end];
                                 let mut msg = format!("Diff for '{file}':\n```\n{truncated}");
                                 if diff.len() > 8000 { msg.push_str("\n... (truncated)"); }
                                 msg.push_str("\n```\n\n");

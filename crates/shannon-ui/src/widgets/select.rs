@@ -1002,10 +1002,11 @@ impl ModelPickerWidget {
                 } else {
                     format!("{}  ({})", model.display_name, model.id)
                 };
-                // Truncate to dialog width
-                let max_len = (dialog_width as usize).saturating_sub(6);
-                let truncated = if label.len() > max_len {
-                    format!("{}...", &label[..max_len.saturating_sub(3)])
+                // Truncate to dialog width (Unicode-safe)
+                let max_chars = (dialog_width as usize).saturating_sub(6);
+                let truncated = if label.chars().count() > max_chars {
+                    let end = max_chars.saturating_sub(3);
+                    format!("{}...", label.chars().take(end).collect::<String>())
                 } else {
                     label
                 };

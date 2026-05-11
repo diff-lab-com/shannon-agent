@@ -183,9 +183,11 @@ pub fn extract_pdf_text(file_path: &str) -> AtReferenceResult {
         .unwrap_or_default();
 
     // Truncate very large PDFs to avoid overwhelming the context
-    let max_chars = 50_000;
-    let (content, truncated) = if text.len() > max_chars {
-        (text[..max_chars].to_string(), true)
+    let max_bytes = 50_000;
+    let (content, truncated) = if text.len() > max_bytes {
+        let mut end = max_bytes;
+        while !text.is_char_boundary(end) { end -= 1; }
+        (text[..end].to_string(), true)
     } else {
         (text, false)
     };
@@ -347,9 +349,11 @@ async fn process_url_response(url: &str, response: reqwest::Response) -> AtRefer
     }
 
     let content_length = content.len();
-    let max_chars = 50_000;
-    let (display_content, truncated) = if content.len() > max_chars {
-        (content[..max_chars].to_string(), true)
+    let max_bytes = 50_000;
+    let (display_content, truncated) = if content.len() > max_bytes {
+        let mut end = max_bytes;
+        while !content.is_char_boundary(end) { end -= 1; }
+        (content[..end].to_string(), true)
     } else {
         (content, false)
     };
