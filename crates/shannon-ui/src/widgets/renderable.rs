@@ -29,7 +29,6 @@ use ratatui::style::Color;
 // ── Search highlighting ──────────────────────────────────────────────────
 
 /// Search parameters for highlighting matches in rendered cells.
-#[allow(dead_code)]
 pub struct SearchParams<'a> {
     pub query: &'a str,
     /// All search matches: (message_index, char_start, char_end).

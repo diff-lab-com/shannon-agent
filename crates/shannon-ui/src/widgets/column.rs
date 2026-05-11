@@ -126,7 +126,6 @@ impl ColumnRenderable {
     }
 
     /// Set the vertical scroll offset for a specific cell.
-    #[allow(dead_code)]
     pub fn set_cell_scroll(&mut self, cell_index: usize, scroll_y: u16) {
         if scroll_y == 0 {
             self.cell_scrolls.remove(&cell_index);
@@ -136,7 +135,6 @@ impl ColumnRenderable {
     }
 
     /// Get the vertical scroll offset for a specific cell.
-    #[allow(dead_code)]
     pub fn cell_scroll(&self, cell_index: usize) -> u16 {
         self.cell_scrolls.get(&cell_index).copied().unwrap_or(0)
     }
@@ -242,8 +240,6 @@ impl ColumnRenderable {
         LayoutResult { visible }
     }
 
-    /// Render visible cells into the buffer.
-    ///
     /// Render visible cells into the buffer.
     ///
     /// `area` — the full viewport rect

@@ -375,8 +375,6 @@ impl ChatWidget {
 
     /// Scroll up by one line. Scrolls within the current cell first,
     /// then moves to the previous message and scrolls to its bottom.
-    /// Scroll up by one line. Scrolls within the current cell first,
-    /// then moves to the previous message and scrolls to its bottom.
     pub fn scroll_up(&mut self) {
         if self.messages.is_empty() {
             return;
