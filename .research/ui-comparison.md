@@ -68,8 +68,8 @@
 5. ~~**No prompt history search**~~ → **Done** — Ctrl+R incremental search with highlighting
 
 ### Important (improves daily workflow)
-6. **No theme picker UI** — OpenCode has Ctrl+T live theme switcher
-7. **No overlay/modal system** — Permission dialogs are inline, not centered
+6. ~~**No theme picker UI**~~ → **Done** — `/theme` fuzzy picker with live preview
+7. ~~**No overlay/modal system**~~ → **Done** — Centered dialogs with diff preview for permissions
 8. **No file sidebar** — OpenCode shows modified files with diff stats
 9. **No image input support** — Codex supports screenshots in composer
 10. **No message edit/fork** — Codex has Esc to edit previous messages

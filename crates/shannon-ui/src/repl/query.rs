@@ -383,7 +383,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                 let phase_idx = (stream_start.elapsed().as_secs() / 2) as usize % THINKING_PHRASES.len();
                 repl.state.status = THINKING_PHRASES[phase_idx].to_string();
             } else if repl.state.streaming_token_rate > 0.0 {
-                repl.state.status = format!("{} \u{00b7} {:.0} tok/s", current_status, repl.state.streaming_token_rate);
+                repl.state.status = format!("{current_status} · {:.0} tok/s", repl.state.streaming_token_rate);
             } else {
                 repl.state.status = current_status.clone();
             }
@@ -543,7 +543,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
             .ok()
             .and_then(|ra| ra.map(|r| r.width))
             .unwrap_or(80);
-        let (lines, _height) = repl.chat.commit_to_lines(width);
+        let (lines, _height) = repl.chat.commit_to_lines(width, &repl.state.theme);
         if !lines.is_empty() {
             repl.chat.pending_scrollback = lines;
         }

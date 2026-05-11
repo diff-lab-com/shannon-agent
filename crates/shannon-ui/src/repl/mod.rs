@@ -1440,7 +1440,7 @@ impl Repl {
                 // Reflow committed scrollback if terminal width changed
                 let width = _cols;
                 if self.chat.needs_reflow(width) {
-                    let (lines, _height) = self.chat.re_render_committed(width);
+                    let (lines, _height) = self.chat.re_render_committed(width, &self.state.theme);
                     if !lines.is_empty() {
                         self.chat.pending_scrollback = lines;
                     }

@@ -710,7 +710,7 @@ impl ChatWidget {
     /// Returns (lines, total_height). Marks messages as committed.
     /// Skips the last message if streaming is active (it stays in viewport).
     /// Uses `MessageCell::lines()` for consistent markdown rendering with the viewport.
-    pub fn commit_to_lines(&mut self, width: u16) -> (Vec<ratatui::text::Line<'static>>, u16) {
+    pub fn commit_to_lines(&mut self, width: u16, theme: &Theme) -> (Vec<ratatui::text::Line<'static>>, u16) {
         if self.committed_count >= self.messages.len() {
             return (Vec::new(), 0);
         }
@@ -733,16 +733,15 @@ impl ChatWidget {
             self.committed_count, commit_end, self.messages.len(), self.streaming_active
         );
 
-        let theme = Theme::default_dark();
         let mut all_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
 
         for i in self.committed_count..commit_end {
             let lines = if let Some(cell) = self.column.get(i) {
-                cell.lines(width, &theme)
+                cell.lines(width, theme)
             } else {
                 let msg = &self.messages[i];
                 let cell = super::renderable::MessageCell::new(msg.clone(), self.collapsed_tools);
-                cell.lines(width, &theme)
+                cell.lines(width, theme)
             };
             all_lines.extend(lines);
         }
@@ -766,21 +765,20 @@ impl ChatWidget {
 
     /// Re-render all committed messages at a new width for scrollback reflow.
     /// Returns (lines, height) suitable for `insert_before` to overwrite scrollback.
-    pub fn re_render_committed(&self, width: u16) -> (Vec<ratatui::text::Line<'static>>, u16) {
+    pub fn re_render_committed(&self, width: u16, theme: &Theme) -> (Vec<ratatui::text::Line<'static>>, u16) {
         if self.committed_count == 0 {
             return (Vec::new(), 0);
         }
 
-        let theme = Theme::default_dark();
         let mut all_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
 
         for i in 0..self.committed_count {
             let lines = if let Some(cell) = self.column.get(i) {
-                cell.lines(width, &theme)
+                cell.lines(width, theme)
             } else {
                 let msg = &self.messages[i];
                 let cell = super::renderable::MessageCell::new(msg.clone(), self.collapsed_tools);
-                cell.lines(width, &theme)
+                cell.lines(width, theme)
             };
             all_lines.extend(lines);
         }
