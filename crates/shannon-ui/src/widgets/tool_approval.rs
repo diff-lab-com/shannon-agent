@@ -34,9 +34,9 @@ impl RiskLevel {
     /// Returns a unicode indicator and the theme color key for this risk level
     fn indicator(&self) -> (&'static str, fn(&Theme) -> ratatui::style::Color) {
         match self {
-            RiskLevel::Low => ("\u{1f7e2} Low", |t| t.success),
-            RiskLevel::Medium => ("\u{1f7e1} Medium", |t| t.warning),
-            RiskLevel::High => ("\u{1f534} High", |t| t.error),
+            RiskLevel::Low => ("\u{25CF} Low", |t| t.success),     // ● filled circle
+            RiskLevel::Medium => ("\u{25D0} Medium", |t| t.warning), // ◐ half circle
+            RiskLevel::High => ("\u{25C6} High", |t| t.error),     // ◆ diamond
         }
     }
 }

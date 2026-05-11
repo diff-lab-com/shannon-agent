@@ -21,9 +21,9 @@ impl AttachmentKind {
     /// Icon used when rendering this attachment kind
     fn icon(&self) -> &'static str {
         match self {
-            AttachmentKind::File => "\u{1f4ce}",   // paperclip
-            AttachmentKind::Image => "\u{1f5bc}",   // framed picture
-            AttachmentKind::Url => "\u{1f517}",     // link symbol
+            AttachmentKind::File => "\u{25A3}",   // ▣ square with fill
+            AttachmentKind::Image => "\u{25A8}",   // ▨ square with hatched fill
+            AttachmentKind::Url => "\u{2197}",     // ↗ arrow
         }
     }
 }
@@ -139,7 +139,7 @@ impl AttachmentBarWidget {
 
         for (i, att) in self.attachments.iter().enumerate() {
             // Each chip takes ~8 chars for brackets + icon + space, plus name + optional size
-            let overhead = if self.delete_mode { 5 } else { 4 }; // "[1\u{1f4ce} ]" vs "[\u{1f4ce} ]"
+            let overhead = if self.delete_mode { 5 } else { 4 }; // "[1▣ ]" vs "[▣ ]"
             let size_width = att.size_str().map_or(0, |s| s.len() + 1); // " 1.2K"
             let name_budget = inner_width.saturating_sub(overhead + size_width);
             let name = att.display_name(name_budget.max(4));

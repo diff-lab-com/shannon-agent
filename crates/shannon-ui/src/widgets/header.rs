@@ -21,39 +21,48 @@ impl HeaderWidget {
     ) {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
-        // Line 1: Welcome
+        // Line 1: Branded welcome with accent bar
         lines.push(Line::from(vec![
-            Span::styled("  Welcome to ", Style::default().fg(theme.text_dim)),
-            Span::styled("Shannon", Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
-            Span::styled(" — AI code assistant", Style::default().fg(theme.text_dim)),
+            Span::styled("  ", Style::default()),
+            Span::styled("\u{258F}", Style::default().fg(theme.primary)),
+            Span::styled(" Shannon", Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
+            Span::styled(" \u{00B7} ", Style::default().fg(theme.border_dim)),
+            Span::styled("AI code assistant", Style::default().fg(theme.text_dim)),
         ]));
 
         // Line 2: Key bindings (if area is tall enough)
         if area.height >= 3 {
+            let sep = Span::styled(" \u{2502} ", Style::default().fg(theme.border_dim));
             lines.push(Line::from(vec![
                 Span::styled("  ", Style::default()),
-                Span::styled("Enter", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
-                Span::styled(" Send  ", Style::default().fg(theme.text_dim)),
-                Span::styled("Shift+Enter", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
-                Span::styled(" Newline  ", Style::default().fg(theme.text_dim)),
-                Span::styled("Ctrl+E", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
-                Span::styled(" Editor  ", Style::default().fg(theme.text_dim)),
-                Span::styled("F11", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
-                Span::styled(" Fullscreen", Style::default().fg(theme.text_dim)),
+                key("Enter", theme),
+                desc("Send", theme),
+                sep.clone(),
+                key("Shift+Enter", theme),
+                desc("Newline", theme),
+                sep.clone(),
+                key("Ctrl+E", theme),
+                desc("Editor", theme),
+                sep.clone(),
+                key("F11", theme),
+                desc("Fullscreen", theme),
             ]));
 
             // Line 3: More shortcuts (if area has room)
             if area.height >= 5 {
                 lines.push(Line::from(vec![
                     Span::styled("  ", Style::default()),
-                    Span::styled("Ctrl+O", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
-                    Span::styled(" Verbose  ", Style::default().fg(theme.text_dim)),
-                    Span::styled("Alt+Enter", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
-                    Span::styled(" Mode  ", Style::default().fg(theme.text_dim)),
-                    Span::styled("Ctrl+G", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
-                    Span::styled(" Pager  ", Style::default().fg(theme.text_dim)),
-                    Span::styled("/help", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
-                    Span::styled(" Commands", Style::default().fg(theme.text_dim)),
+                    key("Ctrl+O", theme),
+                    desc("Verbose", theme),
+                    sep.clone(),
+                    key("Alt+Enter", theme),
+                    desc("Mode", theme),
+                    sep.clone(),
+                    key("Ctrl+G", theme),
+                    desc("Pager", theme),
+                    sep.clone(),
+                    key("/help", theme),
+                    desc("Commands", theme),
                 ]));
             }
         }
@@ -74,4 +83,14 @@ impl HeaderWidget {
     pub fn height() -> usize {
         5 // Top border + welcome + keys row 1 + keys row 2 + bottom border
     }
+}
+
+/// Styled keyboard key label
+fn key(label: &str, theme: &Theme) -> Span<'static> {
+    Span::styled(label.to_string(), Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD))
+}
+
+/// Styled description text after a key
+fn desc(text: &str, theme: &Theme) -> Span<'static> {
+    Span::styled(format!(" {text}"), Style::default().fg(theme.text_dim))
 }

@@ -154,15 +154,20 @@ impl MessageCell {
     pub fn lines(&self, width: u16, theme: &Theme) -> Vec<Line<'static>> {
         let mut l = self.build_lines(width, theme, None);
         if !l.is_empty() {
-            // Light separator: user messages get just a blank line, others get a short thin line
             let msg = &self.message;
             if msg.role == ChatRole::User {
                 l.insert(0, Line::from(""));
             } else {
                 let sep_width = (width as usize).saturating_sub(2).min(30);
+                let sep_color = match msg.role {
+                    ChatRole::Assistant => theme.assistant_msg,
+                    ChatRole::Tool => theme.tool_msg,
+                    ChatRole::System => theme.system_msg,
+                    ChatRole::User => unreachable!(),
+                };
                 let sep = Line::from(Span::styled(
-                    "─".repeat(sep_width),
-                    Style::default().fg(theme.border_dim),
+                    "\u{2500}".repeat(sep_width),
+                    Style::default().fg(sep_color),
                 ));
                 l.insert(0, sep);
             }
@@ -601,6 +606,7 @@ impl MessageCell {
                 MdSegment::Text(text_lines) => {
                     for raw_line in text_lines {
                         if raw_line.trim().is_empty() {
+                            lines.push(Line::from(Span::raw("")));
                             continue;
                         }
                         let wrapped = wrap_line(raw_line, text_width);
@@ -615,35 +621,78 @@ impl MessageCell {
                     }
                 }
                 MdSegment::Header { level, text } => {
-                    let (prefix, text_style) = match level {
-                        1 => ("━".repeat(inner_width.min(60)), Style::default().fg(theme.heading)),
-                        2 => ("▎".to_string(), Style::default().fg(theme.heading).add_modifier(Modifier::BOLD)),
-                        _ => ("▎".to_string(), Style::default().fg(theme.heading)),
-                    };
-                    if *level == 1 {
-                        // H1: text above a full-width line
-                        lines.push(Line::from(Span::styled(text.clone(), Style::default().fg(theme.heading).add_modifier(Modifier::BOLD))));
-                        lines.push(Line::from(Span::styled(prefix, Style::default().fg(theme.heading))));
-                    } else {
-                        let level_prefix = "#".repeat(*level);
-                        lines.push(Line::from(vec![
-                            Span::styled(format!("{level_prefix} "), text_style),
-                            Span::styled(text.clone(), text_style),
-                        ]));
+                    match level {
+                        1 => {
+                            // H1: bold text above a full-width double-line separator
+                            lines.push(Line::from(Span::styled(
+                                text.clone(),
+                                Style::default().fg(theme.heading).add_modifier(Modifier::BOLD),
+                            )));
+                            lines.push(Line::from(Span::styled(
+                                "═".repeat(inner_width.min(60)),
+                                Style::default().fg(theme.heading),
+                            )));
+                        }
+                        2 => {
+                            // H2: colored left bar + bold text
+                            lines.push(Line::from(vec![
+                                Span::styled("█ ", Style::default().fg(theme.primary)),
+                                Span::styled(text.clone(), Style::default().fg(theme.heading).add_modifier(Modifier::BOLD)),
+                            ]));
+                        }
+                        3 => {
+                            // H3: bold text with a thin underline
+                            lines.push(Line::from(Span::styled(
+                                format!("  {}", text),
+                                Style::default().fg(theme.heading).add_modifier(Modifier::BOLD),
+                            )));
+                            lines.push(Line::from(Span::styled(
+                                format!("  {}", "─".repeat(text.len().min(inner_width.saturating_sub(2)))),
+                                Style::default().fg(theme.muted),
+                            )));
+                        }
+                        _ => {
+                            // H4+: dimmer, with level prefix
+                            let level_prefix = "#".repeat(*level);
+                            lines.push(Line::from(vec![
+                                Span::styled(format!("  {level_prefix} "), Style::default().fg(theme.muted)),
+                                Span::styled(text.clone(), Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD)),
+                            ]));
+                        }
                     }
                 }
                 MdSegment::CodeBlock { lang, code } => {
                     let lang_display = lang.as_deref().unwrap_or("");
                     let sep_w = inner_width.clamp(20, 200);
-                    let top = if lang_display.is_empty() {
-                        format!("╭{}╮", "─".repeat(sep_w - 2))
+                    let code_bg = theme.diff_context_bg;
+
+                    // Top border with language label and line count
+                    let total_lines = code.lines().count();
+                    let count_badge = if total_lines > 0 {
+                        format!(" {} lines ", total_lines)
                     } else {
-                        let lp = format!(" {lang_display} ");
-                        let rest = (sep_w - 2).saturating_sub(lp.len() + 1);
-                        format!("╭─{lp}{}╮", "─".repeat(rest))
+                        String::new()
+                    };
+
+                    let top = if lang_display.is_empty() && count_badge.is_empty() {
+                        format!("╭{}╮", "─".repeat(sep_w.saturating_sub(2)))
+                    } else {
+                        let mut inner = String::from("─ ");
+                        if !lang_display.is_empty() {
+                            inner.push_str(lang_display);
+                            inner.push_str(" ");
+                        }
+                        if !count_badge.is_empty() {
+                            inner.push('·');
+                            inner.push_str(&count_badge);
+                        }
+                        inner.push(' ');
+                        let inner_w = unicode_width::UnicodeWidthStr::width(inner.as_str());
+                        let remaining = sep_w.saturating_sub(2).saturating_sub(inner_w);
+                        format!("╭{inner}{}╮", "─".repeat(remaining))
                     };
                     lines.push(Line::from(vec![
-                        Span::styled(top, Style::default().fg(theme.border_dim).bg(theme.diff_context_bg)),
+                        Span::styled(top, Style::default().fg(theme.border_dim).bg(code_bg)),
                     ]));
 
                     let highlighted = if let Some(l) = lang {
@@ -652,7 +701,6 @@ impl MessageCell {
                         code.lines().map(|l| Line::from(l.to_string())).collect()
                     };
 
-                    let code_bg = theme.diff_context_bg;
                     /// Prepend `│ ` gutter prefix to a syntax-highlighted line with bg.
                     fn prefix_code_line(line: Line<'static>, border_color: ratatui::style::Color, bg: ratatui::style::Color) -> Line<'static> {
                         let mut spans = vec![Span::styled("│ ".to_string(), Style::default().fg(border_color).bg(bg))];
@@ -668,10 +716,11 @@ impl MessageCell {
                         for line in &highlighted[..10] {
                             folded.push(prefix_code_line(line.clone(), theme.border_dim, code_bg));
                         }
-                        let hidden = highlighted.len().saturating_sub(16);
-                        folded.push(Line::from(
-                            Span::styled(format!("│ ... {hidden} more lines (press 'o' to expand)"), Style::default().fg(theme.muted).bg(code_bg))
-                        ));
+                        let hidden = highlighted.len().saturating_sub(15);
+                        folded.push(Line::from(vec![
+                            Span::styled("│ ", Style::default().fg(theme.border_dim).bg(code_bg)),
+                            Span::styled(format!("⋯ {} lines folded (Ctrl+F to expand)", hidden), Style::default().fg(theme.muted).add_modifier(Modifier::ITALIC).bg(code_bg)),
+                        ]));
                         for line in highlighted.iter().rev().take(5).rev() {
                             folded.push(prefix_code_line(line.clone(), theme.border_dim, code_bg));
                         }
@@ -681,9 +730,8 @@ impl MessageCell {
                     };
 
                     lines.extend(code_lines);
-                    let sep_w = inner_width.clamp(20, 200);
                     lines.push(Line::from(vec![
-                        Span::styled(format!("╰{}╯", "─".repeat(sep_w - 2)), Style::default().fg(theme.border_dim).bg(theme.diff_context_bg)),
+                        Span::styled(format!("╰{}╯", "─".repeat(sep_w.saturating_sub(2))), Style::default().fg(theme.border_dim).bg(code_bg)),
                     ]));
                 }
                 MdSegment::UnorderedList(items) => {
@@ -742,17 +790,23 @@ impl MessageCell {
                     }
                 }
                 MdSegment::HorizontalRule => {
+                    let w = inner_width.min(60);
+                    let sep: String = std::iter::repeat_n("─╌", w / 4)
+                        .collect::<String>()
+                        .chars()
+                        .take(w)
+                        .collect();
                     lines.push(Line::from(vec![
-                        Span::styled("─".repeat(inner_width.min(60)), Style::default().fg(theme.border_dim)),
+                        Span::styled(sep, Style::default().fg(theme.border_dim)),
                     ]));
                 }
                 MdSegment::TaskList(items) => {
                     let tl_width = content_width.saturating_sub(4).max(20);
                     for (checked, text) in items {
                         let checkbox = if *checked {
-                            Span::styled("✓ ", Style::default().fg(theme.success))
+                            Span::styled("☑ ", Style::default().fg(theme.success))
                         } else {
-                            Span::styled("○ ", Style::default().fg(theme.muted))
+                            Span::styled("☐ ", Style::default().fg(theme.muted))
                         };
                         let wrapped = wrap_line(text, tl_width);
                         for (i, wl) in wrapped.iter().enumerate() {
@@ -785,16 +839,19 @@ impl MessageCell {
                             }
                         }
                     }
+                    // Cap each column to prevent runaway width
+                    for w in &mut widths {
+                        *w = (*w).min(40);
+                    }
                     // Limit total width
-                    let total: usize = widths.iter().sum::<usize>() + (col_count - 1) * 3 + 2;
-                    let budget = inner_width.min(80);
+                    let total: usize = widths.iter().sum::<usize>() + (col_count - 1) * 3 + 4;
+                    let budget = inner_width.min(100);
                     if total > budget && col_count > 0 {
                         let scale = budget as f64 / total as f64;
                         for w in &mut widths {
                             *w = (*w as f64 * scale).max(1.0) as usize;
                         }
                     }
-
 
                     // Pad a string to a given Unicode display width (handles CJK/wide chars).
                     let pad_to_width = |s: &str, target: usize| -> String {
@@ -806,33 +863,64 @@ impl MessageCell {
                         }
                     };
 
-                    // Header row
-                    let mut header_parts = Vec::new();
+                    let brd = Style::default().fg(theme.border_dim);
+
+                    // Top border: ┌──────┬──────┐
+                    let mut top = String::from("┌");
+                    for (i, &w) in widths.iter().enumerate() {
+                        if i > 0 { top.push('┬'); }
+                        let _ = std::fmt::Write::write_fmt(&mut top, format_args!("{:─>width$}", "", width = w + 2));
+                    }
+                    top.push('┐');
+                    lines.push(Line::from(Span::styled(top, brd)));
+
+                    // Header row: │ col1 │ col2 │
+                    let mut hdr_spans: Vec<Span<'static>> = Vec::new();
                     for (i, h) in headers.iter().enumerate() {
-                        let width = widths.get(i).copied().unwrap_or(0);
-                        let padded = pad_to_width(h, width);
-                        header_parts.push(Span::styled(format!(" {padded} "), Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)));
-                    }
-                    lines.push(Line::from(header_parts));
-
-                    // Separator
-                    let mut sep_parts = Vec::new();
-                    for (i, _) in headers.iter().enumerate() {
+                        hdr_spans.push(Span::styled("│".to_string(), brd));
                         let w = widths.get(i).copied().unwrap_or(0);
-                        sep_parts.push(Span::styled(format!("{}┼", "─".repeat(w + 2)), Style::default().fg(theme.border_dim)));
+                        let padded = pad_to_width(h, w);
+                        hdr_spans.push(Span::styled(format!(" {padded} "), Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)));
                     }
-                    lines.push(Line::from(sep_parts));
+                    hdr_spans.push(Span::styled("│".to_string(), brd));
+                    lines.push(Line::from(hdr_spans));
 
-                    // Data rows
-                    for row in rows {
-                        let mut row_parts = Vec::new();
-                        for (i, cell) in row.iter().enumerate() {
-                            let width = widths.get(i).copied().unwrap_or(0);
-                            let padded = pad_to_width(cell, width);
-                            row_parts.push(Span::styled(format!(" {padded} "), Style::default().fg(theme.text_dim)));
-                        }
-                        lines.push(Line::from(row_parts));
+                    // Header separator: ├──────┼──────┤
+                    let mut mid = String::from("├");
+                    for (i, &w) in widths.iter().enumerate() {
+                        if i > 0 { mid.push('┼'); }
+                        let _ = std::fmt::Write::write_fmt(&mut mid, format_args!("{:─>width$}", "", width = w + 2));
                     }
+                    mid.push('┤');
+                    lines.push(Line::from(Span::styled(mid, brd)));
+
+                    // Data rows: │ val1 │ val2 │
+                    for row in rows {
+                        let mut row_spans: Vec<Span<'static>> = Vec::new();
+                        for (i, cell) in row.iter().enumerate() {
+                            row_spans.push(Span::styled("│".to_string(), brd));
+                            let w = widths.get(i).copied().unwrap_or(0);
+                            let padded = pad_to_width(cell, w);
+                            row_spans.push(Span::styled(format!(" {padded} "), Style::default().fg(theme.text)));
+                        }
+                        // Pad missing cells
+                        for i in row.len()..col_count {
+                            row_spans.push(Span::styled("│".to_string(), brd));
+                            let w = widths.get(i).copied().unwrap_or(0);
+                            row_spans.push(Span::styled(" ".repeat(w + 2), Style::default()));
+                        }
+                        row_spans.push(Span::styled("│".to_string(), brd));
+                        lines.push(Line::from(row_spans));
+                    }
+
+                    // Bottom border: └──────┴──────┘
+                    let mut bot = String::from("└");
+                    for (i, &w) in widths.iter().enumerate() {
+                        if i > 0 { bot.push('┴'); }
+                        let _ = std::fmt::Write::write_fmt(&mut bot, format_args!("{:─>width$}", "", width = w + 2));
+                    }
+                    bot.push('┘');
+                    lines.push(Line::from(Span::styled(bot, brd)));
                 }
             }
         }

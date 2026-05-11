@@ -69,6 +69,11 @@ pub fn title_icon(streaming: bool) -> &'static str {
     } else if streaming { "✦" } else { "◇" }
 }
 
+/// Return the git branch icon.
+pub fn branch_icon() -> &'static str {
+    if is_enabled() { "git:" } else { "⎇ " }
+}
+
 /// Sanitize a string, replacing all decorative characters with plain text.
 pub fn sanitize(text: &str) -> String {
     if !is_enabled() {
@@ -89,4 +94,5 @@ pub fn sanitize(text: &str) -> String {
         .replace('│', "|")
         .replace('═', "=")
         .replace('─', "-")
+        .replace('⎇', "git:")
 }

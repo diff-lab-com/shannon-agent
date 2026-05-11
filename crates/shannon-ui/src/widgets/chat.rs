@@ -574,24 +574,75 @@ impl ChatWidget {
 
         // Welcome screen when chat is empty
         if self.messages.is_empty() {
-            let sep_w = 28.min(inner.width.saturating_sub(4) as usize);
-            let welcome_lines = vec![
+            let sep_w = 40.min(inner.width.saturating_sub(4) as usize);
+            let b = ratatui::style::Style::default();
+            let prim = b.fg(theme.primary);
+            let bold_prim = b.fg(theme.primary).add_modifier(ratatui::style::Modifier::BOLD);
+            let dim = b.fg(theme.text_dim);
+            let muted = b.fg(theme.muted);
+            let accent = b.fg(theme.secondary).add_modifier(ratatui::style::Modifier::BOLD);
+            let border = b.fg(theme.border_dim);
+            let sep = "\u{2500}".repeat(sep_w);
+
+            let mut welcome_lines = vec![
                 ratatui::text::Line::from(""),
                 ratatui::text::Line::from(vec![
-                    ratatui::text::Span::styled("  Shannon", ratatui::style::Style::default().fg(theme.primary).add_modifier(ratatui::style::Modifier::BOLD)),
-                    ratatui::text::Span::styled(" — AI Code Assistant", ratatui::style::Style::default().fg(theme.text_dim)),
+                    ratatui::text::Span::styled("      ", b),
+                    ratatui::text::Span::styled("\u{2588}", bold_prim),
+                    ratatui::text::Span::styled("\u{2584}", prim),
+                    ratatui::text::Span::styled("  Shannon", bold_prim),
+                ]),
+                ratatui::text::Line::from(vec![
+                    ratatui::text::Span::styled("      AI code assistant \u{00B7} multi-provider \u{00B7} MCP extensions", dim),
                 ]),
                 ratatui::text::Line::from(""),
                 ratatui::text::Line::from(vec![
-                    ratatui::text::Span::styled(format!("  {}", "─".repeat(sep_w)), ratatui::style::Style::default().fg(theme.border_dim)),
+                    ratatui::text::Span::styled(format!("  {sep}"), border),
                 ]),
                 ratatui::text::Line::from(""),
                 ratatui::text::Line::from(vec![
-                    ratatui::text::Span::styled("  Try: ", ratatui::style::Style::default().fg(theme.muted)),
-                    ratatui::text::Span::styled("/help", ratatui::style::Style::default().fg(theme.secondary).add_modifier(ratatui::style::Modifier::BOLD)),
-                    ratatui::text::Span::styled(" for commands · describe a task · paste code", ratatui::style::Style::default().fg(theme.muted)),
+                    ratatui::text::Span::styled("  Try asking:", muted),
+                ]),
+                ratatui::text::Line::from(vec![
+                    ratatui::text::Span::styled("    \u{25B8} ", b.fg(theme.primary)),
+                    ratatui::text::Span::styled("\"Explain the architecture of this project\"", dim),
+                ]),
+                ratatui::text::Line::from(vec![
+                    ratatui::text::Span::styled("    \u{25B8} ", b.fg(theme.primary)),
+                    ratatui::text::Span::styled("\"Fix the failing tests in the auth module\"", dim),
+                ]),
+                ratatui::text::Line::from(vec![
+                    ratatui::text::Span::styled("    \u{25B8} ", b.fg(theme.primary)),
+                    ratatui::text::Span::styled("\"Add error handling to the API client\"", dim),
+                ]),
+                ratatui::text::Line::from(""),
+                ratatui::text::Line::from(vec![
+                    ratatui::text::Span::styled("  ", b),
+                    ratatui::text::Span::styled("/help", accent),
+                    ratatui::text::Span::styled(" commands  ", muted),
+                    ratatui::text::Span::styled("/config", accent),
+                    ratatui::text::Span::styled(" settings  ", muted),
+                    ratatui::text::Span::styled("/theme", accent),
+                    ratatui::text::Span::styled(" appearance", muted),
                 ]),
             ];
+
+            // Keyboard shortcuts row (only if enough vertical space)
+            if inner.height >= 16 {
+                welcome_lines.push(ratatui::text::Line::from(""));
+                welcome_lines.push(ratatui::text::Line::from(vec![
+                    ratatui::text::Span::styled("  ", b),
+                    ratatui::text::Span::styled("Ctrl+E", accent),
+                    ratatui::text::Span::styled(" editor  ", muted),
+                    ratatui::text::Span::styled("Ctrl+F", accent),
+                    ratatui::text::Span::styled(" fold  ", muted),
+                    ratatui::text::Span::styled("Ctrl+G", accent),
+                    ratatui::text::Span::styled(" pager  ", muted),
+                    ratatui::text::Span::styled("F11", accent),
+                    ratatui::text::Span::styled(" fullscreen", muted),
+                ]));
+            }
+
             let welcome = ratatui::widgets::Paragraph::new(welcome_lines);
             frame.render_widget(welcome, inner);
             return;
@@ -906,6 +957,51 @@ pub(super) enum MdSegment {
     /// Table: (headers, rows)
     Table { headers: Vec<String>, rows: Vec<Vec<String>> },
 }
+/// Try to detect and extract a markdown table wrapped inside a code fence.
+///
+/// LLMs sometimes wrap tables in \`\`\`md fences, which causes them to render
+/// as plain code instead of proper tables. This detects that pattern and
+/// returns the parsed headers and rows.
+fn try_unwrap_table(code: &str) -> Option<(Vec<String>, Vec<Vec<String>>)> {
+    let lines: Vec<&str> = code.lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+    if lines.len() < 3 { return None; }
+
+    // All lines must be pipe-delimited
+    if !lines.iter().all(|l| l.starts_with('|') && l.ends_with('|')) {
+        return None;
+    }
+
+    // Second line must be a separator (only |, -, :, spaces)
+    let sep = lines[1].trim_matches('|').trim();
+    if !sep.chars().all(|c| c == '-' || c == ':' || c == ' ') || !sep.contains('-') {
+        return None;
+    }
+
+    // Parse header (first line)
+    let headers: Vec<String> = lines[0].trim_matches('|')
+        .split('|')
+        .map(|c| c.trim().to_string())
+        .collect();
+
+    if headers.is_empty() || headers.iter().all(|h| h.is_empty()) {
+        return None;
+    }
+
+    // Parse data rows (skip header + separator)
+    let rows: Vec<Vec<String>> = lines[2..].iter()
+        .map(|l| {
+            l.trim_matches('|')
+                .split('|')
+                .map(|c| c.trim().to_string())
+                .collect()
+        })
+        .collect();
+
+    Some((headers, rows))
+}
 
 /// Parse content into markdown segments using pulldown-cmark.
 pub(super) fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
@@ -963,9 +1059,21 @@ pub(super) fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
                 };
             }
             Event::End(TagEnd::CodeBlock) => {
+                let code_content = code_lines.join("\n");
+                // Fence unwrapping: LLMs often wrap tables in ```md or ```markdown
+                // fences. Detect and unwrap so they render as proper tables.
+                let lang_str = code_lang.as_deref();
+                if matches!(lang_str, Some("md") | Some("markdown")) {
+                    if let Some((headers, rows)) = try_unwrap_table(&code_content) {
+                        segments.push(MdSegment::Table { headers, rows });
+                        code_lines.clear();
+                        in_code = false;
+                        continue;
+                    }
+                }
                 segments.push(MdSegment::CodeBlock {
                     lang: code_lang.take(),
-                    code: code_lines.join("\n"),
+                    code: code_content,
                 });
                 code_lines.clear();
                 in_code = false;
@@ -1046,7 +1154,7 @@ pub(super) fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
                 heading_text.push_str(&text);
             }
             Event::Text(text) if in_list => {
-                let text_str = if in_strikethrough { format!("~{text}~") } else { text.to_string() };
+                let text_str = if in_strikethrough { format!("~~{text}~~") } else { text.to_string() };
                 // Collect text into the last list item or a new one
                 let lines: Vec<&str> = text_str.lines().collect();
                 for (i, line) in lines.iter().enumerate() {
@@ -1065,13 +1173,13 @@ pub(super) fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
                 }
             }
             Event::Text(text) if in_blockquote => {
-                let text_str = if in_strikethrough { format!("~{text}~") } else { text.to_string() };
+                let text_str = if in_strikethrough { format!("~~{text}~~") } else { text.to_string() };
                 for line in text_str.lines() {
                     blockquote_lines.push(line.to_string());
                 }
             }
             Event::Text(text) => {
-                let text_str = if in_strikethrough { format!("~{text}~") } else { text.to_string() };
+                let text_str = if in_strikethrough { format!("~~{text}~~") } else { text.to_string() };
                 current_text.extend(text_str.lines().map(|l| l.to_string()));
             }
             Event::SoftBreak | Event::HardBreak => {
@@ -1181,7 +1289,7 @@ pub(super) fn parse_inline_formatting(text: &str, base_color: ratatui::style::Co
                 let close_start = search_start + end;
                 let code_text = &text[search_start..close_start];
                 spans.push(Span::styled(
-                    code_text.to_string(),
+                    format!(" {code_text} "),
                     Style::default().fg(theme.inline_code).bg(theme.inline_code_bg),
                 ));
                 pos = close_start + 1;
@@ -1215,10 +1323,23 @@ pub(super) fn parse_inline_formatting(text: &str, base_color: ratatui::style::Co
                 pos = close_start + 1;
                 continue;
             }
+        } else if bytes[pos] == b'~' && pos + 1 < text.len() && bytes[pos + 1] == b'~' {
+            // ~~strikethrough~~
+            let search_start = pos + 2;
+            if let Some(end) = text[search_start..].find("~~") {
+                let close_start = search_start + end;
+                let strike_text = &text[search_start..close_start];
+                spans.push(Span::styled(
+                    strike_text.to_string(),
+                    Style::default().fg(theme.text_dim).add_modifier(Modifier::CROSSED_OUT),
+                ));
+                pos = close_start + 2;
+                continue;
+            }
         }
-        // Plain character — collect until next * or ` or end
+        // Plain character — collect until next *, `, or ~ or end
         let plain_start = pos;
-        while pos < text.len() && bytes[pos] != b'*' && bytes[pos] != b'`' {
+        while pos < text.len() && bytes[pos] != b'*' && bytes[pos] != b'`' && bytes[pos] != b'~' {
             pos += 1;
         }
         if pos > plain_start {
@@ -1227,7 +1348,7 @@ pub(super) fn parse_inline_formatting(text: &str, base_color: ratatui::style::Co
                 Style::default().fg(base_color),
             ));
         } else {
-            // Unmatched * or `, treat as plain
+            // Unmatched *, `, or ~, treat as plain
             spans.push(Span::styled(
                 text[pos..pos+1].to_string(),
                 Style::default().fg(base_color),

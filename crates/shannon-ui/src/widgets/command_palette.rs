@@ -40,11 +40,11 @@ impl CommandCategory {
     /// Return a short icon/label for the category
     fn icon(&self) -> &'static str {
         match self {
-            CommandCategory::Navigation => "\u{f07c}", // folder-open
-            CommandCategory::Editing => "\u{f303}",    // pencil
-            CommandCategory::Session => "\u{f0c0}",    // users
-            CommandCategory::Tools => "\u{f0ad}",      // wrench
-            CommandCategory::Settings => "\u{f013}",   // cog
+            CommandCategory::Navigation => "\u{2197}", // ↗
+            CommandCategory::Editing => "\u{270E}",    // ✎
+            CommandCategory::Session => "\u{25C8}",    // ◈
+            CommandCategory::Tools => "\u{2692}",      // ⚒
+            CommandCategory::Settings => "\u{2699}",   // ⚙
         }
     }
 

@@ -152,7 +152,7 @@ fn test_prompt_widget_renders() {
 
     terminal.draw(|f| {
         let area = Rect::new(0, 0, 60, 3);
-        prompt.render(f, area, &theme);
+        prompt.render(f, area, &theme, None);
     }).unwrap();
 
     let buf = terminal.backend().buffer().clone();

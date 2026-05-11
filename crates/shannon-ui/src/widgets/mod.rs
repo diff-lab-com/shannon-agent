@@ -251,13 +251,13 @@ impl MainLayoutWidget {
                 ])
                 .split(area);
             render_chat(frame, chunks[0], ctx.theme);
-            ctx.prompt.render(frame, chunks[1], ctx.theme);
+            ctx.prompt.render(frame, chunks[1], ctx.theme, ctx.approval_mode);
         } else {
             let (_header_area, chat_area, prompt_area, status_area, sidebar_area, _) =
                 Self::layout_with_sidebar(area, prompt_height, sidebar_visible, ctx.chat.is_empty());
 
             render_chat(frame, chat_area, ctx.theme);
-            ctx.prompt.render(frame, prompt_area, ctx.theme);
+            ctx.prompt.render(frame, prompt_area, ctx.theme, ctx.approval_mode);
             if let Some(custom) = ctx.cached_statusline {
                 StatusBarWidget::render_custom(frame, status_area, custom, ctx.theme);
             } else {

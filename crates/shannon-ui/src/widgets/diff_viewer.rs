@@ -222,39 +222,39 @@ impl DiffViewerWidget {
             for (i, entry) in all_entries.iter().enumerate() {
                 let is_selected = i == self.selected_index;
                 let is_expanded = self.expanded.get(i).copied().unwrap_or(false);
-                let cursor = if is_selected { ">" } else { " " };
+                let cursor = if is_selected { "▸" } else { " " };
                 let expand_icon = crate::a11y::expand_icon(is_expanded);
+                let sel_bg = if is_selected { theme.context_bar_bg } else { ratatui::style::Color::Reset };
 
                 let line = match entry {
                     Entry::Modified(fc) => {
                         let fname = truncate_path(&fc.path, inner_width.saturating_sub(20));
                         let changes = format!("+{} -{}", fc.additions, fc.deletions);
-                        let bg = if is_selected { theme.context_bar_bg } else { theme.text };
-                        let _ = bg;
+                        let sel_style = Style::default().bg(sel_bg);
                         Line::from(vec![
-                            Span::styled(format!("{cursor} "), Style::default().fg(theme.text_dim)),
-                            Span::styled(format!("{expand_icon} "), Style::default().fg(theme.muted)),
-                            Span::styled(fname, Style::default().fg(if is_selected { theme.primary } else { theme.text })),
-                            Span::styled(" ", Style::default().fg(theme.text_dim)),
-                            Span::styled(changes, Style::default().fg(theme.muted)),
+                            Span::styled(format!("{cursor} "), Style::default().fg(theme.primary).bg(sel_bg)),
+                            Span::styled(format!("{expand_icon} "), Style::default().fg(theme.muted).bg(sel_bg)),
+                            Span::styled(fname, sel_style.fg(if is_selected { theme.primary } else { theme.text })),
+                            Span::styled(" ", sel_style),
+                            Span::styled(changes, Style::default().fg(theme.muted).bg(sel_bg)),
                         ])
                     }
                     Entry::Created(p) => {
                         let fname = truncate_path(p, inner_width.saturating_sub(20));
                         Line::from(vec![
-                            Span::styled(format!("{cursor} "), Style::default().fg(theme.text_dim)),
-                            Span::styled("+ ", Style::default().fg(theme.success)),
-                            Span::styled(fname, Style::default().fg(if is_selected { theme.success } else { theme.text })),
-                            Span::styled(" new", Style::default().fg(theme.success)),
+                            Span::styled(format!("{cursor} "), Style::default().fg(theme.primary).bg(sel_bg)),
+                            Span::styled("+ ", Style::default().fg(theme.success).bg(sel_bg)),
+                            Span::styled(fname, Style::default().fg(if is_selected { theme.success } else { theme.text }).bg(sel_bg)),
+                            Span::styled(" new", Style::default().fg(theme.success).bg(sel_bg)),
                         ])
                     }
                     Entry::Deleted(p) => {
                         let fname = truncate_path(p, inner_width.saturating_sub(20));
                         Line::from(vec![
-                            Span::styled(format!("{cursor} "), Style::default().fg(theme.text_dim)),
-                            Span::styled("x ", Style::default().fg(theme.error)),
-                            Span::styled(fname, Style::default().fg(if is_selected { theme.error } else { theme.text })),
-                            Span::styled(" deleted", Style::default().fg(theme.error)),
+                            Span::styled(format!("{cursor} "), Style::default().fg(theme.primary).bg(sel_bg)),
+                            Span::styled("x ", Style::default().fg(theme.error).bg(sel_bg)),
+                            Span::styled(fname, Style::default().fg(if is_selected { theme.error } else { theme.text }).bg(sel_bg)),
+                            Span::styled(" deleted", Style::default().fg(theme.error).bg(sel_bg)),
                         ])
                     }
                 };

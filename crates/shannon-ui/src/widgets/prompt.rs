@@ -302,7 +302,7 @@ impl PromptWidget {
     }
 
     /// Render the prompt widget
-    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme, mode: Option<&str>) {
         let input_text = self.input();
         let inner_width = area.width.saturating_sub(2) as usize; // 2 prefix chars (no side borders)
 
@@ -337,7 +337,16 @@ impl PromptWidget {
             format!(" Input [{}] ", self.vim_mode)
         };
 
-        let border_color = self.border_color_override.unwrap_or(theme.border_dim);
+        // Explicit /color override takes precedence; otherwise derive from approval mode
+        let border_color = self.border_color_override.unwrap_or_else(|| {
+            match mode {
+                Some("ASK") | Some("PLAN") => theme.accent,
+                Some("EDIT") => theme.success,
+                Some("AUTO") => theme.primary,
+                Some("FULL") => ratatui::style::Color::Red,
+                _ => theme.border_dim,
+            }
+        });
         let paragraph = Paragraph::new(display_lines)
             .block(
                 Block::default()

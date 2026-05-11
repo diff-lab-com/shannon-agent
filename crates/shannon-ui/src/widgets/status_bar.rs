@@ -11,6 +11,7 @@ use ratatui::{
     widgets::Paragraph,
     Frame,
 };
+use unicode_width::UnicodeWidthStr;
 
 /// Status bar widget
 pub struct StatusBarWidget;
@@ -252,7 +253,7 @@ impl StatusBarWidget {
                     Style::default().fg(theme.border_dim),
                 ));
                 left2.push(Span::styled(
-                    format!("\u{1f527}{tools}"),
+                    format!("\u{2692}{tools}"), // ⚒ craft symbol, consistent width
                     Style::default().fg(theme.secondary),
                 ));
             }
@@ -370,15 +371,15 @@ fn format_duration(secs: u64) -> String {
     }
 }
 
-/// Git branch icon (Powerline symbol).
+/// Git branch icon (universal, a11y-aware).
 fn branch_icon() -> &'static str {
-    "\u{E0A0}"
+    crate::a11y::branch_icon()
 }
 
 /// Render a single status line with left/right zones and padding.
 fn render_line(frame: &mut Frame, area: Rect, left: Vec<Span<'static>>, right: Vec<Span<'static>>, theme: &Theme) {
-    let left_w: usize = left.iter().map(|s| s.content.chars().count()).sum();
-    let right_w: usize = right.iter().map(|s| s.content.chars().count()).sum();
+    let left_w: usize = left.iter().map(|s| UnicodeWidthStr::width(s.content.as_ref())).sum();
+    let right_w: usize = right.iter().map(|s| UnicodeWidthStr::width(s.content.as_ref())).sum();
     let total = left_w + right_w;
     let available = area.width as usize;
     let padding = available.saturating_sub(total);

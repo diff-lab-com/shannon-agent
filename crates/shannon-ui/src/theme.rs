@@ -1146,11 +1146,96 @@ impl Theme {
     }
 
     /// Auto-detect theme based on terminal background color.
+    /// Respects NO_COLOR (https://no-color.org/) and TERM=dumb.
     pub fn detect() -> Self {
+        if should_disable_color() {
+            return Self::no_color();
+        }
         if is_light_background() {
             Self::default_light()
         } else {
             Self::default_dark()
+        }
+    }
+
+    /// Monochrome theme for NO_COLOR / TERM=dumb environments.
+    /// Uses only foreground shades (white/gray) with no color.
+    pub fn no_color() -> Self {
+        Self {
+            name: "no_color".to_string(),
+            // Role colors — use white/bold differentiation only
+            user_msg: Color::White,
+            assistant_msg: Color::Gray,
+            system_msg: Color::DarkGray,
+            tool_msg: Color::Gray,
+            // Message backgrounds — no tinting
+            user_msg_bg: Color::Reset,
+            assistant_msg_bg: Color::Reset,
+            // UI chrome
+            primary: Color::White,
+            secondary: Color::Gray,
+            accent: Color::White,
+            border: Color::DarkGray,
+            border_dim: Color::DarkGray,
+            header_text: Color::White,
+            // Status — use bold/weight, not color
+            success: Color::White,
+            warning: Color::White,
+            error: Color::White,
+            muted: Color::DarkGray,
+            // Text
+            text: Color::Gray,
+            text_dim: Color::DarkGray,
+            // Diff — all gray
+            diff_added: Color::Gray,
+            diff_removed: Color::Gray,
+            diff_header: Color::White,
+            diff_added_bg: Color::Reset,
+            diff_removed_bg: Color::Reset,
+            diff_context: Color::DarkGray,
+            diff_context_bg: Color::Reset,
+            diff_added_word: Color::White,
+            diff_removed_word: Color::Gray,
+            diff_line_number: Color::DarkGray,
+            diff_line_number_bg: Color::Reset,
+            // Syntax — all gray
+            syntax_keyword: Color::White,
+            syntax_function: Color::Gray,
+            syntax_string: Color::DarkGray,
+            syntax_number: Color::Gray,
+            syntax_comment: Color::DarkGray,
+            syntax_type: Color::Gray,
+            syntax_variable: Color::Gray,
+            syntax_operator: Color::Gray,
+            // Tool categories — all same
+            tool_read: Color::Gray,
+            tool_write: Color::Gray,
+            tool_search: Color::Gray,
+            tool_bash: Color::Gray,
+            // Fullscreen
+            fullscreen_bg: Color::Reset,
+            fullscreen_border: Color::DarkGray,
+            // Subagent colors
+            subagent_1: Color::White,
+            subagent_2: Color::Gray,
+            subagent_3: Color::DarkGray,
+            subagent_4: Color::White,
+            subagent_5: Color::Gray,
+            subagent_6: Color::DarkGray,
+            subagent_7: Color::White,
+            subagent_8: Color::Gray,
+            // Markdown
+            heading: Color::White,
+            bold_text: Color::White,
+            italic_text: Color::Gray,
+            blockquote: Color::DarkGray,
+            inline_code: Color::Gray,
+            inline_code_bg: Color::Reset,
+            // Misc
+            context_bar_fg: Color::White,
+            context_bar_bg: Color::Reset,
+            selection_bg: Color::DarkGray,
+            link: Color::White,
         }
     }
 
@@ -1451,6 +1536,19 @@ fn is_light_background() -> bool {
         })
         .map(|bg| bg >= 8)
         .unwrap_or(false)
+}
+
+/// Check whether color should be disabled per NO_COLOR or TERM=dumb.
+fn should_disable_color() -> bool {
+    // https://no-color.org/ — presence of the var (even empty) disables color
+    if std::env::var("NO_COLOR").is_ok() {
+        return true;
+    }
+    // TERM=dumb means the terminal has minimal capabilities
+    if std::env::var("TERM").as_deref() == Ok("dumb") {
+        return true;
+    }
+    false
 }
 
 #[cfg(test)]

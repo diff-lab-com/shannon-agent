@@ -1054,7 +1054,7 @@ fn format_diff_collapsed(
 
             let skipped = body_lines.len() - ctx * 2;
             output.push_str(&format!(
-                "{}  ... skipped {} lines (press 'e' to expand) ...{}\n",
+                "{}  ... skipped {} lines (Ctrl+F to expand) ...{}\n",
                 colors::DIM,
                 skipped,
                 colors::RESET,
@@ -1408,7 +1408,7 @@ mod tests {
         let plain = strip_ansi(&formatted);
         // Should contain skip indicator
         assert!(plain.contains("skipped"));
-        assert!(plain.contains("press 'e' to expand"));
+        assert!(plain.contains("Ctrl+F to expand"));
     }
 
     #[test]
