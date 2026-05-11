@@ -8,7 +8,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::{
     Terminal,
     layout::{Alignment, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
     prelude::Widget,
@@ -869,7 +869,7 @@ fn render_chat_search_overlay(
     };
 
     let query_color = if state.chat_search_query.is_empty() {
-        Color::DarkGray
+        theme.text_dim
     } else {
         theme.primary
     };
