@@ -33,6 +33,20 @@ fn add_role_gutter(lines: &mut Vec<Line<'static>>, color: ratatui::style::Color)
     }
 }
 
+/// Apply a background color to all spans in a line.
+fn patch_line_bg(line: &mut Line<'static>, bg: ratatui::style::Color) {
+    for span in &mut line.spans {
+        span.style = span.style.bg(bg);
+    }
+}
+
+/// Apply background color to all lines in a vector.
+fn apply_bg(lines: &mut Vec<Line<'static>>, bg: ratatui::style::Color) {
+    for line in lines.iter_mut() {
+        patch_line_bg(line, bg);
+    }
+}
+
 // ── Search highlighting ──────────────────────────────────────────────────
 
 /// Search parameters for highlighting matches in rendered cells.
@@ -132,10 +146,17 @@ impl MessageCell {
         *self.cached_lines.lock() = None;
     }
 
-    /// Build styled lines for this message, with trailing blank line for spacing.
+    /// Build styled lines for this message, with separator and trailing blank line for spacing.
     pub fn lines(&self, width: u16, theme: &Theme) -> Vec<Line<'static>> {
         let mut l = self.build_lines(width, theme, None);
         if !l.is_empty() {
+            // Thin separator line between messages
+            let sep_width = (width as usize).saturating_sub(2).min(60);
+            let sep = Line::from(Span::styled(
+                "─".repeat(sep_width),
+                Style::default().fg(theme.border_dim),
+            ));
+            l.insert(0, sep);
             l.push(Line::from(""));
         }
         l
@@ -694,6 +715,16 @@ impl MessageCell {
         // Cache for non-search builds
         if search.is_none() {
             *self.cached_lines.lock() = Some((width, lines.clone()));
+        }
+
+        // Apply subtle background tinting to user/AI messages
+        let msg_bg = match msg.role {
+            ChatRole::User => Some(theme.user_msg_bg),
+            ChatRole::Assistant => Some(theme.assistant_msg_bg),
+            _ => None,
+        };
+        if let Some(bg) = msg_bg {
+            apply_bg(&mut lines, bg);
         }
 
         add_role_gutter(&mut lines, gutter_color);

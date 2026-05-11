@@ -217,7 +217,7 @@ impl PromptWidget {
         const MAX_PROMPT_HEIGHT: u16 = 10;
         const MIN_PROMPT_HEIGHT: u16 = 3;
 
-        let inner_width = available_width.saturating_sub(4) as usize; // 2 borders + 2 prefix
+        let inner_width = available_width.saturating_sub(2) as usize; // 2 prefix chars
         if inner_width == 0 {
             return MIN_PROMPT_HEIGHT;
         }
@@ -231,7 +231,7 @@ impl PromptWidget {
             if w == 0 { 1 } else { w.div_ceil(inner_width) }
         }).sum();
 
-        let needed = (rows + 2) as u16; // +2 for top/bottom borders
+        let needed = (rows + 2) as u16; // +2 for top border + bottom hint
         needed.clamp(MIN_PROMPT_HEIGHT, MAX_PROMPT_HEIGHT)
     }
 
@@ -304,7 +304,7 @@ impl PromptWidget {
     /// Render the prompt widget
     pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let input_text = self.input();
-        let inner_width = area.width.saturating_sub(4) as usize; // 2 borders + 2 prefix
+        let inner_width = area.width.saturating_sub(2) as usize; // 2 prefix chars (no side borders)
 
         let mut display_lines: Vec<Line<'static>> = Vec::new();
 
@@ -337,19 +337,17 @@ impl PromptWidget {
             format!(" Input [{}] ", self.vim_mode)
         };
 
+        let border_color = self.border_color_override.unwrap_or(theme.border_dim);
         let paragraph = Paragraph::new(display_lines)
             .block(
                 Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(self.border_color_override.unwrap_or(theme.border)))
+                    .borders(Borders::TOP)
+                    .border_style(Style::default().fg(border_color))
                     .title(title)
                     .title_bottom(
-                        ratatui::text::Line::from(
-                            Span::styled(
-                                " Enter:Send  Shift+Enter:Newline  Ctrl+E:Editor ",
-                                Style::default().fg(theme.muted),
-                            )
-                        ).alignment(ratatui::layout::Alignment::Center),
+                        ratatui::text::Line::from(vec![
+                            Span::styled("─".repeat(area.width as usize), Style::default().fg(border_color)),
+                        ])
                     ),
             )
             .alignment(Alignment::Left);
@@ -359,9 +357,9 @@ impl PromptWidget {
         // Show cursor
         if !input_text.is_empty() && inner_width > 0 {
             let (disp_row, disp_col) = self.cursor_display_pos(inner_width);
-            let cursor_x = area.x + 1 + 2 + disp_col as u16; // border + prefix + col
-            let cursor_y = area.y + 1 + disp_row as u16;     // top border + row
-            if cursor_y < area.bottom() - 1 && cursor_x < area.right() - 1 {
+            let cursor_x = area.x + 2 + disp_col as u16; // prefix + col (no left border)
+            let cursor_y = area.y + 1 + disp_row as u16;  // top border + row
+            if cursor_y < area.bottom() - 1 && cursor_x < area.right() {
                 frame.set_cursor_position((cursor_x, cursor_y));
             }
         }
