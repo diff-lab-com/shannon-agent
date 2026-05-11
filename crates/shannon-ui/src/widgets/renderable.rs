@@ -437,12 +437,12 @@ impl MessageCell {
                         continue;
                     }
 
-                    let (prefix, color, ln_color, inc_old, inc_new) = if raw_line.starts_with('+') {
-                        ("+", theme.diff_added, theme.diff_line_number, false, true)
+                    let (prefix, color, bg, ln_color, inc_old, inc_new) = if raw_line.starts_with('+') {
+                        ("+", theme.diff_added, theme.diff_added_bg, theme.diff_line_number, false, true)
                     } else if raw_line.starts_with('-') {
-                        ("-", theme.diff_removed, theme.diff_line_number, true, false)
+                        ("-", theme.diff_removed, theme.diff_removed_bg, theme.diff_line_number, true, false)
                     } else {
-                        (" ", theme.diff_context, theme.diff_line_number, true, true)
+                        (" ", theme.diff_context, theme.diff_context_bg, theme.diff_line_number, true, true)
                     };
 
                     if inc_old { old_line += 1; }
@@ -454,11 +454,11 @@ impl MessageCell {
 
                     lines.push(Line::from(vec![
                         Span::styled("│", Style::default().fg(theme.border_dim)),
-                        Span::styled(old_ln, Style::default().fg(ln_color)),
-                        Span::styled(" ", Style::default()),
-                        Span::styled(new_ln, Style::default().fg(ln_color)),
-                        Span::styled(prefix, Style::default().fg(color).add_modifier(Modifier::BOLD)),
-                        Span::styled(text, Style::default().fg(color)),
+                        Span::styled(old_ln, Style::default().fg(ln_color).bg(bg)),
+                        Span::styled(" ", Style::default().bg(bg)),
+                        Span::styled(new_ln, Style::default().fg(ln_color).bg(bg)),
+                        Span::styled(prefix, Style::default().fg(color).add_modifier(Modifier::BOLD).bg(bg)),
+                        Span::styled(text, Style::default().fg(color).bg(bg)),
                     ]));
                 }
                 let bottom = format!("╰{}╯", "─".repeat(border_w.saturating_sub(2)));
