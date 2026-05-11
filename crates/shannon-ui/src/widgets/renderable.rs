@@ -26,6 +26,9 @@ use ratatui::{
 #[cfg(test)]
 use ratatui::style::Color;
 
+/// Braille-dot spinner frames for tool execution animation.
+const TOOL_SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
 /// Prepend a colored role gutter `┃ ` to every line for visual lane separation.
 fn add_role_gutter(lines: &mut Vec<Line<'static>>, color: ratatui::style::Color) {
     // Only add indicator to the first line
@@ -251,7 +254,6 @@ impl MessageCell {
             };
 
             // Status icon + duration badge (spinner animation for running tools)
-            const TOOL_SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
             let (status_icon, status_color, dur_badge) = if msg.duration_secs.is_none() && !msg.is_error {
                 // Tool is still running — show spinning animation
                 let frame = TOOL_SPINNER[msg.spinner_frame % TOOL_SPINNER.len()];
@@ -279,7 +281,7 @@ impl MessageCell {
                 (icon.to_string(), color, badge)
             };
 
-            let display_budget = 60usize.saturating_sub(unicode_width::UnicodeWidthStr::width(dur_badge.as_str()));
+            let display_budget = inner_width.min(60).saturating_sub(unicode_width::UnicodeWidthStr::width(dur_badge.as_str()));
             let display = if unicode_width::UnicodeWidthStr::width(first_line) > display_budget {
                 truncate_to(first_line, display_budget)
             } else {
@@ -338,7 +340,6 @@ impl MessageCell {
             };
 
             // Top border: ╭─ toolname ── ✓ duration ──╮
-            const TOOL_SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
             let (status_icon, status_color) = if msg.is_error {
                 ("\u{2717}".to_string(), theme.error)
             } else if msg.duration_secs.is_none() {
@@ -518,7 +519,7 @@ impl MessageCell {
 
             // Bash output: detect $ prefix lines and render command distinctly
             if cat == ToolCategory::Bash {
-                let row_budget: usize = if cat == ToolCategory::Agent { 3 } else { 10 };
+                let row_budget: usize = 10;
                 let mut in_output = false;
                 let all_lines: Vec<String> = content.lines()
                     .filter(|l| !l.trim().is_empty())
