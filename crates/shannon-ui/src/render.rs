@@ -796,6 +796,7 @@ fn render_diff_line_with_word_highlight(
     line: &str,
     is_addition: bool,
     corresponding_line: Option<&str>,
+    theme: &Theme,
 ) -> Line<'static> {
     let prefix = if line.starts_with('+') || line.starts_with('-') {
         &line[..1]
@@ -811,7 +812,7 @@ fn render_diff_line_with_word_highlight(
         if is_addition {
             // For additions: prefix (normal green) + unchanged (green) + changed (bright green) + unchanged (green)
             let mut spans = vec![
-                Span::styled(prefix.to_string(), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled(prefix.to_string(), Style::default().fg(theme.diff_added).add_modifier(Modifier::BOLD)),
             ];
 
             let content_chars: Vec<char> = content.chars().collect();
@@ -820,7 +821,7 @@ fn render_diff_line_with_word_highlight(
             if new_start > 0 {
                 spans.push(Span::styled(
                     content_chars[..new_start].iter().collect::<String>(),
-                    Style::default().fg(Color::Green),
+                    Style::default().fg(theme.diff_added),
                 ));
             }
 
@@ -828,7 +829,7 @@ fn render_diff_line_with_word_highlight(
             if new_start < new_end {
                 spans.push(Span::styled(
                     content_chars[new_start..new_end].iter().collect::<String>(),
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme.diff_added_word).add_modifier(Modifier::BOLD),
                 ));
             }
 
@@ -836,7 +837,7 @@ fn render_diff_line_with_word_highlight(
             if new_end < content_chars.len() {
                 spans.push(Span::styled(
                     content_chars[new_end..].iter().collect::<String>(),
-                    Style::default().fg(Color::Green),
+                    Style::default().fg(theme.diff_added),
                 ));
             }
 
@@ -844,7 +845,7 @@ fn render_diff_line_with_word_highlight(
         } else {
             // For removals: prefix (normal red) + unchanged (red) + changed (bright red) + unchanged (red)
             let mut spans = vec![
-                Span::styled(prefix.to_string(), Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::styled(prefix.to_string(), Style::default().fg(theme.diff_removed).add_modifier(Modifier::BOLD)),
             ];
 
             let content_chars: Vec<char> = content.chars().collect();
@@ -853,7 +854,7 @@ fn render_diff_line_with_word_highlight(
             if new_start > 0 {
                 spans.push(Span::styled(
                     content_chars[..new_start].iter().collect::<String>(),
-                    Style::default().fg(Color::Red),
+                    Style::default().fg(theme.diff_removed),
                 ));
             }
 
@@ -861,7 +862,7 @@ fn render_diff_line_with_word_highlight(
             if new_start < new_end {
                 spans.push(Span::styled(
                     content_chars[new_start..new_end].iter().collect::<String>(),
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme.diff_removed_word).add_modifier(Modifier::BOLD),
                 ));
             }
 
@@ -869,7 +870,7 @@ fn render_diff_line_with_word_highlight(
             if new_end < content_chars.len() {
                 spans.push(Span::styled(
                     content_chars[new_end..].iter().collect::<String>(),
-                    Style::default().fg(Color::Red),
+                    Style::default().fg(theme.diff_removed),
                 ));
             }
 
@@ -877,7 +878,7 @@ fn render_diff_line_with_word_highlight(
         }
     } else {
         // No corresponding line, use line-level coloring as fallback
-        let color = if is_addition { Color::Green } else { Color::Red };
+        let color = if is_addition { theme.diff_added } else { theme.diff_removed };
         Line::from(vec![
             Span::styled(prefix.to_string(), Style::default().fg(color).add_modifier(Modifier::BOLD)),
             Span::styled(content.to_string(), Style::default().fg(color)),
@@ -895,7 +896,7 @@ fn render_diff_line_with_word_highlight(
 ///
 /// Word-level highlighting: For adjacent +/- lines, highlights the differing words
 /// in a brighter shade to show what actually changed.
-pub fn render_diff(diff_text: &str) -> Vec<Line<'static>> {
+pub fn render_diff(diff_text: &str, theme: &Theme) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let diff_lines: Vec<&str> = diff_text.lines().collect();
 
@@ -907,9 +908,9 @@ pub fn render_diff(diff_text: &str) -> Vec<Line<'static>> {
         if trimmed.starts_with("@@") {
             // Hunk header
             lines.push(Line::from(vec![
-                Span::styled("@@", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled("@@", Style::default().fg(theme.diff_header).add_modifier(Modifier::BOLD)),
                 Span::styled(trimmed.trim_start_matches('@').trim_start_matches('@').to_string(),
-                    Style::default().fg(Color::Cyan)),
+                    Style::default().fg(theme.diff_header)),
             ]));
         } else if trimmed.starts_with('+') && !trimmed.starts_with("+++") {
             // Added line - check if there's a corresponding removed line
@@ -940,7 +941,7 @@ pub fn render_diff(diff_text: &str) -> Vec<Line<'static>> {
                 None
             };
 
-            lines.push(render_diff_line_with_word_highlight(raw_line, true, corresponding));
+            lines.push(render_diff_line_with_word_highlight(raw_line, true, corresponding, theme));
         } else if trimmed.starts_with('-') && !trimmed.starts_with("---") {
             // Removed line - check if there's a corresponding added line
             let corresponding = if i > 0 {
@@ -962,24 +963,24 @@ pub fn render_diff(diff_text: &str) -> Vec<Line<'static>> {
                 None
             };
 
-            lines.push(render_diff_line_with_word_highlight(raw_line, false, corresponding));
+            lines.push(render_diff_line_with_word_highlight(raw_line, false, corresponding, theme));
         } else if trimmed.starts_with("+++") {
             // New file header
             lines.push(Line::from(Span::styled(
                 raw_line.to_string(),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme.warning),
             )));
         } else if trimmed.starts_with("---") {
             // Old file header
             lines.push(Line::from(Span::styled(
                 raw_line.to_string(),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme.warning),
             )));
         } else if trimmed.starts_with("diff ") {
             // Diff git header
             lines.push(Line::from(Span::styled(
                 raw_line.to_string(),
-                Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
             )));
         } else if trimmed.starts_with("index ")
             || trimmed.starts_with("new file")
@@ -994,13 +995,13 @@ pub fn render_diff(diff_text: &str) -> Vec<Line<'static>> {
             // Extended diff metadata
             lines.push(Line::from(Span::styled(
                 raw_line.to_string(),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_dim),
             )));
         } else {
             // Context / unchanged line
             lines.push(Line::from(Span::styled(
                 raw_line.to_string(),
-                Style::default().fg(Color::White),
+                Style::default().fg(theme.text),
             )));
         }
 
@@ -1042,7 +1043,7 @@ fn heading_level(line: &str) -> Option<usize> {
 ///
 /// Returns the lines unchanged if they fit within max_lines.
 #[allow(dead_code)]
-pub fn truncate_output(lines: &[Line<'_>], max_lines: usize) -> Vec<Line<'static>> {
+pub fn truncate_output(lines: &[Line<'_>], max_lines: usize, theme: &Theme) -> Vec<Line<'static>> {
     if lines.len() <= max_lines {
         return lines
             .iter()
@@ -1064,7 +1065,7 @@ pub fn truncate_output(lines: &[Line<'_>], max_lines: usize) -> Vec<Line<'static
     let indicator = Line::from(Span::styled(
         format!("... (truncated {truncated_count} lines) ..."),
         Style::default()
-            .fg(Color::DarkGray)
+            .fg(theme.text_dim)
             .add_modifier(Modifier::ITALIC),
     ));
     result.push(indicator);
@@ -1091,7 +1092,7 @@ fn to_static_line(line: &Line<'_>) -> Line<'static> {
 
 /// Parse inline markdown fragments: `**bold**` and `` `code` ``.
 #[allow(dead_code)]
-fn parse_inline_fragments(text: &str) -> Vec<Span<'static>> {
+fn parse_inline_fragments(text: &str, theme: &Theme) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut chars = text.char_indices().peekable();
     let mut current = String::new();
@@ -1116,10 +1117,10 @@ fn parse_inline_fragments(text: &str) -> Vec<Span<'static>> {
                     if found_close {
                         if !current.is_empty() {
                             spans.push(Span::styled(std::mem::take(&mut current),
-                                Style::default().fg(Color::White)));
+                                Style::default().fg(theme.text)));
                         }
                         spans.push(Span::styled(bold_text,
-                            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
+                            Style::default().fg(theme.text).add_modifier(Modifier::BOLD)));
                     } else {
                         // Not a valid bold -- treat as literal
                         current.push_str("**");
@@ -1143,10 +1144,10 @@ fn parse_inline_fragments(text: &str) -> Vec<Span<'static>> {
                 if found_close {
                     if !current.is_empty() {
                         spans.push(Span::styled(std::mem::take(&mut current),
-                            Style::default().fg(Color::White)));
+                            Style::default().fg(theme.text)));
                     }
                     spans.push(Span::styled(code_text,
-                        Style::default().fg(Color::Yellow)));
+                        Style::default().fg(theme.accent)));
                 } else {
                     current.push('`');
                     current.push_str(&code_text);
@@ -1159,7 +1160,7 @@ fn parse_inline_fragments(text: &str) -> Vec<Span<'static>> {
     }
 
     if !current.is_empty() {
-        spans.push(Span::styled(current, Style::default().fg(Color::White)));
+        spans.push(Span::styled(current, Style::default().fg(theme.text)));
     }
 
     if spans.is_empty() {
@@ -1232,7 +1233,7 @@ mod tests {
     #[test]
     fn test_render_diff_addition() {
         let diff = "+added line\n context\n";
-        let lines = render_diff(diff);
+        let lines = render_diff(diff, &Theme::default_dark());
         assert_eq!(lines.len(), 2);
         // First span of first line should be the '+' prefix
         assert_eq!(lines[0].spans[0].content, "+");
@@ -1241,7 +1242,7 @@ mod tests {
     #[test]
     fn test_render_diff_removal() {
         let diff = "-removed line\n context\n";
-        let lines = render_diff(diff);
+        let lines = render_diff(diff, &Theme::default_dark());
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].spans[0].content, "-");
     }
@@ -1249,14 +1250,14 @@ mod tests {
     #[test]
     fn test_render_diff_hunk_header() {
         let diff = "@@ -1,3 +1,4 @@\n context\n";
-        let lines = render_diff(diff);
+        let lines = render_diff(diff, &Theme::default_dark());
         assert_eq!(lines.len(), 2);
     }
 
     #[test]
     fn test_render_diff_file_headers() {
         let diff = "--- a/old.rs\n+++ b/new.rs\n@@ -1 +1 @@\n-old\n+new\n";
-        let lines = render_diff(diff);
+        let lines = render_diff(diff, &Theme::default_dark());
         // 5 lines: ---, +++, @@, -old, +new
         assert_eq!(lines.len(), 5);
     }
@@ -1264,20 +1265,20 @@ mod tests {
     #[test]
     fn test_render_diff_extended_metadata() {
         let diff = "diff --git a/foo b/foo\nnew file mode 100644\nindex 0000000..abc1234\n";
-        let lines = render_diff(diff);
+        let lines = render_diff(diff, &Theme::default_dark());
         assert_eq!(lines.len(), 3);
     }
 
     #[test]
     fn test_render_diff_empty() {
-        let lines = render_diff("");
+        let lines = render_diff("", &Theme::default_dark());
         assert!(lines.is_empty());
     }
 
     #[test]
     fn test_render_diff_plus_plus_plus_not_colored_as_addition() {
         let diff = "+++ b/new.rs\n";
-        let lines = render_diff(diff);
+        let lines = render_diff(diff, &Theme::default_dark());
         assert_eq!(lines.len(), 1);
         // The +++ file header should not be treated as an addition line
         // It is rendered with yellow style (not green addition)
@@ -1286,7 +1287,7 @@ mod tests {
     #[test]
     fn test_render_diff_minus_minus_minus_not_colored_as_removal() {
         let diff = "--- a/old.rs\n";
-        let lines = render_diff(diff);
+        let lines = render_diff(diff, &Theme::default_dark());
         assert_eq!(lines.len(), 1);
     }
 
@@ -1526,20 +1527,20 @@ mod tests {
 
     #[test]
     fn test_parse_inline_fragments_plain() {
-        let spans = parse_inline_fragments("hello world");
+        let spans = parse_inline_fragments("hello world", &Theme::default_dark());
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].content, "hello world");
     }
 
     #[test]
     fn test_parse_inline_fragments_bold() {
-        let spans = parse_inline_fragments("normal **bold** normal");
+        let spans = parse_inline_fragments("normal **bold** normal", &Theme::default_dark());
         assert_eq!(spans.len(), 3);
     }
 
     #[test]
     fn test_parse_inline_fragments_code() {
-        let spans = parse_inline_fragments("use `code` here");
+        let spans = parse_inline_fragments("use `code` here", &Theme::default_dark());
         assert_eq!(spans.len(), 3);
     }
 
