@@ -193,6 +193,8 @@ pub struct ReplState {
     pub pager_scroll: usize,
     /// Whether to auto-scroll to bottom during streaming
     pub auto_follow: bool,
+    /// Message count at the moment auto_follow was disabled (for "new" counter)
+    pub messages_at_scroll_pause: usize,
     /// Turn counter for context visualization
     pub turn_count: usize,
     /// Recent background task notifications (message + timestamp)
@@ -459,6 +461,7 @@ impl Default for ReplState {
             pager_active: false,
             pager_scroll: 0,
             auto_follow: true,
+            messages_at_scroll_pause: 0,
             turn_count: 0,
             pending_notifications: Vec::new(),
             onboarding_active: false,

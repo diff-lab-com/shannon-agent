@@ -46,6 +46,9 @@ pub fn handle_mouse(repl: &mut Repl, mouse: MouseEvent) {
     match mouse.kind {
         MouseEventKind::ScrollUp => {
             repl.chat.scroll_up_by(step);
+            if repl.state.auto_follow {
+                repl.state.messages_at_scroll_pause = repl.chat.message_count();
+            }
             repl.state.auto_follow = false;
         }
         MouseEventKind::ScrollDown => {
@@ -296,6 +299,9 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
         KeyCode::PageUp => {
             let page = repl.chat.chat_viewport_height() as usize;
             repl.chat.scroll_up_by(page.saturating_sub(2).max(1));
+            if repl.state.auto_follow {
+                repl.state.messages_at_scroll_pause = repl.chat.message_count();
+            }
             repl.state.auto_follow = false;
             Ok(())
         }
@@ -311,6 +317,9 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
         // Home: jump to top of chat
         KeyCode::Home => {
             repl.chat.scroll_to_top();
+            if repl.state.auto_follow {
+                repl.state.messages_at_scroll_pause = repl.chat.message_count();
+            }
             repl.state.auto_follow = false;
             Ok(())
         }

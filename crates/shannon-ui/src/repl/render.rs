@@ -187,10 +187,15 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
 
         // "Scroll to bottom" indicator when user scrolled up away from latest content
         if !state.auto_follow && !state.show_key_hints && chat.message_count() > 1 {
-            let indicator = " ↓ End = jump to latest ";
+            let new_count = chat.message_count().saturating_sub(state.messages_at_scroll_pause);
+            let indicator = if new_count > 0 {
+                format!(" ↓ {} new · End = jump to latest ", new_count)
+            } else {
+                " ↓ End = jump to latest ".to_string()
+            };
             let indicator_width = indicator.chars().count() as u16;
             let ix = f.area().x + f.area().width.saturating_sub(indicator_width + 2);
-            let iy = f.area().y + 2; // Near top of viewport
+            let iy = f.area().y + 2;
             let iw = indicator_width.min(f.area().width.saturating_sub(4));
             let indicator_area = ratatui::layout::Rect { x: ix, y: iy, width: iw, height: 1 };
             let indicator_paragraph = Paragraph::new(indicator.chars().take(iw as usize).collect::<String>())
