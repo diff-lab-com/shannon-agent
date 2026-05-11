@@ -348,7 +348,8 @@ impl MessageCell {
                 String::new()
             };
             let inner = format!("─ {tool_label}{dur_part} ─");
-            let remaining = border_w.saturating_sub(2 + inner.len()).saturating_sub(1);
+            let inner_w = unicode_width::UnicodeWidthStr::width(inner.as_str());
+            let remaining = border_w.saturating_sub(2 + inner_w).saturating_sub(1);
             let top = format!("╭{inner}{}╮", "─".repeat(remaining));
             lines.push(Line::from(vec![
                 Span::styled(top, Style::default().fg(theme.border_dim)),
@@ -647,7 +648,7 @@ impl MessageCell {
                                 Style::default().fg(theme.heading).add_modifier(Modifier::BOLD),
                             )));
                             lines.push(Line::from(Span::styled(
-                                format!("  {}", "─".repeat(text.len().min(inner_width.saturating_sub(2)))),
+                                format!("  {}", "─".repeat(unicode_width::UnicodeWidthStr::width(text.as_str()).min(inner_width.saturating_sub(2)))),
                                 Style::default().fg(theme.muted),
                             )));
                         }

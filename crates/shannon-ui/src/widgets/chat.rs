@@ -8,7 +8,7 @@ use std::sync::LazyLock;
 use parking_lot::Mutex;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use syntect::parsing::SyntaxSet;
 
 use ratatui::{
@@ -561,7 +561,9 @@ impl ChatWidget {
         } else {
             label
         };
-        let dash_count = (area.width as usize).saturating_sub(label.len()).saturating_sub(1);
+        let dash_count = (area.width as usize)
+            .saturating_sub(UnicodeWidthStr::width(label.as_str()))
+            .saturating_sub(1);
         let sep = format!("─{label}{}", "─".repeat(dash_count));
         let sep_line = ratatui::widgets::Paragraph::new(ratatui::text::Line::from(vec![
             ratatui::text::Span::styled(sep, ratatui::style::Style::default().fg(theme.border)),
