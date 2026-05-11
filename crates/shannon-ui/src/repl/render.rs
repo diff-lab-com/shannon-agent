@@ -79,20 +79,30 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         // Render base layout (always)
         let ctx_window = state.model.as_ref()
             .map(|m| shannon_core::model_registry::context_window_for(m) as u64);
-        crate::widgets::MainLayoutWidget::render_complete_with_spinner(
-            f, chat, prompt, display_status,
-            state.model.as_deref(), Some(state.tokens_used),
-            &state.working_directory, Some(&state.spinner), pb, sidebar_ref, &state.theme, state.sidebar_tab,
-            Some(&state.approval_mode_label),
-            state.focus_mode, state.fullscreen_mode,
-            search_query, &search_matches, search_focused_idx,
-            ctx_window, Some(state.total_cost_usd), None,
-            Some((state.input_tokens, state.output_tokens)),
-            Some((state.diagnostic_store.error_count(), state.diagnostic_store.warning_count())),
-            state.cached_statusline.as_deref(),
-            state.rate_limit_5h,
-            state.auto_follow,
-        );
+        let render_ctx = crate::widgets::RenderContext {
+            chat, prompt, theme: &state.theme, status: display_status,
+            model: state.model.as_deref(),
+            tokens_used: Some(state.tokens_used),
+            max_tokens: ctx_window,
+            cost_usd: Some(state.total_cost_usd),
+            git_branch: None,
+            token_breakdown: Some((state.input_tokens, state.output_tokens)),
+            diag_counts: Some((state.diagnostic_store.error_count(), state.diagnostic_store.warning_count())),
+            rate_limit: state.rate_limit_5h,
+            spinner: Some(&state.spinner),
+            progress_bar: pb,
+            sidebar_info: sidebar_ref,
+            sidebar_tab: state.sidebar_tab,
+            approval_mode: Some(&state.approval_mode_label),
+            focus_mode: state.focus_mode,
+            fullscreen_mode: state.fullscreen_mode,
+            auto_follow: state.auto_follow,
+            search_query,
+            search_matches: &search_matches,
+            search_focused_idx,
+            cached_statusline: state.cached_statusline.as_deref(),
+        };
+        crate::widgets::MainLayoutWidget::render_with_ctx(f, &render_ctx);
 
         // Overlay dialogs on top of base layout
         if let Some(ref dialog) = state.permission_dialog {

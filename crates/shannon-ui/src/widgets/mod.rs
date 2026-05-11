@@ -75,6 +75,46 @@ impl Default for StreamingState {
 
 // ---------------------------------------------------------------------------
 
+/// Aggregated render context passed to layout rendering.
+///
+/// Groups the many parameters needed by `render_with_ctx`
+/// into a single struct so call sites stay readable and new fields
+/// don't require signature changes across multiple files.
+pub struct RenderContext<'a> {
+    pub chat: &'a ChatWidget,
+    pub prompt: &'a PromptWidget,
+    pub theme: &'a Theme,
+    pub status: &'a str,
+
+    // Model / usage
+    pub model: Option<&'a str>,
+    pub tokens_used: Option<u64>,
+    pub max_tokens: Option<u64>,
+    pub cost_usd: Option<f64>,
+    pub git_branch: Option<&'a str>,
+    pub token_breakdown: Option<(u64, u64)>,
+    pub diag_counts: Option<(usize, usize)>,
+    pub rate_limit: Option<(u32, u32)>,
+
+    // UI state
+    pub spinner: Option<&'a crate::widgets::progress::SpinnerWidget>,
+    pub progress_bar: Option<&'a crate::widgets::progress::ProgressBarWidget>,
+    pub sidebar_info: Option<&'a SidebarInfo>,
+    pub sidebar_tab: crate::repl::SidebarTab,
+    pub approval_mode: Option<&'a str>,
+    pub focus_mode: bool,
+    pub fullscreen_mode: bool,
+    pub auto_follow: bool,
+
+    // Search
+    pub search_query: Option<&'a str>,
+    pub search_matches: &'a [(usize, usize, usize)],
+    pub search_focused_idx: Option<usize>,
+
+    // Other
+    pub cached_statusline: Option<&'a str>,
+}
+
 /// Main UI layout widget
 pub struct MainLayoutWidget;
 
@@ -131,7 +171,7 @@ impl MainLayoutWidget {
         (header_area, chat_area, prompt_area, status_area, None, full)
     }
 
-    /// Render the complete UI
+    /// Render the complete UI (convenience wrapper for minimal call sites).
     #[allow(clippy::too_many_arguments)]
     pub fn render_complete(
         frame: &mut Frame,
@@ -143,76 +183,57 @@ impl MainLayoutWidget {
         _working_dir: &str,
         theme: &Theme,
     ) {
-        Self::render_complete_with_spinner(frame, chat, prompt, status, model, tokens_used, _working_dir, None, None, None, theme, crate::repl::SidebarTab::default(), None, false, false, None, &[], None, None, None, None, None, None, None, None, true);
+        let ctx = RenderContext {
+            chat, prompt, theme, status,
+            model, tokens_used,
+            max_tokens: None, cost_usd: None, git_branch: None,
+            token_breakdown: None, diag_counts: None, rate_limit: None,
+            spinner: None, progress_bar: None, sidebar_info: None,
+            sidebar_tab: crate::repl::SidebarTab::default(),
+            approval_mode: None,
+            focus_mode: false, fullscreen_mode: false, auto_follow: true,
+            search_query: None, search_matches: &[], search_focused_idx: None,
+            cached_statusline: None,
+        };
+        Self::render_with_ctx(frame, &ctx);
     }
 
-    /// Render the complete UI with spinner animation support
-    #[allow(clippy::too_many_arguments)]
-    pub fn render_complete_with_spinner(
-        frame: &mut Frame,
-        chat: &ChatWidget,
-        prompt: &PromptWidget,
-        status: &str,
-        model: Option<&str>,
-        tokens_used: Option<u64>,
-        _working_dir: &str,
-        spinner: Option<&crate::widgets::progress::SpinnerWidget>,
-        progress_bar: Option<&crate::widgets::progress::ProgressBarWidget>,
-        sidebar_info: Option<&SidebarInfo>,
-        theme: &Theme,
-        sidebar_tab: crate::repl::SidebarTab,
-        approval_mode: Option<&str>,
-        focus_mode: bool,
-        fullscreen_mode: bool,
-        search_query: Option<&str>,
-        search_matches: &[(usize, usize, usize)],
-        search_focused_idx: Option<usize>,
-        max_tokens: Option<u64>,
-        cost_usd: Option<f64>,
-        git_branch: Option<&str>,
-        token_breakdown: Option<(u64, u64)>,
-        diag_counts: Option<(usize, usize)>,
-        cached_statusline: Option<&str>,
-        rate_limit: Option<(u32, u32)>,
-        auto_follow: bool,
-    ) {
+    /// Core render implementation using a `RenderContext`.
+    pub fn render_with_ctx(frame: &mut Frame, ctx: &RenderContext) {
         let area = frame.area();
 
-        // Show warning if terminal is too small
         if area.width < MIN_TERMINAL_WIDTH || area.height < MIN_TERMINAL_HEIGHT {
             let msg = format!(
                 "Terminal too small: {}x{}. Need at least {}x{}.",
                 area.width, area.height, MIN_TERMINAL_WIDTH, MIN_TERMINAL_HEIGHT
             );
             let warning = Paragraph::new(msg)
-                .style(Style::default().fg(theme.error))
+                .style(Style::default().fg(ctx.theme.error))
                 .alignment(Alignment::Center);
             frame.render_widget(warning, area);
             return;
         }
 
-        let prompt_height = prompt.needed_height(area.width);
-        let sidebar_visible = sidebar_info.is_some();
+        let prompt_height = ctx.prompt.needed_height(area.width);
+        let sidebar_visible = ctx.sidebar_info.is_some();
 
-        // Render chat — column path handles search highlighting internally
         let render_chat = |frame: &mut Frame, chat_area: Rect, theme: &Theme| {
-            let search = search_query.and_then(|q| {
-                if q.is_empty() || search_matches.is_empty() {
+            let search = ctx.search_query.and_then(|q| {
+                if q.is_empty() || ctx.search_matches.is_empty() {
                     None
                 } else {
                     Some(renderable::SearchParams {
                         query: q,
-                        matches: search_matches,
-                        focused_idx: search_focused_idx,
+                        matches: ctx.search_matches,
+                        focused_idx: ctx.search_focused_idx,
                         cell_index: 0,
                     })
                 }
             });
-            chat.render(frame, chat_area, theme, search.as_ref(), auto_follow);
+            ctx.chat.render(frame, chat_area, theme, search.as_ref(), ctx.auto_follow);
         };
 
-        if fullscreen_mode {
-            // Fullscreen: chat fills entire terminal + prompt, no chrome at all
+        if ctx.fullscreen_mode || ctx.focus_mode {
             let chunks = ratatui::layout::Layout::default()
                 .direction(Direction::Vertical)
                 .margin(0)
@@ -221,43 +242,33 @@ impl MainLayoutWidget {
                     Constraint::Length(prompt_height),
                 ])
                 .split(area);
-            render_chat(frame, chunks[0], theme);
-            prompt.render(frame, chunks[1], theme);
-        } else if focus_mode {
-            // Focus mode: only chat + prompt, maximized (no header/status/sidebar)
-            let chunks = ratatui::layout::Layout::default()
-                .direction(Direction::Vertical)
-                .margin(0)
-                .constraints([
-                    Constraint::Min(0),
-                    Constraint::Length(prompt_height),
-                ])
-                .split(area);
-            render_chat(frame, chunks[0], theme);
-            prompt.render(frame, chunks[1], theme);
+            render_chat(frame, chunks[0], ctx.theme);
+            ctx.prompt.render(frame, chunks[1], ctx.theme);
         } else {
             let (_header_area, chat_area, prompt_area, status_area, sidebar_area, _) =
-                Self::layout_with_sidebar(area, prompt_height, sidebar_visible, chat.is_empty());
+                Self::layout_with_sidebar(area, prompt_height, sidebar_visible, ctx.chat.is_empty());
 
-            // Header area reserved but not rendered — chat is the primary interface
-            render_chat(frame, chat_area, theme);
-            prompt.render(frame, prompt_area, theme);
-            if let Some(custom) = cached_statusline {
-                StatusBarWidget::render_custom(frame, status_area, custom, theme);
+            render_chat(frame, chat_area, ctx.theme);
+            ctx.prompt.render(frame, prompt_area, ctx.theme);
+            if let Some(custom) = ctx.cached_statusline {
+                StatusBarWidget::render_custom(frame, status_area, custom, ctx.theme);
             } else {
-                let files_info = sidebar_info.map(|si| (si.modified_files.len(), si.total_additions, si.total_deletions));
-                let tools_invoked = sidebar_info.map(|si| si.tools_invoked);
-                let session_duration = sidebar_info.map(|si| si.session_duration_secs);
-                StatusBarWidget::render_with_spinner(frame, status_area, status, model, tokens_used, max_tokens, cost_usd, git_branch, spinner, progress_bar, theme, approval_mode, token_breakdown, diag_counts, rate_limit, files_info, tools_invoked, session_duration);
+                let files_info = ctx.sidebar_info.map(|si| (si.modified_files.len(), si.total_additions, si.total_deletions));
+                let tools_invoked = ctx.sidebar_info.map(|si| si.tools_invoked);
+                let session_duration = ctx.sidebar_info.map(|si| si.session_duration_secs);
+                StatusBarWidget::render_with_spinner(
+                    frame, status_area, ctx.status, ctx.model, ctx.tokens_used,
+                    ctx.max_tokens, ctx.cost_usd, ctx.git_branch, ctx.spinner,
+                    ctx.progress_bar, ctx.theme, ctx.approval_mode, ctx.token_breakdown,
+                    ctx.diag_counts, ctx.rate_limit, files_info, tools_invoked, session_duration,
+                );
             }
 
-            if let (Some(info), Some(sb_area)) = (sidebar_info, sidebar_area) {
+            if let (Some(info), Some(sb_area)) = (ctx.sidebar_info, sidebar_area) {
                 if sb_area.width > 5 && sb_area.height > 3 {
-                    // Clear the sidebar area first to prevent old content showing through
-                    // during diff-based rendering (especially during streaming).
                     frame.render_widget(Clear, sb_area);
                     let sidebar_widget = SidebarWidget::new();
-                    sidebar_widget.render(frame, sb_area, info, theme, sidebar_tab);
+                    sidebar_widget.render(frame, sb_area, info, ctx.theme, ctx.sidebar_tab);
                 }
             }
         }
