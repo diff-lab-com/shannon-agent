@@ -191,7 +191,7 @@ impl LspClient {
         let content_length: usize = header_line
             .trim()
             .strip_prefix("Content-Length:")
-            .unwrap()
+            .expect("already verified prefix above")
             .trim()
             .parse()
             .map_err(|e| LspClientError::ProtocolError(format!("Invalid content length: {e}")))?;

@@ -260,7 +260,7 @@ impl BillingManager {
             chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap_or_else(|| {
                 tracing::error!("chrono could not construct midnight; using fallback");
                 chrono::NaiveTime::from_num_seconds_from_midnight_opt(0, 0)
-                    .unwrap_or_else(|| chrono::NaiveTime::MIN)
+                    .unwrap_or(chrono::NaiveTime::MIN)
             }),
         ).and_utc();
         let end = now;
@@ -316,7 +316,7 @@ impl BillingManager {
             chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap_or_else(|| {
                 tracing::error!("chrono could not construct midnight; using fallback");
                 chrono::NaiveTime::from_num_seconds_from_midnight_opt(0, 0)
-                    .unwrap_or_else(|| chrono::NaiveTime::MIN)
+                    .unwrap_or(chrono::NaiveTime::MIN)
             }),
         ).and_utc();
 

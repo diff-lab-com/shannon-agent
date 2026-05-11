@@ -164,7 +164,7 @@ impl QuestionHandler for TerminalQuestionHandler {
                 .lock()
                 .lines()
                 .next()
-                .ok_or_else(|| AskUserError::NoInput)?
+                .ok_or(AskUserError::NoInput)?
                 .map_err(|e| AskUserError::Io(e.to_string()))?;
             return Ok(vec![line.trim().to_string()]);
         }
@@ -193,7 +193,7 @@ impl QuestionHandler for TerminalQuestionHandler {
             .lock()
             .lines()
             .next()
-            .ok_or_else(|| AskUserError::NoInput)?
+            .ok_or(AskUserError::NoInput)?
             .map_err(|e| AskUserError::Io(e.to_string()))?;
         let input = raw.trim();
 
@@ -270,7 +270,7 @@ fn prompt_free_text() -> Result<String, AskUserError> {
         .lock()
         .lines()
         .next()
-        .ok_or_else(|| AskUserError::NoInput)?
+        .ok_or(AskUserError::NoInput)?
         .map_err(|e| AskUserError::Io(e.to_string()))?;
     Ok(line.trim().to_string())
 }

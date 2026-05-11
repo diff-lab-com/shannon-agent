@@ -92,7 +92,7 @@ impl LspManager {
         }
 
         // Safe to unwrap because we just inserted it
-        Ok(self.active_clients.get_mut(language).unwrap())
+        Ok(self.active_clients.get_mut(language).expect("just inserted above"))
     }
 
     /// Check if a server is available for the given language

@@ -3,7 +3,6 @@
 use crate::tool_format::strip_ansi;
 use crate::theme::Theme;
 use crate::render::Renderer;
-use super::renderable::SearchParams;
 use std::collections::{HashMap, VecDeque};
 use std::sync::LazyLock;
 use parking_lot::Mutex;
@@ -523,9 +522,7 @@ impl ChatWidget {
         frame: &mut Frame,
         area: Rect,
         theme: &Theme,
-        search_query: Option<&str>,
-        search_matches: &[(usize, usize, usize)],
-        search_focused_idx: Option<usize>,
+        search: Option<&crate::widgets::renderable::SearchParams>,
         auto_follow: bool,
     ) {
         tracing::debug!(
@@ -572,19 +569,7 @@ impl ChatWidget {
 
         // Render visible cells using ColumnRenderable
         let buf = frame.buffer_mut();
-        let search = search_query.and_then(|q| {
-            if q.is_empty() || search_matches.is_empty() {
-                None
-            } else {
-                Some(SearchParams {
-                    query: q,
-                    matches: search_matches,
-                    focused_idx: search_focused_idx,
-                    cell_index: 0, // overridden per-cell in ColumnRenderable
-                })
-            }
-        });
-        self.column.render(inner, buf, theme, self.scroll_offset, 0, search.as_ref());
+        self.column.render(inner, buf, theme, self.scroll_offset, 0, search);
     }
 
     /// Render all messages including committed ones (used by transcript pager).

@@ -94,7 +94,7 @@ fn test_chat_widget_empty() {
     terminal.draw(|f| {
         let area = Rect::new(0, 0, 60, 10);
         let chat = ChatWidget::new(100);
-        chat.render(f, area, &theme, None, &[], None, true);
+        chat.render(f, area, &theme, None, true);
     }).unwrap();
 
     let buf = terminal.backend().buffer().clone();
@@ -113,7 +113,7 @@ fn test_chat_widget_with_messages() {
 
     terminal.draw(|f| {
         let area = Rect::new(0, 0, 60, 20);
-        chat.render(f, area, &theme, None, &[], None, true);
+        chat.render(f, area, &theme, None, true);
     }).unwrap();
 
     let buf = terminal.backend().buffer().clone();
@@ -132,7 +132,7 @@ fn test_chat_widget_system_message() {
 
     terminal.draw(|f| {
         let area = Rect::new(0, 0, 60, 15);
-        chat.render(f, area, &theme, None, &[], None, true);
+        chat.render(f, area, &theme, None, true);
     }).unwrap();
 
     let buf = terminal.backend().buffer().clone();

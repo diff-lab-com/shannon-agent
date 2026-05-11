@@ -706,7 +706,7 @@ impl Transport for WebSocketTransport {
                             let _ = stream.send(Message::Pong(data)).await;
                             continue;
                         }
-                        Message::Pong(_) | _ => continue,
+                        _ => continue,
                     }
                     Some(Err(e)) => return Err(TransportError::WebSocket(format!("Receive error: {e}"))),
                     None => return Ok(None),

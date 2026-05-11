@@ -196,7 +196,19 @@ impl MainLayoutWidget {
 
         // Render chat — column path handles search highlighting internally
         let render_chat = |frame: &mut Frame, chat_area: Rect, theme: &Theme| {
-            chat.render(frame, chat_area, theme, search_query, search_matches, search_focused_idx, auto_follow);
+            let search = search_query.and_then(|q| {
+                if q.is_empty() || search_matches.is_empty() {
+                    None
+                } else {
+                    Some(renderable::SearchParams {
+                        query: q,
+                        matches: search_matches,
+                        focused_idx: search_focused_idx,
+                        cell_index: 0,
+                    })
+                }
+            });
+            chat.render(frame, chat_area, theme, search.as_ref(), auto_follow);
         };
 
         if fullscreen_mode {

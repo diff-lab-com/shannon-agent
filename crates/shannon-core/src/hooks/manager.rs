@@ -608,8 +608,7 @@ Do not include any other text, explanation, or formatting.";
                 // HookEvent is serialized with PascalCase; iterate keys looking
                 // for a known event-type object and return its key name.
                 v.as_object()
-                    .map(|obj| obj.keys().next().cloned())
-                    .flatten()
+                    .and_then(|obj| obj.keys().next().cloned())
             })
             .unwrap_or_else(|| "Unknown".to_string())
     }
