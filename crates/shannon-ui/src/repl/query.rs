@@ -727,6 +727,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
             // Submit queued follow-up message if any
             if let Some(queued) = repl.state.queued_message.take() {
                 if !queued.trim().is_empty() {
+                    repl.state.toast = Some(("Sending queued message…".to_string(), std::time::Instant::now()));
                     super::commands::submit_input_with_text(repl, &queued);
                 }
             }
