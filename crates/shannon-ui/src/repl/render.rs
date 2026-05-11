@@ -110,9 +110,9 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         if let Some(ref dialog) = state.permission_dialog {
             render_permission_dialog(f, f.area(), dialog, &state.theme);
         } else if let Some(ref dialog) = state.active_dialog {
-            dialog.render(f, f.area());
+            dialog.render(f, f.area(), &state.theme);
         } else if let Some(ref input_dlg) = state.input_dialog {
-            input_dlg.render(f, f.area());
+            input_dlg.render(f, f.area(), &state.theme);
         } else if let Some(ref picker) = state.fuzzy_picker {
             picker.render(f, f.area());
         } else if let Some(ref selector) = state.file_selector {

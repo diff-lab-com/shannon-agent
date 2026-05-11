@@ -2,9 +2,10 @@
 //!
 //! Provides modal dialogs for user interaction and confirmation
 
+use crate::theme::Theme;
 use ratatui::{
     layout::{Alignment, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
     Frame,
@@ -140,7 +141,7 @@ impl DialogWidget {
     }
 
     /// Render the dialog
-    pub fn render(&self, frame: &mut Frame, area: Rect) {
+    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         // Calculate centered dialog area
         let dialog_width = self.width.min(area.width.saturating_sub(4));
         let dialog_height = self.height.min(area.height.saturating_sub(4));
@@ -166,7 +167,7 @@ impl DialogWidget {
             Span::styled(
                 &self.title,
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme.accent)
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
@@ -176,7 +177,7 @@ impl DialogWidget {
         if let Some(ref subtitle) = self.subtitle {
             for line in Self::wrap_text(subtitle, dialog_width.saturating_sub(4) as usize) {
                 content_lines.push(Line::from(vec![
-                    Span::styled(line, Style::default().fg(Color::Gray)),
+                    Span::styled(line, Style::default().fg(theme.muted)),
                 ]));
             }
             content_lines.push(Line::from(""));
@@ -192,17 +193,17 @@ impl DialogWidget {
         content_lines.push(Line::from(""));
 
         // Buttons
-        let button_row = self.render_button_row();
+        let button_row = self.render_button_row(theme);
         content_lines.push(button_row);
 
         // Help text
         if self.closable && !self.buttons.is_empty() {
             content_lines.push(Line::from(""));
             content_lines.push(Line::from(vec![
-                Span::styled("Enter: Select  ", Style::default().fg(Color::DarkGray)),
-                Span::styled("←/→: Navigate", Style::default().fg(Color::DarkGray)),
+                Span::styled("Enter: Select  ", Style::default().fg(theme.text_dim)),
+                Span::styled("←/→: Navigate", Style::default().fg(theme.text_dim)),
                 if self.closable {
-                    Span::styled("  Esc: Close", Style::default().fg(Color::DarkGray))
+                    Span::styled("  Esc: Close", Style::default().fg(theme.text_dim))
                 } else {
                     Span::raw("")
                 },
@@ -213,7 +214,7 @@ impl DialogWidget {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan))
+                    .border_style(Style::default().fg(theme.accent))
                     .border_type(ratatui::widgets::BorderType::Rounded)
             )
             .alignment(Alignment::Center)
@@ -223,7 +224,7 @@ impl DialogWidget {
     }
 
     /// Render button row
-    fn render_button_row(&self) -> Line<'static> {
+    fn render_button_row(&self, theme: &Theme) -> Line<'static> {
         let mut spans: Vec<Span<'static>> = Vec::new();
         let button_spacing = "  ";
 
@@ -232,21 +233,21 @@ impl DialogWidget {
 
             let style = if button.is_dangerous {
                 Style::default().fg(if is_selected {
-                    Color::Red
+                    theme.error
                 } else {
-                    Color::DarkGray
+                    theme.text_dim
                 }).add_modifier(Modifier::BOLD)
             } else if button.is_primary {
                 Style::default().fg(if is_selected {
-                    Color::Green
+                    theme.success
                 } else {
-                    Color::DarkGray
+                    theme.text_dim
                 }).add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(if is_selected {
-                    Color::White
+                    theme.text
                 } else {
-                    Color::DarkGray
+                    theme.text_dim
                 }).add_modifier(if is_selected {
                     Modifier::BOLD
                 } else {
@@ -435,14 +436,14 @@ impl InputDialog {
     }
 
     /// Build and render the dialog
-    pub fn render(&self, frame: &mut Frame, area: Rect) {
+    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let mut dialog = self.dialog.clone();
         dialog.content.push(format!(
             "{}{}",
             self.value,
             if self.value.is_empty() { &self.placeholder } else { "" }
         ));
-        dialog.render(frame, area);
+        dialog.render(frame, area, theme);
     }
 
     /// Get the underlying dialog for navigation
