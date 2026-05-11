@@ -74,69 +74,41 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             (None, Vec::new(), None)
         };
 
-        // Determine which overlay to render
+        // Render base layout (always)
+        let ctx_window = state.model.as_ref()
+            .map(|m| shannon_core::model_registry::context_window_for(m) as u64);
+        crate::widgets::MainLayoutWidget::render_complete_with_spinner(
+            f, chat, prompt, &display_status,
+            state.model.as_deref(), Some(state.tokens_used),
+            &state.working_directory, Some(&state.spinner), pb, sidebar_ref, &state.theme, state.sidebar_tab,
+            Some(&state.approval_mode_label),
+            state.focus_mode, state.fullscreen_mode,
+            search_query.as_deref(), &search_matches, search_focused_idx,
+            ctx_window, Some(state.total_cost_usd), None,
+            Some((state.input_tokens, state.output_tokens)),
+            Some((state.diagnostic_store.error_count(), state.diagnostic_store.warning_count())),
+            state.cached_statusline.as_deref(),
+            state.rate_limit_5h,
+            state.auto_follow,
+        );
+
+        // Overlay dialogs on top of base layout
         if let Some(ref dialog) = state.permission_dialog {
             render_permission_dialog(f, f.area(), dialog, &state.theme);
-        } else if state.active_dialog.is_some()
-            || state.input_dialog.is_some()
-            || state.fuzzy_picker.is_some()
-            || state.file_selector.is_some()
-            || state.multi_select.is_some()
-            || state.model_picker.is_some()
-            || state.theme_picker.is_some()
-        {
-            // Render base layout first
-            {
-                let ctx_window = state.model.as_ref()
-                    .map(|m| shannon_core::model_registry::context_window_for(m) as u64);
-                crate::widgets::MainLayoutWidget::render_complete_with_spinner(
-                    f, chat, prompt, &display_status,
-                    state.model.as_deref(), Some(state.tokens_used),
-                    &state.working_directory, Some(&state.spinner), pb, sidebar_ref, &state.theme, state.sidebar_tab,
-                    Some(&state.approval_mode_label),
-                    state.focus_mode, state.fullscreen_mode,
-                    search_query.as_deref(), &search_matches, search_focused_idx,
-                    ctx_window, Some(state.total_cost_usd), None,
-                    Some((state.input_tokens, state.output_tokens)),
-                    Some((state.diagnostic_store.error_count(), state.diagnostic_store.warning_count())),
-                    state.cached_statusline.as_deref(),
-                    state.rate_limit_5h,
-                    state.auto_follow,
-                );
-            }
-            // Then render the active overlay
-            if let Some(ref dialog) = state.active_dialog {
-                dialog.render(f, f.area());
-            } else if let Some(ref input_dlg) = state.input_dialog {
-                input_dlg.render(f, f.area());
-            } else if let Some(ref picker) = state.fuzzy_picker {
-                picker.render(f, f.area());
-            } else if let Some(ref selector) = state.file_selector {
-                selector.render(f, f.area());
-            } else if let Some(ref msel) = state.multi_select {
-                msel.render(f, f.area());
-            } else if let Some(ref mp) = state.model_picker {
-                mp.render(f, f.area());
-            } else if let Some(ref tp) = state.theme_picker {
-                tp.render(f, f.area());
-            }
-        } else {
-            let ctx_window = state.model.as_ref()
-                .map(|m| shannon_core::model_registry::context_window_for(m) as u64);
-            crate::widgets::MainLayoutWidget::render_complete_with_spinner(
-                f, chat, prompt, &display_status,
-                state.model.as_deref(), Some(state.tokens_used),
-                &state.working_directory, Some(&state.spinner), pb, sidebar_ref, &state.theme, state.sidebar_tab,
-                Some(&state.approval_mode_label),
-                state.focus_mode, state.fullscreen_mode,
-                search_query.as_deref(), &search_matches, search_focused_idx,
-                ctx_window, Some(state.total_cost_usd), None,
-                Some((state.input_tokens, state.output_tokens)),
-                Some((state.diagnostic_store.error_count(), state.diagnostic_store.warning_count())),
-                state.cached_statusline.as_deref(),
-                state.rate_limit_5h,
-                state.auto_follow,
-            );
+        } else if let Some(ref dialog) = state.active_dialog {
+            dialog.render(f, f.area());
+        } else if let Some(ref input_dlg) = state.input_dialog {
+            input_dlg.render(f, f.area());
+        } else if let Some(ref picker) = state.fuzzy_picker {
+            picker.render(f, f.area());
+        } else if let Some(ref selector) = state.file_selector {
+            selector.render(f, f.area());
+        } else if let Some(ref msel) = state.multi_select {
+            msel.render(f, f.area());
+        } else if let Some(ref mp) = state.model_picker {
+            mp.render(f, f.area());
+        } else if let Some(ref tp) = state.theme_picker {
+            tp.render(f, f.area());
         }
 
         // Overlay multi-progress bars at the bottom if active

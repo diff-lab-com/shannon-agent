@@ -1423,6 +1423,13 @@ impl Repl {
                     self.state.spinner.tick();
                 }
 
+                // Auto-dismiss toast after 5 seconds
+                if let Some((_, started)) = self.state.toast {
+                    if started.elapsed().as_secs() >= 5 {
+                        self.state.toast = None;
+                    }
+                }
+
                 // Refresh custom statusline (throttled internally)
                 self.refresh_statusline();
             }
