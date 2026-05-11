@@ -267,7 +267,7 @@ impl MessageCell {
                 (icon.to_string(), color, badge)
             };
 
-            let display_budget = 60usize.saturating_sub(dur_badge.len());
+            let display_budget = 60usize.saturating_sub(unicode_width::UnicodeWidthStr::width(dur_badge.as_str()));
             let display = if unicode_width::UnicodeWidthStr::width(first_line) > display_budget {
                 truncate_to(first_line, display_budget)
             } else {
