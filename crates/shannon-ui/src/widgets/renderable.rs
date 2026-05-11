@@ -589,7 +589,7 @@ impl MessageCell {
                 }
                 MdSegment::Header { level, text } => {
                     let (prefix, text_style) = match level {
-                        1 => ("━".repeat(inner_width.min(60).into()), Style::default().fg(theme.heading)),
+                        1 => ("━".repeat(inner_width.min(60)), Style::default().fg(theme.heading)),
                         2 => ("▎".to_string(), Style::default().fg(theme.heading).add_modifier(Modifier::BOLD)),
                         _ => ("▎".to_string(), Style::default().fg(theme.heading)),
                     };

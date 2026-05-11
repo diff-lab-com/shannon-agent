@@ -354,13 +354,22 @@ impl PromptWidget {
 
         frame.render_widget(paragraph, area);
 
-        // Show cursor
-        if !input_text.is_empty() && inner_width > 0 {
-            let (disp_row, disp_col) = self.cursor_display_pos(inner_width);
-            let cursor_x = area.x + 2 + disp_col as u16; // prefix + col (no left border)
-            let cursor_y = area.y + 1 + disp_row as u16;  // top border + row
-            if cursor_y < area.bottom() - 1 && cursor_x < area.right() {
-                frame.set_cursor_position((cursor_x, cursor_y));
+        // Show cursor (always, even on empty input so user sees where to type)
+        if inner_width > 0 {
+            if input_text.is_empty() {
+                // Place cursor right after the "> " prompt
+                let cursor_x = area.x + 2;
+                let cursor_y = area.y + 1;
+                if cursor_y < area.bottom() - 1 && cursor_x < area.right() {
+                    frame.set_cursor_position((cursor_x, cursor_y));
+                }
+            } else {
+                let (disp_row, disp_col) = self.cursor_display_pos(inner_width);
+                let cursor_x = area.x + 2 + disp_col as u16;
+                let cursor_y = area.y + 1 + disp_row as u16;
+                if cursor_y < area.bottom() - 1 && cursor_x < area.right() {
+                    frame.set_cursor_position((cursor_x, cursor_y));
+                }
             }
         }
     }
