@@ -395,8 +395,14 @@ pub(crate) fn handle_copy(repl: &mut Repl, args: &str) -> Result<()> {
     // Try platform-specific clipboard commands
     let success = copy_to_clipboard(&content);
     if success {
-        let preview = if content.chars().count() > 60 {
-            let truncated: String = content.chars().take(60).collect();
+        let preview = if unicode_width::UnicodeWidthStr::width(content.as_str()) > 60 {
+            let mut len = 0;
+            let truncated: String = content.chars()
+                .take_while(|c| {
+                    let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
+                    if len + cw > 57 { false } else { len += cw; true }
+                })
+                .collect();
             format!("{truncated}...")
         } else {
             content.clone()

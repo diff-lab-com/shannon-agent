@@ -1002,11 +1002,19 @@ impl ModelPickerWidget {
                 } else {
                     format!("{}  ({})", model.display_name, model.id)
                 };
-                // Truncate to dialog width (Unicode-safe)
-                let max_chars = (dialog_width as usize).saturating_sub(6);
-                let truncated = if label.chars().count() > max_chars {
-                    let end = max_chars.saturating_sub(3);
-                    format!("{}...", label.chars().take(end).collect::<String>())
+                // Truncate to dialog width (Unicode display width aware)
+                let max_w = (dialog_width as usize).saturating_sub(6);
+                let label_w = unicode_width::UnicodeWidthStr::width(label.as_str());
+                let truncated = if label_w > max_w {
+                    let end = max_w.saturating_sub(3);
+                    let mut len = 0;
+                    let t: String = label.chars()
+                        .take_while(|c| {
+                            let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
+                            if len + cw > end { false } else { len += cw; true }
+                        })
+                        .collect();
+                    format!("{t}...")
                 } else {
                     label
                 };

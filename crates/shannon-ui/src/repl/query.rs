@@ -601,8 +601,14 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
             repl.current_turn += 1;
 
             // Record per-turn checkpoint with file change tracking
-            let prompt_preview = if input.chars().count() > 80 {
-                let truncated: String = input.chars().take(80).collect();
+            let prompt_preview = if unicode_width::UnicodeWidthStr::width(input) > 80 {
+                let mut len = 0;
+                let truncated: String = input.chars()
+                    .take_while(|c| {
+                        let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
+                        if len + cw > 77 { false } else { len += cw; true }
+                    })
+                    .collect();
                 format!("{truncated}...")
             } else {
                 input.to_string()
