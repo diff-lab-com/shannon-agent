@@ -30,6 +30,21 @@ impl StatusBarWidget {
         frame.render_widget(paragraph, area);
     }
 
+    /// Render enhanced status bar using a `RenderContext`.
+    ///
+    /// Derives files/tools/duration from `sidebar_info` internally.
+    pub fn render_from_ctx(frame: &mut Frame, area: Rect, ctx: &crate::widgets::RenderContext) {
+        let files_info = ctx.sidebar_info.map(|si| (si.modified_files.len(), si.total_additions, si.total_deletions));
+        let tools_invoked = ctx.sidebar_info.map(|si| si.tools_invoked);
+        let session_duration = ctx.sidebar_info.map(|si| si.session_duration_secs);
+        Self::render_with_spinner(
+            frame, area, ctx.status, ctx.model, ctx.tokens_used,
+            ctx.max_tokens, ctx.cost_usd, ctx.git_branch, ctx.spinner,
+            ctx.progress_bar, ctx.theme, ctx.approval_mode, ctx.token_breakdown,
+            ctx.diag_counts, ctx.rate_limit, files_info, tools_invoked, session_duration,
+        );
+    }
+
     /// Render enhanced status bar with spinner animation and zone-based layout.
     ///
     /// Expects a 2-line area. Line 1: spinner, status, model, context, cost.

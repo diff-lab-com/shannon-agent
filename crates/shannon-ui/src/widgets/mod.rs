@@ -253,15 +253,7 @@ impl MainLayoutWidget {
             if let Some(custom) = ctx.cached_statusline {
                 StatusBarWidget::render_custom(frame, status_area, custom, ctx.theme);
             } else {
-                let files_info = ctx.sidebar_info.map(|si| (si.modified_files.len(), si.total_additions, si.total_deletions));
-                let tools_invoked = ctx.sidebar_info.map(|si| si.tools_invoked);
-                let session_duration = ctx.sidebar_info.map(|si| si.session_duration_secs);
-                StatusBarWidget::render_with_spinner(
-                    frame, status_area, ctx.status, ctx.model, ctx.tokens_used,
-                    ctx.max_tokens, ctx.cost_usd, ctx.git_branch, ctx.spinner,
-                    ctx.progress_bar, ctx.theme, ctx.approval_mode, ctx.token_breakdown,
-                    ctx.diag_counts, ctx.rate_limit, files_info, tools_invoked, session_duration,
-                );
+                StatusBarWidget::render_from_ctx(frame, status_area, ctx);
             }
 
             if let (Some(info), Some(sb_area)) = (ctx.sidebar_info, sidebar_area) {
