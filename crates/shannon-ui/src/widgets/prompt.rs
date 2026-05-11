@@ -338,7 +338,7 @@ impl PromptWidget {
         };
 
         // Explicit /color override takes precedence; otherwise derive from approval mode
-        let border_color = self.border_color_override.unwrap_or_else(|| {
+        let border_color = self.border_color_override.unwrap_or({
             match mode {
                 Some("ASK") | Some("PLAN") => theme.accent,
                 Some("EDIT") => theme.success,

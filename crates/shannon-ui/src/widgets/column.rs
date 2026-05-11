@@ -246,6 +246,7 @@ impl ColumnRenderable {
     /// `scroll_offset` — absolute index of focused message
     /// `start` — first cell index to consider (e.g., committed_count)
     /// `search` — optional search params for match highlighting
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
         area: Rect,

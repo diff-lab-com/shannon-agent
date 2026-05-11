@@ -644,7 +644,7 @@ impl MessageCell {
                         3 => {
                             // H3: bold text with a thin underline
                             lines.push(Line::from(Span::styled(
-                                format!("  {}", text),
+                                format!("  {text}"),
                                 Style::default().fg(theme.heading).add_modifier(Modifier::BOLD),
                             )));
                             lines.push(Line::from(Span::styled(
@@ -670,7 +670,7 @@ impl MessageCell {
                     // Top border with language label and line count
                     let total_lines = code.lines().count();
                     let count_badge = if total_lines > 0 {
-                        format!(" {} lines ", total_lines)
+                        format!(" {total_lines} lines ")
                     } else {
                         String::new()
                     };
@@ -681,7 +681,7 @@ impl MessageCell {
                         let mut inner = String::from("─ ");
                         if !lang_display.is_empty() {
                             inner.push_str(lang_display);
-                            inner.push_str(" ");
+                            inner.push(' ');
                         }
                         if !count_badge.is_empty() {
                             inner.push('·');
@@ -720,7 +720,7 @@ impl MessageCell {
                         let hidden = highlighted.len().saturating_sub(15);
                         folded.push(Line::from(vec![
                             Span::styled("│ ", Style::default().fg(theme.border_dim).bg(code_bg)),
-                            Span::styled(format!("⋯ {} lines folded (Ctrl+F to expand)", hidden), Style::default().fg(theme.muted).add_modifier(Modifier::ITALIC).bg(code_bg)),
+                            Span::styled(format!("⋯ {hidden} lines folded (Ctrl+F to expand)"), Style::default().fg(theme.muted).add_modifier(Modifier::ITALIC).bg(code_bg)),
                         ]));
                         for line in highlighted.iter().rev().take(5).rev() {
                             folded.push(prefix_code_line(line.clone(), theme.border_dim, code_bg));
