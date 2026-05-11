@@ -293,9 +293,6 @@ impl super::Repl {
     /// Throttled to once every 10 seconds to avoid excessive subprocess calls.
     pub fn refresh_git_branch(&mut self) {
         // Throttle: no need to check more than once every 10s
-        if let Some(branch) = &self.state.git_branch {
-            let _ = branch; // branch exists, just check timing
-        }
         static LAST_CHECK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
