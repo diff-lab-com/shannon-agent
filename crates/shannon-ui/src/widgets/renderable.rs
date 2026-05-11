@@ -190,7 +190,6 @@ impl MessageCell {
 
         // ── Collapsed tool messages ──
         if msg.role == ChatRole::Tool && (self.collapsed || msg.folded) {
-            let timestamp = msg.timestamp.format("%H:%M:%S").to_string();
             let clean_content = strip_ansi(&msg.content);
             let first_line = clean_content.lines().next().unwrap_or("");
             let tool_label = msg.tool_name.as_deref().unwrap_or("tool");
@@ -241,7 +240,6 @@ impl MessageCell {
             };
 
             lines.push(Line::from(vec![
-                Span::styled(format!("[{timestamp}] "), Style::default().fg(theme.muted)),
                 Span::styled(format!("{icon}{tool_label} "), Style::default().fg(cat_color).add_modifier(Modifier::BOLD)),
                 Span::styled(prefix.to_string(), Style::default().fg(cat_color)),
                 Span::styled(display, Style::default().fg(theme.text_dim)),
@@ -254,7 +252,7 @@ impl MessageCell {
             return lines;
         }
 
-        // ── Role label line ──
+        // ── Role prefix (will be inlined into first content line) ──
         let (role_name, role_color) = match msg.role {
             ChatRole::User => ("You", theme.user_msg),
             ChatRole::Assistant => ("AI", theme.assistant_msg),
@@ -262,18 +260,18 @@ impl MessageCell {
             ChatRole::Tool => ("Tool", theme.tool_msg),
         };
 
-        let timestamp = msg.timestamp.format("%H:%M:%S").to_string();
-
         let display_name = if msg.role == ChatRole::Tool {
             msg.tool_name.as_deref().unwrap_or("Tool").to_string()
         } else {
             role_name.to_string()
         };
 
-        lines.push(Line::from(vec![
-            Span::styled(format!("[{timestamp}] "), Style::default().fg(theme.muted)),
-            Span::styled(format!("{display_name} > "), Style::default().fg(role_color).add_modifier(Modifier::BOLD)),
-        ]));
+        // Build role prefix spans and compute indent width
+        let role_prefix_spans = vec![
+            Span::styled(format!("{display_name} "), Style::default().fg(role_color).add_modifier(Modifier::BOLD)),
+        ];
+        let role_prefix_str = format!("{display_name} ");
+        let role_prefix_len = unicode_width::UnicodeWidthStr::width(role_prefix_str.as_str());
 
         // ── Specialized tool output rendering ──
         if msg.role == ChatRole::Tool && !self.collapsed && !msg.folded {
@@ -527,9 +525,9 @@ impl MessageCell {
         let content = strip_ansi(&msg.content);
         let segments = parse_markdown_segments(&content);
 
-        let prefix_str = format!("[{timestamp}] {display_name} > ");
-        let prefix_len = unicode_width::UnicodeWidthStr::width(prefix_str.as_str());
-        let text_width = inner_width.saturating_sub(prefix_len).max(20);
+        // Indent for continuation lines = role prefix width + 2 spaces
+        let indent = role_prefix_len + 2;
+        let text_width = inner_width.saturating_sub(indent).max(20);
         let content_width = inner_width.max(20);
 
         for seg in &segments {
@@ -675,9 +673,22 @@ impl MessageCell {
             lines.extend(imgs.clone());
         }
 
-        if lines.len() == 1 {
-            // Only the role line — add an empty content indicator
-            lines.push(Line::from(Span::styled("(empty)", Style::default().fg(theme.muted))));
+        // ── Inline role prefix: prepend to first line, indent remaining ──
+        if !lines.is_empty() {
+            // Prepend role prefix spans to the first content line
+            let mut first = lines.remove(0);
+            let mut new_spans = role_prefix_spans;
+            new_spans.append(&mut first.spans);
+            lines.insert(0, Line::from(new_spans));
+
+            // Indent remaining lines to align with content after role prefix
+            let indent_str = " ".repeat(indent);
+            for line in lines.iter_mut().skip(1) {
+                line.spans.insert(0, Span::styled(indent_str.clone(), Style::default()));
+            }
+        } else {
+            // Empty content — just show role label
+            lines.push(Line::from(role_prefix_spans));
         }
 
         // Cache for non-search builds
