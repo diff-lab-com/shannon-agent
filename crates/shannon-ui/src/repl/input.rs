@@ -154,6 +154,11 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
         return handle_incremental_search_input(repl, key);
     }
 
+    // If chat search (activated by / in pager) is active, handle search input
+    if repl.state.chat_search_active {
+        return handle_chat_search_input(repl, key);
+    }
+
     match key.code {
         // F1: show full keyboard shortcuts overlay
         KeyCode::F(1) => {
@@ -1763,6 +1768,56 @@ fn handle_pager_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Char('N') => {
             repl.chat_search_prev();
+            Ok(())
+        }
+        _ => Ok(())
+    }
+}
+
+/// Handle input while chat search is active (query typing mode).
+fn handle_chat_search_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
+    match key.code {
+        // Escape: close search, clear highlights
+        KeyCode::Esc => {
+            repl.state.chat_search_active = false;
+            repl.state.chat_search_query.clear();
+            repl.state.chat_search_total_matches = 0;
+            Ok(())
+        }
+        // Enter: close search input, keep highlights and jump to first match
+        KeyCode::Enter => {
+            repl.state.chat_search_active = false;
+            if repl.state.chat_search_total_matches > 0 {
+                repl.chat_search_next();
+            }
+            Ok(())
+        }
+        // Backspace: remove last char
+        KeyCode::Backspace => {
+            repl.state.chat_search_query.pop();
+            repl.update_chat_search();
+            // Auto-scroll to first match
+            if repl.state.chat_search_total_matches > 0 {
+                let matches = repl.chat.find_search_matches(&repl.state.chat_search_query);
+                if let Some(&(msg_idx, _, _)) = matches.first() {
+                    repl.chat.scroll_offset = msg_idx;
+                    repl.state.auto_follow = false;
+                }
+            }
+            Ok(())
+        }
+        // Typing: append to query
+        KeyCode::Char(c) => {
+            repl.state.chat_search_query.push(c);
+            repl.update_chat_search();
+            // Auto-scroll to first match when query changes
+            if repl.state.chat_search_total_matches > 0 {
+                let matches = repl.chat.find_search_matches(&repl.state.chat_search_query);
+                if let Some(&(msg_idx, _, _)) = matches.first() {
+                    repl.chat.scroll_offset = msg_idx;
+                    repl.state.auto_follow = false;
+                }
+            }
             Ok(())
         }
         _ => Ok(())
