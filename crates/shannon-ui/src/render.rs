@@ -234,7 +234,7 @@ impl Renderer {
 
     /// Render a block of markdown text into ratatui `Line` objects using
     /// pulldown-cmark for full CommonMark support.
-    pub fn render_markdown(&self, text: &str) -> Vec<Line<'static>> {
+    pub fn render_markdown(&self, text: &str, theme: &Theme) -> Vec<Line<'static>> {
         // Check render cache first
         let hash = MarkdownCache::compute_hash(text);
         {
@@ -272,10 +272,10 @@ impl Renderer {
                 }
                 Event::End(TagEnd::Heading(level)) => {
                     let style = match level {
-                        HeadingLevel::H1 => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-                        HeadingLevel::H2 => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-                        HeadingLevel::H3 => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-                        _ => Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                        HeadingLevel::H1 => Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+                        HeadingLevel::H2 => Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+                        HeadingLevel::H3 => Style::default().fg(theme.warning).add_modifier(Modifier::BOLD),
+                        _ => Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
                     };
                     let text = spans_to_string(&inline_spans);
                     inline_spans.clear();
@@ -295,7 +295,7 @@ impl Renderer {
                 Event::Start(Tag::Paragraph) => {}
                 Event::End(TagEnd::Paragraph) => {
                     if !in_table {
-                        prepend_blockquote(&mut inline_spans, blockquote_depth);
+                        prepend_blockquote(&mut inline_spans, blockquote_depth, theme);
                     }
                     flush_inline(&mut inline_spans, &mut output);
                     if !in_table {
@@ -326,6 +326,7 @@ impl Renderer {
                             &highlighted,
                             &code_lang,
                             blockquote_depth,
+                            theme,
                         ));
                     }
                     output.push(Line::from(""));
@@ -354,26 +355,26 @@ impl Renderer {
                         if let Some(idx) = list_item_counters.last_mut() {
                             *idx += 1;
                             let prefix = format!("{indent}{}. ", *idx - 1);
-                            inline_spans.push(Span::styled(prefix, Style::default().fg(Color::Cyan)));
+                            inline_spans.push(Span::styled(prefix, Style::default().fg(theme.accent)));
                         }
                     } else {
-                        inline_spans.push(Span::styled(format!("{indent}• "), Style::default().fg(Color::Cyan)));
+                        inline_spans.push(Span::styled(format!("{indent}• "), Style::default().fg(theme.accent)));
                     }
                 }
                 Event::End(TagEnd::Item) => {
-                    prepend_blockquote(&mut inline_spans, blockquote_depth);
+                    prepend_blockquote(&mut inline_spans, blockquote_depth, theme);
                     flush_inline(&mut inline_spans, &mut output);
                 }
                 Event::TaskListMarker(checked) => {
                     if checked {
                         inline_spans.push(Span::styled(
                             "☑ ".to_string(),
-                            Style::default().fg(Color::Green),
+                            Style::default().fg(theme.success),
                         ));
                     } else {
                         inline_spans.push(Span::styled(
                             "☐ ".to_string(),
-                            Style::default().fg(Color::DarkGray),
+                            Style::default().fg(theme.text_dim),
                         ));
                     }
                 }
@@ -383,7 +384,7 @@ impl Renderer {
                     table_alignments = alignments.to_vec();
                 }
                 Event::End(TagEnd::Table) => {
-                    render_aligned_table(&table_rows, &table_alignments, &mut output);
+                    render_aligned_table(&table_rows, &table_alignments, &mut output, theme);
                     table_rows.clear();
                     table_alignments.clear();
                     in_table = false;
@@ -439,7 +440,7 @@ impl Renderer {
                     let target = if in_table { &mut current_cell_spans } else { &mut inline_spans };
                     target.push(Span::styled(
                         format!("`{code}`"),
-                        Style::default().fg(Color::Yellow),
+                        Style::default().fg(theme.warning),
                     ));
                 }
                 Event::Text(text) => {
@@ -448,11 +449,11 @@ impl Renderer {
                     } else if in_table {
                         current_cell_spans.push(Span::styled(
                             text.to_string(),
-                            Style::default().fg(Color::White),
+                            Style::default().fg(theme.text),
                         ));
                     } else {
                         // Determine style based on inline formatting state
-                        let mut style = Style::default().fg(Color::White);
+                        let mut style = Style::default().fg(theme.text);
                         if strong_depth > 0 {
                             style = style.add_modifier(Modifier::BOLD);
                         }
@@ -461,12 +462,12 @@ impl Renderer {
                         }
                         // Dim text inside blockquotes
                         if blockquote_depth > 0 {
-                            style = style.fg(Color::Gray);
+                            style = style.fg(theme.text_dim);
                         }
 
                         for (i, line) in text.split('\n').enumerate() {
                             if i > 0 {
-                                prepend_blockquote(&mut inline_spans, blockquote_depth);
+                                prepend_blockquote(&mut inline_spans, blockquote_depth, theme);
                                 flush_inline(&mut inline_spans, &mut output);
                             }
                             if !line.is_empty() {
@@ -479,7 +480,7 @@ impl Renderer {
                     if in_table {
                         // ignore breaks in tables
                     } else {
-                        prepend_blockquote(&mut inline_spans, blockquote_depth);
+                        prepend_blockquote(&mut inline_spans, blockquote_depth, theme);
                         flush_inline(&mut inline_spans, &mut output);
                     }
                 }
@@ -488,7 +489,7 @@ impl Renderer {
                     flush_inline(&mut inline_spans, &mut output);
                     output.push(Line::from(Span::styled(
                         "─".repeat(40),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme.border_dim),
                     )));
                 }
                 Event::FootnoteReference(_) => {}
@@ -534,14 +535,14 @@ fn flush_inline(spans: &mut Vec<Span<'static>>, output: &mut Vec<Line<'static>>)
 
 /// Prepend blockquote vertical bar prefix to inline spans.
 /// Inserts `│ ` for each nesting level before the text content.
-fn prepend_blockquote(spans: &mut Vec<Span<'static>>, depth: usize) {
+fn prepend_blockquote(spans: &mut Vec<Span<'static>>, depth: usize, theme: &Theme) {
     if depth == 0 {
         return;
     }
     // Build the prefix: "│ " for each level, with inner levels using "│ "
     let mut prefix_spans: Vec<Span<'static>> = Vec::new();
     for _ in 0..depth {
-        let bar_style = Style::default().fg(Color::DarkGray);
+        let bar_style = Style::default().fg(theme.border_dim);
         prefix_spans.push(Span::styled("│ ".to_string(), bar_style));
     }
     // Prepend before existing spans
@@ -576,6 +577,7 @@ fn render_aligned_table(
     rows: &[Vec<Vec<Span<'static>>>],
     alignments: &[pulldown_cmark::Alignment],
     output: &mut Vec<Line<'static>>,
+    theme: &Theme,
 ) {
     if rows.is_empty() {
         return;
@@ -595,7 +597,7 @@ fn render_aligned_table(
         }
     }
 
-    let border_style = Style::default().fg(Color::DarkGray);
+    let border_style = Style::default().fg(theme.border_dim);
 
     // Top border: ┌─────┬─────┐
     let mut top = String::from("┌");
@@ -618,9 +620,9 @@ fn render_aligned_table(
             let text = spans_to_string(cell);
             let truncated = truncate_chars(&text, TABLE_MAX_COL_WIDTH);
             let style = if ri == 0 {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(theme.text)
             };
             let width = col_widths.get(ci).copied().unwrap_or(0);
             let aligned = match alignments.get(ci) {
@@ -683,9 +685,10 @@ fn render_code_block_with_border(
     highlighted_lines: &[Line<'static>],
     lang: &str,
     _blockquote_depth: usize,
+    theme: &Theme,
 ) -> Vec<Line<'static>> {
     let mut output = Vec::new();
-    let border_style = Style::default().fg(Color::DarkGray);
+    let border_style = Style::default().fg(theme.border_dim);
     let lang_label = if lang.is_empty() { "code" } else { lang };
 
     // Parse filename hint from lang string: e.g. "rust:src/main.rs"
@@ -721,7 +724,7 @@ fn render_code_block_with_border(
         let fold_msg = format!("│   ... {} lines folded ...", folded_count.max(1));
         output.push(Line::from(Span::styled(
             fold_msg,
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+            Style::default().fg(theme.text_dim).add_modifier(Modifier::ITALIC),
         )));
 
         // Show last CODE_FOLD_TAIL lines
@@ -1290,7 +1293,7 @@ mod tests {
     #[test]
     fn test_render_markdown_heading() {
         let renderer = Renderer::new();
-        let lines = renderer.render_markdown("# Hello World");
+        let lines = renderer.render_markdown("# Hello World", &Theme::default_dark());
         // Heading + trailing empty line
         assert!(!lines.is_empty());
         let text = spans_to_string(&lines[0].spans);
@@ -1302,7 +1305,7 @@ mod tests {
         let renderer = Renderer::new();
         for level in 1..=6 {
             let md = format!("{} Heading {}", "#".repeat(level), level);
-            let lines = renderer.render_markdown(&md);
+            let lines = renderer.render_markdown(&md, &Theme::default_dark());
             assert!(!lines.is_empty(), "Heading level {level}");
             let text = spans_to_string(&lines[0].spans);
             assert!(text.contains(&format!("Heading {level}")), "Heading level {level}");
@@ -1312,12 +1315,12 @@ mod tests {
     #[test]
     fn test_render_markdown_heading_decorative_prefix() {
         let renderer = Renderer::new();
-        let lines = renderer.render_markdown("# Hello");
+        let lines = renderer.render_markdown("# Hello", &Theme::default_dark());
         let text = spans_to_string(&lines[0].spans);
         // H1 should have "█ " prefix
         assert!(text.starts_with("█ "), "H1 heading should have █ prefix: got {text}");
 
-        let lines = renderer.render_markdown("## Hello");
+        let lines = renderer.render_markdown("## Hello", &Theme::default_dark());
         let text = spans_to_string(&lines[0].spans);
         // H2 should have "▌ " prefix
         assert!(text.starts_with("▌ "), "H2 heading should have ▌ prefix: got {text}");
@@ -1327,7 +1330,7 @@ mod tests {
     fn test_render_markdown_code_block() {
         let renderer = Renderer::new();
         let md = "```rust\nfn main() {}\n```";
-        let lines = renderer.render_markdown(md);
+        let lines = renderer.render_markdown(md, &Theme::default_dark());
         assert!(!lines.is_empty());
         // Should have title bar, code line, footer, and trailing empty
         assert!(lines.len() >= 3, "Code block should have title, code, and footer");
@@ -1337,7 +1340,7 @@ mod tests {
     fn test_render_markdown_code_block_border() {
         let renderer = Renderer::new();
         let md = "```rust\nfn main() {}\n```";
-        let lines = renderer.render_markdown(md);
+        let lines = renderer.render_markdown(md, &Theme::default_dark());
         // First line should be title bar starting with ╭
         let first_text = spans_to_string(&lines[0].spans);
         assert!(first_text.starts_with("╭"), "Code block should start with ╭: got {first_text}");
@@ -1348,7 +1351,7 @@ mod tests {
     fn test_render_markdown_code_block_filename_hint() {
         let renderer = Renderer::new();
         let md = "```rust:src/main.rs\nfn main() {}\n```";
-        let lines = renderer.render_markdown(md);
+        let lines = renderer.render_markdown(md, &Theme::default_dark());
         let first_text = spans_to_string(&lines[0].spans);
         assert!(first_text.contains("rust"), "Title should contain language");
         assert!(first_text.contains("src/main.rs"), "Title should contain filename: got {first_text}");
@@ -1357,21 +1360,21 @@ mod tests {
     #[test]
     fn test_render_markdown_inline_code() {
         let renderer = Renderer::new();
-        let lines = renderer.render_markdown("Use `cargo build` to compile.");
+        let lines = renderer.render_markdown("Use `cargo build` to compile.", &Theme::default_dark());
         assert_eq!(lines.len(), 1);
     }
 
     #[test]
     fn test_render_markdown_bold() {
         let renderer = Renderer::new();
-        let lines = renderer.render_markdown("This is **bold** text.");
+        let lines = renderer.render_markdown("This is **bold** text.", &Theme::default_dark());
         assert_eq!(lines.len(), 1);
     }
 
     #[test]
     fn test_render_markdown_horizontal_rule() {
         let renderer = Renderer::new();
-        let lines = renderer.render_markdown("---");
+        let lines = renderer.render_markdown("---", &Theme::default_dark());
         assert_eq!(lines.len(), 1);
     }
 
@@ -1379,7 +1382,7 @@ mod tests {
     fn test_render_markdown_mixed() {
         let renderer = Renderer::new();
         let md = "# Title\n\nSome **bold** text with `code`.\n\n```rust\nfn main() {}\n```\n";
-        let lines = renderer.render_markdown(md);
+        let lines = renderer.render_markdown(md, &Theme::default_dark());
         // Title + empty + paragraph + empty + code + possible empty
         assert!(lines.len() >= 4);
     }
@@ -1388,7 +1391,7 @@ mod tests {
     fn test_render_markdown_unclosed_code_block() {
         let renderer = Renderer::new();
         let md = "```rust\nfn main() {}\n";
-        let lines = renderer.render_markdown(md);
+        let lines = renderer.render_markdown(md, &Theme::default_dark());
         // Should still render the code even without closing fence
         assert!(!lines.is_empty());
     }
@@ -1397,7 +1400,7 @@ mod tests {
     fn test_render_markdown_task_list_checked() {
         let renderer = Renderer::new();
         let md = "- [x] Done\n- [ ] Todo\n";
-        let lines = renderer.render_markdown(md);
+        let lines = renderer.render_markdown(md, &Theme::default_dark());
         assert!(!lines.is_empty());
         // Find the ☑ character in the output
         let all_text: String = lines.iter().map(|l| spans_to_string(&l.spans)).collect();
@@ -1409,7 +1412,7 @@ mod tests {
     fn test_render_markdown_nested_list() {
         let renderer = Renderer::new();
         let md = "- Item 1\n  - Nested 1\n  - Nested 2\n- Item 2\n";
-        let lines = renderer.render_markdown(md);
+        let lines = renderer.render_markdown(md, &Theme::default_dark());
         assert!(lines.len() >= 2, "Nested list should produce multiple lines");
         // Check that nested items have indentation
         let all_text: String = lines.iter().map(|l| spans_to_string(&l.spans)).collect();
@@ -1421,7 +1424,7 @@ mod tests {
     fn test_render_markdown_ordered_nested_list() {
         let renderer = Renderer::new();
         let md = "1. First\n   - Nested bullet\n2. Second\n";
-        let lines = renderer.render_markdown(md);
+        let lines = renderer.render_markdown(md, &Theme::default_dark());
         assert!(lines.len() >= 2);
         let all_text: String = lines.iter().map(|l| spans_to_string(&l.spans)).collect();
         assert!(all_text.contains("1."), "Should contain ordered marker");
@@ -1432,7 +1435,7 @@ mod tests {
     fn test_render_markdown_blockquote() {
         let renderer = Renderer::new();
         let md = "> Quoted text\n> More quote\n";
-        let lines = renderer.render_markdown(md);
+        let lines = renderer.render_markdown(md, &Theme::default_dark());
         assert!(!lines.is_empty());
         // Should contain blockquote bar
         let all_text: String = lines.iter().map(|l| spans_to_string(&l.spans)).collect();
@@ -1444,7 +1447,7 @@ mod tests {
     fn test_render_markdown_nested_blockquote() {
         let renderer = Renderer::new();
         let md = "> Level 1\n>> Level 2\n";
-        let lines = renderer.render_markdown(md);
+        let lines = renderer.render_markdown(md, &Theme::default_dark());
         assert!(!lines.is_empty());
         let all_text: String = lines.iter().map(|l| spans_to_string(&l.spans)).collect();
         // Should have at least 2 bar characters for nested blockquote
@@ -1456,7 +1459,7 @@ mod tests {
     fn test_render_markdown_table_with_borders() {
         let renderer = Renderer::new();
         let md = "| Name | Value |\n|------|-------|\n| foo  | bar   |\n";
-        let lines = renderer.render_markdown(md);
+        let lines = renderer.render_markdown(md, &Theme::default_dark());
         assert!(!lines.is_empty());
         let all_text: String = lines.iter().map(|l| spans_to_string(&l.spans)).collect();
         // Should have box-drawing characters for borders
@@ -1470,7 +1473,7 @@ mod tests {
     fn test_render_markdown_table_alignment() {
         let renderer = Renderer::new();
         let md = "| Left | Center | Right |\n|:-----|:------:|------:|\n| a | b | c |\n";
-        let lines = renderer.render_markdown(md);
+        let lines = renderer.render_markdown(md, &Theme::default_dark());
         assert!(!lines.is_empty());
         let all_text: String = lines.iter().map(|l| spans_to_string(&l.spans)).collect();
         assert!(all_text.contains("Left"), "Should contain header");
@@ -1481,7 +1484,7 @@ mod tests {
     fn test_render_markdown_link_osc8() {
         let renderer = Renderer::new();
         let md = "Click [here](https://example.com) for info.\n";
-        let lines = renderer.render_markdown(md);
+        let lines = renderer.render_markdown(md, &Theme::default_dark());
         assert!(!lines.is_empty());
         let all_text: String = lines.iter().map(|l| spans_to_string(&l.spans)).collect();
         // Should contain OSC 8 escape sequences
@@ -1500,7 +1503,7 @@ mod tests {
         code.push_str("```");
 
         let renderer = Renderer::new();
-        let lines = renderer.render_markdown(&code);
+        let lines = renderer.render_markdown(&code, &Theme::default_dark());
         // Should have title + 10 head lines + fold indicator + 5 tail lines + footer
         // That's about 18 lines, not 25+ lines of code
         let all_text: String = lines.iter().map(|l| spans_to_string(&l.spans)).collect();
