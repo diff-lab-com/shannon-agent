@@ -171,7 +171,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
 
         // Streaming queue hint — show "Enter=queue" near the prompt when streaming
         if state.streaming_active && state.queued_message.is_none() {
-            let hint = " \u{2191}\u{2193} scroll \u{00b7} Enter = queue after response \u{00b7} Esc = stop ";
+            let hint = " ↑↓ scroll · Enter = queue after response · Esc = stop ";
             let hint_width = hint.chars().count() as u16;
             let x = f.area().x + 2;
             let y = f.area().bottom().saturating_sub(5);
@@ -183,6 +183,21 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
                     .fg(state.theme.muted)
                     .bg(state.theme.context_bar_bg));
             f.render_widget(hint_paragraph, hint_area);
+        }
+
+        // "Scroll to bottom" indicator when user scrolled up away from latest content
+        if !state.auto_follow && !state.show_key_hints && chat.message_count() > 1 {
+            let indicator = " ↓ End = jump to latest ";
+            let indicator_width = indicator.chars().count() as u16;
+            let ix = f.area().x + f.area().width.saturating_sub(indicator_width + 2);
+            let iy = f.area().y + 2; // Near top of viewport
+            let iw = indicator_width.min(f.area().width.saturating_sub(4));
+            let indicator_area = ratatui::layout::Rect { x: ix, y: iy, width: iw, height: 1 };
+            let indicator_paragraph = Paragraph::new(indicator.chars().take(iw as usize).collect::<String>())
+                .style(ratatui::style::Style::default()
+                    .fg(state.theme.text)
+                    .bg(state.theme.accent));
+            f.render_widget(indicator_paragraph, indicator_area);
         }
 
         // Overlay history search bar when Ctrl+R active
