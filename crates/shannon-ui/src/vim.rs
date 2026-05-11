@@ -73,6 +73,8 @@ pub enum VimAction {
     MoveCursor { direction: Direction, count: usize },
     /// Delete the current line
     DeleteLine { count: usize },
+    /// Delete character(s) under cursor (vim `x`)
+    DeleteChar { count: usize },
     /// Yank (copy) the current line into buffer
     YankLine { count: usize },
     /// Paste buffer contents after cursor
@@ -478,10 +480,8 @@ impl VimHandler {
                             return VimAction::EnterVisualLineMode;
                         }
                         'x' => {
-                            // In a real vim, x deletes the char under cursor.
-                            // Here we treat it as delete-line for simplicity.
                             self.reset_transient();
-                            return VimAction::DeleteLine { count: 1 };
+                            return VimAction::DeleteChar { count };
                         }
                         '/' => {
                             self.command_buffer.clear();
