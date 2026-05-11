@@ -587,7 +587,7 @@ impl MessageCell {
                         format!("╭─{lp}{}╮", "─".repeat(rest))
                     };
                     lines.push(Line::from(vec![
-                        Span::styled(top, Style::default().fg(theme.border_dim)),
+                        Span::styled(top, Style::default().fg(theme.border_dim).bg(theme.diff_context_bg)),
                     ]));
 
                     let highlighted = if let Some(l) = lang {
@@ -596,34 +596,38 @@ impl MessageCell {
                         code.lines().map(|l| Line::from(l.to_string())).collect()
                     };
 
-                    /// Prepend `│ ` gutter prefix to a syntax-highlighted line.
-                    fn prefix_code_line(line: Line<'static>, border_color: ratatui::style::Color) -> Line<'static> {
-                        let mut spans = vec![Span::styled("│ ".to_string(), Style::default().fg(border_color))];
-                        spans.extend(line.spans);
+                    let code_bg = theme.diff_context_bg;
+                    /// Prepend `│ ` gutter prefix to a syntax-highlighted line with bg.
+                    fn prefix_code_line(line: Line<'static>, border_color: ratatui::style::Color, bg: ratatui::style::Color) -> Line<'static> {
+                        let mut spans = vec![Span::styled("│ ".to_string(), Style::default().fg(border_color).bg(bg))];
+                        for mut span in line.spans {
+                            span.style = span.style.bg(bg);
+                            spans.push(span);
+                        }
                         Line::from(spans)
                     }
 
                     let code_lines: Vec<Line<'static>> = if highlighted.len() > 20 && msg.folded && msg.role == ChatRole::Tool {
                         let mut folded = Vec::with_capacity(16);
                         for line in &highlighted[..10] {
-                            folded.push(prefix_code_line(line.clone(), theme.border_dim));
+                            folded.push(prefix_code_line(line.clone(), theme.border_dim, code_bg));
                         }
                         let hidden = highlighted.len() - 15;
                         folded.push(Line::from(
-                            Span::styled(format!("│ ... {hidden} more lines (press 'o' to expand)"), Style::default().fg(theme.muted))
+                            Span::styled(format!("│ ... {hidden} more lines (press 'o' to expand)"), Style::default().fg(theme.muted).bg(code_bg))
                         ));
                         for line in highlighted.iter().rev().take(5).rev() {
-                            folded.push(prefix_code_line(line.clone(), theme.border_dim));
+                            folded.push(prefix_code_line(line.clone(), theme.border_dim, code_bg));
                         }
                         folded
                     } else {
-                        highlighted.into_iter().map(|line| prefix_code_line(line, theme.border_dim)).collect()
+                        highlighted.into_iter().map(|line| prefix_code_line(line, theme.border_dim, code_bg)).collect()
                     };
 
                     lines.extend(code_lines);
                     let sep_w = inner_width.clamp(4, 60);
                     lines.push(Line::from(vec![
-                        Span::styled(format!("╰{}╯", "─".repeat(sep_w - 2)), Style::default().fg(theme.border_dim)),
+                        Span::styled(format!("╰{}╯", "─".repeat(sep_w - 2)), Style::default().fg(theme.border_dim).bg(theme.diff_context_bg)),
                     ]));
                 }
                 MdSegment::UnorderedList(items) => {
