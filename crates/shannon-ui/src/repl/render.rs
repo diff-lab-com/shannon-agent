@@ -189,7 +189,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         if !state.auto_follow && !state.show_key_hints && chat.message_count() > 1 {
             let new_count = chat.message_count().saturating_sub(state.messages_at_scroll_pause);
             let indicator = if new_count > 0 {
-                format!(" ↓ {} new · End = jump to latest ", new_count)
+                format!(" ↓ {new_count} new · End = jump to latest ")
             } else {
                 " ↓ End = jump to latest ".to_string()
             };

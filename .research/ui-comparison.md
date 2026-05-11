@@ -97,4 +97,6 @@
 - **Draft history** — Up/Down navigates prior inputs
 - **RenderContext struct** — clean parameter passing (refactored from 23-arg function)
 - **Git branch in status bar** — auto-detected and refreshed every 10s
+- **Scroll-to-bottom indicator** — floating "↓ N new · End = jump" when scrolled up
+- **Enter-to-queue** — Enter during streaming auto-queues follow-up message
 - **Lightweight** — smaller footprint than Codex or OpenCode
