@@ -735,15 +735,27 @@ impl MessageCell {
                     if total > budget && col_count > 0 {
                         let scale = budget as f64 / total as f64;
                         for w in &mut widths {
-                            *w = (*w as f64 * scale) as usize;
+                            *w = (*w as f64 * scale).max(1.0) as usize;
                         }
                     }
+
+
+                    // Pad a string to a given Unicode display width (handles CJK/wide chars).
+                    let pad_to_width = |s: &str, target: usize| -> String {
+                        let w = unicode_width::UnicodeWidthStr::width(s);
+                        if w >= target {
+                            s.to_string()
+                        } else {
+                            format!("{}{}", s, " ".repeat(target - w))
+                        }
+                    };
 
                     // Header row
                     let mut header_parts = Vec::new();
                     for (i, h) in headers.iter().enumerate() {
                         let width = widths.get(i).copied().unwrap_or(0);
-                        header_parts.push(Span::styled(format!(" {h:width$} "), Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)));
+                        let padded = pad_to_width(h, width);
+                        header_parts.push(Span::styled(format!(" {padded} "), Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)));
                     }
                     lines.push(Line::from(header_parts));
 
@@ -760,7 +772,8 @@ impl MessageCell {
                         let mut row_parts = Vec::new();
                         for (i, cell) in row.iter().enumerate() {
                             let width = widths.get(i).copied().unwrap_or(0);
-                            row_parts.push(Span::styled(format!(" {cell:width$} "), Style::default().fg(theme.text_dim)));
+                            let padded = pad_to_width(cell, width);
+                            row_parts.push(Span::styled(format!(" {padded} "), Style::default().fg(theme.text_dim)));
                         }
                         lines.push(Line::from(row_parts));
                     }
