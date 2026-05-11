@@ -72,6 +72,21 @@ impl PromptWidget {
         self.buffer.backspace();
     }
 
+    /// Remove the character at the cursor (forward delete)
+    pub fn delete_forward(&mut self) {
+        self.buffer.delete();
+    }
+
+    /// Kill from cursor to end of line. Returns killed text.
+    pub fn kill_line(&mut self) -> String {
+        self.buffer.kill_line()
+    }
+
+    /// Kill from cursor to start of line. Returns killed text.
+    pub fn kill_to_start(&mut self) -> String {
+        self.buffer.kill_to_start()
+    }
+
     /// Clear the input
     pub fn clear(&mut self) {
         self.buffer.clear();

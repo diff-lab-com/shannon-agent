@@ -388,6 +388,24 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
             repl.state.file_selector_for_at = true;
             Ok(())
         }
+        // Ctrl+K: kill to end of line
+        KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            repl.prompt.kill_line();
+            update_auto_completions(repl);
+            Ok(())
+        }
+        // Ctrl+U: kill to start of line
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            repl.prompt.kill_to_start();
+            update_auto_completions(repl);
+            Ok(())
+        }
+        // Ctrl+A: move to start of line (readline convention)
+        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let col = repl.prompt.cursor_position();
+            for _ in 0..col { repl.prompt.cursor_left(); }
+            Ok(())
+        }
         KeyCode::Char(c) => {
             repl.prompt.add_char(c);
             update_auto_completions(repl);
@@ -395,6 +413,11 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
         }
         KeyCode::Backspace => {
             repl.prompt.backspace();
+            update_auto_completions(repl);
+            Ok(())
+        }
+        KeyCode::Delete => {
+            repl.prompt.delete_forward();
             update_auto_completions(repl);
             Ok(())
         }

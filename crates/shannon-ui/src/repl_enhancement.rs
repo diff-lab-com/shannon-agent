@@ -477,6 +477,29 @@ impl InputBuffer {
         }
     }
 
+    /// Kill (delete) from cursor to end of line. Returns the killed text.
+    pub fn kill_line(&mut self) -> String {
+        if self.cursor_row >= self.lines.len() {
+            return String::new();
+        }
+        let byte_idx = Self::char_to_byte(&self.lines[self.cursor_row], self.cursor_col);
+        let killed = self.lines[self.cursor_row][byte_idx..].to_string();
+        self.lines[self.cursor_row].truncate(byte_idx);
+        killed
+    }
+
+    /// Kill (delete) from cursor to start of line. Returns the killed text.
+    pub fn kill_to_start(&mut self) -> String {
+        if self.cursor_row >= self.lines.len() {
+            return String::new();
+        }
+        let byte_idx = Self::char_to_byte(&self.lines[self.cursor_row], self.cursor_col);
+        let killed = self.lines[self.cursor_row][..byte_idx].to_string();
+        self.lines[self.cursor_row] = self.lines[self.cursor_row][byte_idx..].to_string();
+        self.cursor_col = 0;
+        killed
+    }
+
     /// Move cursor left by one character.
     pub fn move_left(&mut self) {
         if self.cursor_col > 0 {
