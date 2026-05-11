@@ -10,6 +10,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
     Frame,
 };
+use unicode_width::UnicodeWidthStr;
 
 /// Dialog button for user actions
 #[derive(Debug, Clone)]
@@ -270,14 +271,14 @@ impl DialogWidget {
         Line::from(spans)
     }
 
-    /// Wrap text to fit width
+    /// Wrap text to fit width (Unicode-aware)
     fn wrap_text(text: &str, width: usize) -> Vec<String> {
         let mut lines = Vec::new();
         let mut current_line = String::new();
         let mut current_length = 0;
 
         for word in text.split_whitespace() {
-            let word_len = word.len();
+            let word_len = UnicodeWidthStr::width(word);
 
             if current_length == 0 {
                 current_line.push_str(word);
