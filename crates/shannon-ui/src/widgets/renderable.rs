@@ -392,11 +392,20 @@ impl MessageCell {
                         ]));
                         continue;
                     }
-                    // File headers (+++/---)
+                    // File headers (+++/---): extract filename and show cleanly
                     if raw_line.starts_with("+++") || raw_line.starts_with("---") {
+                        let is_new = raw_line.starts_with("+++");
+                        let path = raw_line.trim_start_matches('+').trim_start_matches('-').trim();
+                        // Strip a/ or b/ prefix from git diff paths
+                        let clean_path = path.strip_prefix("b/").or_else(|| path.strip_prefix("a/")).unwrap_or(path);
+                        let label = if clean_path.starts_with('/') || clean_path.is_empty() {
+                            raw_line.to_string()
+                        } else {
+                            format!("{} {}", if is_new { "→" } else { "←" }, clean_path)
+                        };
                         lines.push(Line::from(vec![
                             Span::styled("│ ", Style::default().fg(theme.border_dim)),
-                            Span::styled(raw_line.to_string(), Style::default().fg(theme.diff_header)),
+                            Span::styled(label, Style::default().fg(theme.diff_header).add_modifier(Modifier::BOLD)),
                         ]));
                         continue;
                     }
@@ -570,11 +579,22 @@ impl MessageCell {
                     }
                 }
                 MdSegment::Header { level, text } => {
-                    let prefix = "#".repeat(*level);
-                    lines.push(Line::from(vec![
-                        Span::styled(format!("{prefix} "), Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
-                        Span::styled(text.clone(), Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
-                    ]));
+                    let (prefix, text_style) = match level {
+                        1 => ("━".repeat(inner_width.min(60).into()), Style::default().fg(theme.accent)),
+                        2 => ("▎".to_string(), Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+                        _ => ("▎".to_string(), Style::default().fg(theme.primary)),
+                    };
+                    if *level == 1 {
+                        // H1: text above a full-width line
+                        lines.push(Line::from(Span::styled(text.clone(), Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))));
+                        lines.push(Line::from(Span::styled(prefix, Style::default().fg(theme.accent))));
+                    } else {
+                        let level_prefix = "#".repeat(*level);
+                        lines.push(Line::from(vec![
+                            Span::styled(format!("{level_prefix} "), text_style),
+                            Span::styled(text.clone(), text_style),
+                        ]));
+                    }
                 }
                 MdSegment::CodeBlock { lang, code } => {
                     let lang_display = lang.as_deref().unwrap_or("");
