@@ -265,8 +265,8 @@ impl CommandPaletteWidget {
 
                 // Selection indicator
                 let indicator = Span::styled(
-                    if is_selected { " >" } else { "  " },
-                    Style::default().fg(if is_selected { theme.secondary } else { theme.muted }),
+                    if is_selected { " ▸" } else { "  " },
+                    Style::default().fg(if is_selected { theme.accent } else { theme.muted }),
                 );
 
                 ListItem::new(Line::from(vec![indicator, icon_span, name_span, desc_span]))

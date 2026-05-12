@@ -325,8 +325,8 @@ impl ToolApprovalWidget {
                 Style::default().fg(theme.text_dim)
             };
 
-            let prefix = if is_selected { " > " } else { "   " };
-            let suffix = if is_selected { "<" } else { " " };
+            let prefix = if is_selected { " ▸ " } else { "   " };
+            let suffix = " ";
 
             option_spans.push(Span::styled(
                 format!("{prefix}[{key}] {label}{suffix}"),
@@ -348,13 +348,18 @@ impl ToolApprovalWidget {
             ),
         ]));
 
+        // Border color matches risk level for visual cue
+        let border_color = risk_color_fn(theme);
         let paragraph = Paragraph::new(lines)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.border))
+                    .border_style(Style::default().fg(border_color))
                     .border_type(BorderType::Rounded)
-                    .title(" Tool Approval Required "),
+                    .title(Span::styled(
+                        " Tool Approval Required ",
+                        Style::default().fg(border_color).add_modifier(Modifier::BOLD),
+                    )),
             )
             .alignment(Alignment::Left)
             .wrap(Wrap { trim: false });

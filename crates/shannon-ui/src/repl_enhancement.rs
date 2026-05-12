@@ -633,6 +633,8 @@ pub struct ReplRenderer {
     pub use_color: bool,
     /// Terminal width for wrapping.
     pub terminal_width: usize,
+    /// Syntect theme name for code highlighting (e.g. "base16-eighties.dark" or "InspiredGitHub").
+    pub syntect_theme_name: String,
 }
 
 impl Default for ReplRenderer {
@@ -647,6 +649,7 @@ impl ReplRenderer {
         Self {
             use_color: true,
             terminal_width: 80,
+            syntect_theme_name: "base16-eighties.dark".to_string(),
         }
     }
 
@@ -708,7 +711,7 @@ impl ReplRenderer {
                 if in_code_block {
                     // Closing code block — highlight collected code with syntect
                     in_code_block = false;
-                    let highlighted = highlight_code_ansi(&code_buffer, &code_lang, ss, ts);
+                    let highlighted = highlight_code_ansi(&code_buffer, &code_lang, ss, ts, &self.syntect_theme_name);
                     result.push_str(&highlighted);
                     code_buffer.clear();
                     code_lang.clear();
@@ -751,7 +754,7 @@ impl ReplRenderer {
 
         // Handle unclosed code block at end of text
         if in_code_block {
-            let highlighted = highlight_code_ansi(&code_buffer, &code_lang, ss, ts);
+            let highlighted = highlight_code_ansi(&code_buffer, &code_lang, ss, ts, &self.syntect_theme_name);
             result.push_str(&highlighted);
         }
         if in_inline_code {
@@ -901,6 +904,7 @@ fn highlight_code_ansi(
     lang: &str,
     ss: &syntect::parsing::SyntaxSet,
     ts: &syntect::highlighting::ThemeSet,
+    theme_name: &str,
 ) -> String {
     use syntect::easy::HighlightLines;
     use syntect::util::as_24_bit_terminal_escaped;
@@ -920,7 +924,7 @@ fn highlight_code_ansi(
         return format!("\x1b[32m{code}\x1b[0m\n");
     };
 
-    let theme = &ts.themes["base16-eighties.dark"];
+    let theme = ts.themes.get(theme_name).unwrap_or_else(|| &ts.themes["base16-eighties.dark"]);
     let mut highlighter = HighlightLines::new(syntax, theme);
     let mut output = String::new();
 

@@ -103,6 +103,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             search_matches: &search_matches,
             search_focused_idx,
             cached_statusline: state.cached_statusline.as_deref(),
+            streaming_elapsed: state.streaming_start.map(|t| t.elapsed().as_secs()),
         };
         crate::widgets::MainLayoutWidget::render_with_ctx(f, &render_ctx);
 
@@ -249,11 +250,17 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         }
 
         // Render attachment bar above prompt area
+        // Offset up when toast or streaming hint is also visible to avoid overlap
         if !state.attachment_bar.is_empty() {
             let bar_height = 1u16;
+            let y_offset = if toast_visible || (state.streaming_active && state.queued_message.is_none()) {
+                6
+            } else {
+                5
+            };
             let bar_area = ratatui::layout::Rect {
                 x: f.area().x + 1,
-                y: f.area().bottom().saturating_sub(5),
+                y: f.area().bottom().saturating_sub(y_offset),
                 width: f.area().width.saturating_sub(2),
                 height: bar_height,
             };
@@ -277,7 +284,8 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
 
         // Overlay chat search bar when active
         if state.chat_search_active {
-            render_chat_search_overlay(f, f.area(), state, &state.theme);
+            let fresh_total = search_matches.len();
+            render_chat_search_overlay(f, f.area(), state, &state.theme, fresh_total);
         }
 
         // Render session tab bar at the very top when visible
@@ -406,8 +414,18 @@ pub fn render_permission_dialog(
             )));
         }
     } else {
-        content_lines.push(Line::from("Input:"));
-        content_lines.push(Line::from(serde_json::to_string_pretty(&dialog.tool_input).unwrap_or_else(|_| "(invalid)".to_string()).to_string()));
+        content_lines.push(Line::from(Span::styled("Input:", Style::default().fg(theme.muted))));
+        let json = serde_json::to_string_pretty(&dialog.tool_input).unwrap_or_else(|_| "(invalid)".to_string());
+        for line in json.lines().take(8) {
+            content_lines.push(Line::from(Span::styled(line.to_string(), Style::default().fg(theme.text_dim))));
+        }
+        let total_lines = json.lines().count();
+        if total_lines > 8 {
+            content_lines.push(Line::from(Span::styled(
+                format!("... ({} more lines)", total_lines - 8),
+                Style::default().fg(theme.text_dim),
+            )));
+        }
     }
 
     // Show risk reason if available
@@ -436,9 +454,12 @@ pub fn render_permission_dialog(
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.primary))
+                .border_style(Style::default().fg(risk_color))
                 .border_type(ratatui::widgets::BorderType::Rounded)
-                .title(" Permission Required "),
+                .title(Span::styled(
+                    " Permission Required ",
+                    Style::default().fg(risk_color).add_modifier(Modifier::BOLD),
+                )),
         )
         .alignment(Alignment::Left)
         .wrap(Wrap { trim: true });
@@ -484,13 +505,13 @@ pub(crate) fn render_completion_suggestions(
             let text = truncate_visual(s, (popup_width - 4) as usize);
             if i == selected_index {
                 Line::from(Span::styled(
-                    format!("▶ {text}"),
-                    Style::default().fg(theme.context_bar_bg).bg(theme.accent).add_modifier(Modifier::BOLD),
+                    format!("▸ {text}"),
+                    Style::default().fg(theme.primary).bg(theme.context_bar_bg).add_modifier(Modifier::BOLD),
                 ))
             } else {
                 Line::from(Span::styled(
                     format!("  {text}"),
-                    Style::default().fg(theme.accent),
+                    Style::default().fg(theme.text),
                 ))
             }
         })
@@ -502,7 +523,10 @@ pub(crate) fn render_completion_suggestions(
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme.text_dim))
                 .border_type(ratatui::widgets::BorderType::Rounded)
-                .title(" Completions "),
+                .title(Span::styled(
+                    " Completions ",
+                    Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD),
+                )),
         );
 
     frame.render_widget(paragraph, popup_area);
@@ -774,7 +798,7 @@ fn render_onboarding_overlay(
     theme: &Theme,
 ) {
     let dialog_width = 60.min(area.width.saturating_sub(4));
-    let dialog_height = 28.min(area.height.saturating_sub(4));
+    let dialog_height = 31.min(area.height.saturating_sub(4));
     let x = (area.width.saturating_sub(dialog_width)) / 2;
     let y = (area.height.saturating_sub(dialog_height)) / 2;
     let dialog_area = Rect {
@@ -847,6 +871,7 @@ fn render_chat_search_overlay(
     area: Rect,
     state: &super::ReplState,
     theme: &Theme,
+    total_matches: usize,
 ) {
     let bar_height = 3u16;
     let bar_width = area.width.saturating_sub(4).min(60);
@@ -874,8 +899,9 @@ fn render_chat_search_overlay(
         theme.primary
     };
 
-    let match_info = if state.chat_search_total_matches > 0 {
-        format!("match {} of {}", state.chat_search_match_index + 1, state.chat_search_total_matches)
+    let match_info = if total_matches > 0 {
+        let focused_idx = state.chat_search_match_index.min(total_matches - 1);
+        format!("match {} of {}", focused_idx + 1, total_matches)
     } else if state.chat_search_query.is_empty() {
         String::new()
     } else {

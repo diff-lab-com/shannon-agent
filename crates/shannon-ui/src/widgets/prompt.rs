@@ -347,17 +347,43 @@ impl PromptWidget {
                 _ => theme.border_dim,
             }
         });
+        // Build key hint line for bottom border
+        let w = area.width as usize;
+        // Pre-measure hint content width
+        let hint_content = " Enter=Send │ PgUp/Dn=History │ Ctrl+E=Editor │ Tab=Complete ";
+        let hint_w = unicode_width::UnicodeWidthStr::width(hint_content);
+        let bottom_line = if w > hint_w + 4 {
+            let pad = w - hint_w;
+            let left_pad = pad / 2;
+            let right_pad = pad - left_pad;
+            ratatui::text::Line::from(vec![
+                Span::styled("─".repeat(left_pad), Style::default().fg(border_color)),
+                Span::styled(" Enter", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
+                Span::styled("=Send", Style::default().fg(theme.text_dim)),
+                Span::styled(" \u{2502} ", Style::default().fg(theme.border_dim)),
+                Span::styled("PgUp/Dn", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
+                Span::styled("=History", Style::default().fg(theme.text_dim)),
+                Span::styled(" \u{2502} ", Style::default().fg(theme.border_dim)),
+                Span::styled("Ctrl+E", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
+                Span::styled("=Editor", Style::default().fg(theme.text_dim)),
+                Span::styled(" \u{2502} ", Style::default().fg(theme.border_dim)),
+                Span::styled("Tab", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
+                Span::styled("=Complete ", Style::default().fg(theme.text_dim)),
+                Span::styled("─".repeat(right_pad), Style::default().fg(border_color)),
+            ])
+        } else {
+            ratatui::text::Line::from(vec![
+                Span::styled("─".repeat(w), Style::default().fg(border_color)),
+            ])
+        };
+
         let paragraph = Paragraph::new(display_lines)
             .block(
                 Block::default()
                     .borders(Borders::TOP)
                     .border_style(Style::default().fg(border_color))
                     .title(title)
-                    .title_bottom(
-                        ratatui::text::Line::from(vec![
-                            Span::styled("─".repeat(area.width as usize), Style::default().fg(border_color)),
-                        ])
-                    ),
+                    .title_bottom(bottom_line),
             )
             .alignment(Alignment::Left);
 

@@ -47,12 +47,10 @@ impl MarkdownCache {
     }
 
     fn compute_hash(content: &str) -> u64 {
-        let mut h: u64 = content.len() as u64;
-        for (i, b) in content.bytes().enumerate() {
-            h = h.wrapping_mul(31).wrapping_add(b as u64);
-            if i > 1024 { break; }
-        }
-        h
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        content.hash(&mut hasher);
+        hasher.finish()
     }
 
     fn get(&self, hash: u64) -> Option<&[Line<'static>]> {
@@ -440,7 +438,7 @@ impl Renderer {
                     let target = if in_table { &mut current_cell_spans } else { &mut inline_spans };
                     target.push(Span::styled(
                         format!("`{code}`"),
-                        Style::default().fg(theme.warning),
+                        Style::default().fg(theme.inline_code).bg(theme.inline_code_bg),
                     ));
                 }
                 Event::Text(text) => {
@@ -684,11 +682,12 @@ fn pad_center(text: &str, width: usize) -> String {
 fn render_code_block_with_border(
     highlighted_lines: &[Line<'static>],
     lang: &str,
-    _blockquote_depth: usize,
+    blockquote_depth: usize,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
     let mut output = Vec::new();
     let border_style = Style::default().fg(theme.border_dim);
+    let bq_prefix = "│ ".repeat(blockquote_depth);
     let lang_label = if lang.is_empty() { "code" } else { lang };
 
     // Parse filename hint from lang string: e.g. "rust:src/main.rs"
@@ -699,13 +698,22 @@ fn render_code_block_with_border(
         (lang_label, None)
     };
 
-    // Title bar: ╭─ rust ─ src/main.rs ─╮
-    let title_content = match filename_hint {
-        Some(fname) => format!(" {display_lang} ─ {fname} "),
-        None => format!(" {display_lang} "),
+    // Title bar: ╭─ rust ─ src/main.rs ─╮  (language label highlighted)
+    let title_line = match filename_hint {
+        Some(fname) => vec![
+            Span::styled(format!("{bq_prefix}╭─ "), border_style),
+            Span::styled(display_lang.to_string(), Style::default().fg(theme.secondary)),
+            Span::styled(" ─ ", border_style),
+            Span::styled(fname.to_string(), Style::default().fg(theme.text_dim)),
+            Span::styled(" ─╮", border_style),
+        ],
+        None => vec![
+            Span::styled(format!("{bq_prefix}╭─ "), border_style),
+            Span::styled(display_lang.to_string(), Style::default().fg(theme.secondary)),
+            Span::styled(" ─╮", border_style),
+        ],
     };
-    let title_bar = format!("╭─{title_content}─╮");
-    output.push(Line::from(Span::styled(title_bar, border_style)));
+    output.push(Line::from(title_line));
 
     let total_lines = highlighted_lines.len();
 
@@ -713,7 +721,7 @@ fn render_code_block_with_border(
         // Show first CODE_FOLD_HEAD lines
         for line in highlighted_lines.iter().take(CODE_FOLD_HEAD) {
             let mut line_spans = vec![
-                Span::styled("│ ".to_string(), border_style),
+                Span::styled(format!("{bq_prefix}│ "), border_style),
             ];
             line_spans.extend(line.spans.iter().map(|s| Span::styled(s.content.to_string(), s.style)));
             output.push(Line::from(line_spans));
@@ -721,17 +729,19 @@ fn render_code_block_with_border(
 
         // Fold indicator
         let folded_count = total_lines.saturating_sub(CODE_FOLD_HEAD).saturating_sub(CODE_FOLD_TAIL);
-        let fold_msg = format!("│   ... {} lines folded ...", folded_count.max(1));
-        output.push(Line::from(Span::styled(
-            fold_msg,
-            Style::default().fg(theme.text_dim).add_modifier(Modifier::ITALIC),
-        )));
+        output.push(Line::from(vec![
+            Span::styled(format!("{bq_prefix}│ "), border_style),
+            Span::styled(
+                format!("... {} lines folded ...", folded_count.max(1)),
+                Style::default().fg(theme.text_dim).add_modifier(Modifier::ITALIC),
+            ),
+        ]));
 
         // Show last CODE_FOLD_TAIL lines
         let tail_start = total_lines.saturating_sub(CODE_FOLD_TAIL);
         for line in &highlighted_lines[tail_start..] {
             let mut line_spans = vec![
-                Span::styled("│ ".to_string(), border_style),
+                Span::styled(format!("{bq_prefix}│ "), border_style),
             ];
             line_spans.extend(line.spans.iter().map(|s| Span::styled(s.content.to_string(), s.style)));
             output.push(Line::from(line_spans));
@@ -740,7 +750,7 @@ fn render_code_block_with_border(
         // Show all lines
         for line in highlighted_lines {
             let mut line_spans = vec![
-                Span::styled("│ ".to_string(), border_style),
+                Span::styled(format!("{bq_prefix}│ "), border_style),
             ];
             line_spans.extend(line.spans.iter().map(|s| Span::styled(s.content.to_string(), s.style)));
             output.push(Line::from(line_spans));
@@ -748,8 +758,10 @@ fn render_code_block_with_border(
     }
 
     // Footer: ╰──────────────────────╯
-    let footer_width = unicode_width::UnicodeWidthStr::width(title_content.as_str()) + 2; // +2 for corners
-    let footer = format!("╰{:─>width$}╯", "", width = footer_width);
+    let label_width = unicode_width::UnicodeWidthStr::width(display_lang)
+        + filename_hint.map(|f| unicode_width::UnicodeWidthStr::width(f) + 3).unwrap_or(0);
+    let footer_width = label_width + 4; // +4 for ── flanking dashes
+    let footer = format!("{bq_prefix}╰{:─>width$}╯", "", width = footer_width);
     output.push(Line::from(Span::styled(footer, border_style)));
 
     output
@@ -906,10 +918,12 @@ pub fn render_diff(diff_text: &str, theme: &Theme) -> Vec<Line<'static>> {
         let trimmed = raw_line.trim_start();
 
         if trimmed.starts_with("@@") {
-            // Hunk header
+            // Hunk header: strip leading @@ prefix and trailing @@ suffix for clean display
+            let inner = trimmed.strip_prefix("@@").unwrap_or(trimmed);
+            let inner = inner.strip_suffix("@@").unwrap_or(inner);
             lines.push(Line::from(vec![
                 Span::styled("@@", Style::default().fg(theme.diff_header).add_modifier(Modifier::BOLD)),
-                Span::styled(trimmed.trim_start_matches('@').trim_start_matches('@').to_string(),
+                Span::styled(inner.to_string(),
                     Style::default().fg(theme.diff_header)),
             ]));
         } else if trimmed.starts_with('+') && !trimmed.starts_with("+++") {

@@ -38,8 +38,17 @@ impl StatusBarWidget {
         let files_info = ctx.sidebar_info.map(|si| (si.modified_files.len(), si.total_additions, si.total_deletions));
         let tools_invoked = ctx.sidebar_info.map(|si| si.tools_invoked);
         let session_duration = ctx.sidebar_info.map(|si| si.session_duration_secs);
+        let status = if let Some(elapsed) = ctx.streaming_elapsed {
+            if elapsed > 0 {
+                format!("{} · {}s", ctx.status, elapsed)
+            } else {
+                ctx.status.to_string()
+            }
+        } else {
+            ctx.status.to_string()
+        };
         Self::render_with_spinner(
-            frame, area, ctx.status, ctx.model, ctx.tokens_used,
+            frame, area, &status, ctx.model, ctx.tokens_used,
             ctx.max_tokens, ctx.cost_usd, ctx.git_branch, ctx.spinner,
             ctx.progress_bar, ctx.theme, ctx.approval_mode, ctx.token_breakdown,
             ctx.diag_counts, ctx.rate_limit, files_info, tools_invoked, session_duration,

@@ -323,7 +323,13 @@ impl ColumnRenderable {
                         }
                     }
                     if let Some(x) = last_content_x {
-                        let cursor_x = (x + 1).min(last_rect.right() - 1);
+                        // Place cursor after last content char, but don't overwrite it at the right edge
+                        let cursor_x = if x + 1 < last_rect.right() {
+                            x + 1
+                        } else {
+                            // Content reaches right edge — skip cursor to avoid overwriting
+                            break;
+                        };
                         if let Some(cell) = buf.cell_mut((cursor_x, y)) {
                             cell.set_symbol("█");
                             cell.set_style(cursor_style);

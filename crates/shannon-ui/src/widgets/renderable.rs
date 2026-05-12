@@ -29,7 +29,7 @@ use ratatui::style::Color;
 /// Braille-dot spinner frames for tool execution animation.
 const TOOL_SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-/// Prepend a colored role gutter `┃ ` to every line for visual lane separation.
+/// Prepend a colored role gutter `▕ ` to every line for visual lane separation.
 fn add_role_gutter(lines: &mut Vec<Line<'static>>, color: ratatui::style::Color) {
     // Only add indicator to the first line
     if let Some(first) = lines.first_mut() {
@@ -127,6 +127,8 @@ pub trait Renderable {
 pub struct MessageCell {
     message: ChatMessage,
     collapsed: bool,
+    /// Whether this message continues from a same-role predecessor (suppresses turn separator).
+    is_continuation: bool,
     /// Cached width (u16::MAX means no cache).
     cached_width: AtomicU16,
     /// Cached height (u16::MAX means no cache).
@@ -140,9 +142,18 @@ impl MessageCell {
         Self {
             message,
             collapsed,
+            is_continuation: false,
             cached_width: AtomicU16::new(u16::MAX),
             cached_height: AtomicU16::new(u16::MAX),
             cached_lines: Mutex::new(None),
+        }
+    }
+
+    /// Mark this cell as a continuation of the same role (suppresses turn separator).
+    pub fn set_continuation(&mut self, val: bool) {
+        if self.is_continuation != val {
+            self.is_continuation = val;
+            self.invalidate_cache();
         }
     }
 
@@ -237,6 +248,14 @@ impl MessageCell {
             ChatRole::Tool => theme.tool_msg,
         };
         let mut lines: Vec<Line<'static>> = Vec::new();
+
+        // ── Turn separator before user messages ──
+        if msg.role == ChatRole::User && !self.is_continuation {
+            lines.push(Line::from(Span::styled(
+                "\u{2500}".repeat(inner_width.min(40)),
+                Style::default().fg(theme.border_dim),
+            )));
+        }
 
         // ── Collapsed tool messages ──
         if msg.role == ChatRole::Tool && (self.collapsed || msg.folded) {
@@ -378,9 +397,12 @@ impl MessageCell {
             };
             let inner_w = unicode_width::UnicodeWidthStr::width(inner.as_str());
             let remaining = border_w.saturating_sub(2 + inner_w).saturating_sub(1);
-            let top = format!("╭{inner}{}╮", "─".repeat(remaining));
+            let top_left = "╭─";
+            let top_right = format!("{}╮", "─".repeat(remaining));
             lines.push(Line::from(vec![
-                Span::styled(top, Style::default().fg(status_color)),
+                Span::styled(top_left.to_string(), Style::default().fg(theme.border)),
+                Span::styled(format!(" {inner}"), Style::default().fg(status_color)),
+                Span::styled(format!(" {top_right}"), Style::default().fg(theme.border)),
             ]));
 
             // Error messages get a red-tinted rendering
@@ -396,7 +418,7 @@ impl MessageCell {
                     }
                 }
                 let bottom = format!("╰{}╯", "─".repeat(border_w.saturating_sub(2)));
-                lines.push(Line::from(Span::styled(bottom, Style::default().fg(status_color))));
+                lines.push(Line::from(Span::styled(bottom, Style::default().fg(theme.border))));
                 add_role_gutter(&mut lines, gutter_color);
                 return lines;
             }
@@ -507,12 +529,13 @@ impl MessageCell {
                         Span::styled(old_ln, Style::default().fg(ln_color).bg(bg)),
                         Span::styled(" ", Style::default().bg(bg)),
                         Span::styled(new_ln, Style::default().fg(ln_color).bg(bg)),
+                        Span::styled(" \u{2502}", Style::default().fg(ln_color).bg(bg)),
                         Span::styled(prefix, Style::default().fg(color).add_modifier(Modifier::BOLD).bg(bg)),
                         Span::styled(text, Style::default().fg(color).bg(bg)),
                     ]));
                 }
                 let bottom = format!("╰{}╯", "─".repeat(border_w.saturating_sub(2)));
-                lines.push(Line::from(Span::styled(bottom, Style::default().fg(status_color))));
+                lines.push(Line::from(Span::styled(bottom, Style::default().fg(theme.border))));
                 add_role_gutter(&mut lines, gutter_color);
                 return lines;
             }
@@ -605,7 +628,7 @@ impl MessageCell {
                     }
                 }
                 let bottom = format!("╰{}╯", "─".repeat(border_w.saturating_sub(2)));
-                lines.push(Line::from(Span::styled(bottom, Style::default().fg(status_color))));
+                lines.push(Line::from(Span::styled(bottom, Style::default().fg(theme.border))));
                 add_role_gutter(&mut lines, gutter_color);
                 return lines;
             }
@@ -650,7 +673,7 @@ impl MessageCell {
                 }
             }
             let bottom = format!("╰{}╯", "─".repeat(border_w.saturating_sub(2)));
-            lines.push(Line::from(Span::styled(bottom, Style::default().fg(status_color))));
+            lines.push(Line::from(Span::styled(bottom, Style::default().fg(theme.border))));
             add_role_gutter(&mut lines, gutter_color);
             return lines;
         }
@@ -840,14 +863,14 @@ impl MessageCell {
                     }
                 }
                 MdSegment::Blockquote(bq_lines) => {
-                    // "  ┃ " = 4 chars prefix with subtle background
+                    // "  │ " = 4 chars prefix with subtle background
                     let bq_width = content_width.saturating_sub(4).max(20);
                     let bq_bg = theme.diff_context_bg;
                     for line in bq_lines {
                         let wrapped = wrap_line(line, bq_width);
                         for wl in wrapped {
                             lines.push(Line::from(vec![
-                                Span::styled("  ┃ ", Style::default().fg(theme.blockquote).bg(bq_bg)),
+                                Span::styled("  \u{2502} ", Style::default().fg(theme.blockquote).bg(bq_bg)),
                                 Span::styled(wl, Style::default().fg(theme.italic_text).add_modifier(Modifier::ITALIC).bg(bq_bg)),
                             ]));
                         }

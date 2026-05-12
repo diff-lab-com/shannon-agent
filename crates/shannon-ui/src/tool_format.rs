@@ -5,7 +5,7 @@
 
 use syntect::easy::HighlightLines;
 use syntect::parsing::SyntaxSet;
-use syntect::highlighting::{ThemeSet, Theme};
+use syntect::highlighting::ThemeSet;
 use syntect::highlighting::FontStyle;
 use syntect::util::LinesWithEndings;
 
@@ -77,16 +77,16 @@ fn is_light_terminal() -> bool {
 /// Lazy-initialized syntax highlighting state
 struct SyntaxHighlight {
     syntax_set: SyntaxSet,
-    theme: Theme,
+    theme_set: ThemeSet,
+    theme_name: String,
 }
 
 impl SyntaxHighlight {
     fn new() -> Self {
         let syntax_set = SyntaxSet::load_defaults_newlines();
         let theme_set = ThemeSet::load_defaults();
-        // Use a dark theme that works well in terminal
-        let theme = theme_set.themes["base16-eighties.dark"].clone();
-        Self { syntax_set, theme }
+        let theme_name = "base16-eighties.dark".to_string();
+        Self { syntax_set, theme_set, theme_name }
     }
 
     fn highlight(&self, code: &str, lang: &str) -> String {
@@ -95,7 +95,9 @@ impl SyntaxHighlight {
             .or_else(|| self.syntax_set.find_syntax_by_extension(lang))
             .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text());
 
-        let mut highlighter = HighlightLines::new(syntax, &self.theme);
+        let theme = self.theme_set.themes.get(&self.theme_name)
+            .unwrap_or_else(|| &self.theme_set.themes["base16-eighties.dark"]);
+        let mut highlighter = HighlightLines::new(syntax, theme);
         let mut output = String::new();
 
         for line in LinesWithEndings::from(code) {

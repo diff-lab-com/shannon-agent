@@ -638,8 +638,8 @@ impl FuzzyPickerWidget {
 
                     content.push(Line::from(vec![
                         Span::styled(
-                            if is_selected { "→ " } else { "  " },
-                            Style::default().fg(theme.warning),
+                            if is_selected { "▸ " } else { "  " },
+                            Style::default().fg(theme.accent),
                         ),
                         Span::styled(
                             &item.label,

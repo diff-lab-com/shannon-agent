@@ -34,8 +34,8 @@ impl ProgressBarWidget {
             title: None,
             progress: 0.0,
             width: None,
-            fill_style: Style::default().fg(Color::Green),
-            empty_style: Style::default().fg(Color::DarkGray),
+            fill_style: Style::default(),
+            empty_style: Style::default(),
             show_percentage: true,
             animated: false,
             animation_frame: 0,
@@ -160,9 +160,9 @@ impl ProgressBarWidget {
             };
 
             let style = if is_filled {
-                self.fill_style
+                Style::default().fg(theme.success)
             } else {
-                self.empty_style
+                Style::default().fg(theme.text_dim)
             };
 
             bar_spans.push(Span::styled(block_char, style));

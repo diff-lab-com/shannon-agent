@@ -224,6 +224,7 @@ impl ChatWidget {
         let index = self.messages.len();
         self.messages.push_back(message.clone());
         self.column.push(super::renderable::MessageCell::new(message, self.collapsed_tools));
+        self.mark_continuation(self.messages.back().unwrap().role);
 
         // Auto-scroll to bottom
         if !self.messages.is_empty() {
@@ -260,6 +261,7 @@ impl ChatWidget {
         let index = self.messages.len();
         self.messages.push_back(message.clone());
         self.column.push(super::renderable::MessageCell::new(message, self.collapsed_tools));
+        self.mark_continuation(self.messages.back().unwrap().role);
 
         if !self.messages.is_empty() {
             self.scroll_offset = self.messages.len() - 1;
@@ -330,6 +332,7 @@ impl ChatWidget {
         let index = self.messages.len();
         self.messages.push_back(message.clone());
         self.column.push(super::renderable::MessageCell::new(message, self.collapsed_tools));
+        self.mark_continuation(ChatRole::Tool);
         if !self.messages.is_empty() {
             self.scroll_offset = self.messages.len() - 1;
         }
@@ -696,6 +699,18 @@ impl ChatWidget {
             }
         }
         matches
+    }
+
+    /// Set continuation flag on the last-pushed cell based on previous message role.
+    fn mark_continuation(&mut self, current_role: ChatRole) {
+        let idx = self.messages.len().saturating_sub(1);
+        if idx == 0 { return; }
+        let prev_is_same_role = self.messages.get(idx - 1).map(|m| m.role == current_role).unwrap_or(false);
+        if prev_is_same_role {
+            if let Some(cell) = self.column.get_mut(idx) {
+                cell.set_continuation(true);
+            }
+        }
     }
 
     /// Get the number of messages

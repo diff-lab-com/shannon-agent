@@ -531,7 +531,7 @@ impl SidebarWidget {
                             "running" => theme.success,
                             "spawning" => theme.warning,
                             "idle" => theme.muted,
-                            "completed" => theme.secondary,
+                            "completed" => theme.success,
                             s if s.starts_with("failed") => theme.error,
                             _ => theme.text_dim,
                         };
