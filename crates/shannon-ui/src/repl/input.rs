@@ -416,6 +416,12 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
             update_auto_completions(repl);
             Ok(())
         }
+        // Ctrl+W: kill word before cursor (readline convention)
+        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            repl.prompt.kill_word_back();
+            update_auto_completions(repl);
+            Ok(())
+        }
         // Ctrl+A: move to start of line (readline convention)
         KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             let col = repl.prompt.cursor_position();
@@ -679,6 +685,31 @@ fn handle_vim_action(repl: &mut Repl, action: VimAction) {
             if !yanked.is_empty() {
                 repl.vim_handler.set_yank_buffer(yanked);
             }
+        }
+        VimAction::ChangeWord { count } => {
+            let mut deleted = String::new();
+            for _ in 0..count {
+                let word = repl.prompt.current_word();
+                if word.is_empty() { break; }
+                deleted.push_str(&word);
+                for _ in 0..word.chars().count() {
+                    repl.prompt.delete_forward();
+                }
+            }
+            if !deleted.is_empty() {
+                repl.vim_handler.set_yank_buffer(deleted);
+            }
+        }
+        VimAction::ChangeLine { count } => {
+            let mut deleted = String::new();
+            for _ in 0..count {
+                let line = repl.prompt.delete_current_line();
+                if !line.is_empty() {
+                    if !deleted.is_empty() { deleted.push('\n'); }
+                    deleted.push_str(&line);
+                }
+            }
+            repl.vim_handler.set_yank_buffer(deleted);
         }
         VimAction::Quit => {
             repl.running = false;

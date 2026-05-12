@@ -117,6 +117,10 @@ pub enum VimAction {
     DeleteWord { count: usize },
     /// Yank (copy) word(s) into buffer
     YankWord { count: usize },
+    /// Change word(s) — delete and enter insert mode
+    ChangeWord { count: usize },
+    /// Change line(s) — delete and enter insert mode
+    ChangeLine { count: usize },
     /// Set a mark at current position
     SetMark { mark: char },
     /// Jump to a mark position
@@ -360,6 +364,18 @@ impl VimHandler {
                         }
                         "yw" => {
                             let action = VimAction::YankWord { count };
+                            self.reset_transient();
+                            return action;
+                        }
+                        "cw" => {
+                            let action = VimAction::ChangeWord { count };
+                            self.set_mode(VimMode::Insert);
+                            self.reset_transient();
+                            return action;
+                        }
+                        "cc" => {
+                            let action = VimAction::ChangeLine { count };
+                            self.set_mode(VimMode::Insert);
                             self.reset_transient();
                             return action;
                         }

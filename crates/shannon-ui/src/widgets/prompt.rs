@@ -87,6 +87,11 @@ impl PromptWidget {
         self.buffer.kill_to_start()
     }
 
+    /// Kill the word before the cursor. Returns killed text.
+    pub fn kill_word_back(&mut self) -> String {
+        self.buffer.kill_word_back()
+    }
+
     /// Delete the current line and return its content.
     pub fn delete_current_line(&mut self) -> String {
         self.buffer.delete_current_line()

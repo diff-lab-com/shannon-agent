@@ -505,6 +505,37 @@ impl InputBuffer {
         killed
     }
 
+    /// Kill the word before the cursor (Ctrl+W / Alt+Backspace behavior).
+    /// Returns the killed text.
+    pub fn kill_word_back(&mut self) -> String {
+        if self.cursor_row >= self.lines.len() || self.cursor_col == 0 {
+            return String::new();
+        }
+        let chars: Vec<char> = self.lines[self.cursor_row].chars().collect();
+        let mut end = self.cursor_col;
+        // Skip trailing whitespace
+        while end > 0 && chars[end - 1].is_whitespace() {
+            end -= 1;
+        }
+        // Skip word characters
+        let at_word = end > 0 && (chars[end - 1].is_alphanumeric() || chars[end - 1] == '_');
+        if at_word {
+            while end > 0 && (chars[end - 1].is_alphanumeric() || chars[end - 1] == '_') {
+                end -= 1;
+            }
+        } else {
+            while end > 0 && !chars[end - 1].is_alphanumeric() && chars[end - 1] != '_' && !chars[end - 1].is_whitespace() {
+                end -= 1;
+            }
+        }
+        let killed: String = chars[end..self.cursor_col].iter().collect();
+        let before: String = chars[..end].iter().collect();
+        let after: String = chars[self.cursor_col..].iter().collect();
+        self.lines[self.cursor_row] = format!("{before}{after}");
+        self.cursor_col = end;
+        killed
+    }
+
     /// Delete the current line and return its content. Cursor moves to
     /// the start of the next line, or the end of the previous line if
     /// deleting the last line. If only one line exists, clears it.
