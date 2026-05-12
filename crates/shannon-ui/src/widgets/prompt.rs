@@ -369,28 +369,41 @@ impl PromptWidget {
         });
         // Build key hint line for bottom border
         let w = area.width as usize;
-        // Pre-measure hint content width
-        let hint_content = " Enter=Send │ PgUp/Dn=History │ Ctrl+E=Editor │ Tab=Complete ";
-        let hint_w = unicode_width::UnicodeWidthStr::width(hint_content);
+        let is_insert = self.vim_mode == "INSERT";
+        let hint_w = if is_insert {
+            unicode_width::UnicodeWidthStr::width(" Enter=Send │ PgUp/Dn=History │ Ctrl+E=Editor │ Tab=Complete ")
+        } else {
+            unicode_width::UnicodeWidthStr::width(" dd=DelLine │ yy=Yank │ p=Paste │ / =Search │ i=Insert ")
+        };
         let bottom_line = if w > hint_w + 4 {
             let pad = w - hint_w;
             let left_pad = pad / 2;
             let right_pad = pad - left_pad;
-            ratatui::text::Line::from(vec![
+            let sep = Span::styled(" \u{2502} ", Style::default().fg(theme.border_dim));
+            let dim = |t: &str| Span::styled(t.to_string(), Style::default().fg(theme.text_dim));
+            let key = |t: &str| Span::styled(t.to_string(), Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD));
+
+            let mut spans: Vec<Span<'static>> = vec![
                 Span::styled("─".repeat(left_pad), Style::default().fg(border_color)),
-                Span::styled(" Enter", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
-                Span::styled("=Send", Style::default().fg(theme.text_dim)),
-                Span::styled(" \u{2502} ", Style::default().fg(theme.border_dim)),
-                Span::styled("PgUp/Dn", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
-                Span::styled("=History", Style::default().fg(theme.text_dim)),
-                Span::styled(" \u{2502} ", Style::default().fg(theme.border_dim)),
-                Span::styled("Ctrl+E", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
-                Span::styled("=Editor", Style::default().fg(theme.text_dim)),
-                Span::styled(" \u{2502} ", Style::default().fg(theme.border_dim)),
-                Span::styled("Tab", Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD)),
-                Span::styled("=Complete ", Style::default().fg(theme.text_dim)),
-                Span::styled("─".repeat(right_pad), Style::default().fg(border_color)),
-            ])
+            ];
+            if is_insert {
+                spans.extend_from_slice(&[
+                    key(" Enter"), dim("=Send"), sep.clone(),
+                    key("PgUp/Dn"), dim("=History"), sep.clone(),
+                    key("Ctrl+E"), dim("=Editor"), sep.clone(),
+                    key("Tab"), dim("=Complete "),
+                ]);
+            } else {
+                spans.extend_from_slice(&[
+                    key(" dd"), dim("=DelLine"), sep.clone(),
+                    key("yy"), dim("=Yank"), sep.clone(),
+                    key("p"), dim("=Paste"), sep.clone(),
+                    key("/"), dim("=Search"), sep.clone(),
+                    key("i"), dim("=Insert "),
+                ]);
+            }
+            spans.push(Span::styled("─".repeat(right_pad), Style::default().fg(border_color)));
+            ratatui::text::Line::from(spans)
         } else {
             ratatui::text::Line::from(vec![
                 Span::styled("─".repeat(w), Style::default().fg(border_color)),

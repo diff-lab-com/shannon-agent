@@ -321,6 +321,11 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
             repl.cycle_view_mode();
             Ok(())
         }
+        // Ctrl+L: clear screen / force full redraw
+        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::Clear(crossterm::terminal::ClearType::All));
+            Ok(())
+        }
         // Alt+F: toggle all tool messages collapsed/expanded
         KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::ALT) => {
             repl.chat.collapsed_tools = !repl.chat.collapsed_tools;
