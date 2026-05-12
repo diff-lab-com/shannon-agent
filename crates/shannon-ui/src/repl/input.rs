@@ -5,7 +5,7 @@ use crate::{
     Result,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
-use crate::vim::{Direction, VimAction};
+use crate::vim::{Direction, VimAction, TextObjectScope, TextObject};
 use rust_i18n::t;
 
 use super::Repl;
@@ -370,10 +370,13 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
             repl.toggle_pager();
             Ok(())
         }
-        // Ctrl+W: close current session tab
+        // Ctrl+W: close session tab (if visible) or kill word back (readline)
         KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             if repl.state.session_tab.visible {
                 repl.state.session_tab.close_session();
+            } else {
+                repl.prompt.kill_word_back();
+                update_auto_completions(repl);
             }
             Ok(())
         }
@@ -416,12 +419,6 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
             update_auto_completions(repl);
             Ok(())
         }
-        // Ctrl+W: kill word before cursor (readline convention)
-        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            repl.prompt.kill_word_back();
-            update_auto_completions(repl);
-            Ok(())
-        }
         // Ctrl+A: move to start of line (readline convention)
         KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             let col = repl.prompt.cursor_position();
@@ -430,6 +427,12 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
         }
         KeyCode::Char(c) => {
             repl.prompt.add_char(c);
+            update_auto_completions(repl);
+            Ok(())
+        }
+        // Alt+Backspace: kill word back (readline convention)
+        KeyCode::Backspace if key.modifiers.contains(KeyModifiers::ALT) => {
+            repl.prompt.kill_word_back();
             update_auto_completions(repl);
             Ok(())
         }
@@ -545,6 +548,18 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
 }
 
 /// Handle vim actions produced by the VimHandler
+/// Map a TextObject enum to its target character for InputBuffer methods.
+fn text_object_target(obj: TextObject) -> char {
+    match obj {
+        TextObject::Word => 'w',
+        TextObject::DoubleQuote => '"',
+        TextObject::SingleQuote => '\'',
+        TextObject::Paren => '(',
+        TextObject::Bracket => '[',
+        TextObject::Brace => '{',
+    }
+}
+
 fn handle_vim_action(repl: &mut Repl, action: VimAction) {
     match action {
         VimAction::YankLine { count } => {
@@ -713,6 +728,48 @@ fn handle_vim_action(repl: &mut Repl, action: VimAction) {
         }
         VimAction::Quit => {
             repl.running = false;
+        }
+        VimAction::DeleteTextObject { scope, object, count } => {
+            let inner = matches!(scope, TextObjectScope::Inner);
+            let target = text_object_target(object);
+            let mut all_deleted = String::new();
+            for _ in 0..count {
+                if let Some((start, end)) = repl.prompt.find_text_object_range(inner, target) {
+                    let deleted = repl.prompt.delete_col_range(start, end);
+                    all_deleted.push_str(&deleted);
+                } else {
+                    break;
+                }
+            }
+            if !all_deleted.is_empty() {
+                repl.vim_handler.set_yank_buffer(all_deleted);
+            }
+        }
+        VimAction::ChangeTextObject { scope, object, count } => {
+            let inner = matches!(scope, TextObjectScope::Inner);
+            let target = text_object_target(object);
+            let mut all_deleted = String::new();
+            for _ in 0..count {
+                if let Some((start, end)) = repl.prompt.find_text_object_range(inner, target) {
+                    let deleted = repl.prompt.delete_col_range(start, end);
+                    all_deleted.push_str(&deleted);
+                } else {
+                    break;
+                }
+            }
+            if !all_deleted.is_empty() {
+                repl.vim_handler.set_yank_buffer(all_deleted);
+            }
+        }
+        VimAction::YankTextObject { scope, object, count: _ } => {
+            let inner = matches!(scope, TextObjectScope::Inner);
+            let target = text_object_target(object);
+            if let Some((start, end)) = repl.prompt.find_text_object_range(inner, target) {
+                let text = repl.prompt.text_at_cols(start, end);
+                if !text.is_empty() {
+                    repl.vim_handler.set_yank_buffer(text);
+                }
+            }
         }
         _ => {}
     }

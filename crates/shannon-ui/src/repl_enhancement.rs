@@ -536,6 +536,90 @@ impl InputBuffer {
         killed
     }
 
+    /// Find the column range of a text object on the current line.
+    /// Returns `(start_col, end_col)` where end_col is exclusive.
+    pub fn find_text_object_range(&self, inner: bool, target: char) -> Option<(usize, usize)> {
+        let line = self.current_line();
+        let col = self.cursor_col;
+        let chars: Vec<char> = line.chars().collect();
+        let len = chars.len();
+        if len == 0 { return None; }
+        let col = col.min(len.saturating_sub(1));
+
+        match target {
+            'w' => {
+                let is_word = |c: char| c.is_alphanumeric() || c == '_';
+                if is_word(chars[col]) {
+                    let mut start = col;
+                    while start > 0 && is_word(chars[start - 1]) { start -= 1; }
+                    let mut end = col + 1;
+                    while end < len && is_word(chars[end]) { end += 1; }
+                    if inner {
+                        Some((start, end))
+                    } else {
+                        let mut ae = end;
+                        while ae < len && chars[ae].is_whitespace() { ae += 1; }
+                        if ae == end && start > 0 {
+                            let mut as_ = start;
+                            while as_ > 0 && chars[as_ - 1].is_whitespace() { as_ -= 1; }
+                            Some((as_, end))
+                        } else {
+                            Some((start, ae))
+                        }
+                    }
+                } else if chars[col].is_whitespace() {
+                    let mut start = col;
+                    while start > 0 && chars[start - 1].is_whitespace() { start -= 1; }
+                    let mut end = col + 1;
+                    while end < len && chars[end].is_whitespace() { end += 1; }
+                    Some((start, end))
+                } else {
+                    let mut start = col;
+                    while start > 0 && !is_word(chars[start - 1]) && !chars[start - 1].is_whitespace() { start -= 1; }
+                    let mut end = col + 1;
+                    while end < len && !is_word(chars[end]) && !chars[end].is_whitespace() { end += 1; }
+                    Some((start, end))
+                }
+            }
+            '"' | '\'' => {
+                let quote = target;
+                let open = (0..=col).rev().find(|&i| chars[i] == quote)?;
+                let close = (open + 1..len).find(|&i| chars[i] == quote)?;
+                if inner { Some((open + 1, close)) } else { Some((open, close + 1)) }
+            }
+            '(' | ')' => find_matching_brackets(&chars, col, '(', ')', inner),
+            '[' | ']' => find_matching_brackets(&chars, col, '[', ']', inner),
+            '{' | '}' => find_matching_brackets(&chars, col, '{', '}', inner),
+            _ => None,
+        }
+    }
+
+    /// Delete characters from `start` to `end` (exclusive) on the current line.
+    /// Moves cursor to `start` first. Returns the deleted text.
+    pub fn delete_col_range(&mut self, start: usize, end: usize) -> String {
+        let col = self.cursor_col;
+        if col > start {
+            for _ in 0..(col - start) { self.move_left(); }
+        } else if col < start {
+            for _ in 0..(start - col) { self.move_right(); }
+        }
+        let line = self.current_line();
+        let chars: Vec<char> = line.chars().collect();
+        let end = end.min(chars.len());
+        if start >= end { return String::new(); }
+        let deleted: String = chars[start..end].iter().collect();
+        let count = end - start;
+        for _ in 0..count { self.delete(); }
+        deleted
+    }
+
+    /// Get text at column range on current line (no deletion).
+    pub fn text_at_cols(&self, start: usize, end: usize) -> String {
+        let line = self.current_line();
+        let chars: Vec<char> = line.chars().collect();
+        chars[start..end.min(chars.len())].iter().collect()
+    }
+
     /// Delete the current line and return its content. Cursor moves to
     /// the start of the next line, or the end of the previous line if
     /// deleting the last line. If only one line exists, clears it.
@@ -651,6 +735,23 @@ impl InputBuffer {
     pub fn set_auto_indent(&mut self, enabled: bool) {
         self.auto_indent = enabled;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Text object helpers
+// ---------------------------------------------------------------------------
+
+/// Find matching bracket pair on a single line.
+fn find_matching_brackets(chars: &[char], col: usize, open: char, close: char, inner: bool) -> Option<(usize, usize)> {
+    let limit = col.min(chars.len().saturating_sub(1));
+    let bracket_open = (0..=limit).rev().find(|&i| chars[i] == open)?;
+    let mut depth = 1;
+    let bracket_close = (bracket_open + 1..chars.len()).find(|&i| {
+        if chars[i] == open { depth += 1; }
+        if chars[i] == close { depth -= 1; }
+        depth == 0
+    })?;
+    if inner { Some((bracket_open + 1, bracket_close)) } else { Some((bracket_open, bracket_close + 1)) }
 }
 
 // ---------------------------------------------------------------------------

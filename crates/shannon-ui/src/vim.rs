@@ -58,6 +58,24 @@ pub enum ScrollDirection {
     FullPageDown,
 }
 
+/// Scope for text objects (inner vs around)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextObjectScope {
+    Inner,
+    Around,
+}
+
+/// Target for text objects
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextObject {
+    Word,
+    DoubleQuote,
+    SingleQuote,
+    Paren,
+    Bracket,
+    Brace,
+}
+
 /// Resulting action from processing a key sequence
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VimAction {
@@ -125,6 +143,12 @@ pub enum VimAction {
     SetMark { mark: char },
     /// Jump to a mark position
     JumpToMark { mark: char },
+    /// Delete a text object (e.g., diw, di")
+    DeleteTextObject { scope: TextObjectScope, object: TextObject, count: usize },
+    /// Change a text object (e.g., ciw, ci") — delete and enter insert
+    ChangeTextObject { scope: TextObjectScope, object: TextObject, count: usize },
+    /// Yank a text object (e.g., yiw, yi")
+    YankTextObject { scope: TextObjectScope, object: TextObject, count: usize },
 }
 
 /// Vim key handler state machine
@@ -379,6 +403,10 @@ impl VimHandler {
                             self.reset_transient();
                             return action;
                         }
+                        // Text object prefixes — wait for 3rd char
+                        "ci" | "di" | "yi" | "ca" | "da" | "ya" => {
+                            return VimAction::None;
+                        }
                         _ => {
                             // Unknown 2-char sequence, reset
                             self.reset_transient();
@@ -532,7 +560,7 @@ impl VimHandler {
                             return VimAction::EnterCommandMode;
                         }
                         // Keys that start two-char sequences: wait for next key
-                        'd' | 'y' | 'g' => {
+                        'd' | 'y' | 'g' | 'c' => {
                             // Don't reset -- keep pending_keys for the next keystroke
                             return VimAction::None;
                         }
@@ -544,10 +572,43 @@ impl VimHandler {
                     }
                 }
 
-                // If we get here with a 2-char pending that didn't match,
-                // the first char was probably a motion and the second is new.
+                // 3-char sequences: text objects like ciw, di", ya(
                 if seq.len() >= 3 {
-                    // Too long, reset
+                    let bytes = seq.as_bytes();
+                    if bytes.len() == 3 {
+                        let op = bytes[0];
+                        let scope_ch = bytes[1];
+                        let obj_ch = bytes[2];
+                        if matches!(scope_ch, b'i' | b'a') {
+                            let scope = if scope_ch == b'i' {
+                                TextObjectScope::Inner
+                            } else {
+                                TextObjectScope::Around
+                            };
+                            let obj = match obj_ch {
+                                b'w' => Some(TextObject::Word),
+                                b'"' => Some(TextObject::DoubleQuote),
+                                b'\'' => Some(TextObject::SingleQuote),
+                                b'(' | b')' => Some(TextObject::Paren),
+                                b'[' | b']' => Some(TextObject::Bracket),
+                                b'{' | b'}' => Some(TextObject::Brace),
+                                _ => None,
+                            };
+                            if let Some(object) = obj {
+                                let count = self.parsed_count();
+                                self.reset_transient();
+                                return match op {
+                                    b'c' => {
+                                        self.set_mode(VimMode::Insert);
+                                        VimAction::ChangeTextObject { scope, object, count }
+                                    }
+                                    b'd' => VimAction::DeleteTextObject { scope, object, count },
+                                    b'y' => VimAction::YankTextObject { scope, object, count },
+                                    _ => VimAction::None,
+                                };
+                            }
+                        }
+                    }
                     self.reset_transient();
                     return VimAction::None;
                 }

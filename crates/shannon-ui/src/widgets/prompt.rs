@@ -92,6 +92,21 @@ impl PromptWidget {
         self.buffer.kill_word_back()
     }
 
+    /// Find the column range of a text object on the current line.
+    pub fn find_text_object_range(&self, inner: bool, target: char) -> Option<(usize, usize)> {
+        self.buffer.find_text_object_range(inner, target)
+    }
+
+    /// Delete characters in a column range on the current line.
+    pub fn delete_col_range(&mut self, start: usize, end: usize) -> String {
+        self.buffer.delete_col_range(start, end)
+    }
+
+    /// Get text at column range on current line (no deletion).
+    pub fn text_at_cols(&self, start: usize, end: usize) -> String {
+        self.buffer.text_at_cols(start, end)
+    }
+
     /// Delete the current line and return its content.
     pub fn delete_current_line(&mut self) -> String {
         self.buffer.delete_current_line()
