@@ -261,6 +261,7 @@ impl Renderer {
         // Track bold/emphasis state for inline styling
         let mut strong_depth: usize = 0;
         let mut emphasis_depth: usize = 0;
+        let mut link_depth: usize = 0;
 
         for event in parser {
             match event {
@@ -407,6 +408,7 @@ impl Renderer {
                     current_row_cells.push(std::mem::take(&mut current_cell_spans));
                 }
                 Event::Start(Tag::Link { dest_url, .. }) => {
+                    link_depth += 1;
                     // OSC 8 hyperlink open sequence
                     inline_spans.push(Span::styled(
                         format!("\x1b]8;;{dest_url}\x1b\\"),
@@ -414,6 +416,7 @@ impl Renderer {
                     ));
                 }
                 Event::End(TagEnd::Link) => {
+                    link_depth = link_depth.saturating_sub(1);
                     // OSC 8 hyperlink close sequence
                     inline_spans.push(Span::styled(
                         "\x1b]8;;\x1b\\".to_string(),
@@ -458,8 +461,11 @@ impl Renderer {
                         if emphasis_depth > 0 {
                             style = style.add_modifier(Modifier::ITALIC);
                         }
-                        // Dim text inside blockquotes
-                        if blockquote_depth > 0 {
+                        if link_depth > 0 {
+                            style = style.fg(theme.link).add_modifier(Modifier::UNDERLINED);
+                        }
+                        // Dim text inside blockquotes (but preserve link color)
+                        if blockquote_depth > 0 && link_depth == 0 {
                             style = style.fg(theme.text_dim);
                         }
 
