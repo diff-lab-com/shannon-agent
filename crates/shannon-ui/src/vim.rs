@@ -1693,4 +1693,174 @@ mod tests {
         assert_eq!(handler.get_mark('x'), Some(&42));
         assert_eq!(handler.get_mark('z'), None);
     }
+
+    // ── Text objects ──────────────────────────────────────────
+
+    #[test]
+    fn test_ciw_changes_inner_word() {
+        let mut handler = VimHandler::new();
+        let a = handler.process_key(char_key('c'));
+        assert_eq!(a, VimAction::None); // prefix, waiting
+        let b = handler.process_key(char_key('i'));
+        assert_eq!(b, VimAction::None); // text object prefix, waiting
+        let action = handler.process_key(char_key('w'));
+        assert_eq!(action, VimAction::ChangeTextObject {
+            scope: TextObjectScope::Inner,
+            object: TextObject::Word,
+            count: 1,
+        });
+        assert_eq!(handler.mode(), VimMode::Insert);
+    }
+
+    #[test]
+    fn test_diw_deletes_inner_word() {
+        let mut handler = VimHandler::new();
+        handler.process_key(char_key('d'));
+        handler.process_key(char_key('i'));
+        let action = handler.process_key(char_key('w'));
+        assert_eq!(action, VimAction::DeleteTextObject {
+            scope: TextObjectScope::Inner,
+            object: TextObject::Word,
+            count: 1,
+        });
+        assert_eq!(handler.mode(), VimMode::Normal);
+    }
+
+    #[test]
+    fn test_yiw_yanks_inner_word() {
+        let mut handler = VimHandler::new();
+        handler.process_key(char_key('y'));
+        handler.process_key(char_key('i'));
+        let action = handler.process_key(char_key('w'));
+        assert_eq!(action, VimAction::YankTextObject {
+            scope: TextObjectScope::Inner,
+            object: TextObject::Word,
+            count: 1,
+        });
+    }
+
+    #[test]
+    fn test_caw_changes_around_word() {
+        let mut handler = VimHandler::new();
+        handler.process_key(char_key('c'));
+        handler.process_key(char_key('a'));
+        let action = handler.process_key(char_key('w'));
+        assert_eq!(action, VimAction::ChangeTextObject {
+            scope: TextObjectScope::Around,
+            object: TextObject::Word,
+            count: 1,
+        });
+        assert_eq!(handler.mode(), VimMode::Insert);
+    }
+
+    #[test]
+    fn test_ci_double_quote() {
+        let mut handler = VimHandler::new();
+        handler.process_key(char_key('c'));
+        handler.process_key(char_key('i'));
+        let action = handler.process_key(char_key('"'));
+        assert_eq!(action, VimAction::ChangeTextObject {
+            scope: TextObjectScope::Inner,
+            object: TextObject::DoubleQuote,
+            count: 1,
+        });
+    }
+
+    #[test]
+    fn test_ci_paren() {
+        let mut handler = VimHandler::new();
+        handler.process_key(char_key('c'));
+        handler.process_key(char_key('i'));
+        let action = handler.process_key(char_key('('));
+        assert_eq!(action, VimAction::ChangeTextObject {
+            scope: TextObjectScope::Inner,
+            object: TextObject::Paren,
+            count: 1,
+        });
+    }
+
+    #[test]
+    fn test_da_brace() {
+        let mut handler = VimHandler::new();
+        handler.process_key(char_key('d'));
+        handler.process_key(char_key('a'));
+        let action = handler.process_key(char_key('{'));
+        assert_eq!(action, VimAction::DeleteTextObject {
+            scope: TextObjectScope::Around,
+            object: TextObject::Brace,
+            count: 1,
+        });
+    }
+
+    #[test]
+    fn test_yi_single_quote() {
+        let mut handler = VimHandler::new();
+        handler.process_key(char_key('y'));
+        handler.process_key(char_key('i'));
+        let action = handler.process_key(char_key('\''));
+        assert_eq!(action, VimAction::YankTextObject {
+            scope: TextObjectScope::Inner,
+            object: TextObject::SingleQuote,
+            count: 1,
+        });
+    }
+
+    #[test]
+    fn test_c_prefix_keeps_pending() {
+        let mut handler = VimHandler::new();
+        let a = handler.process_key(char_key('c'));
+        assert_eq!(a, VimAction::None); // should NOT reset, waiting for next key
+        let action = handler.process_key(char_key('w'));
+        assert_eq!(action, VimAction::ChangeWord { count: 1 });
+        assert_eq!(handler.mode(), VimMode::Insert);
+    }
+
+    #[test]
+    fn test_cc_changes_line() {
+        let mut handler = VimHandler::new();
+        handler.process_key(char_key('c'));
+        let action = handler.process_key(char_key('c'));
+        assert_eq!(action, VimAction::ChangeLine { count: 1 });
+        assert_eq!(handler.mode(), VimMode::Insert);
+    }
+
+    #[test]
+    fn test_unknown_text_object_resets() {
+        let mut handler = VimHandler::new();
+        handler.process_key(char_key('c'));
+        handler.process_key(char_key('i'));
+        let action = handler.process_key(char_key('z')); // invalid object
+        assert_eq!(action, VimAction::None);
+        // Verify state is reset (next key should work)
+        let next = handler.process_key(char_key('i'));
+        assert_eq!(next, VimAction::EnterInsertMode);
+    }
+
+    #[test]
+    fn test_count_text_object() {
+        let mut handler = VimHandler::new();
+        handler.process_key(char_key('3'));
+        handler.process_key(char_key('d'));
+        handler.process_key(char_key('i'));
+        let action = handler.process_key(char_key('w'));
+        assert_eq!(action, VimAction::DeleteTextObject {
+            scope: TextObjectScope::Inner,
+            object: TextObject::Word,
+            count: 3,
+        });
+    }
+
+    #[test]
+    fn test_di_bracket_alias() {
+        let mut handler = VimHandler::new();
+        handler.process_key(char_key('d'));
+        handler.process_key(char_key('i'));
+        // Both [ and ] should match bracket
+        let action = handler.process_key(char_key(']'));
+        assert_eq!(action, VimAction::DeleteTextObject {
+            scope: TextObjectScope::Inner,
+            object: TextObject::Bracket,
+            count: 1,
+        });
+    }
 }
