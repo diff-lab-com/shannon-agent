@@ -155,19 +155,33 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         // Overlay toast notification if active
         let toast_visible = state.toast.is_some();
         if let Some((ref msg, _started)) = state.toast {
-            let toast_text = format!(" {msg} ");
-            let toast_width = unicode_width::UnicodeWidthStr::width(toast_text.as_str()) as u16;
-            let y = f.area().bottom().saturating_sub(5);
+            let theme = &state.theme;
+            let inner = format!(" {msg} ");
+            let inner_w = unicode_width::UnicodeWidthStr::width(inner.as_str()) as u16;
+            let total_w = inner_w.saturating_add(2).min(f.area().width.saturating_sub(2));
+            let y = f.area().bottom().saturating_sub(6);
             let x = f.area().x + 1;
-            let toast_area = ratatui::layout::Rect {
-                x,
-                y,
-                width: toast_width.min(f.area().width.saturating_sub(2)),
-                height: 1,
-            };
-            let toast = Paragraph::new(toast_text)
-                .style(ratatui::style::Style::default().fg(state.theme.text).bg(state.theme.accent));
-            f.render_widget(toast, toast_area);
+
+            // Top border
+            let top = format!("╭{}╮", "─".repeat(total_w.saturating_sub(2) as usize));
+            f.render_widget(
+                Paragraph::new(top).style(ratatui::style::Style::default().fg(theme.accent)),
+                ratatui::layout::Rect { x, y, width: total_w, height: 1 },
+            );
+            // Content line with side borders
+            let content_area = ratatui::layout::Rect { x, y: y + 1, width: total_w, height: 1 };
+            let content_line = ratatui::text::Line::from(vec![
+                ratatui::text::Span::styled("│", ratatui::style::Style::default().fg(theme.accent)),
+                ratatui::text::Span::styled(inner.clone(), ratatui::style::Style::default().fg(theme.text).bg(theme.accent)),
+                ratatui::text::Span::styled("│", ratatui::style::Style::default().fg(theme.accent)),
+            ]);
+            f.render_widget(Paragraph::new(content_line), content_area);
+            // Bottom border
+            let bottom = format!("╰{}╯", "─".repeat(total_w.saturating_sub(2) as usize));
+            f.render_widget(
+                Paragraph::new(bottom).style(ratatui::style::Style::default().fg(theme.accent)),
+                ratatui::layout::Rect { x, y: y + 2, width: total_w, height: 1 },
+            );
         }
 
         // Streaming queue hint — show "Enter=queue" near the prompt when streaming
@@ -798,7 +812,7 @@ fn render_onboarding_overlay(
     theme: &Theme,
 ) {
     let dialog_width = 60.min(area.width.saturating_sub(4));
-    let dialog_height = 31.min(area.height.saturating_sub(4));
+    let dialog_height = 40.min(area.height.saturating_sub(4));
     let x = (area.width.saturating_sub(dialog_width)) / 2;
     let y = (area.height.saturating_sub(dialog_height)) / 2;
     let dialog_area = Rect {
@@ -815,13 +829,41 @@ fn render_onboarding_overlay(
 
     let sep_width = dialog_width as usize - 4;
     let content_lines = vec![
+        // ASCII art logo
         Line::from(Span::styled(
-            " Welcome to Shannon Code",
-            Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
+            "  ____  _   _  ____      _       ",
+            Style::default().fg(theme.primary),
+        )),
+        Line::from(Span::styled(
+            " / ___|| | | |/ ___| ___| |_ ___ ",
+            Style::default().fg(theme.primary),
+        )),
+        Line::from(Span::styled(
+            " \\___ \\| |_| | |    / _ \\ __/ __|",
+            Style::default().fg(theme.primary),
+        )),
+        Line::from(Span::styled(
+            "  ___) |  _  | |___|  __/ |_\\__ \\",
+            Style::default().fg(theme.primary),
+        )),
+        Line::from(Span::styled(
+            " |____/|_| |_|\\____|\\___|\\__|___/",
+            Style::default().fg(theme.primary),
         )),
         Line::from(""),
-        Line::from(Span::styled(" Essential Keybindings", Style::default().fg(theme.text_dim))),
-        Line::from("─".repeat(sep_width)),
+        Line::from(Span::styled(
+            "  Rust-based AI code assistant with multi-provider support",
+            Style::default().fg(theme.text_dim),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            " \u{2328} Keybindings",
+            Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            format!(" {}", "─".repeat(sep_width)),
+            Style::default().fg(theme.border_dim),
+        )),
         Line::from(vec![Span::styled("  Enter           ", accent_style), Span::styled("Send message", text_style)]),
         Line::from(vec![Span::styled("  Ctrl+E          ", accent_style), Span::styled("Open external editor", text_style)]),
         Line::from(vec![Span::styled("  Ctrl+F          ", accent_style), Span::styled("Toggle focus mode", text_style)]),
@@ -833,22 +875,34 @@ fn render_onboarding_overlay(
         Line::from(vec![Span::styled("  Tab             ", accent_style), Span::styled("Autocomplete suggestions", text_style)]),
         Line::from(vec![Span::styled("  Esc             ", accent_style), Span::styled("Cancel / close dialog", text_style)]),
         Line::from(""),
-        Line::from(Span::styled(" Commands (type in prompt)", Style::default().fg(theme.text_dim))),
-        Line::from("─".repeat(sep_width)),
+        Line::from(Span::styled(
+            " \u{2318} Commands",
+            Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            format!(" {}", "─".repeat(sep_width)),
+            Style::default().fg(theme.border_dim),
+        )),
         Line::from(vec![Span::styled("  /help           ", accent_style), Span::styled("Show all commands", text_style)]),
         Line::from(vec![Span::styled("  /model          ", accent_style), Span::styled("Switch AI model", text_style)]),
         Line::from(vec![Span::styled("  /config         ", accent_style), Span::styled("Edit configuration", text_style)]),
         Line::from(vec![Span::styled("  /vim            ", accent_style), Span::styled("Toggle vim mode", text_style)]),
         Line::from(vec![Span::styled("  /sessions       ", accent_style), Span::styled("List saved sessions", text_style)]),
         Line::from(""),
-        Line::from(Span::styled(" Tips", Style::default().fg(theme.text_dim))),
-        Line::from("─".repeat(sep_width)),
+        Line::from(Span::styled(
+            " \u{2728} Tips",
+            Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            format!(" {}", "─".repeat(sep_width)),
+            Style::default().fg(theme.border_dim),
+        )),
         Line::from(vec![Span::styled("  Shift+Drag      ", accent_style), Span::styled("Select & copy text", text_style)]),
         Line::from(vec![Span::styled("  F8              ", accent_style), Span::styled("Toggle mouse scroll/selection", text_style)]),
         Line::from(vec![Span::styled("  !command        ", accent_style), Span::styled("Run shell command inline", text_style)]),
         Line::from(""),
         Line::from(vec![
-            Span::styled(" [Enter] ", Style::default().fg(theme.success)),
+            Span::styled(" \u{25B6} [Enter] ", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
             Span::styled("Get started", Style::default().fg(theme.text)),
         ]),
     ];

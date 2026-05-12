@@ -351,13 +351,13 @@ impl MessageCell {
             let content = strip_ansi(&msg.content);
             let border_w = inner_width.clamp(20, 200);
 
-            // Category icon for the top border
-            let (cat_icon, cat_prefix) = match cat {
-                ToolCategory::Read => ("\u{25B8}", ""),
-                ToolCategory::Write => ("\u{270E}", ""),
-                ToolCategory::Search => ("\u{229B}", ""),
-                ToolCategory::Bash => ("", "$ "),
-                ToolCategory::Agent => ("\u{25C6}", ""),
+            // Category icon and border color
+            let (cat_icon, cat_prefix, tool_border) = match cat {
+                ToolCategory::Read => ("\u{25B8}", "", theme.tool_read),
+                ToolCategory::Write => ("\u{270E}", "", theme.tool_write),
+                ToolCategory::Search => ("\u{229B}", "", theme.tool_search),
+                ToolCategory::Bash => ("", "$ ", theme.tool_bash),
+                ToolCategory::Agent => ("\u{25C6}", "", theme.accent),
             };
 
             // Top border: ╭─ toolname ── ✓ duration ──╮
@@ -402,9 +402,9 @@ impl MessageCell {
             let top_left = "╭─";
             let top_right = format!("{}╮", "─".repeat(remaining));
             lines.push(Line::from(vec![
-                Span::styled(top_left.to_string(), Style::default().fg(theme.border)),
+                Span::styled(top_left.to_string(), Style::default().fg(tool_border)),
                 Span::styled(format!(" {inner}"), Style::default().fg(status_color)),
-                Span::styled(format!(" {top_right}"), Style::default().fg(theme.border)),
+                Span::styled(format!(" {top_right}"), Style::default().fg(tool_border)),
             ]));
 
             // Error messages get a red-tinted rendering
@@ -420,7 +420,7 @@ impl MessageCell {
                     }
                 }
                 let bottom = format!("╰{}╯", "─".repeat(border_w.saturating_sub(2)));
-                lines.push(Line::from(Span::styled(bottom, Style::default().fg(theme.border))));
+                lines.push(Line::from(Span::styled(bottom, Style::default().fg(tool_border))));
                 add_role_gutter(&mut lines, gutter_color);
                 return lines;
             }
@@ -537,7 +537,7 @@ impl MessageCell {
                     ]));
                 }
                 let bottom = format!("╰{}╯", "─".repeat(border_w.saturating_sub(2)));
-                lines.push(Line::from(Span::styled(bottom, Style::default().fg(theme.border))));
+                lines.push(Line::from(Span::styled(bottom, Style::default().fg(tool_border))));
                 add_role_gutter(&mut lines, gutter_color);
                 return lines;
             }
@@ -630,7 +630,7 @@ impl MessageCell {
                     }
                 }
                 let bottom = format!("╰{}╯", "─".repeat(border_w.saturating_sub(2)));
-                lines.push(Line::from(Span::styled(bottom, Style::default().fg(theme.border))));
+                lines.push(Line::from(Span::styled(bottom, Style::default().fg(tool_border))));
                 add_role_gutter(&mut lines, gutter_color);
                 return lines;
             }
@@ -675,7 +675,7 @@ impl MessageCell {
                 }
             }
             let bottom = format!("╰{}╯", "─".repeat(border_w.saturating_sub(2)));
-            lines.push(Line::from(Span::styled(bottom, Style::default().fg(theme.border))));
+            lines.push(Line::from(Span::styled(bottom, Style::default().fg(tool_border))));
             add_role_gutter(&mut lines, gutter_color);
             return lines;
         }

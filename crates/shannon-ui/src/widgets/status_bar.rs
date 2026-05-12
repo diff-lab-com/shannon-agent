@@ -171,6 +171,13 @@ impl StatusBarWidget {
                     format!(" {used_k:.1}k/{max_k:.0}k"),
                     Style::default().fg(theme.secondary),
                 ));
+                // Warning indicator when context is running low
+                if pct >= 0.9 {
+                    left.push(Span::styled(" \u{26A0}", Style::default().fg(theme.error).add_modifier(Modifier::BOLD)));
+                    left.push(Span::styled(" LOW", Style::default().fg(theme.error).add_modifier(Modifier::BOLD)));
+                } else if pct >= 0.8 {
+                    left.push(Span::styled(" \u{26A0}", Style::default().fg(theme.warning)));
+                }
             } else {
                 left.push(Span::styled(
                     format_tokens(used),
