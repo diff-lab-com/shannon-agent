@@ -112,7 +112,39 @@ pub fn submit_input(repl: &mut Repl, terminal: Option<&mut super::query::Term>) 
     repl.state.paste_counter = 0;
 
     // Process command or query with expanded text
-    if expanded.starts_with('/') {
+    if expanded.starts_with('!') {
+        // Inline shell execution: "!command" or "! command"
+        let shell_cmd = expanded.trim_start_matches('!').trim();
+        if !shell_cmd.is_empty() {
+            let output = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(shell_cmd)
+                .current_dir(&repl.state.working_directory)
+                .output();
+            let msg = match output {
+                Ok(out) => {
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    let mut parts = String::new();
+                    if !stdout.is_empty() {
+                        parts.push_str(&stdout);
+                    }
+                    if !stderr.is_empty() {
+                        if !parts.is_empty() { parts.push('\n'); }
+                        parts.push_str("[stderr]\n");
+                        parts.push_str(&stderr);
+                    }
+                    if parts.is_empty() {
+                        format!("$ {shell_cmd}\n(exit {})", out.status.code().unwrap_or(-1))
+                    } else {
+                        format!("$ {shell_cmd}\n{parts}")
+                    }
+                }
+                Err(e) => format!("$ {shell_cmd}\nFailed to execute: {e}"),
+            };
+            repl.chat.add_message(ChatRole::Tool, msg);
+        }
+    } else if expanded.starts_with('/') {
         repl.commands_run += 1;
         handle_command(repl, &expanded)?;
     } else {
@@ -133,7 +165,36 @@ pub fn submit_input_with_text(repl: &mut Repl, text: &str) {
     repl.state.pasted_texts.clear();
     repl.state.paste_counter = 0;
 
-    if expanded.starts_with('/') {
+    if expanded.starts_with('!') {
+        let shell_cmd = expanded.trim_start_matches('!').trim();
+        if !shell_cmd.is_empty() {
+            let output = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(shell_cmd)
+                .current_dir(&repl.state.working_directory)
+                .output();
+            let msg = match output {
+                Ok(out) => {
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    let mut parts = String::new();
+                    if !stdout.is_empty() { parts.push_str(&stdout); }
+                    if !stderr.is_empty() {
+                        if !parts.is_empty() { parts.push('\n'); }
+                        parts.push_str("[stderr]\n");
+                        parts.push_str(&stderr);
+                    }
+                    if parts.is_empty() {
+                        format!("$ {shell_cmd}\n(exit {})", out.status.code().unwrap_or(-1))
+                    } else {
+                        format!("$ {shell_cmd}\n{parts}")
+                    }
+                }
+                Err(e) => format!("$ {shell_cmd}\nFailed to execute: {e}"),
+            };
+            repl.chat.add_message(ChatRole::Tool, msg);
+        }
+    } else if expanded.starts_with('/') {
         repl.commands_run += 1;
         if let Err(e) = handle_command(repl, &expanded) {
             repl.chat.add_message(ChatRole::System, format!("Error: {e}"));

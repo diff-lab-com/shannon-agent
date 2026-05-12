@@ -845,6 +845,7 @@ fn render_onboarding_overlay(
         Line::from("─".repeat(sep_width)),
         Line::from(vec![Span::styled("  Shift+Drag      ", accent_style), Span::styled("Select & copy text", text_style)]),
         Line::from(vec![Span::styled("  F8              ", accent_style), Span::styled("Toggle mouse scroll/selection", text_style)]),
+        Line::from(vec![Span::styled("  !command        ", accent_style), Span::styled("Run shell command inline", text_style)]),
         Line::from(""),
         Line::from(vec![
             Span::styled(" [Enter] ", Style::default().fg(theme.success)),
