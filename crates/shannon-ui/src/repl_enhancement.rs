@@ -574,8 +574,8 @@ impl InputBuffer {
         };
 
         self.cursor_row += 1;
-        self.lines.insert(self.cursor_row, format!("{after}{indent}"));
-        self.cursor_col = after.chars().count() + indent.chars().count();
+        self.lines.insert(self.cursor_row, format!("{indent}{after}"));
+        self.cursor_col = indent.chars().count();
     }
 
     /// Get the full text content of the buffer.
