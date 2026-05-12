@@ -220,7 +220,7 @@ impl VimHandler {
     }
 
     /// Transition to a new mode, resetting transient state
-    fn set_mode(&mut self, mode: VimMode) {
+    pub fn set_mode(&mut self, mode: VimMode) {
         self.mode = mode;
         self.pending_keys.clear();
         self.count_buffer.clear();
@@ -602,11 +602,7 @@ impl VimHandler {
                 direction: Direction::LineEnd,
                 count: 1,
             },
-            KeyCode::Delete => {
-                // Forward delete -- not directly supported by prompt widget,
-                // map to noop for now
-                VimAction::Noop
-            }
+            KeyCode::Delete => VimAction::DeleteChar { count: 1 },
             _ => VimAction::None,
         }
     }

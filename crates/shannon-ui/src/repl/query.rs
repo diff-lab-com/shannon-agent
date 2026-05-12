@@ -3,12 +3,16 @@
 
 /// Rotating phrases shown during the thinking phase, cycled every 2 seconds.
 const THINKING_PHRASES: &[&str] = &[
-    "Thinking",
-    "Analyzing",
-    "Processing",
-    "Reasoning",
-    "Considering",
-    "Evaluating",
+    "Thinking...",
+    "Analyzing...",
+    "Processing...",
+    "Reasoning...",
+    "Considering...",
+    "Evaluating...",
+    "Pondering...",
+    "Deliberating...",
+    "Working...",
+    "Reflecting...",
 ];
 
 use crate::{
@@ -45,6 +49,8 @@ struct StreamingState {
     delta: String,
     /// Whether the model is still thinking (no text tokens yet)
     thinking_phase: bool,
+    /// Accumulated thinking content from extended thinking mode
+    thinking_content: String,
     /// Rate limit info from API (used, total)
     rate_limit: Option<(u32, u32)>,
 }
@@ -63,6 +69,7 @@ impl Default for StreamingState {
             budget: None,
             delta: String::new(),
             thinking_phase: true,
+            thinking_content: String::new(),
             rate_limit: None,
         }
     }
@@ -176,40 +183,62 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
             match event_result {
                 Ok(QueryEvent::Started { .. }) => {}
                 Ok(QueryEvent::Thinking { content, .. }) => {
-                    // Accumulate thinking content but don't display inline yet
-                    // Will be shown as collapsible block after completion
-                    let _ = content;
+                    if let Ok(mut s) = ss.lock() {
+                        s.thinking_content.push_str(&content);
+                        let len = s.thinking_content.len();
+                        s.status = if len > 1000 {
+                            format!("Thinking... ({}k chars)", len / 1000)
+                        } else {
+                            format!("Thinking... ({len} chars)")
+                        };
+                    }
                 }
                 Ok(QueryEvent::Text { content, .. }) => {
-                    response_text.push_str(&content);
                     if let Ok(mut s) = ss.lock() {
+                        if s.thinking_phase && !s.thinking_content.is_empty() {
+                            let thinking = std::mem::take(&mut s.thinking_content);
+                            let cap = 4000;
+                            let truncated = thinking.len() > cap;
+                            let mut end = cap.min(thinking.len());
+                            while !thinking.is_char_boundary(end) { end -= 1; }
+                            let text = &thinking[..end];
+                            let block: String = text.lines()
+                                .map(|line| format!("> {line}"))
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            response_text.push_str(&block);
+                            if truncated {
+                                response_text.push_str("\n> …");
+                            }
+                            response_text.push_str("\n\n");
+                        }
+                        s.thinking_phase = false;
+                        response_text.push_str(&content);
                         s.buffer = response_text.clone();
                         s.delta.push_str(&content);
-                        s.thinking_phase = false;
                     }
                 }
                 Ok(QueryEvent::ToolUseRequest { tool_name, tool_input, .. }) => {
                     steps_done += 1;
                     {
-                        let colors = [
-                            ratatui::style::Color::Cyan,
-                            ratatui::style::Color::Green,
-                            ratatui::style::Color::Yellow,
-                            ratatui::style::Color::Magenta,
-                            ratatui::style::Color::Blue,
-                        ];
-                        let color = colors[tool_calls.len() % colors.len()];
                         if let Ok(mut s) = ss.lock() {
                             s.tools += 1;
-                            s.multi_progress.push((tool_name.clone(), 0.0, color));
+                            s.multi_progress.push((tool_name.clone(), 0.0, ratatui::style::Color::Reset));
                             s.status = format!("Tool: {tool_name}");
                             s.buffer = response_text.clone();
                         }
                     }
 
                     progress_status = format!("Tool: {tool_name}");
-                    let tool_display = format!("\n> Using: {} with input: {}", tool_name,
-                        serde_json::to_string_pretty(&tool_input).unwrap_or_else(|_| "invalid".to_string()));
+                    let input_json = serde_json::to_string_pretty(&tool_input).unwrap_or_else(|_| "invalid".to_string());
+                    let display_input = if input_json.len() > 500 {
+                        let mut end = 500.min(input_json.len());
+                        while !input_json.is_char_boundary(end) { end -= 1; }
+                        format!("{}…", &input_json[..end])
+                    } else {
+                        input_json
+                    };
+                    let tool_display = format!("\n> Using: {tool_name} with input: {display_input}");
                     tool_start_times.insert(tool_name.clone(), Instant::now());
                     response_text.push_str(&tool_display);
                     tool_calls.push(tool_name.clone());
@@ -230,7 +259,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                             format!("{:.1}s", elapsed.as_secs_f64())
                         }
                     }).unwrap_or_default();
-                    let status_icon = if is_error { "x" } else { "ok" };
+                    let status_icon = if is_error { "\u{2717}" } else { "\u{2713}" };
                     let formatted = crate::tool_format::format_tool_result(&tool_name, &result, is_error);
                     if duration_str.is_empty() {
                         response_text.push_str(&format!("\n{formatted}"));
@@ -377,11 +406,20 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
             }
 
             // Thinking indicator: fixed-width label while model thinks
-            let is_thinking = streaming.lock().map(|s| s.thinking_phase).unwrap_or(false);
+            let (is_thinking, thinking_len) = streaming.lock()
+                .map(|s| (s.thinking_phase, s.thinking_content.len()))
+                .unwrap_or((false, 0));
             repl.state.thinking_phase = is_thinking;
             if is_thinking {
                 let phase_idx = (stream_start.elapsed().as_secs() / 2) as usize % THINKING_PHRASES.len();
-                repl.state.status = THINKING_PHRASES[phase_idx].to_string();
+                let phrase = THINKING_PHRASES[phase_idx];
+                repl.state.status = if thinking_len > 1000 {
+                    format!("{phrase} ({}k chars)", thinking_len / 1000)
+                } else if thinking_len > 0 {
+                    format!("{phrase} ({thinking_len} chars)")
+                } else {
+                    phrase.to_string()
+                };
             } else if repl.state.streaming_token_rate > 0.0 {
                 repl.state.status = format!("{current_status} · {:.0} tok/s", repl.state.streaming_token_rate);
             } else {
@@ -440,8 +478,19 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                 if !s.multi_progress.is_empty() {
                     repl.state.multi_progress_visible = true;
                     repl.state.multi_progress.clear();
-                    for (label, progress, color) in s.multi_progress.iter() {
-                        repl.state.multi_progress = repl.state.multi_progress.clone().add_bar(label.clone(), *progress, *color);
+                    let theme_colors = [
+                        repl.state.theme.subagent_1,
+                        repl.state.theme.subagent_2,
+                        repl.state.theme.subagent_3,
+                        repl.state.theme.subagent_4,
+                        repl.state.theme.subagent_5,
+                        repl.state.theme.subagent_6,
+                        repl.state.theme.subagent_7,
+                        repl.state.theme.subagent_8,
+                    ];
+                    for (i, (label, progress, _color)) in s.multi_progress.iter().enumerate() {
+                        let tc = theme_colors[i % theme_colors.len()];
+                        repl.state.multi_progress = repl.state.multi_progress.clone().add_bar(label.clone(), *progress, tc);
                     }
                 } else {
                     repl.state.multi_progress_visible = false;
@@ -740,14 +789,9 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
         Err(e) => {
             let is_cancelled = e == "cancelled";
 
-            let mut new_engine = shannon_core::query_engine::QueryEngine::with_defaults(
-                shannon_core::api::LlmClient::new(shannon_core::api::LlmClientConfig::default()),
-                shannon_core::tools::ToolRegistry::new(),
-                shannon_core::permissions::PermissionManager::new(),
-                shannon_core::state::StateManager::new(),
-            );
-            new_engine.add_user_message(input.to_string());
-            repl.query_engine = Some(new_engine);
+            // Preserve existing engine with full conversation history — don't create a new one.
+            // The engine's conversation state is not corrupted by a stream error;
+            // only the in-flight response was lost.
 
             if is_cancelled {
                 let current = streaming.lock().map(|s| s.buffer.clone()).unwrap_or_default();

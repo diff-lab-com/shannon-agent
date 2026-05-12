@@ -163,6 +163,17 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
         return handle_chat_search_input(repl, key);
     }
 
+    // In non-Insert vim modes, route all keys through the vim handler
+    use crate::vim::VimMode;
+    if repl.vim_handler.mode() != VimMode::Insert {
+        let action = repl.vim_handler.process_key(key);
+        let mode_str = repl.vim_handler.mode().to_string();
+        repl.state.vim_mode = mode_str.clone();
+        repl.prompt.set_vim_mode(&mode_str);
+        handle_vim_action(repl, action);
+        return Ok(());
+    }
+
     match key.code {
         // F1: show full keyboard shortcuts overlay
         KeyCode::F(1) => {
@@ -490,6 +501,9 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
                 repl.state.last_esc_time = None;
             }
             let action = repl.vim_handler.process_key(key);
+            let mode_str = repl.vim_handler.mode().to_string();
+            repl.state.vim_mode = mode_str.clone();
+            repl.prompt.set_vim_mode(&mode_str);
             handle_vim_action(repl, action);
             Ok(())
         }
@@ -626,6 +640,49 @@ fn handle_vim_action(repl: &mut Repl, action: VimAction) {
                 }
             }
         }
+        VimAction::EnterInsertModeAppend => {
+            repl.prompt.cursor_right();
+        }
+        VimAction::EnterInsertModeBelow => {
+            let len = repl.prompt.current_line_len();
+            let col = repl.prompt.cursor_position();
+            for _ in 0..len.saturating_sub(col) { repl.prompt.cursor_right(); }
+            repl.prompt.insert_newline();
+        }
+        VimAction::EnterInsertModeAbove => {
+            let col = repl.prompt.cursor_position();
+            for _ in 0..col { repl.prompt.cursor_left(); }
+            repl.prompt.insert_newline();
+            repl.prompt.cursor_up();
+        }
+        VimAction::DeleteWord { count } => {
+            let mut deleted = String::new();
+            for _ in 0..count {
+                let word = repl.prompt.current_word();
+                if word.is_empty() { break; }
+                deleted.push_str(&word);
+                for _ in 0..word.chars().count() {
+                    repl.prompt.delete_forward();
+                }
+            }
+            if !deleted.is_empty() {
+                repl.vim_handler.set_yank_buffer(deleted);
+            }
+        }
+        VimAction::YankWord { count } => {
+            let mut yanked = String::new();
+            for _ in 0..count {
+                let word = repl.prompt.current_word();
+                if word.is_empty() { break; }
+                yanked.push_str(&word);
+            }
+            if !yanked.is_empty() {
+                repl.vim_handler.set_yank_buffer(yanked);
+            }
+        }
+        VimAction::Quit => {
+            repl.running = false;
+        }
         _ => {}
     }
 }
@@ -746,9 +803,11 @@ pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String>
     let candidates: &[&str] = match cmd_name {
         "team" => &["create", "add", "task", "assign", "status", "list", "run", "shutdown", "help"],
         "model" => &[
-            "claude-3-5-sonnet", "claude-3-opus", "claude-3-sonnet",
-            "gpt-4o", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo",
-            "ollama/llama3", "ollama/mistral", "ollama/codellama",
+            "claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5",
+            "claude-sonnet-4-5", "claude-opus-4-5",
+            "claude-3-5-sonnet", "claude-3-opus",
+            "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o3", "o4-mini",
+            "ollama/llama3", "ollama/mistral", "ollama/codellama", "ollama/qwen3",
         ],
         "doctor" | "check" | "diagnostics" => &[],
         "config" => &["list", "get", "set", "reset", "help"],
@@ -1675,12 +1734,13 @@ fn handle_diff_viewer_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
 }
 
 /// Collect project files for the @ fuzzy picker.
-/// Skips hidden directories, common build/artifact dirs, and .git.
+/// Skips hidden directories (except useful config dirs), common build/artifact dirs, and .git.
 fn collect_project_files(root: &str) -> Vec<String> {
     let mut files = Vec::new();
     let skip_dirs: &[&str] = &[".git", "node_modules", "target", "__pycache__", ".next", "dist", "build", ".cache"];
+    let visible_dot_dirs: &[&str] = &[".claude", ".shannon", ".github", ".vscode", ".env", ".direnv"];
 
-    fn walk(dir: &std::path::Path, root: &std::path::Path, skip_dirs: &[&str], files: &mut Vec<String>, depth: usize) {
+    fn walk(dir: &std::path::Path, root: &std::path::Path, skip_dirs: &[&str], visible_dot_dirs: &[&str], files: &mut Vec<String>, depth: usize) {
         if depth > 8 { return; }
         let entries = match std::fs::read_dir(dir) {
             Ok(rd) => rd,
@@ -1689,10 +1749,10 @@ fn collect_project_files(root: &str) -> Vec<String> {
         for entry in entries.flatten() {
             let path = entry.path();
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name.starts_with('.') { continue; }
+            if name.starts_with('.') && !visible_dot_dirs.contains(&name) { continue; }
             if path.is_dir() {
                 if skip_dirs.contains(&name) { continue; }
-                walk(&path, root, skip_dirs, files, depth + 1);
+                walk(&path, root, skip_dirs, visible_dot_dirs, files, depth + 1);
             } else if let Ok(rel) = path.strip_prefix(root) {
                 files.push(rel.to_string_lossy().to_string());
             }
@@ -1700,7 +1760,7 @@ fn collect_project_files(root: &str) -> Vec<String> {
     }
 
     let root_path = std::path::Path::new(root);
-    walk(root_path, root_path, skip_dirs, &mut files, 0);
+    walk(root_path, root_path, skip_dirs, visible_dot_dirs, &mut files, 0);
 
     // Limit to 500 files for performance
     files.truncate(500);

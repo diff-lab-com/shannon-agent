@@ -21,7 +21,7 @@ use crate::{
     render::Renderer,
     repl_enhancement::{DiffData, ReplHistory, ReplRenderer},
     theme::Theme,
-    vim::VimHandler,
+    vim::{VimHandler, VimMode},
     widgets::{
         ChatWidget, ChatRole, PromptWidget,
         StreamingState,
@@ -319,7 +319,11 @@ impl Repl {
             commands_run: 0,
             tools_invoked: 0,
             tab_completion_state: TabCompletionState::default(),
-            vim_handler: VimHandler::new(),
+            vim_handler: {
+                let mut h = VimHandler::new();
+                h.set_mode(VimMode::Insert);
+                h
+            },
             team_coordinator: None,
             agent_registry: None,
             mcp_pool,
@@ -340,6 +344,7 @@ impl Repl {
         repl.sync_approval_mode_label();
         repl.state.spinner.set_static_mode(repl.state.reduced_motion);
         repl.renderer.set_theme(&repl.state.theme);
+        repl.output_renderer.syntect_theme_name = repl.state.theme.syntect_theme_name().to_string();
         Ok(repl)
     }
 
@@ -1046,7 +1051,11 @@ impl Repl {
             commands_run: 0,
             tools_invoked: 0,
             tab_completion_state: TabCompletionState::default(),
-            vim_handler: VimHandler::new(),
+            vim_handler: {
+                let mut h = VimHandler::new();
+                h.set_mode(VimMode::Insert);
+                h
+            },
             team_coordinator: shared_coordinator,
             agent_registry: None,
             mcp_pool,
@@ -1081,6 +1090,7 @@ impl Repl {
         repl.sync_approval_mode_label();
         repl.state.spinner.set_static_mode(repl.state.reduced_motion);
         repl.renderer.set_theme(&repl.state.theme);
+        repl.output_renderer.syntect_theme_name = repl.state.theme.syntect_theme_name().to_string();
         Ok(repl)
     }
 
