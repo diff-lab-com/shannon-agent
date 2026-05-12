@@ -116,12 +116,13 @@ pub fn submit_input(repl: &mut Repl, terminal: Option<&mut super::query::Term>) 
         // Inline shell execution: "!command" or "! command"
         let shell_cmd = expanded.trim_start_matches('!').trim();
         if !shell_cmd.is_empty() {
+            let start = chrono::Utc::now();
             let output = std::process::Command::new("sh")
                 .arg("-c")
                 .arg(shell_cmd)
                 .current_dir(&repl.state.working_directory)
                 .output();
-            let msg = match output {
+            let msg = match &output {
                 Ok(out) => {
                     let stdout = String::from_utf8_lossy(&out.stdout);
                     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -142,7 +143,8 @@ pub fn submit_input(repl: &mut Repl, terminal: Option<&mut super::query::Term>) 
                 }
                 Err(e) => format!("$ {shell_cmd}\nFailed to execute: {e}"),
             };
-            repl.chat.add_message(ChatRole::Tool, msg);
+            let is_error = output.as_ref().map(|o| !o.status.success()).unwrap_or(true);
+            repl.chat.add_tool_message(shell_cmd.to_string(), msg, is_error, Some(start));
         }
     } else if expanded.starts_with('/') {
         repl.commands_run += 1;
@@ -168,12 +170,13 @@ pub fn submit_input_with_text(repl: &mut Repl, text: &str) {
     if expanded.starts_with('!') {
         let shell_cmd = expanded.trim_start_matches('!').trim();
         if !shell_cmd.is_empty() {
+            let start = chrono::Utc::now();
             let output = std::process::Command::new("sh")
                 .arg("-c")
                 .arg(shell_cmd)
                 .current_dir(&repl.state.working_directory)
                 .output();
-            let msg = match output {
+            let msg = match &output {
                 Ok(out) => {
                     let stdout = String::from_utf8_lossy(&out.stdout);
                     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -192,7 +195,8 @@ pub fn submit_input_with_text(repl: &mut Repl, text: &str) {
                 }
                 Err(e) => format!("$ {shell_cmd}\nFailed to execute: {e}"),
             };
-            repl.chat.add_message(ChatRole::Tool, msg);
+            let is_error = output.as_ref().map(|o| !o.status.success()).unwrap_or(true);
+            repl.chat.add_tool_message(shell_cmd.to_string(), msg, is_error, Some(start));
         }
     } else if expanded.starts_with('/') {
         repl.commands_run += 1;

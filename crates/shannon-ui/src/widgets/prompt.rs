@@ -391,9 +391,9 @@ impl PromptWidget {
         let w = area.width as usize;
         let is_insert = self.vim_mode == "INSERT";
         let hint_w = if is_insert {
-            unicode_width::UnicodeWidthStr::width(" Enter=Send │ PgUp/Dn=History │ Ctrl+E=Editor │ Tab=Complete ")
+            unicode_width::UnicodeWidthStr::width(" Enter=Send │ PgUp/Dn=Scroll │ Ctrl+E=Editor │ Tab=Complete ")
         } else {
-            unicode_width::UnicodeWidthStr::width(" dd=DelLine │ yy=Yank │ p=Paste │ / =Search │ i=Insert ")
+            unicode_width::UnicodeWidthStr::width(" dd=DelLine │ yy=Yank │ p=Paste │ u=Undo │ i=Insert ")
         };
         let bottom_line = if w > hint_w + 4 {
             let pad = w - hint_w;
@@ -408,8 +408,8 @@ impl PromptWidget {
             ];
             if is_insert {
                 spans.extend_from_slice(&[
-                    key(" Enter"), dim("=Send"), sep.clone(),
-                    key("PgUp/Dn"), dim("=History"), sep.clone(),
+                    key("Enter"), dim("=Send"), sep.clone(),
+                    key("PgUp/Dn"), dim("=Scroll"), sep.clone(),
                     key("Ctrl+E"), dim("=Editor"), sep.clone(),
                     key("Tab"), dim("=Complete "),
                 ]);
@@ -418,7 +418,7 @@ impl PromptWidget {
                     key(" dd"), dim("=DelLine"), sep.clone(),
                     key("yy"), dim("=Yank"), sep.clone(),
                     key("p"), dim("=Paste"), sep.clone(),
-                    key("/"), dim("=Search"), sep.clone(),
+                    key("u"), dim("=Undo"), sep.clone(),
                     key("i"), dim("=Insert "),
                 ]);
             }
