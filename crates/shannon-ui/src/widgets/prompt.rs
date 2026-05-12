@@ -57,6 +57,26 @@ impl PromptWidget {
         self.vim_mode = mode.to_string();
     }
 
+    /// Add a character with auto-pairing for brackets and quotes.
+    pub fn add_char_smart(&mut self, c: char) {
+        match c {
+            '(' => { self.buffer.insert_char('('); self.buffer.insert_char(')'); self.buffer.move_left(); }
+            '[' => { self.buffer.insert_char('['); self.buffer.insert_char(']'); self.buffer.move_left(); }
+            '{' => { self.buffer.insert_char('{'); self.buffer.insert_char('}'); self.buffer.move_left(); }
+            ')' | ']' | '}' => {
+                let line = self.buffer.current_line();
+                let col = self.buffer.cursor_col();
+                let chars: Vec<char> = line.chars().collect();
+                if col < chars.len() && chars[col] == c {
+                    self.buffer.move_right();
+                } else {
+                    self.buffer.insert_char(c);
+                }
+            }
+            _ => { self.buffer.insert_char(c); }
+        }
+    }
+
     /// Get the current input text
     pub fn input(&self) -> String {
         self.buffer.text()

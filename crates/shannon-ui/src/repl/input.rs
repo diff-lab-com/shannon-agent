@@ -431,7 +431,7 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
             Ok(())
         }
         KeyCode::Char(c) => {
-            repl.prompt.add_char(c);
+            repl.prompt.add_char_smart(c);
             update_auto_completions(repl);
             Ok(())
         }
@@ -579,7 +579,7 @@ fn handle_vim_action(repl: &mut Repl, action: VimAction) {
             }
         }
         VimAction::InsertChar { c } => {
-            repl.prompt.add_char(c);
+            repl.prompt.add_char_smart(c);
         }
         VimAction::Backspace => {
             repl.prompt.backspace();
