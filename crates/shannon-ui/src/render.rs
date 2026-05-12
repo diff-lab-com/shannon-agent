@@ -22,13 +22,13 @@ use syntect::parsing::SyntaxSet;
 const TABLE_MAX_COL_WIDTH: usize = 40;
 
 /// Line count threshold for code block folding.
-const CODE_FOLD_THRESHOLD: usize = 20;
+pub const CODE_FOLD_THRESHOLD: usize = 20;
 
 /// Number of lines to show at the start of a folded code block.
-const CODE_FOLD_HEAD: usize = 10;
+pub const CODE_FOLD_HEAD: usize = 10;
 
 /// Number of lines to show at the end of a folded code block.
-const CODE_FOLD_TAIL: usize = 5;
+pub const CODE_FOLD_TAIL: usize = 5;
 
 /// Cache for rendered markdown output to avoid re-parsing on repeated calls.
 struct MarkdownCache {

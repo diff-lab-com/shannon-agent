@@ -797,17 +797,19 @@ impl MessageCell {
                         Line::from(spans)
                     }
 
-                    let code_lines: Vec<Line<'static>> = if highlighted.len() > 20 && msg.folded && msg.role == ChatRole::Tool {
-                        let mut folded = Vec::with_capacity(16);
-                        for line in &highlighted[..10] {
+                    let code_lines: Vec<Line<'static>> = if highlighted.len() > crate::render::CODE_FOLD_THRESHOLD && msg.folded && msg.role == ChatRole::Tool {
+                        let head = crate::render::CODE_FOLD_HEAD.min(highlighted.len());
+                        let tail = crate::render::CODE_FOLD_TAIL.min(highlighted.len().saturating_sub(head));
+                        let mut folded = Vec::with_capacity(head + 1 + tail);
+                        for line in &highlighted[..head] {
                             folded.push(prefix_code_line(line.clone(), theme.border_dim, code_bg));
                         }
-                        let hidden = highlighted.len().saturating_sub(15);
+                        let hidden = highlighted.len().saturating_sub(head + tail);
                         folded.push(Line::from(vec![
                             Span::styled("│ ", Style::default().fg(theme.border_dim).bg(code_bg)),
                             Span::styled(format!("⋯ {hidden} lines folded (Ctrl+F to expand)"), Style::default().fg(theme.muted).add_modifier(Modifier::ITALIC).bg(code_bg)),
                         ]));
-                        for line in highlighted.iter().rev().take(5).rev() {
+                        for line in highlighted.iter().rev().take(tail).rev() {
                             folded.push(prefix_code_line(line.clone(), theme.border_dim, code_bg));
                         }
                         folded

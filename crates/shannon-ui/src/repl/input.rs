@@ -287,6 +287,12 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
             repl.state.incremental_search_saved_input = repl.prompt.input().to_string();
             Ok(())
         }
+        // Ctrl+H: activate chat search
+        KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            repl.state.chat_search_active = true;
+            repl.state.chat_search_query.clear();
+            Ok(())
+        }
         KeyCode::Enter => {
             if key.modifiers.contains(KeyModifiers::SHIFT) {
                 repl.prompt.insert_newline();
