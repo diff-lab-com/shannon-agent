@@ -170,10 +170,12 @@ impl MessageCell {
         if !l.is_empty() {
             let msg = &self.message;
             if msg.role == ChatRole::User {
-                // User message label: dim "You 14:23"
+                // User message label: "▸ You  ·  14:23"
                 let time_str = msg.timestamp.format("%H:%M").to_string();
                 l.insert(0, Line::from(vec![
-                    Span::styled(" You ", Style::default().fg(theme.user_msg).add_modifier(Modifier::BOLD)),
+                    Span::styled("▸ ", Style::default().fg(theme.user_msg)),
+                    Span::styled("You", Style::default().fg(theme.user_msg).add_modifier(Modifier::BOLD)),
+                    Span::styled("  ·  ", Style::default().fg(theme.border_dim)),
                     Span::styled(time_str, Style::default().fg(theme.text_dim)),
                 ]));
             } else {
@@ -186,7 +188,7 @@ impl MessageCell {
                 // Separator with dimmed timestamp: "── 14:23 ──"
                 let time_str = msg.timestamp.format("%H:%M").to_string();
                 let time_w = unicode_width::UnicodeWidthStr::width(time_str.as_str());
-                let max_sep = (width as usize).saturating_sub(2).min(40);
+                let max_sep = (width as usize).saturating_sub(2);
                 let total_dash = max_sep.saturating_sub(time_w + 4); // 4 for spaces around time
                 let left_dash = total_dash / 2;
                 let right_dash = total_dash.saturating_sub(left_dash);
@@ -252,7 +254,7 @@ impl MessageCell {
         // ── Turn separator before user messages ──
         if msg.role == ChatRole::User && !self.is_continuation {
             lines.push(Line::from(Span::styled(
-                "\u{2500}".repeat(inner_width.min(40)),
+                "\u{2500}".repeat(inner_width),
                 Style::default().fg(theme.border_dim),
             )));
         }
