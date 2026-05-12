@@ -3,17 +3,27 @@
 
 /// Rotating phrases shown during the thinking phase, cycled every 2 seconds.
 const THINKING_PHRASES: &[&str] = &[
-    "Thinking...",
-    "Analyzing...",
-    "Processing...",
-    "Reasoning...",
-    "Considering...",
-    "Evaluating...",
-    "Pondering...",
-    "Deliberating...",
-    "Working...",
-    "Reflecting...",
+    "Thinking",
+    "Analyzing",
+    "Processing",
+    "Reasoning",
+    "Considering",
+    "Evaluating",
+    "Pondering",
+    "Deliberating",
+    "Working",
+    "Reflecting",
 ];
+
+/// Animated trailing dots: cycles "·", "··", "···" every 400ms.
+fn animated_dots(elapsed: std::time::Duration) -> &'static str {
+    let phase = (elapsed.as_millis() / 400) % 3;
+    match phase {
+        0 => "·",
+        1 => "··",
+        _ => "···",
+    }
+}
 
 use crate::{
     stream_buffer::StreamBuffer,
@@ -186,10 +196,11 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                     if let Ok(mut s) = ss.lock() {
                         s.thinking_content.push_str(&content);
                         let len = s.thinking_content.len();
+                        let dots = animated_dots(std::time::Instant::now().elapsed());
                         s.status = if len > 1000 {
-                            format!("Thinking... ({}k chars)", len / 1000)
+                            format!("Thinking{dots} ({}k chars)", len / 1000)
                         } else {
-                            format!("Thinking... ({len} chars)")
+                            format!("Thinking{dots} ({len} chars)")
                         };
                     }
                 }
@@ -405,20 +416,22 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                 }
             }
 
-            // Thinking indicator: fixed-width label while model thinks
+            // Thinking indicator: rotating phrases with animated dots
             let (is_thinking, thinking_len) = streaming.lock()
                 .map(|s| (s.thinking_phase, s.thinking_content.len()))
                 .unwrap_or((false, 0));
             repl.state.thinking_phase = is_thinking;
             if is_thinking {
-                let phase_idx = (stream_start.elapsed().as_secs() / 2) as usize % THINKING_PHRASES.len();
+                let elapsed = stream_start.elapsed();
+                let phase_idx = (elapsed.as_secs() / 2) as usize % THINKING_PHRASES.len();
                 let phrase = THINKING_PHRASES[phase_idx];
+                let dots = animated_dots(elapsed);
                 repl.state.status = if thinking_len > 1000 {
-                    format!("{phrase} ({}k chars)", thinking_len / 1000)
+                    format!("{phrase}{dots} ({}k chars)", thinking_len / 1000)
                 } else if thinking_len > 0 {
-                    format!("{phrase} ({thinking_len} chars)")
+                    format!("{phrase}{dots} ({thinking_len} chars)")
                 } else {
-                    phrase.to_string()
+                    format!("{phrase}{dots}")
                 };
             } else if repl.state.streaming_token_rate > 0.0 {
                 repl.state.status = format!("{current_status} · {:.0} tok/s", repl.state.streaming_token_rate);
