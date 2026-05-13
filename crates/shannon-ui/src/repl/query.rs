@@ -508,10 +508,12 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                         repl.state.theme.subagent_7,
                         repl.state.theme.subagent_8,
                     ];
+                    let mut mp = crate::widgets::progress::MultiProgressWidget::new();
                     for (i, (label, progress, _color)) in s.multi_progress.iter().enumerate() {
                         let tc = theme_colors[i % theme_colors.len()];
-                        repl.state.multi_progress = repl.state.multi_progress.clone().add_bar(label.clone(), *progress, tc);
+                        mp = mp.add_bar(label.clone(), *progress, tc);
                     }
+                    repl.state.multi_progress = mp;
                 } else {
                     repl.state.multi_progress_visible = false;
                 }
