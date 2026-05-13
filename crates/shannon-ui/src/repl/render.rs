@@ -89,6 +89,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             cost_usd: Some(state.total_cost_usd),
             git_branch: state.git_branch.as_deref(),
             token_breakdown: Some((state.input_tokens, state.output_tokens)),
+            cached_tokens: Some(state.cached_tokens),
             diag_counts: Some((state.diagnostic_store.error_count(), state.diagnostic_store.warning_count())),
             rate_limit: state.rate_limit_5h,
             spinner: Some(&state.spinner),

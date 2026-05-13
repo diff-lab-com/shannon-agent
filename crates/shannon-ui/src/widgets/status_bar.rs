@@ -51,7 +51,7 @@ impl StatusBarWidget {
             frame, area, &status, ctx.model, ctx.tokens_used,
             ctx.max_tokens, ctx.cost_usd, ctx.git_branch, ctx.spinner,
             ctx.progress_bar, ctx.theme, ctx.approval_mode, ctx.token_breakdown,
-            ctx.diag_counts, ctx.rate_limit, files_info, tools_invoked, session_duration,
+            ctx.cached_tokens, ctx.diag_counts, ctx.rate_limit, files_info, tools_invoked, session_duration,
         );
     }
 
@@ -74,6 +74,7 @@ impl StatusBarWidget {
         theme: &Theme,
         approval_mode: Option<&str>,
         token_breakdown: Option<(u64, u64)>,
+        cached_tokens: Option<u64>,
         diag_counts: Option<(usize, usize)>,
         rate_limit: Option<(u32, u32)>,
         files_info: Option<(usize, usize, usize)>,
@@ -192,6 +193,18 @@ impl StatusBarWidget {
                 left.push(Span::styled(
                     format!(" {}↑ {}↓", format_tokens(input), format_tokens(output)),
                     Style::default().fg(theme.secondary),
+                ));
+            }
+        }
+
+        // Cache hit indicator
+        if let Some(cached) = cached_tokens {
+            if cached > 0 {
+                let total_input = token_breakdown.map(|(i, _)| i).unwrap_or(0);
+                let pct = if total_input > 0 { cached * 100 / total_input } else { 0 };
+                left.push(Span::styled(
+                    format!(" cache:{}%", pct.min(100)),
+                    Style::default().fg(theme.success),
                 ));
             }
         }
