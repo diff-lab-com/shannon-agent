@@ -1,0 +1,31 @@
+[package]
+name = "shannon-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Shannon Code desktop application (Tauri)"
+license.workspace = true
+
+[features]
+default = []
+tauri = ["dep:tauri", "dep:tauri-build"]
+
+[dependencies]
+shannon-core = { path = "../shannon-core" }
+shannon-types = { path = "../shannon-types" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+tauri = { version = "2", optional = true }
+
+[build-dependencies]
+tauri-build = { version = "2", optional = true }
+
+[package.metadata.tauri]
+# Tauri build configuration — these settings control the native window
+productName = "Shannon Code"
+identifier = "com.shannon-code.desktop"
+window = { title = "Shannon Code", width = 1200, height = 800, minWidth = 800, minHeight = 600 }

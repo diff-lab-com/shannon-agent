@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Shannon Code</title>
+    <style>
+        :root {
+            --bg-primary: #1a1b26;
+            --bg-secondary: #24283b;
+            --bg-input: #1f2335;
+            --text-primary: #c0caf5;
+            --text-secondary: #a9b1d6;
+            --text-muted: #565f89;
+            --accent: #7aa2f7;
+            --accent-hover: #89b4fa;
+            --border: #3b4261;
+            --user-bg: #2a2f4a;
+            --assistant-bg: #24283b;
+            --success: #9ece6a;
+            --error: #f7768e;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 16px;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        .header-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--accent);
+        }
+        .header-status {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        /* Chat area */
+        .chat {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+        }
+
+        .message {
+            margin-bottom: 12px;
+            padding: 10px 14px;
+            border-radius: 8px;
+            max-width: 85%;
+            line-height: 1.5;
+            font-size: 14px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .message.user {
+            background: var(--user-bg);
+            margin-left: auto;
+            border-bottom-right-radius: 2px;
+        }
+        .message.assistant {
+            background: var(--assistant-bg);
+            border-bottom-left-radius: 2px;
+        }
+        .message .role-label {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+
+        .typing-indicator {
+            display: none;
+            padding: 10px 14px;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+        .typing-indicator.active { display: block; }
+        .typing-indicator span {
+            animation: blink 1.4s infinite;
+        }
+        .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes blink {
+            0%, 20% { opacity: 0.2; }
+            50% { opacity: 1; }
+            80%, 100% { opacity: 0.2; }
+        }
+
+        /* Input area */
+        .input-area {
+            display: flex;
+            align-items: flex-end;
+            padding: 12px 16px;
+            background: var(--bg-secondary);
+            border-top: 1px solid var(--border);
+        }
+        .input-area textarea {
+            flex: 1;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 14px;
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 14px;
+            resize: none;
+            outline: none;
+            min-height: 42px;
+            max-height: 150px;
+        }
+        .input-area textarea:focus {
+            border-color: var(--accent);
+        }
+        .input-area textarea::placeholder {
+            color: var(--text-muted);
+        }
+        .send-btn {
+            margin-left: 8px;
+            padding: 10px 16px;
+            background: var(--accent);
+            color: var(--bg-primary);
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .send-btn:hover { background: var(--accent-hover); }
+        .send-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Key hints */
+        .key-hints {
+            font-size: 11px;
+            color: var(--text-muted);
+            padding: 4px 16px 8px;
+            background: var(--bg-secondary);
+        }
+        .key-hints kbd {
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            padding: 1px 4px;
+            font-family: inherit;
+            font-size: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-title">Shannon Code</div>
+        <div class="header-status" id="status">Ready</div>
+    </div>
+
+    <div class="chat" id="chat">
+        <div class="message assistant">
+            <div class="role-label">Shannon</div>
+            Welcome to Shannon Code. Ask me anything about your codebase.
+        </div>
+    </div>
+    <div class="typing-indicator" id="typing">
+        Thinking<span>.</span><span>.</span><span>.</span>
+    </div>
+
+    <div class="key-hints">
+        <kbd>Enter</kbd> Send &nbsp;
+        <kbd>Shift+Enter</kbd> New line &nbsp;
+        <kbd>Ctrl+C</kbd> Cancel
+    </div>
+    <div class="input-area">
+        <textarea id="input" placeholder="Ask Shannon..." rows="1"></textarea>
+        <button class="send-btn" id="send">Send</button>
+    </div>
+
+    <script>
+        const chat = document.getElementById('chat');
+        const input = document.getElementById('input');
+        const sendBtn = document.getElementById('send');
+        const typing = document.getElementById('typing');
+        const statusEl = document.getElementById('status');
+
+        function addMessage(role, content) {
+            const div = document.createElement('div');
+            div.className = `message ${role}`;
+            const label = document.createElement('div');
+            label.className = 'role-label';
+            label.textContent = role === 'user' ? 'You' : 'Shannon';
+            div.appendChild(label);
+            div.appendChild(document.createTextNode(content));
+            chat.appendChild(div);
+            chat.scrollTop = chat.scrollHeight;
+        }
+
+        async function sendMessage() {
+            const text = input.value.trim();
+            if (!text) return;
+
+            input.value = '';
+            input.style.height = 'auto';
+            addMessage('user', text);
+            typing.classList.add('active');
+            sendBtn.disabled = true;
+            statusEl.textContent = 'Thinking...';
+
+            try {
+                const { invoke } = window.__TAURI__;
+                const response = await invoke('send_message', { message: text });
+                typing.classList.remove('active');
+                addMessage('assistant', response);
+            } catch (e) {
+                typing.classList.remove('active');
+                addMessage('assistant', `Error: ${e}`);
+            }
+
+            sendBtn.disabled = false;
+            statusEl.textContent = 'Ready';
+            input.focus();
+        }
+
+        sendBtn.addEventListener('click', sendMessage);
+
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        input.addEventListener('input', () => {
+            input.style.height = 'auto';
+            input.style.height = Math.min(input.scrollHeight, 150) + 'px';
+        });
+
+        input.focus();
+    </script>
+</body>
+</html>
