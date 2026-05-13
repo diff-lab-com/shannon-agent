@@ -227,7 +227,8 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                         }
                         s.thinking_phase = false;
                         response_text.push_str(&content);
-                        s.buffer = response_text.clone();
+                        // Note: s.buffer intentionally not updated on every delta — it's only
+                        // read at cancellation (line ~822). Updated on tool events instead.
                         s.delta.push_str(&content);
                     }
                 }
