@@ -229,10 +229,8 @@ impl Settings {
         match key {
             "version" => Some(Value::String(self.version.clone())),
             "model" => self.model.as_ref().map(|v| Value::String(v.clone())),
-            "temperature" => self.temperature.map(|v| {
-                let num = serde_json::Number::from_f64(v as f64)
-                    .expect("temperature f64 should be a valid JSON number");
-                Value::Number(num)
+            "temperature" => self.temperature.and_then(|v| {
+                serde_json::Number::from_f64(v as f64).map(Value::Number)
             }),
             "max_tokens" => self.max_tokens.map(|v| Value::Number(v.into())),
             "tools_enabled" => Some(Value::Bool(self.tools_enabled)),
