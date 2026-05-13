@@ -882,6 +882,7 @@ fn test_query_engine_config_custom() {
         auto_commit: false,
         effort_level: None,
         focus_area: None,
+        fast_model: None,
         max_parallel_tools: 10,
     };
     assert_eq!(config.max_turns, 5);

@@ -405,6 +405,59 @@ fn bench_json_processing(c: &mut Criterion) {
     group.finish();
 }
 
+// ============================================================================
+// Token Usage Tracking Benchmarks
+// ============================================================================
+
+fn bench_token_usage(c: &mut Criterion) {
+    let mut group = c.benchmark_group("token_usage");
+
+    group.bench_function("cost_tracker_record_1000", |b| {
+        let mut tracker = CostTracker::default();
+        b.iter(|| {
+            for _ in 0..1000 {
+                tracker.record_usage("claude-sonnet-4-20250514", 100, 50);
+            }
+        })
+    });
+
+    group.bench_function("model_router_recommend", |b| {
+        use shannon_core::model_registry::{ModelRouter, TaskType};
+        let tasks = [TaskType::QuickQuery, TaskType::CodeGeneration, TaskType::ArchitectureDesign, TaskType::ComplexWorkflow];
+        b.iter(|| {
+            for task in &tasks {
+                let _ = black_box(ModelRouter::recommend(*task));
+            }
+        })
+    });
+
+    group.bench_function("model_router_recommend_fast", |b| {
+        use shannon_core::model_registry::{ModelRouter, TaskType};
+        let tasks = [TaskType::QuickQuery, TaskType::CodeGeneration, TaskType::ArchitectureDesign, TaskType::ComplexWorkflow];
+        b.iter(|| {
+            for task in &tasks {
+                let _ = black_box(ModelRouter::recommend_fast(*task));
+            }
+        })
+    });
+
+    group.bench_function("usage_deserialize_with_cache", |b| {
+        let json = r#"{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":200,"cache_read_input_tokens":500}"#;
+        b.iter(|| {
+            let _: shannon_core::api::Usage = serde_json::from_str(black_box(json)).unwrap();
+        })
+    });
+
+    group.bench_function("usage_deserialize_without_cache", |b| {
+        let json = r#"{"input_tokens":100,"output_tokens":50}"#;
+        b.iter(|| {
+            let _: shannon_core::api::Usage = serde_json::from_str(black_box(json)).unwrap();
+        })
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_cost_tracker_calculation,
@@ -413,5 +466,6 @@ criterion_group!(
     bench_settings,
     bench_provider_detection,
     bench_json_processing,
+    bench_token_usage,
 );
 criterion_main!(benches);

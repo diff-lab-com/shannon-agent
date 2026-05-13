@@ -463,6 +463,10 @@ pub struct QueryEngineConfig {
     pub effort_level: Option<String>,
     /// Focus area for the LLM (e.g. "security", "performance")
     pub focus_area: Option<String>,
+    /// Fast/cheap model for quick tasks (e.g. haiku). If set, the engine can
+    /// route simple queries (token counting, short responses) to this model
+    /// instead of the primary model, reducing cost and latency.
+    pub fast_model: Option<String>,
 }
 
 impl Default for QueryEngineConfig {
@@ -511,6 +515,7 @@ impl Default for QueryEngineConfig {
             max_parallel_tools: 10,
             effort_level: None,
             focus_area: None,
+            fast_model: None,
         }
     }
 }
