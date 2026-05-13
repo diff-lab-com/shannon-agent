@@ -443,7 +443,10 @@ impl Transport for SseTransport {
                             // stream is consumed
                             drop(stream);
                             // Try reconnect in background for next receive
-                            let _ = self.reconnect().await;
+                            let _ = self.reconnect().await.map_err(|e| {
+                                tracing::warn!("SSE reconnect after stream close failed: {e}");
+                                e
+                            });
                             return Ok(Some(data));
                         }
                         // Attempt reconnection for graceful close
