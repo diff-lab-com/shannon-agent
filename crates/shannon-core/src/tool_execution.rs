@@ -704,9 +704,10 @@ impl ToolExecutionService {
         self.emit_progress(started).await;
 
         // 4. Execute the tool (using effective_input which may have been modified by hooks)
-        let output = match self.registry.execute(tool_name, effective_input.clone()).await {
-            Ok(output) => output,
-            Err(err) => {
+        let execute_future = self.registry.execute(tool_name, effective_input.clone());
+        let output = match tokio::time::timeout(self.config.default_timeout, execute_future).await {
+            Ok(Ok(output)) => output,
+            Ok(Err(err)) => {
                 // Discard checkpoint if tool failed to execute
                 if checkpoint_created {
                     if let Some(ref mgr) = self.checkpoint_manager {
@@ -722,6 +723,25 @@ impl ToolExecutionService {
                 self.fire_post_failure_hook(tool_name, &effective_input, &msg).await;
 
                 return Err(ToolExecutionError::ExecutionFailed(msg));
+            }
+            Err(_) => {
+                // Tool timed out
+                if checkpoint_created {
+                    if let Some(ref mgr) = self.checkpoint_manager {
+                        mgr.discard_last();
+                    }
+                }
+                let msg = format!("Tool timed out after {:?}", self.config.default_timeout);
+                let progress = ToolProgress::failed(&tool_id, tool_name, &msg);
+                progress_events.push(progress.clone());
+                self.emit_progress(progress).await;
+
+                self.fire_post_failure_hook(tool_name, &effective_input, &msg).await;
+
+                return Err(ToolExecutionError::Timeout {
+                    tool_name: tool_name.to_string(),
+                    timeout_secs: self.config.default_timeout.as_secs(),
+                });
             }
         };
 
