@@ -69,7 +69,7 @@ fn serialize_openai_request(request: &MessageRequest) -> Value {
 
     // Convert messages
     for msg in &request.messages {
-        messages.push(convert_message_for_openai(msg));
+        messages.extend(convert_message_for_openai(msg));
     }
 
     let mut body = json!({
@@ -150,7 +150,7 @@ fn serialize_ollama_request(request: &MessageRequest) -> Value {
     }
 
     for msg in &request.messages {
-        messages.push(convert_message_for_openai(msg)); // same format as OpenAI
+        messages.extend(convert_message_for_openai(msg)); // same format as OpenAI
     }
 
     let mut body = json!({
@@ -200,13 +200,13 @@ fn serialize_ollama_request(request: &MessageRequest) -> Value {
 }
 
 /// Convert a single `Message` to OpenAI-style JSON value.
-fn convert_message_for_openai(msg: &Message) -> Value {
+fn convert_message_for_openai(msg: &Message) -> Vec<Value> {
     match &msg.content {
         crate::api::types::MessageContent::Text(text) => {
-            json!({
+            vec![json!({
                 "role": msg.role,
                 "content": text
-            })
+            })]
         }
         crate::api::types::MessageContent::Blocks(blocks) => {
             // Separate tool_use and tool_result blocks for OpenAI format
@@ -229,10 +229,10 @@ fn convert_message_for_openai(msg: &Message) -> Value {
 
             if !tool_calls.is_empty() {
                 // Assistant message with tool calls
-                json!({
+                vec![json!({
                     "role": msg.role,
                     "tool_calls": tool_calls
-                })
+                })]
             } else {
                 // Check for image blocks — OpenAI uses a different content format
                 let has_images = blocks.iter().any(|b| matches!(b, ContentBlock::Image { .. }));
@@ -256,10 +256,10 @@ fn convert_message_for_openai(msg: &Message) -> Value {
                             _ => None,
                         })
                         .collect();
-                    return json!({
+                    return vec![json!({
                         "role": msg.role,
                         "content": content_parts
-                    });
+                    })];
                 }
 
                 // Regular content blocks — extract text
@@ -304,17 +304,13 @@ fn convert_message_for_openai(msg: &Message) -> Value {
                     .collect();
 
                 if !tool_results.is_empty() {
-                    // Return the first tool result as the message
-                    // (OpenAI expects one message per tool result)
-                    tool_results.into_iter().next().unwrap_or(json!({
-                        "role": msg.role,
-                        "content": text
-                    }))
+                    // OpenAI expects one message per tool result — return all
+                    tool_results
                 } else {
-                    json!({
+                    vec![json!({
                         "role": msg.role,
                         "content": text
-                    })
+                    })]
                 }
             }
         }
