@@ -457,6 +457,8 @@ pub struct QueryEngineConfig {
     pub system_prompt: Option<String>,
     /// When true, automatically stage and commit after file-write tools (Edit, Write)
     pub auto_commit: bool,
+    /// Maximum number of tools to execute in parallel (default: 10)
+    pub max_parallel_tools: usize,
     /// Effort level for the LLM (e.g. "low", "medium", "high")
     pub effort_level: Option<String>,
     /// Focus area for the LLM (e.g. "security", "performance")
@@ -506,6 +508,7 @@ impl Default for QueryEngineConfig {
                      - When referencing git commits, use the full hash.".to_string(),
             ),
             auto_commit: false,
+            max_parallel_tools: 10,
             effort_level: None,
             focus_area: None,
         }

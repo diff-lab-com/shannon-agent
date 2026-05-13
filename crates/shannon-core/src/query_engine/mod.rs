@@ -856,6 +856,7 @@ mod tests {
             auto_commit: false,
             effort_level: None,
             focus_area: None,
+            max_parallel_tools: 10,
         };
         assert_eq!(config.max_turns, 5);
         assert_eq!(config.max_budget_usd, Some(1.0));
@@ -1109,6 +1110,7 @@ mod tests {
             auto_commit: false,
             effort_level: None,
             focus_area: None,
+            max_parallel_tools: 10,
         };
         assert_eq!(config.max_turns, 1);
         assert_eq!(config.max_budget_usd, Some(0.01));

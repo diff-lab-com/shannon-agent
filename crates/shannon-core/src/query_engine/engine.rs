@@ -1195,10 +1195,10 @@ impl QueryEngine {
 
                                                 // Phase 2: Execute approved tools using read/write-aware batch scheduler.
                                                 //
-                                                // Read-only tools are grouped into parallel batches (max 10).
+                                                // Read-only tools are grouped into parallel batches.
                                                 // Write tools execute one at a time to avoid race conditions.
                                                 {
-                                                    let batches = tools.partition_tool_calls(approved_tools, 10);
+                                                    let batches = tools.partition_tool_calls(approved_tools, config.max_parallel_tools);
 
                                                     for batch in batches {
                                                         match batch {

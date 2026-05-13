@@ -861,6 +861,7 @@ fn test_query_engine_config_defaults() {
     assert!(config.system_prompt.is_some());
     assert_eq!(config.compression_threshold, 0.8);
     assert_eq!(config.keep_recent_messages, 10);
+    assert_eq!(config.max_parallel_tools, 10);
     assert!(!config.verbose);
     assert!(!config.enable_thinking);
 }
@@ -881,6 +882,7 @@ fn test_query_engine_config_custom() {
         auto_commit: false,
         effort_level: None,
         focus_area: None,
+        max_parallel_tools: 10,
     };
     assert_eq!(config.max_turns, 5);
     assert_eq!(config.max_budget_usd, Some(1.0));
