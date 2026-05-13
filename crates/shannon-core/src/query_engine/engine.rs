@@ -60,6 +60,49 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
+// ── Query complexity classification ──────────────────────────────────
+
+/// Query complexity level for model routing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QueryComplexity {
+    /// Simple lookup, short question — route to fast_model
+    Simple,
+    /// Planning, architecture, design — route to plan_model
+    Planning,
+    /// Standard coding task — use primary model
+    Standard,
+}
+
+/// Keywords that signal planning/architecture queries.
+const PLANNING_KEYWORDS: &[&str] = &[
+    "architect", "architecture", "design", "plan", "planning",
+    "refactor", "migrate", "strategy", "blueprint", "roadmap",
+    "system design", "evaluate", "analyze", "review",
+];
+
+/// Keywords that signal complex implementation queries.
+const COMPLEX_KEYWORDS: &[&str] = &[
+    "implement", "build", "create", "develop", "integrate",
+    "debug", "fix", "solve", "troubleshoot",
+];
+
+/// Classify a user query by complexity for model routing.
+fn classify_query_complexity(query: &str) -> QueryComplexity {
+    let lower = query.to_lowercase();
+
+    // Short queries with no complex keywords → Simple
+    if query.len() < 200 && !PLANNING_KEYWORDS.iter().any(|k| lower.contains(k)) && !COMPLEX_KEYWORDS.iter().any(|k| lower.contains(k)) {
+        return QueryComplexity::Simple;
+    }
+
+    // Planning/architecture keywords → Planning
+    if PLANNING_KEYWORDS.iter().any(|k| lower.contains(k)) {
+        return QueryComplexity::Planning;
+    }
+
+    QueryComplexity::Standard
+}
+
 /// Main query engine orchestrator
 pub struct QueryEngine {
     pub(crate) client: LlmClient,
@@ -487,21 +530,28 @@ impl QueryEngine {
         let client_api_key = self.client.api_key().to_string();
         let client_model = self.client.model().to_string();
 
-        // Multi-tier model routing: use fast_model for simple queries when configured
-        let client_model = if let Some(ref fast_model) = self.config.fast_model {
+        // Resolve model aliases in fast_model and plan_model
+        let fast_model = self.config.fast_model.as_ref().map(|m| {
+            crate::model_registry::resolve_model(m, Some(&self.client.provider()))
+        });
+        let plan_model = self.config.plan_model.as_ref().map(|m| {
+            crate::model_registry::resolve_model(m, Some(&self.client.provider()))
+        });
+
+        // Multi-tier model routing
+        let client_model = {
             let query = &context.user_message;
-            let is_simple = query.len() < 200
-                && !query.contains("refactor")
-                && !query.contains("implement")
-                && !query.contains("architecture")
-                && !query.contains("design");
-            if is_simple {
-                fast_model.clone()
-            } else {
-                client_model
+            let complexity = classify_query_complexity(query);
+
+            match complexity {
+                QueryComplexity::Simple => {
+                    fast_model.as_deref().unwrap_or(&client_model).to_string()
+                }
+                QueryComplexity::Planning => {
+                    plan_model.as_deref().unwrap_or(&client_model).to_string()
+                }
+                QueryComplexity::Standard => client_model.clone(),
             }
-        } else {
-            client_model
         };
         let client_base_url = self.client.base_url().to_string();
         let client_max_tokens = self.client.max_tokens();

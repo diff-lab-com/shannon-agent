@@ -6,6 +6,7 @@ use similar::{ChangeTag, TextDiff};
 use shannon_core::{
     api::LlmClientConfig,
     i18n,
+    model_registry::resolve_model,
     query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata},
     state::StateManager,
     tools::ToolRegistry,
@@ -152,9 +153,12 @@ struct CliConfig {
 }
 
 impl CliConfig {
-    /// Get the model, with fallback to environment variable.
+    /// Get the model, with fallback to environment variable and alias resolution.
     fn model(&self) -> Option<String> {
-        self.model.clone().or_else(|| std::env::var("SHANNON_MODEL").ok())
+        self.model
+            .clone()
+            .or_else(|| std::env::var("SHANNON_MODEL").ok())
+            .map(|m| resolve_model(&m, None))
     }
 
     /// Get the provider, with fallback to environment variable.

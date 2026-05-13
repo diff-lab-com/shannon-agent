@@ -883,6 +883,7 @@ mod tests {
             effort_level: None,
             focus_area: None,
             fast_model: None,
+            plan_model: None,
             max_parallel_tools: 10,
         };
         assert_eq!(config.max_turns, 5);
@@ -1138,6 +1139,7 @@ mod tests {
             effort_level: None,
             focus_area: None,
             fast_model: None,
+            plan_model: None,
             max_parallel_tools: 10,
         };
         assert_eq!(config.max_turns, 1);
