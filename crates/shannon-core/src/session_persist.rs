@@ -88,10 +88,17 @@ pub struct SessionSummary {
     pub total_tokens: u64,
 }
 
+/// Current session file format version. Increment when the schema changes.
+const SESSION_FORMAT_VERSION: u32 = 1;
+
 /// On-disk envelope: wraps the session state together with a content hash
 /// used for dirty-checking during auto-save.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SessionFile {
+    /// Format version for forward/backward compatibility.
+    /// Old files without this field deserialize as 0.
+    #[serde(default)]
+    version: u32,
     /// The session payload.
     session: PersistedSessionState,
     /// SHA-256-sized hex hash of the serialised session at save time, used to
@@ -143,6 +150,7 @@ impl SessionPersistManager {
 
         let content_hash = compute_hash(state);
         let file = SessionFile {
+            version: SESSION_FORMAT_VERSION,
             session: state.clone(),
             content_hash,
         };
@@ -166,7 +174,13 @@ impl SessionPersistManager {
         }
 
         let contents = fs::read_to_string(&path)?;
-        let file: SessionFile = serde_json::from_str(&contents)?;
+        let mut file: SessionFile = serde_json::from_str(&contents)?;
+
+        // Migrate from older formats
+        if file.version < SESSION_FORMAT_VERSION {
+            migrate_session(&mut file);
+        }
+
         Ok(file.session)
     }
 
@@ -329,6 +343,16 @@ fn default_storage_dir() -> PathBuf {
 /// Uses a simple XOR-fold of the bytes in the canonical JSON representation.
 /// This is not cryptographically secure but is sufficient for detecting
 /// whether the session data has changed between saves.
+
+/// Apply format migrations to bring an older session up to the current version.
+/// Add version-specific migration steps as the format evolves.
+fn migrate_session(file: &mut SessionFile) {
+    // Version 0 → 1: initial versioned format, no structural changes needed.
+    // Future migrations go here, e.g.:
+    // if file.version < 2 { migrate_v1_to_v2(file); }
+    file.version = SESSION_FORMAT_VERSION;
+}
+
 fn compute_hash(state: &PersistedSessionState) -> String {
     let json = serde_json::to_string(state).unwrap_or_default();
 

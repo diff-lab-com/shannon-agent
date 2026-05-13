@@ -347,7 +347,7 @@ pub(crate) fn handle_browse(repl: &mut Repl, args: &str) -> Result<()> {
     Ok(())
 }
 
-fn copy_nth_response(repl: &mut Repl, n: usize) -> Option<String> {
+pub(crate) fn copy_nth_response(repl: &mut Repl, n: usize) -> Option<String> {
     if n == 0 {
         repl.chat.add_message(ChatRole::System, "Invalid index. Use /copy 1 for the latest response.".to_string());
         return None;

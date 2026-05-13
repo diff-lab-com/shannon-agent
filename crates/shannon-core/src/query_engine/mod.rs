@@ -124,6 +124,7 @@ mod tests {
             max_context_tokens: Some(100),
             compression_threshold: 0.8,
             keep_recent_messages: 2,
+            system_prompt: None,
             ..Default::default()
         };
 

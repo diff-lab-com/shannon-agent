@@ -391,6 +391,20 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
             }
             Ok(())
         }
+        // Ctrl+Y: copy last assistant response to clipboard
+        KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if let Some(content) = super::commands::copy_nth_response(repl, 1) {
+                if super::commands::copy_to_clipboard(&content) {
+                    repl.chat.copy_feedback = Some((repl.chat.messages.len(), std::time::Instant::now()));
+                } else {
+                    let tmp = std::env::temp_dir().join("shannon-clipboard.txt");
+                    let _ = std::fs::write(&tmp, &content);
+                    repl.chat.add_message(crate::widgets::chat::ChatRole::System,
+                        format!("Copied to {}", tmp.display()));
+                }
+            }
+            Ok(())
+        }
         // Alt+Left: previous session tab
         KeyCode::Left if key.modifiers.contains(KeyModifiers::ALT) => {
             if repl.state.session_tab.visible {

@@ -15,6 +15,7 @@ mod web;
 
 // Re-export public API
 pub use media::handle_image_paste_from_input;
+pub(crate) use media::{copy_nth_response, copy_to_clipboard};
 pub(crate) use loop_engine::{notify_query_complete, check_loop_iteration, check_ralph_iteration};
 #[allow(unused_imports)]
 pub(crate) use cost::extract_plan_steps;
