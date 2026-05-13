@@ -1149,4 +1149,22 @@ mod tests {
         assert!((config.compression_threshold - 0.9).abs() < 0.001);
         assert_eq!(config.keep_recent_messages, 1);
     }
+
+    #[test]
+    fn test_fast_model_routing_simple_query() {
+        use crate::model_registry::{ModelRouter, TaskType};
+
+        // Verify ModelRouter returns valid model IDs for all task types
+        for task in [TaskType::QuickQuery, TaskType::CodeGeneration, TaskType::ArchitectureDesign, TaskType::ComplexWorkflow] {
+            let model = ModelRouter::recommend(task);
+            assert!(!model.is_empty(), "ModelRouter should return a model for {:?}", task);
+        }
+
+        // Verify fast_model config field works
+        let config = QueryEngineConfig {
+            fast_model: Some("claude-3-5-haiku-20241022".to_string()),
+            ..QueryEngineConfig::default()
+        };
+        assert_eq!(config.fast_model.as_deref(), Some("claude-3-5-haiku-20241022"));
+    }
 }

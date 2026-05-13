@@ -486,6 +486,23 @@ impl QueryEngine {
         let permissions = self.permissions.clone();
         let client_api_key = self.client.api_key().to_string();
         let client_model = self.client.model().to_string();
+
+        // Multi-tier model routing: use fast_model for simple queries when configured
+        let client_model = if let Some(ref fast_model) = self.config.fast_model {
+            let query = &context.user_message;
+            let is_simple = query.len() < 200
+                && !query.contains("refactor")
+                && !query.contains("implement")
+                && !query.contains("architecture")
+                && !query.contains("design");
+            if is_simple {
+                fast_model.clone()
+            } else {
+                client_model
+            }
+        } else {
+            client_model
+        };
         let client_base_url = self.client.base_url().to_string();
         let client_max_tokens = self.client.max_tokens();
         let client_provider = self.client.provider().clone();
