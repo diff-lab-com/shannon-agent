@@ -384,7 +384,9 @@ impl AgentCoordinator {
                                 request_id,
                                 "Forwarding RPC request from agent"
                             );
-                            let _ = rpc_tx.send((agent_name, request_id, method, params)).await;
+                            if let Err(e) = rpc_tx.send((agent_name, request_id, method, params)).await {
+                                tracing::warn!("Failed to forward RPC request: {e}");
+                            }
                             None
                         }
                     };
