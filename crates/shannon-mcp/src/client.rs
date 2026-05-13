@@ -14,6 +14,8 @@ use tracing::{debug, error, info, warn};
 /// MCP client for communicating with MCP servers
 pub struct McpClient<T: Transport> {
     transport: Arc<Mutex<T>>,
+    /// Write channel for sending messages through the I/O loop (set after connect).
+    write_tx: Option<tokio::sync::mpsc::Sender<String>>,
     request_timeout: std::time::Duration,
     pending_requests: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>>>,
     server_capabilities: Arc<Mutex<Option<ServerCapabilities>>>,
@@ -24,6 +26,7 @@ impl<T: Transport> McpClient<T> {
     pub fn new(transport: T) -> Self {
         Self {
             transport: Arc::new(Mutex::new(transport)),
+            write_tx: None,
             request_timeout: std::time::Duration::from_secs(30),
             pending_requests: Arc::new(Mutex::new(HashMap::new())),
             server_capabilities: Arc::new(Mutex::new(None)),
@@ -37,19 +40,24 @@ impl<T: Transport> McpClient<T> {
     }
 
     /// Connect to the server and initialize the session
-    pub async fn connect(self) -> McpResult<Self>
+    pub async fn connect(mut self) -> McpResult<Self>
     where
         T: 'static,
     {
         info!("Connecting to MCP server...");
 
-        // Start the message receiver task
+        // Create write channel for decoupled send/receive
+        let (write_tx, write_rx) = tokio::sync::mpsc::channel(64);
+        self.write_tx = Some(write_tx);
+
+        // Start the combined I/O task (select! avoids the deadlock that
+        // a separate receive_loop + send_request sharing one Mutex would cause)
         let transport_clone = self.transport.clone();
         let pending_clone = self.pending_requests.clone();
         let server_caps_clone = self.server_capabilities.clone();
 
         tokio::spawn(async move {
-            Self::receive_loop(transport_clone, pending_clone, server_caps_clone).await
+            Self::io_loop(transport_clone, write_rx, pending_clone, server_caps_clone).await
         });
 
         // Initialize the connection
@@ -275,69 +283,104 @@ impl<T: Transport> McpClient<T> {
         // Send the request
         let message = JsonRpcMessage::Request(request);
         let serialized = serde_json::to_string(&message)?;
-        {
+        if let Some(ref tx) = self.write_tx {
+            tx.send(serialized).await
+                .map_err(|e| McpError::Protocol(format!("Write channel closed: {e}")))?;
+        } else {
             let mut transport = self.transport.lock().await;
             transport.send(&serialized).await?;
         }
 
         // Wait for the response
-        let response = tokio::time::timeout(self.request_timeout, rx)
-            .await
+        let timeout_result = tokio::time::timeout(self.request_timeout, rx).await;
+        if timeout_result.is_err() {
+            // Clean up the stale entry to prevent memory leak
+            self.pending_requests.lock().await.remove(&id);
+            return Err(McpError::Timeout(self.request_timeout));
+        }
+        let response = timeout_result
             .map_err(|_| McpError::Timeout(self.request_timeout))?
             .map_err(|_| McpError::Protocol("Response channel closed".to_string()))?;
 
         Ok(response)
     }
 
-    /// Receive loop for handling incoming messages
-    async fn receive_loop(
+    /// Combined I/O loop using `tokio::select!` to avoid deadlock.
+    ///
+    /// The previous approach had `receive_loop` hold the transport `Mutex` while
+    /// awaiting `receive()`, which blocked `send_request()` from acquiring the
+    /// same lock. Using `select!` ensures that when a write is ready, the
+    /// receive future is dropped (releasing the `MutexGuard`), allowing the
+    /// write branch to acquire the lock.
+    async fn io_loop(
         transport: Arc<Mutex<T>>,
+        mut write_rx: tokio::sync::mpsc::Receiver<String>,
         pending: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>>>,
         server_capabilities: Arc<Mutex<Option<ServerCapabilities>>>,
     ) {
         loop {
-            let message = {
-                let mut transport = transport.lock().await;
-                match transport.receive().await {
-                    Ok(Some(msg)) => msg,
-                    Ok(None) => {
-                        debug!("Transport closed gracefully");
-                        break;
-                    }
-                    Err(e) => {
-                        error!("Receive error: {}", e);
-                        break;
-                    }
-                }
-            };
-
-            // Parse the JSON-RPC message
-            let parsed: JsonRpcMessage = match serde_json::from_str(&message) {
-                Ok(msg) => msg,
-                Err(e) => {
-                    error!("Failed to parse message: {}", e);
-                    continue;
-                }
-            };
-
-            match parsed {
-                JsonRpcMessage::Response(response) => {
-                    if let Some(tx) = pending.lock().await.remove(&response.id) {
-                        if let Some(error) = response.error {
-                            warn!("JSON-RPC error: {} - {}", error.code, error.message);
-                            let _ = tx.send(serde_json::json!({"error": error}));
-                        } else if let Some(result) = response.result {
-                            let _ = tx.send(result);
+            tokio::select! {
+                // Outgoing messages from send_request()
+                msg = write_rx.recv() => {
+                    match msg {
+                        Some(serialized) => {
+                            let mut t = transport.lock().await;
+                            if let Err(e) = t.send(&serialized).await {
+                                error!("Send error: {}", e);
+                                break;
+                            }
                         }
-                    } else {
-                        warn!("Received response for unknown request ID: {}", response.id);
+                        None => {
+                            debug!("Write channel closed, shutting down I/O loop");
+                            break;
+                        }
                     }
                 }
-                JsonRpcMessage::Notification(notification) => {
-                    Self::handle_notification(notification, &server_capabilities).await;
-                }
-                JsonRpcMessage::Request(request) => {
-                    warn!("Received unexpected request from server: {}", request.method);
+                // Incoming messages from transport
+                result = async {
+                    let mut t = transport.lock().await;
+                    t.receive().await
+                } => {
+                    let message = match result {
+                        Ok(Some(msg)) => msg,
+                        Ok(None) => {
+                            debug!("Transport closed gracefully");
+                            break;
+                        }
+                        Err(e) => {
+                            error!("Receive error: {}", e);
+                            break;
+                        }
+                    };
+
+                    let parsed: JsonRpcMessage = match serde_json::from_str(&message) {
+                        Ok(msg) => msg,
+                        Err(e) => {
+                            error!("Failed to parse message: {}", e);
+                            continue;
+                        }
+                    };
+
+                    match parsed {
+                        JsonRpcMessage::Response(response) => {
+                            if let Some(tx) = pending.lock().await.remove(&response.id) {
+                                if let Some(error) = response.error {
+                                    warn!("JSON-RPC error: {} - {}", error.code, error.message);
+                                    let _ = tx.send(serde_json::json!({"error": error}));
+                                } else if let Some(result) = response.result {
+                                    let _ = tx.send(result);
+                                }
+                            } else {
+                                warn!("Received response for unknown request ID: {}", response.id);
+                            }
+                        }
+                        JsonRpcMessage::Notification(notification) => {
+                            Self::handle_notification(notification, &server_capabilities).await;
+                        }
+                        JsonRpcMessage::Request(request) => {
+                            warn!("Received unexpected request from server: {}", request.method);
+                        }
+                    }
                 }
             }
         }
