@@ -626,14 +626,10 @@ impl ToolPermissionPolicy {
     /// Check if the given input matches any deny pattern
     pub fn is_denied(&self, input_str: &str) -> bool {
         self.deny_patterns.iter().any(|pattern| {
-            input_str.contains(pattern) || {
-                if pattern.contains('*') {
-                    // Simple wildcard matching
-                    let regex_pattern = pattern.replace('*', ".*");
-                    input_str.matches(&regex_pattern).count() > 0
-                } else {
-                    false
-                }
+            if pattern.contains('*') {
+                Self::wildcard_matches(pattern, input_str)
+            } else {
+                input_str.contains(pattern)
             }
         })
     }
@@ -641,15 +637,20 @@ impl ToolPermissionPolicy {
     /// Check if the given input requires confirmation
     pub fn requires_confirmation(&self, input_str: &str) -> bool {
         self.confirmation_patterns.iter().any(|pattern| {
-            input_str.contains(pattern) || {
-                if pattern.contains('*') {
-                    let regex_pattern = pattern.replace('*', ".*");
-                    input_str.matches(&regex_pattern).count() > 0
-                } else {
-                    false
-                }
+            if pattern.contains('*') {
+                Self::wildcard_matches(pattern, input_str)
+            } else {
+                input_str.contains(pattern)
             }
         })
+    }
+
+    /// Match a glob-style wildcard pattern against input using regex.
+    fn wildcard_matches(pattern: &str, input: &str) -> bool {
+        let regex_pattern = format!("(?i)^{}$", regex::escape(pattern).replace("\\*", ".*"));
+        regex::Regex::new(&regex_pattern)
+            .map(|re| re.is_match(input))
+            .unwrap_or(false)
     }
 
     /// Get the risk level for a specific input
