@@ -167,7 +167,7 @@ impl LlmClient {
             .await
             .map_err(|e| match e.status() {
                 Some(reqwest::StatusCode::UNAUTHORIZED) => ApiError::AuthenticationFailed,
-                Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded,
+                Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded { retry_after_secs: None },
                 Some(status) => ApiError::ApiError {
                     status: status.as_u16(),
                     message: format!("HTTP error: {e}"),
@@ -177,6 +177,15 @@ impl LlmClient {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
+            if status == 429 {
+                let retry_after = response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<u64>().ok());
+                let _ = response.text().await;
+                return Err(ApiError::RateLimitExceeded { retry_after_secs: retry_after });
+            }
             let error_text = response.text().await.unwrap_or_default();
             return Err(ApiError::from_provider_response(
                 &self.config.provider,
@@ -248,7 +257,7 @@ impl LlmClient {
             .await
             .map_err(|e| match e.status() {
                 Some(reqwest::StatusCode::UNAUTHORIZED) => ApiError::AuthenticationFailed,
-                Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded,
+                Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded { retry_after_secs: None },
                 Some(status) => ApiError::ApiError {
                     status: status.as_u16(),
                     message: format!("HTTP error: {e}"),
@@ -258,6 +267,15 @@ impl LlmClient {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
+            if status == 429 {
+                let retry_after = response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<u64>().ok());
+                let _ = response.text().await;
+                return Err(ApiError::RateLimitExceeded { retry_after_secs: retry_after });
+            }
             let error_text = response.text().await.unwrap_or_default();
             return Err(ApiError::from_provider_response(
                 &self.config.provider,
@@ -320,7 +338,7 @@ impl LlmClient {
             .await
             .map_err(|e| match e.status() {
                 Some(reqwest::StatusCode::UNAUTHORIZED) => ApiError::AuthenticationFailed,
-                Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded,
+                Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded { retry_after_secs: None },
                 Some(status) => ApiError::ApiError {
                     status: status.as_u16(),
                     message: format!("HTTP error: {e}"),
@@ -330,6 +348,15 @@ impl LlmClient {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
+            if status == 429 {
+                let retry_after = response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<u64>().ok());
+                let _ = response.text().await;
+                return Err(ApiError::RateLimitExceeded { retry_after_secs: retry_after });
+            }
             let error_text = response.text().await.unwrap_or_default();
             return Err(ApiError::from_provider_response(
                 &self.config.provider,
@@ -383,7 +410,7 @@ impl LlmClient {
             .await
             .map_err(|e| match e.status() {
                 Some(reqwest::StatusCode::UNAUTHORIZED) => ApiError::AuthenticationFailed,
-                Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded,
+                Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded { retry_after_secs: None },
                 Some(status) => ApiError::ApiError {
                     status: status.as_u16(),
                     message: format!("HTTP error: {e}"),
@@ -393,6 +420,15 @@ impl LlmClient {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
+            if status == 429 {
+                let retry_after = response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<u64>().ok());
+                let _ = response.text().await;
+                return Err(ApiError::RateLimitExceeded { retry_after_secs: retry_after });
+            }
             let error_text = response.text().await.unwrap_or_default();
             return Err(ApiError::from_provider_response(
                 &self.config.provider,

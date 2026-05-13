@@ -42,7 +42,7 @@ impl RetryConfig {
     /// Check if an error is retryable.
     pub fn is_retryable(&self, error: &ApiError) -> bool {
         match error {
-            ApiError::RateLimitExceeded => true,
+            ApiError::RateLimitExceeded { .. } => true,
             ApiError::ApiError { status, .. } => self.retryable_status_codes.contains(status),
             ApiError::HttpError(e) => e.is_timeout() || e.is_connect(),
             ApiError::Timeout => true,
@@ -103,14 +103,22 @@ where
                     return Err(e);
                 }
                 let backoff = config.backoff_duration(attempt);
+                // Honor server-suggested Retry-After for 429 responses
+                let wait = match &e {
+                    ApiError::RateLimitExceeded { retry_after_secs: Some(secs) } => {
+                        let ra = Duration::from_secs(*secs);
+                        if ra > backoff { ra } else { backoff }
+                    }
+                    _ => backoff,
+                };
                 tracing::warn!(
                     "API request failed (attempt {}/{}): {}. Retrying in {:?}",
                     attempt + 1,
                     config.max_retries + 1,
                     e,
-                    backoff
+                    wait
                 );
-                sleep(backoff).await;
+                sleep(wait).await;
                 last_error = Some(e);
             }
         }
@@ -145,7 +153,7 @@ mod tests {
     #[test]
     fn test_is_retryable_rate_limit() {
         let config = RetryConfig::default();
-        assert!(config.is_retryable(&ApiError::RateLimitExceeded));
+        assert!(config.is_retryable(&ApiError::RateLimitExceeded { retry_after_secs: None }));
     }
 
     #[test]
@@ -217,7 +225,7 @@ mod tests {
             attempts += 1;
             async move {
                 if attempts < 3 {
-                    Err(ApiError::RateLimitExceeded)
+                    Err(ApiError::RateLimitExceeded { retry_after_secs: None })
                 } else {
                     Ok(99)
                 }
@@ -231,11 +239,11 @@ mod tests {
     async fn test_retry_fails_after_max_retries() {
         let config = RetryConfig::new(2, 10, 100);
         let result: Result<i32, ApiError> = retry_request(&config, || async {
-            Err(ApiError::RateLimitExceeded)
+            Err(ApiError::RateLimitExceeded { retry_after_secs: None })
         })
         .await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ApiError::RateLimitExceeded));
+        assert!(matches!(result.unwrap_err(), ApiError::RateLimitExceeded { .. }));
     }
 
     #[tokio::test]

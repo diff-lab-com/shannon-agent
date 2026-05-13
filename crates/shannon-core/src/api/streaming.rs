@@ -329,7 +329,7 @@ impl Stream for ResumableSseStream {
                     ApiError::HttpError(_)
                     | ApiError::Timeout
                     | ApiError::StreamEndedUnexpectedly
-                    | ApiError::RateLimitExceeded
+                    | ApiError::RateLimitExceeded { .. }
                     | ApiError::ApiError { status: 500..=599, .. }
                 );
                 if !is_reconnectable || self.reconnects_remaining == 0 {

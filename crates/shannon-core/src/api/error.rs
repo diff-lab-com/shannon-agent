@@ -13,7 +13,7 @@ pub enum ApiError {
     AuthenticationFailed,
 
     #[error("Rate limit exceeded")]
-    RateLimitExceeded,
+    RateLimitExceeded { retry_after_secs: Option<u64> },
 
     #[error("Invalid response: {0}")]
     InvalidResponse(String),
@@ -67,7 +67,7 @@ impl ApiError {
         // Special-case well-known HTTP status codes regardless of body.
         match status {
             401 => return ApiError::AuthenticationFailed,
-            429 => return ApiError::RateLimitExceeded,
+            429 => return ApiError::RateLimitExceeded { retry_after_secs: None },
             // Server errors: use ApiError variant so the retry system can match
             // on the status code. ProviderError is for client errors with
             // structured provider info.
@@ -242,7 +242,7 @@ impl ApiError {
             return Some("The conversation is too long. Try /compact to compress context, or start a new session.".to_string());
         }
         match self {
-            ApiError::RateLimitExceeded => {
+            ApiError::RateLimitExceeded { .. } => {
                 Some("Rate limited — the request will be retried automatically. If this persists, consider using a different model.".to_string())
             }
             ApiError::AuthenticationFailed => {

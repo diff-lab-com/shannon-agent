@@ -23,7 +23,7 @@ fn test_api_error_http_error() {
 
 #[test]
 fn test_api_error_rate_limit() {
-    let err = ApiError::RateLimitExceeded;
+    let err = ApiError::RateLimitExceeded { retry_after_secs: None };
     assert!(err.to_string().contains("Rate limit"));
 }
 
@@ -143,7 +143,7 @@ fn test_401_short_circuits_to_auth_failed() {
 #[test]
 fn test_429_short_circuits_to_rate_limit() {
     let err = ApiError::from_provider_response(&LlmProvider::OpenAI, 429, "slow down");
-    assert!(matches!(err, ApiError::RateLimitExceeded));
+    assert!(matches!(err, ApiError::RateLimitExceeded { .. }));
 }
 
 #[test]
