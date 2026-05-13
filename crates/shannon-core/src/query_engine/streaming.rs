@@ -24,68 +24,78 @@ impl Default for ConversationState {
 }
 
 impl ConversationState {
-    /// Estimate the token count of the current conversation
-    /// This is a rough approximation based on character count
+    /// Estimate the token count of the current conversation.
+    /// Uses CJK-aware token estimation for better accuracy with mixed-language content.
     pub fn estimate_tokens(&self) -> usize {
-        let mut total_chars = 0;
+        use crate::compact::helpers::estimate_text_tokens;
+        let mut total: usize = 0;
         for msg in &self.messages {
-            // Rough approximation: ~4 chars per token for text
-            total_chars += match &msg.content {
-                crate::api::MessageContent::Text(text) => text.len(),
+            total += match &msg.content {
+                crate::api::MessageContent::Text(text) => estimate_text_tokens(text),
                 crate::api::MessageContent::Blocks(blocks) => {
-                    let mut block_chars = 0;
+                    let mut block_tokens = 0;
                     for block in blocks {
                         match block {
-                            crate::api::ContentBlock::Text { text } => block_chars += text.len(),
+                            crate::api::ContentBlock::Text { text } => {
+                                block_tokens += estimate_text_tokens(text)
+                            }
                             crate::api::ContentBlock::ToolUse { name, input, .. } => {
-                                block_chars +=
-                                    name.len() + serde_json::to_string(input).map_or(0, |s| s.len())
+                                block_tokens += estimate_text_tokens(name);
+                                block_tokens += serde_json::to_string(input)
+                                    .map_or(0, |s| estimate_text_tokens(&s));
                             }
                             crate::api::ContentBlock::ToolResult { content: Some(c), .. } => {
                                 match c {
                                     crate::api::ToolResultContent::Single(s) => {
-                                        block_chars += s.len()
+                                        block_tokens += estimate_text_tokens(s)
                                     }
                                     crate::api::ToolResultContent::Multiple(blocks) => {
-                                        block_chars +=
-                                            blocks.iter().map(|b| match b {
+                                        for b in blocks {
+                                            match b {
                                                 crate::api::ContentBlock::Text { text } => {
-                                                    text.len()
+                                                    block_tokens += estimate_text_tokens(text)
                                                 }
                                                 crate::api::ContentBlock::ToolUse {
-                                                    name,
-                                                    input,
-                                                    ..
+                                                    name, input, ..
                                                 } => {
-                                                    name.len()
-                                                        + serde_json::to_string(input)
-                                                            .map_or(0, |s| s.len())
+                                                    block_tokens += estimate_text_tokens(name);
+                                                    block_tokens += serde_json::to_string(input)
+                                                        .map_or(0, |s| estimate_text_tokens(&s));
                                                 }
-                                                crate::api::ContentBlock::ToolResult {
-                                                    ..
-                                                } => 0,
-                                                _ => 0,
-                                            }).sum::<usize>();
+                                                _ => {}
+                                            }
+                                        }
                                     }
                                 }
                             }
                             crate::api::ContentBlock::ToolResult { content: None, .. } => {}
+                            crate::api::ContentBlock::Image { .. } => block_tokens += 100,
                             _ => {}
                         }
                     }
-                    block_chars
+                    block_tokens
                 }
             };
         }
-        // Rough approximation: ~4 characters per token
-        total_chars / 4
+        total
     }
 
-    /// Check if the conversation needs compression based on config
+    /// Estimate tokens including an optional system prompt.
+    /// This gives a more accurate picture of total context usage.
+    pub fn estimate_tokens_with_system_prompt(&self, system_prompt: Option<&str>) -> usize {
+        use crate::compact::helpers::estimate_text_tokens;
+        let msg_tokens = self.estimate_tokens();
+        let system_tokens = system_prompt.map(|sp| estimate_text_tokens(sp)).unwrap_or(0);
+        msg_tokens + system_tokens
+    }
+
+    /// Check if the conversation needs compression based on config.
+    /// Includes system prompt in token budget for accurate threshold detection.
     pub fn needs_compression(&self, config: &QueryEngineConfig) -> bool {
         if let Some(max_tokens) = config.max_context_tokens {
             let threshold = (max_tokens as f32 * config.compression_threshold) as usize;
-            self.estimate_tokens() > threshold
+            let tokens = self.estimate_tokens_with_system_prompt(config.system_prompt.as_deref());
+            tokens > threshold
         } else {
             false
         }

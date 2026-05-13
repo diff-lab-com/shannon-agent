@@ -782,30 +782,8 @@ impl QueryEngine {
 
                 // Auto-compress conversation if it exceeds the threshold
                 {
-                    // Rough token estimate: ~4 chars per token
-                    let total_chars: usize = messages.iter().map(|m| {
-                        match &m.content {
-                            MessageContent::Text(t) => t.len(),
-                            MessageContent::Blocks(blocks) => blocks.iter().map(|b| match b {
-                                ContentBlock::Text { text } => text.len(),
-                                ContentBlock::ToolUse { name, input, .. } => {
-                                    name.len() + input.to_string().len()
-                                }
-                                ContentBlock::ToolResult { content, .. } => {
-                                    content.as_ref().map(|c| match c {
-                                        ToolResultContent::Single(s) => s.len(),
-                                        ToolResultContent::Multiple(v) => v.iter().map(|b| match b {
-                                            ContentBlock::Text { text } => text.len(),
-                                            _ => 50,
-                                        }).sum::<usize>(),
-                                    }).unwrap_or(50)
-                                }
-                                ContentBlock::Image { source } => source.data.len(),
-                                ContentBlock::Thinking { thinking } => thinking.len(),
-                            }).sum::<usize>()
-                        }
-                    }).sum();
-                    let estimated_tokens = total_chars / 4;
+                    let estimated_tokens = crate::compact::helpers::estimate_tokens(&messages)
+                        + config.system_prompt.as_ref().map(|sp| crate::compact::helpers::estimate_text_tokens(sp)).unwrap_or(0);
                     let max_context = config.max_context_tokens.unwrap_or(200_000);
                     if estimated_tokens as f32 / max_context as f32 > 0.8 {
                         // Circuit breaker: if compaction has failed repeatedly, skip it and just truncate
@@ -987,19 +965,17 @@ impl QueryEngine {
                                                     break;
                                                 }
 
-                                                // Budget warning at 80% usage
-                                                if let Some(ratio) = tracker.budget_usage_ratio() {
-                                                    if (0.8..0.81).contains(&ratio) {
-                                                        let limit = tracker.budget_limit_usd.unwrap_or(0.0);
-                                                        let total = tracker.total_cost();
-                                                        let _ = tx.send(Ok(QueryEvent::Progress {
-                                                            query_id,
-                                                            message: format!(
-                                                                "Budget warning: ${total:.4} / ${limit:.2} ({:.0}%)",
-                                                                ratio * 100.0
-                                                            ),
-                                                        }));
-                                                    }
+                                                // Budget warning at 80% usage (fires once)
+                                                if tracker.check_and_mark_budget_warning() {
+                                                    let limit = tracker.budget_limit_usd.unwrap_or(0.0);
+                                                    let total = tracker.total_cost();
+                                                    let _ = tx.send(Ok(QueryEvent::Progress {
+                                                        query_id,
+                                                        message: format!(
+                                                            "Budget warning: ${total:.4} / ${limit:.2} ({:.0}%)",
+                                                            (total / limit) * 100.0
+                                                        ),
+                                                    }));
                                                 }
                                             }
 

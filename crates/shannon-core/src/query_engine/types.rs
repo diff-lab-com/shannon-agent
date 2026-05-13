@@ -77,6 +77,8 @@ pub struct CostTracker {
     model_breakdowns: std::collections::HashMap<String, ModelCostBreakdown>,
     /// Optional budget limit in USD
     pub budget_limit_usd: Option<f64>,
+    /// Whether the 80% budget warning has already been sent
+    budget_warned: bool,
 }
 
 /// Pricing for a single model: cost per million tokens.
@@ -207,6 +209,7 @@ impl CostTracker {
             turn_costs: Vec::new(),
             model_breakdowns: std::collections::HashMap::new(),
             budget_limit_usd: None,
+            budget_warned: false,
         }
     }
 
@@ -269,6 +272,21 @@ impl CostTracker {
     pub fn budget_usage_ratio(&self) -> Option<f64> {
         self.budget_limit_usd
             .map(|limit| self.total_cost_usd / limit)
+    }
+
+    /// Check if budget warning should fire (>= 80% and not yet warned).
+    /// Marks the warning as sent so it fires only once.
+    pub fn check_and_mark_budget_warning(&mut self) -> bool {
+        if self.budget_warned {
+            return false;
+        }
+        if let Some(ratio) = self.budget_usage_ratio() {
+            if ratio >= 0.8 {
+                self.budget_warned = true;
+                return true;
+            }
+        }
+        false
     }
 
     /// Get per-turn cost records

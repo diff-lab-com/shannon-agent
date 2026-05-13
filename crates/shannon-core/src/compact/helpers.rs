@@ -69,43 +69,70 @@ pub fn truncate_text(text: &str, max_chars: usize) -> String {
     }
 }
 
+/// Estimate token count for a text string, accounting for CJK characters.
+///
+/// CJK characters typically tokenize as ~1.5 tokens each (not 4 chars/token like ASCII).
+/// This produces more accurate estimates for mixed-language content.
+pub fn estimate_text_tokens(text: &str) -> usize {
+    let mut ascii_chars: usize = 0;
+    let mut cjk_chars: usize = 0;
+    for ch in text.chars() {
+        let cp = ch as u32;
+        if (0x4E00..=0x9FFF).contains(&cp) // CJK Unified Ideographs
+            || (0x3400..=0x4DBF).contains(&cp) // CJK Extension A
+            || (0x3000..=0x303F).contains(&cp) // CJK Symbols
+            || (0x3040..=0x309F).contains(&cp) // Hiragana
+            || (0x30A0..=0x30FF).contains(&cp) // Katakana
+            || (0xAC00..=0xD7AF).contains(&cp) // Hangul Syllables
+            || (0xF900..=0xFAFF).contains(&cp) // CJK Compatibility Ideographs
+            || (0xFF00..=0xFFEF).contains(&cp)
+        {
+            // Fullwidth Forms
+            cjk_chars += 1;
+        } else {
+            ascii_chars += ch.len_utf8();
+        }
+    }
+    let ascii_tokens = ascii_chars / 4;
+    let cjk_tokens = (cjk_chars as f32 * 1.5).ceil() as usize;
+    (ascii_tokens + cjk_tokens).max(1)
+}
+
 /// Estimate token count for a single message
 pub fn estimate_message_tokens(msg: &Message) -> usize {
-    let chars = match &msg.content {
-        MessageContent::Text(text) => text.len(),
+    match &msg.content {
+        MessageContent::Text(text) => estimate_text_tokens(text),
         MessageContent::Blocks(blocks) => {
-            let mut total = 0;
+            let mut total = 0usize;
             for block in blocks {
                 match block {
-                    ContentBlock::Text { text } => total += text.len(),
+                    ContentBlock::Text { text } => total += estimate_text_tokens(text),
                     ContentBlock::ToolUse { name, input, .. } => {
-                        total += name.len();
+                        total += estimate_text_tokens(name);
                         total += serde_json::to_string(input)
-                            .map_or(0, |s| s.len());
+                            .map_or(0, |s| estimate_text_tokens(&s));
                     }
                     ContentBlock::ToolResult { content, .. } => {
                         if let Some(c) = content {
                             match c {
-                                ToolResultContent::Single(s) => total += s.len(),
+                                ToolResultContent::Single(s) => total += estimate_text_tokens(s),
                                 ToolResultContent::Multiple(blocks) => {
                                     for b in blocks {
                                         if let ContentBlock::Text { text } = b {
-                                            total += text.len();
+                                            total += estimate_text_tokens(text);
                                         }
                                     }
                                 }
                             }
                         }
                     }
-                    ContentBlock::Image { .. } => total += 100, // rough image token estimate
+                    ContentBlock::Image { .. } => total += 100,
                     ContentBlock::Thinking { .. } => {}
                 }
             }
-            total
+            total.max(1)
         }
-    };
-    // ~4 characters per token (rough approximation)
-    (chars / 4).max(1)
+    }
 }
 
 /// Estimate total token count for a slice of messages

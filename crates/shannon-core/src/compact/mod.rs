@@ -46,7 +46,7 @@ pub use compact_messages::{
 
 pub use protection::compact_messages_with_protection;
 pub use engine::CompactEngine;
-pub use helpers::{estimate_message_tokens, estimate_tokens, looks_like_code};
+pub use helpers::{estimate_message_tokens, estimate_text_tokens, estimate_tokens, looks_like_code};
 pub use protection::{classify_message_priority, MessageProtector};
 pub use summarizer::{LlmSummarizer, RuleBasedSummarizer};
 pub use types::{

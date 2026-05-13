@@ -378,7 +378,9 @@ impl HookManager {
                     exit_code: -1,
                     stdout: String::new(),
                     stderr: e.to_string(),
-                    decision: HookDecision::Allow, // Network errors don't block by default
+                    decision: HookDecision::Deny {
+                        reason: format!("HTTP hook failed: {e}"),
+                    },
                     command: format!("POST {url}"),
                 }),
             }
@@ -502,12 +504,14 @@ impl HookManager {
         let client = match &self.llm_client {
             Some(c) => c.clone(),
             None => {
-                tracing::warn!("LLM hook executed but no LlmClient configured, allowing by default");
+                tracing::warn!("LLM hook executed but no LlmClient configured, denying by default");
                 return Ok(HookResult {
                     exit_code: 0,
-                    stdout: "No LLM client configured, allowing by default".to_string(),
-                    stderr: String::new(),
-                    decision: HookDecision::Allow,
+                    stdout: String::new(),
+                    stderr: "No LLM client configured for hook evaluation".to_string(),
+                    decision: HookDecision::Deny {
+                        reason: "LLM hook requires LlmClient but none is configured".to_string(),
+                    },
                     command: command_label,
                 });
             }
@@ -576,24 +580,26 @@ Do not include any other text, explanation, or formatting.";
                 })
             }
             Ok(Err(api_err)) => {
-                // LLM call failed — fail-open (Allow) during development
-                tracing::warn!("LLM hook call failed: {api_err}, allowing by default");
+                tracing::warn!("LLM hook call failed: {api_err}, denying by default");
                 Ok(HookResult {
                     exit_code: -1,
                     stdout: String::new(),
                     stderr: format!("LLM call failed: {api_err}"),
-                    decision: HookDecision::Allow,
+                    decision: HookDecision::Deny {
+                        reason: format!("LLM hook evaluation failed: {api_err}"),
+                    },
                     command: command_label,
                 })
             }
             Err(_) => {
-                // Timeout — fail-open
-                tracing::warn!("LLM hook timed out after {}s, allowing by default", timeout.as_secs());
+                tracing::warn!("LLM hook timed out after {}s, denying by default", timeout.as_secs());
                 Ok(HookResult {
                     exit_code: -1,
                     stdout: String::new(),
                     stderr: format!("LLM hook timed out after {}s", timeout.as_secs()),
-                    decision: HookDecision::Allow,
+                    decision: HookDecision::Deny {
+                        reason: format!("LLM hook timed out after {}s", timeout.as_secs()),
+                    },
                     command: command_label,
                 })
             }
