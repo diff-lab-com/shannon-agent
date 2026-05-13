@@ -55,13 +55,26 @@ pub fn extract_text_content(msg: &Message) -> String {
     }
 }
 
-/// Truncate text to a maximum character length at a word boundary
-pub fn truncate_text(text: &str, max_chars: usize) -> String {
-    if text.len() <= max_chars {
+/// Truncate text to a maximum byte length, respecting UTF-8 boundaries.
+pub fn truncate_text(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
         return text.to_string();
     }
-    let truncated = &text[..max_chars];
+    // Find the last safe UTF-8 boundary at or before max_bytes
+    let end = text
+        .char_indices()
+        .take_while(|(i, _)| *i < max_bytes)
+        .last()
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(0);
+    if end == 0 {
+        return text
+            .chars()
+            .next()
+            .map_or_else(String::new, |c| format!("{c}..."));
+    }
     // Try to break at the last space to avoid cutting words
+    let truncated = &text[..end];
     if let Some(space_pos) = truncated.rfind(' ') {
         format!("{}...", &text[..space_pos])
     } else {
@@ -202,4 +215,30 @@ pub fn looks_like_code(msg: &Message) -> bool {
     );
 
     has_code_fence || has_file_path || has_tool_use
+}
+
+/// Tools that typically return content-rich results worth preserving in summaries.
+pub fn is_content_rich_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "Read"
+            | "Grep"
+            | "Glob"
+            | "Bash"
+            | "WebSearch"
+            | "WebFetch"
+            | "Fetch"
+            | "search"
+            | "code_search"
+            | "ast_grep_search"
+    )
+}
+
+/// Get the appropriate truncation limit for a tool result based on tool name.
+pub fn tool_result_preview_limit(tool_name: &str) -> usize {
+    if is_content_rich_tool(tool_name) {
+        400
+    } else {
+        150
+    }
 }

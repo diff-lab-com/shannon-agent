@@ -26,6 +26,8 @@ impl Summarizer for RuleBasedSummarizer {
         let mut summary_parts = Vec::new();
         let mut turn_count = 0;
         let mut tool_names: HashSet<String> = HashSet::new();
+        let mut tool_name_map: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
         let mut file_paths: HashSet<String> = HashSet::new();
         let mut errors_encountered = Vec::new();
 
@@ -44,9 +46,13 @@ impl Summarizer for RuleBasedSummarizer {
 
                     // Extract file path patterns
                     for word in text.split_whitespace() {
-                        if word.contains('/') && (word.ends_with(".rs") || word.ends_with(".toml")
-                            || word.ends_with(".md") || word.ends_with(".json")
-                            || word.ends_with(".yaml") || word.ends_with(".yml"))
+                        if word.contains('/')
+                            && (word.ends_with(".rs")
+                                || word.ends_with(".toml")
+                                || word.ends_with(".md")
+                                || word.ends_with(".json")
+                                || word.ends_with(".yaml")
+                                || word.ends_with(".yml"))
                         {
                             file_paths.insert(word.to_string());
                         }
@@ -56,29 +62,49 @@ impl Summarizer for RuleBasedSummarizer {
                 MessageContent::Blocks(blocks) => {
                     for block in blocks {
                         match block {
-                            ContentBlock::ToolUse { name, input, .. } => {
+                            ContentBlock::ToolUse {
+                                id, name, input, ..
+                            } => {
                                 tool_names.insert(name.clone());
+                                tool_name_map.insert(id.clone(), name.clone());
                                 summary_parts.push(format!(
-                                    "Tool call: {}({})",
+                                    "Tool: {}({})",
                                     name,
-                                    truncate_text(&serde_json::to_string(input).unwrap_or_default(), 100)
+                                    truncate_text(
+                                        &serde_json::to_string(input).unwrap_or_default(),
+                                        100
+                                    )
                                 ));
                             }
-                            ContentBlock::ToolResult { content, is_error, .. } => {
+                            ContentBlock::ToolResult {
+                                tool_use_id,
+                                content,
+                                is_error,
+                                ..
+                            } => {
                                 let is_err = is_error.unwrap_or(false);
+                                let tool_name = tool_name_map
+                                    .get(tool_use_id)
+                                    .map(|s| s.as_str())
+                                    .unwrap_or("unknown");
+                                let limit =
+                                    super::helpers::tool_result_preview_limit(tool_name);
                                 let result_text = match content {
-                                    Some(ToolResultContent::Single(s)) => truncate_text(s, 100),
+                                    Some(ToolResultContent::Single(s)) => {
+                                        truncate_text(s, limit)
+                                    }
                                     Some(ToolResultContent::Multiple(blocks)) => {
-                                        let count = blocks.len();
                                         let text: String = blocks
                                             .iter()
                                             .filter_map(|b| match b {
-                                                ContentBlock::Text { text } => Some(text.as_str()),
+                                                ContentBlock::Text { text } => {
+                                                    Some(text.as_str())
+                                                }
                                                 _ => None,
                                             })
                                             .collect::<Vec<_>>()
                                             .join(" ");
-                                        format!("{} items: {}", count, truncate_text(&text, 80))
+                                        truncate_text(&text, limit)
                                     }
                                     None => "(empty)".to_string(),
                                 };
@@ -86,17 +112,20 @@ impl Summarizer for RuleBasedSummarizer {
                                     errors_encountered.push(result_text.clone());
                                 }
                                 summary_parts.push(format!(
-                                    "Tool result{}: {}",
+                                    "Result{} [{}]: {}",
                                     if is_err { " (error)" } else { "" },
+                                    tool_name,
                                     result_text
                                 ));
                             }
                             ContentBlock::Text { text } => {
-                                summary_parts.push(format!("Text: {}", truncate_text(text, 100)));
+                                summary_parts
+                                    .push(format!("Text: {}", truncate_text(text, 100)));
                                 turn_count += 1;
                             }
                             ContentBlock::Image { .. } => {
-                                summary_parts.push("Image (omitted from summary)".to_string());
+                                summary_parts
+                                    .push("Image (omitted from summary)".to_string());
                             }
                             ContentBlock::Thinking { .. } => {}
                         }
