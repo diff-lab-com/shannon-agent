@@ -387,48 +387,12 @@ impl PromptWidget {
                 _ => theme.border_dim,
             }
         });
-        // Build key hint line for bottom border
+        // Bottom border — plain horizontal line (keyboard hints are shown by
+        // the centralized KeyHintWidget at the screen bottom).
         let w = area.width as usize;
-        let is_insert = self.vim_mode == "INSERT";
-        let hint_w = if is_insert {
-            unicode_width::UnicodeWidthStr::width(" Enter=Send │ PgUp/Dn=Scroll │ Ctrl+E=Editor │ Tab=Complete ")
-        } else {
-            unicode_width::UnicodeWidthStr::width(" dd=DelLine │ yy=Yank │ p=Paste │ u=Undo │ i=Insert ")
-        };
-        let bottom_line = if w > hint_w + 4 {
-            let pad = w - hint_w;
-            let left_pad = pad / 2;
-            let right_pad = pad - left_pad;
-            let sep = Span::styled(" \u{2502} ", Style::default().fg(theme.border_dim));
-            let dim = |t: &str| Span::styled(t.to_string(), Style::default().fg(theme.text_dim));
-            let key = |t: &str| Span::styled(t.to_string(), Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD));
-
-            let mut spans: Vec<Span<'static>> = vec![
-                Span::styled("─".repeat(left_pad), Style::default().fg(border_color)),
-            ];
-            if is_insert {
-                spans.extend_from_slice(&[
-                    key("Enter"), dim("=Send"), sep.clone(),
-                    key("PgUp/Dn"), dim("=Scroll"), sep.clone(),
-                    key("Ctrl+E"), dim("=Editor"), sep.clone(),
-                    key("Tab"), dim("=Complete "),
-                ]);
-            } else {
-                spans.extend_from_slice(&[
-                    key(" dd"), dim("=DelLine"), sep.clone(),
-                    key("yy"), dim("=Yank"), sep.clone(),
-                    key("p"), dim("=Paste"), sep.clone(),
-                    key("u"), dim("=Undo"), sep.clone(),
-                    key("i"), dim("=Insert "),
-                ]);
-            }
-            spans.push(Span::styled("─".repeat(right_pad), Style::default().fg(border_color)));
-            ratatui::text::Line::from(spans)
-        } else {
-            ratatui::text::Line::from(vec![
-                Span::styled("─".repeat(w), Style::default().fg(border_color)),
-            ])
-        };
+        let bottom_line = ratatui::text::Line::from(vec![
+            Span::styled("─".repeat(w), Style::default().fg(border_color)),
+        ]);
 
         let paragraph = Paragraph::new(display_lines)
             .block(
