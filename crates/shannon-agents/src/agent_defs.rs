@@ -277,6 +277,7 @@ impl AgentDefinitionRegistry {
     /// Load agent definitions from both project-local and user-global directories.
     ///
     /// Loading order (later overrides earlier):
+    /// 0. Built-in defaults (explorer, planner, code-reviewer, etc.)
     /// 1. `~/.shannon/agents/` (user-global, TOML)
     /// 2. `~/.claude/agents/` (user-global, Markdown — Claude Code compatible)
     /// 3. `.shannon/agents/` (project-local, TOML)
@@ -284,7 +285,10 @@ impl AgentDefinitionRegistry {
     pub fn load_from_dirs() -> Self {
         let mut registry = Self::new();
 
-        // 1. Load user-global TOML definitions (lowest priority)
+        // 0. Load built-in defaults (lowest priority, user files override)
+        registry.with_builtin_defaults();
+
+        // 1. Load user-global TOML definitions
         if let Some(home) = dirs::home_dir() {
             let global_dir = home.join(".shannon").join("agents");
             if global_dir.is_dir() {
@@ -397,6 +401,18 @@ impl AgentDefinitionRegistry {
         self.definitions.is_empty()
     }
 
+    /// Populate the registry with built-in agent definitions.
+    ///
+    /// Built-in definitions act as defaults — user-loaded definitions from
+    /// files will override these when names collide.
+    pub fn with_builtin_defaults(&mut self) -> &mut Self {
+        let builtins = builtin_agent_definitions();
+        for def in builtins {
+            self.definitions.entry(def.name.clone()).or_insert(def);
+        }
+        self
+    }
+
     /// Get a summary string of all loaded definitions.
     pub fn summary(&self) -> String {
         if self.definitions.is_empty() {
@@ -415,6 +431,228 @@ impl AgentDefinitionRegistry {
         }
         lines.join("\n")
     }
+}
+
+/// Return built-in agent definitions for common specialized roles.
+///
+/// These are available out-of-the-box without any user configuration.
+/// Users can override any of these by placing a file with the same agent
+/// name in their agents directory.
+fn builtin_agent_definitions() -> Vec<AgentDefinition> {
+    vec![
+        // Read-only code explorer
+        AgentDefinition {
+            name: "explorer".into(),
+            description: "Read-only code exploration and analysis".into(),
+            system_prompt: Some(
+                "You are a code explorer. Read files, search the codebase, trace execution \
+                 paths, and map architecture. Never modify any files. Focus on understanding \
+                 and documenting how code works. Produce concise summaries with file:line \
+                 references.".into(),
+            ),
+            model: None,
+            capabilities: vec!["read".into(), "search".into(), "analysis".into()],
+            allowed_tools: vec![
+                "Read".into(), "Grep".into(), "Glob".into(),
+                "Bash(git log:*)".into(), "Bash(git diff:*)".into(),
+                "Bash(find:*)".into(), "Bash(ls:*)".into(),
+            ],
+            max_concurrent_tasks: 1,
+            plan_mode_required: false,
+            temperature: None,
+        },
+        // Planning agent — produces step-by-step implementation plans
+        AgentDefinition {
+            name: "planner".into(),
+            description: "Architecture analysis and implementation planning".into(),
+            system_prompt: Some(
+                "You are a planning agent. Analyze tasks, explore relevant code, and produce \
+                 detailed step-by-step implementation plans with specific file paths, line numbers, \
+                 and code changes. Identify risks and dependencies. Do NOT modify files. \
+                 Structure output as numbered steps with rationale.".into(),
+            ),
+            model: None,
+            capabilities: vec!["planning".into(), "architecture".into()],
+            allowed_tools: vec![
+                "Read".into(), "Grep".into(), "Glob".into(),
+                "Bash(git log:*)".into(), "Bash(git diff:*)".into(),
+            ],
+            max_concurrent_tasks: 1,
+            plan_mode_required: false,
+            temperature: Some(0.3),
+        },
+        // Code reviewer — static analysis and review
+        AgentDefinition {
+            name: "code-reviewer".into(),
+            description: "Code review with bug detection and quality analysis".into(),
+            system_prompt: Some(
+                "You are a code reviewer. Analyze diffs and code for bugs, logic errors, \
+                 security vulnerabilities, performance issues, and style violations. \
+                 Rate each finding by severity (critical/high/medium/low). Provide specific \
+                 fix suggestions with code snippets. Focus on high-signal findings, not \
+                 nitpicks.".into(),
+            ),
+            model: None,
+            capabilities: vec!["code-review".into(), "security".into(), "performance".into()],
+            allowed_tools: vec![
+                "Read".into(), "Grep".into(), "Glob".into(),
+                "Bash(git diff:*)".into(), "Bash(git diff --stat:*)".into(),
+                "Bash(git log:*)".into(),
+            ],
+            max_concurrent_tasks: 2,
+            plan_mode_required: false,
+            temperature: Some(0.2),
+        },
+        // Security reviewer — OWASP-aligned security audit
+        AgentDefinition {
+            name: "security-reviewer".into(),
+            description: "Security audit aligned with OWASP Top 10".into(),
+            system_prompt: Some(
+                "You are a security reviewer. Audit code for vulnerabilities following OWASP \
+                 Top 10: injection, broken auth, sensitive data exposure, XXE, broken access \
+                 control, misconfigurations, XSS, deserialization, known-vulnerable components, \
+                 and insufficient logging. Also check for: hardcoded secrets, unsafe Rust, \
+                 path traversal, timing attacks. Provide CVSS-style severity ratings and \
+                 concrete remediation steps.".into(),
+            ),
+            model: None,
+            capabilities: vec!["security".into(), "owasp".into(), "audit".into()],
+            allowed_tools: vec![
+                "Read".into(), "Grep".into(), "Glob".into(),
+                "Bash(git diff:*)".into(), "Bash(git log:*)".into(),
+            ],
+            max_concurrent_tasks: 1,
+            plan_mode_required: false,
+            temperature: Some(0.1),
+        },
+        // Backend architect — server-side design and implementation
+        AgentDefinition {
+            name: "backend-architect".into(),
+            description: "Backend system design with focus on reliability and data integrity".into(),
+            system_prompt: Some(
+                "You are a backend architect. Design reliable backend systems with focus on \
+                 data integrity, security, and fault tolerance. Prefer simple, well-tested \
+                 solutions over clever abstractions. Consider error handling, retry logic, \
+                 idempotency, and graceful degradation. Write production-ready code with \
+                 proper logging and monitoring hooks.".into(),
+            ),
+            model: None,
+            capabilities: vec!["backend".into(), "api-design".into(), "database".into()],
+            allowed_tools: vec![
+                "Read".into(), "Write".into(), "Edit".into(), "Grep".into(), "Glob".into(),
+                "Bash(cargo check:*)".into(), "Bash(cargo test:*)".into(),
+                "Bash(cargo clippy:*)".into(),
+            ],
+            max_concurrent_tasks: 2,
+            plan_mode_required: false,
+            temperature: None,
+        },
+        // Frontend architect — UI/UX design and implementation
+        AgentDefinition {
+            name: "frontend-architect".into(),
+            description: "Frontend UI with focus on accessibility and performance".into(),
+            system_prompt: Some(
+                "You are a frontend architect. Create accessible, performant user interfaces. \
+                 Follow framework conventions, ensure responsive design, and maintain \
+                 consistent component patterns. Prioritize: semantic HTML, ARIA attributes, \
+                 keyboard navigation, screen reader compatibility, and Core Web Vitals. \
+                 Write clean, maintainable component code.".into(),
+            ),
+            model: None,
+            capabilities: vec!["frontend".into(), "ui".into(), "accessibility".into()],
+            allowed_tools: vec![
+                "Read".into(), "Write".into(), "Edit".into(), "Grep".into(), "Glob".into(),
+                "Bash(npx tsc:*)".into(), "Bash(npm run build:*)".into(),
+            ],
+            max_concurrent_tasks: 2,
+            plan_mode_required: false,
+            temperature: None,
+        },
+        // Test engineer — testing strategy and test writing
+        AgentDefinition {
+            name: "test-engineer".into(),
+            description: "Testing strategy and comprehensive test implementation".into(),
+            system_prompt: Some(
+                "You are a test engineer. Design testing strategies and implement comprehensive \
+                 tests. Cover unit, integration, and edge cases. Ensure tests are deterministic, \
+                 fast, and independent. Use appropriate mocking patterns but prefer real \
+                 dependencies when feasible. Name tests descriptively. Follow existing test \
+                 patterns in the codebase.".into(),
+            ),
+            model: None,
+            capabilities: vec!["testing".into(), "quality".into()],
+            allowed_tools: vec![
+                "Read".into(), "Write".into(), "Edit".into(), "Grep".into(), "Glob".into(),
+                "Bash(cargo test:*)".into(), "Bash(cargo check:*)".into(),
+            ],
+            max_concurrent_tasks: 2,
+            plan_mode_required: false,
+            temperature: None,
+        },
+        // Performance engineer — optimization and profiling
+        AgentDefinition {
+            name: "performance-engineer".into(),
+            description: "Performance optimization through measurement-driven analysis".into(),
+            system_prompt: Some(
+                "You are a performance engineer. Optimize system performance through \
+                 measurement-driven analysis and bottleneck elimination. Profile before \
+                 optimizing. Identify hot paths, memory allocations, and I/O bottlenecks. \
+                 Propose targeted fixes with expected impact. Prefer algorithmic improvements \
+                 over micro-optimizations. Include benchmarks when relevant.".into(),
+            ),
+            model: None,
+            capabilities: vec!["performance".into(), "profiling".into(), "optimization".into()],
+            allowed_tools: vec![
+                "Read".into(), "Write".into(), "Edit".into(), "Grep".into(), "Glob".into(),
+                "Bash(cargo bench:*)".into(), "Bash(cargo test:*)".into(),
+                "Bash(time:*)".into(),
+            ],
+            max_concurrent_tasks: 1,
+            plan_mode_required: false,
+            temperature: None,
+        },
+        // Technical writer — documentation
+        AgentDefinition {
+            name: "technical-writer".into(),
+            description: "Clear technical documentation and inline comments".into(),
+            system_prompt: Some(
+                "You are a technical writer. Create clear, comprehensive documentation \
+                 tailored to specific audiences. Write README files, API docs, architecture \
+                 guides, and inline comments. Prioritize clarity and usability. Use consistent \
+                 formatting, provide code examples, and keep documentation concise. \
+                 Avoid obvious restatements of what code does — explain why, not what.".into(),
+            ),
+            model: None,
+            capabilities: vec!["documentation".into(), "writing".into()],
+            allowed_tools: vec![
+                "Read".into(), "Write".into(), "Edit".into(), "Grep".into(), "Glob".into(),
+            ],
+            max_concurrent_tasks: 2,
+            plan_mode_required: false,
+            temperature: Some(0.5),
+        },
+        // DevOps — deployment and infrastructure
+        AgentDefinition {
+            name: "devops".into(),
+            description: "CI/CD pipelines, deployment, and infrastructure automation".into(),
+            system_prompt: Some(
+                "You are a DevOps engineer. Automate infrastructure and deployment processes \
+                 with focus on reliability and observability. Design CI/CD pipelines, Docker \
+                 configurations, and deployment strategies. Ensure rollback safety, proper \
+                 secrets management, and infrastructure-as-code practices. Prioritize \
+                 reproducibility and auditability.".into(),
+            ),
+            model: None,
+            capabilities: vec!["devops".into(), "ci-cd".into(), "infrastructure".into()],
+            allowed_tools: vec![
+                "Read".into(), "Write".into(), "Edit".into(), "Grep".into(), "Glob".into(),
+                "Bash(docker:*)".into(), "Bash(cargo build:*)".into(),
+            ],
+            max_concurrent_tasks: 1,
+            plan_mode_required: false,
+            temperature: None,
+        },
+    ]
 }
 
 #[cfg(test)]
@@ -668,5 +906,87 @@ capabilities = ["test"]
         assert_eq!(registry.get("tester").unwrap().model.as_deref(), Some("claude-haiku"));
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn builtin_definitions_loaded() {
+        let mut registry = AgentDefinitionRegistry::new();
+        registry.with_builtin_defaults();
+
+        assert!(registry.get("explorer").is_some());
+        assert!(registry.get("planner").is_some());
+        assert!(registry.get("code-reviewer").is_some());
+        assert!(registry.get("security-reviewer").is_some());
+        assert!(registry.get("backend-architect").is_some());
+        assert!(registry.get("frontend-architect").is_some());
+        assert!(registry.get("test-engineer").is_some());
+        assert!(registry.get("performance-engineer").is_some());
+        assert!(registry.get("technical-writer").is_some());
+        assert!(registry.get("devops").is_some());
+        assert_eq!(registry.list_names().len(), 10);
+    }
+
+    #[test]
+    fn builtin_definitions_are_overridable() {
+        let mut registry = AgentDefinitionRegistry::new();
+        registry.with_builtin_defaults();
+
+        // Override the explorer with a custom definition
+        let custom = AgentDefinition {
+            name: "explorer".into(),
+            description: "Custom explorer".into(),
+            system_prompt: Some("Custom prompt".into()),
+            model: Some("claude-opus".into()),
+            capabilities: vec![],
+            allowed_tools: vec![],
+            max_concurrent_tasks: 1,
+            plan_mode_required: false,
+            temperature: None,
+        };
+        registry.definitions.insert("explorer".into(), custom);
+
+        let def = registry.get("explorer").unwrap();
+        assert_eq!(def.description, "Custom explorer");
+        assert_eq!(def.model.as_deref(), Some("claude-opus"));
+    }
+
+    #[test]
+    fn builtin_explorer_is_read_only() {
+        let mut registry = AgentDefinitionRegistry::new();
+        registry.with_builtin_defaults();
+
+        let explorer = registry.get("explorer").unwrap();
+        assert!(!explorer.allowed_tools.contains(&"Write".to_string()));
+        assert!(!explorer.allowed_tools.contains(&"Edit".to_string()));
+        assert!(explorer.allowed_tools.contains(&"Read".to_string()));
+    }
+
+    #[test]
+    fn builtin_reviewer_has_low_temperature() {
+        let mut registry = AgentDefinitionRegistry::new();
+        registry.with_builtin_defaults();
+
+        let reviewer = registry.get("code-reviewer").unwrap();
+        assert_eq!(reviewer.temperature, Some(0.2));
+
+        let sec = registry.get("security-reviewer").unwrap();
+        assert_eq!(sec.temperature, Some(0.1));
+    }
+
+    #[test]
+    fn user_files_override_builtins() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("explorer.toml"),
+            "name = \"explorer\"\ndescription = \"My custom explorer\"\nmodel = \"gpt-4\"\n",
+        ).unwrap();
+
+        let mut registry = AgentDefinitionRegistry::new();
+        registry.with_builtin_defaults();
+        registry.load_from_dir(dir.path());
+
+        let def = registry.get("explorer").unwrap();
+        assert_eq!(def.description, "My custom explorer");
+        assert_eq!(def.model.as_deref(), Some("gpt-4"));
     }
 }
