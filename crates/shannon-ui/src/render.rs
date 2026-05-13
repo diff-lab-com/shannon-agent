@@ -1047,7 +1047,7 @@ fn heading_level(line: &str) -> Option<usize> {
         }
     }
     // Must be followed by a space (or end of line) to be a heading
-    if (1..=6).contains(&count) && line.chars().nth(count).is_none_or(|c| c == ' ') {
+    if (1..=6).contains(&count) && line.as_bytes().get(count).is_none_or(|&b| b == b' ') {
         Some(count)
     } else {
         None

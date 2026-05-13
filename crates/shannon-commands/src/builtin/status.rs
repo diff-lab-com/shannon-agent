@@ -139,34 +139,37 @@ pub fn parse_git_status(output: &str) -> Option<GitStatusInfo> {
         }
 
         // Short format parsing: "MM file.txt" (status codes in first two chars)
-        if line.len() > 3 && !line.starts_with(' ') && line.chars().next().is_some_and(|c| c == 'M' || c == 'A' || c == 'D' || c == 'R' || c == 'C' || c == 'U' || c == '?' || c == '!') {
-            let staged_status = line.chars().next().filter(|c| *c != ' ');
-            let unstaged_status = line.chars().nth(1).filter(|c| *c != ' ');
-            let path = line[3..].trim().to_string();
+        let bytes = line.as_bytes();
+        if line.len() > 3 && !line.starts_with(' ') {
+            let first = bytes[0];
+            let is_status = matches!(first, b'M' | b'A' | b'D' | b'R' | b'C' | b'U' | b'?' | b'!');
+            if is_status {
+                let staged_status = (first != b' ').then_some(first as char);
+                let unstaged_status = (bytes[1] != b' ').then_some(bytes[1] as char);
+                let path = line[3..].trim().to_string();
 
-            if let Some(ss) = staged_status {
-                if ss == 'U' || unstaged_status == Some('U') {
-                    conflicts.push(path.clone());
+                if let Some(ss) = staged_status {
+                    if ss == 'U' || unstaged_status == Some('U') {
+                        conflicts.push(path.clone());
+                    }
+                    staged.push(StatusFile {
+                        path: path.clone(),
+                        status: ss.to_string(),
+                        staged_status: None,
+                        old_path: None,
+                    });
                 }
-                staged.push(StatusFile {
-                    path: path.clone(),
-                    status: ss.to_string(),
-                    staged_status: None,
-                    old_path: None,
-                });
-            }
 
-            if let Some(us) = unstaged_status {
-                unstaged.push(StatusFile {
-                    path,
-                    status: us.to_string(),
-                    staged_status: None,
-                    old_path: None,
-                });
+                if let Some(us) = unstaged_status {
+                    unstaged.push(StatusFile {
+                        path,
+                        status: us.to_string(),
+                        staged_status: None,
+                        old_path: None,
+                    });
+                }
             }
         }
-
-        // Untracked files: "Untracked files:" section
         if line.contains("Untracked files:") {
             // In a real implementation, we'd parse the following section
         }

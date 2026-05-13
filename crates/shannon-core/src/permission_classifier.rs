@@ -1194,7 +1194,7 @@ fn strip_command_wrappers(command: &str) -> &str {
         let wrappers = ["timeout", "nice", "ionice", "chrt", "taskset", "nohup"];
         let mut found = false;
         for w in wrappers {
-            if stripped.starts_with(w) && stripped.chars().nth(w.len()).is_none_or(|c| c.is_whitespace()) {
+            if stripped.starts_with(w) && stripped.as_bytes().get(w.len()).is_none_or(|&b| b.is_ascii_whitespace()) {
                 // Skip the wrapper and its first argument (usually a number or flag)
                 let after_wrapper = &stripped[w.len()..].trim_start();
                 // Skip one token (the argument to the wrapper)

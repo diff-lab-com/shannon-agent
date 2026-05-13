@@ -17,6 +17,14 @@ use crate::registry::CommandRegistry;
 
 mod commit;
 mod review_pr;
+mod review;
+mod security_review;
+mod theme;
+mod effort;
+mod memory;
+mod plan;
+mod monitor;
+mod check;
 mod pdf;
 mod issue;
 mod help;
@@ -49,6 +57,14 @@ pub fn all_commands() -> Vec<Command> {
     let mut cmds = vec![
         commit::command(),
         review_pr::command(),
+        review::command(),
+        security_review::command(),
+        theme::command(),
+        effort::command(),
+        memory::command(),
+        plan::command(),
+        monitor::command(),
+        check::command(),
         pdf::command(),
         issue::command(),
         help::command(),
