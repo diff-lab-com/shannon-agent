@@ -231,7 +231,7 @@ impl BriefTool {
 
         for (i, c) in text.char_indices() {
             length += 1;
-            if c == '\n' && (text.chars().nth(i + 1) == Some('\n')) {
+            if c == '\n' && text.as_bytes().get(i + 1) == Some(&b'\n') {
                 last_boundary = i;
                 in_section = true;
             }

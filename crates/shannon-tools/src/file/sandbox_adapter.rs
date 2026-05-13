@@ -336,17 +336,17 @@ impl PathSandboxAdapter {
 
     /// Check if a path is read-only.
     fn is_read_only(&self, path: &Path) -> bool {
-        let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let resolved = safe_resolve(path);
         self.config.read_only_paths.iter().any(|ro| {
-            canonical.starts_with(ro) || canonical == *ro
+            resolved.starts_with(ro) || resolved == *ro
         })
     }
 
     /// Check if a path is in the denied list.
     fn is_path_denied(&self, path: &Path) -> bool {
-        let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let resolved = safe_resolve(path);
         self.config.denied_paths.iter().any(|denied| {
-            canonical.starts_with(denied) || canonical == *denied
+            resolved.starts_with(denied) || resolved == *denied
         })
     }
 
@@ -357,11 +357,44 @@ impl PathSandboxAdapter {
             return true;
         }
 
-        let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let resolved = safe_resolve(path);
         self.config.allowed_paths.iter().any(|allowed| {
-            canonical.starts_with(allowed) || canonical == *allowed
+            resolved.starts_with(allowed) || resolved == *allowed
         })
     }
+}
+
+/// Safely resolve a path for security checks.
+/// Uses canonicalize when the file exists; otherwise canonicalizes the parent
+/// directory (if it exists) and appends the file name, or falls back to
+/// component-based normalization that strips `.` and resolves `..`.
+fn safe_resolve(path: &Path) -> PathBuf {
+    // Best case: file exists, full canonicalization (resolves symlinks)
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return canonical;
+    }
+    // File doesn't exist yet — try canonicalizing the parent directory
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            if let Ok(canonical_parent) = std::fs::canonicalize(parent) {
+                if let Some(file_name) = path.file_name() {
+                    return canonical_parent.join(file_name);
+                }
+            }
+        }
+    }
+    // Last resort: normalize by stripping `.` and resolving `..` components
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            c => normalized.push(c.as_os_str()),
+        }
+    }
+    normalized
 }
 
 impl Default for PathSandboxAdapter {
