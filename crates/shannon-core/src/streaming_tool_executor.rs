@@ -317,10 +317,16 @@ impl StreamingToolExecutor {
         if let Some(tool) = tools.iter_mut().find(|t| t.id == tool_id) {
             tool.complete(output);
             tracing::debug!(tool_id = %tool_id, "Tool completed");
+            drop(tools);
+            self.completion_notify.notify_one();
+            Ok(())
+        } else {
+            tracing::warn!(tool_id = %tool_id, "complete_tool: unknown tool ID");
+            Err(ExecutorError::ExecutionFailed {
+                tool_id: tool_id.to_string(),
+                reason: "Tool ID not found in executor".to_string(),
+            })
         }
-        drop(tools);
-        self.completion_notify.notify_one();
-        Ok(())
     }
 
     /// Mark a tool as failed with an error message.
@@ -329,10 +335,16 @@ impl StreamingToolExecutor {
         if let Some(tool) = tools.iter_mut().find(|t| t.id == tool_id) {
             tool.fail(reason);
             tracing::debug!(tool_id = %tool_id, reason = %reason, "Tool failed");
+            drop(tools);
+            self.completion_notify.notify_one();
+            Ok(())
+        } else {
+            tracing::warn!(tool_id = %tool_id, reason = %reason, "fail_tool: unknown tool ID");
+            Err(ExecutorError::ExecutionFailed {
+                tool_id: tool_id.to_string(),
+                reason: format!("Tool ID not found in executor: {reason}"),
+            })
         }
-        drop(tools);
-        self.completion_notify.notify_one();
-        Ok(())
     }
 
     /// Get the next completed result in submission order.
