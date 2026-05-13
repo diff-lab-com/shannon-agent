@@ -55,27 +55,12 @@ impl SyntaxCache {
     }
 
     fn compute_key(lang: &str, code: &str) -> u64 {
-        let mut h: u64 = code.len() as u64;
-        // Hash language fully, then code with sampling for long blocks
-        for b in lang.bytes() {
-            h = h.wrapping_mul(31).wrapping_add(b as u64);
-        }
-        let bytes = code.as_bytes();
-        let len = bytes.len();
-        if len <= 8192 {
-            for &b in bytes {
-                h = h.wrapping_mul(31).wrapping_add(b as u64);
-            }
-        } else {
-            // Sample: first 4096 + last 4096 bytes for very long blocks
-            for &b in &bytes[..4096] {
-                h = h.wrapping_mul(31).wrapping_add(b as u64);
-            }
-            for &b in &bytes[len.saturating_sub(4096)..] {
-                h = h.wrapping_mul(31).wrapping_add(b as u64);
-            }
-        }
-        h
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+        let mut hasher = DefaultHasher::new();
+        lang.hash(&mut hasher);
+        code.hash(&mut hasher);
+        hasher.finish()
     }
 
     fn get(&self, key: u64) -> Option<&Vec<Line<'static>>> {

@@ -1609,14 +1609,23 @@ impl QueryEngine {
                                 };
                                 match retry_result {
                                     Ok(mut retry_stream) => {
-                                        // Re-process the retry stream with the same logic
+                                        // Re-process the retry stream — extract text content properly
                                         while let Some(event_result) = retry_stream.next().await {
                                             match event_result {
-                                                Ok(stream_event) => {
-                                                    // Forward all events from the retry
-                                                    let event_json = serde_json::to_string(&stream_event).unwrap_or_default();
-                                                    let _ = tx.send(Ok(QueryEvent::Text { query_id, content: event_json }));
+                                                Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                                                    match delta {
+                                                        ContentDelta::TextDelta { text } => {
+                                                            let _ = tx.send(Ok(QueryEvent::Text { query_id, content: text }));
+                                                        }
+                                                        _ => {}
+                                                    }
                                                 }
+                                                Ok(StreamEvent::MessageDelta { delta, .. }) => {
+                                                    if delta.stop_reason.as_deref() == Some("end_turn") {
+                                                        let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
+                                                    }
+                                                }
+                                                Ok(_) => {} // Ping, MessageStart, MessageStop, etc.
                                                 Err(retry_err) => {
                                                     let suggestion = retry_err.user_suggestion()
                                                         .map(|s| format!(" {s}."))
