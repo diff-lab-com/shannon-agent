@@ -422,8 +422,12 @@ async fn write_response(
         body.len(),
         body,
     );
-    let _ = stream.write_all(response.as_bytes()).await;
-    let _ = stream.shutdown().await;
+    if let Err(e) = stream.write_all(response.as_bytes()).await {
+        tracing::warn!("Failed to write HTTP response to trigger stream: {e}");
+    }
+    if let Err(e) = stream.shutdown().await {
+        tracing::debug!("Failed to shutdown trigger stream: {e}");
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -366,9 +366,13 @@ impl<T: Transport> McpClient<T> {
                             if let Some(tx) = pending.lock().await.remove(&response.id) {
                                 if let Some(error) = response.error {
                                     warn!("JSON-RPC error: {} - {}", error.code, error.message);
-                                    let _ = tx.send(serde_json::json!({"error": error}));
+                                    if tx.send(serde_json::json!({"error": error})).is_err() {
+                                        debug!("response channel closed for request {}", response.id);
+                                    }
                                 } else if let Some(result) = response.result {
-                                    let _ = tx.send(result);
+                                    if tx.send(result).is_err() {
+                                        debug!("response channel closed for request {}", response.id);
+                                    }
                                 }
                             } else {
                                 warn!("Received response for unknown request ID: {}", response.id);

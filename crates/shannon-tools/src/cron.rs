@@ -756,7 +756,9 @@ impl CronTool {
 
         if durable_jobs.is_empty() {
             // Remove the file if no durable jobs remain
-            let _ = std::fs::remove_file(&path);
+            if let Err(e) = std::fs::remove_file(&path) {
+                tracing::debug!("Failed to remove durable cron file {}: {e}", path.display());
+            }
             return;
         }
 

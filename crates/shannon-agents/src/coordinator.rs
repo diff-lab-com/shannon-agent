@@ -1175,7 +1175,14 @@ impl AgentCoordinator {
                 let teams = self.teams.read().await;
                 if let Some(team) = teams.get(team_name) {
                     if let Some(agent) = team.members.get(agent_name) {
-                        let _ = agent.assign_task(task_id).await;
+                        if let Err(e) = agent.assign_task(task_id).await {
+                            tracing::warn!(
+                                task_id = %task_id,
+                                agent = %agent_name,
+                                error = %e,
+                                "Failed to assign task to agent after file-locked claim"
+                            );
+                        }
                     }
                 }
             }
@@ -1241,7 +1248,14 @@ impl AgentCoordinator {
             let teams = self.teams.read().await;
             if let Some(team) = teams.get(team_name) {
                 if let Some(agent) = team.members.get(agent_name) {
-                    let _ = agent.assign_task(task_id).await;
+                    if let Err(e) = agent.assign_task(task_id).await {
+                        tracing::warn!(
+                            task_id = %task_id,
+                            agent = %agent_name,
+                            error = %e,
+                            "Failed to assign task to agent after in-memory claim"
+                        );
+                    }
                 }
             }
         }
@@ -1889,7 +1903,13 @@ impl AgentCoordinator {
             let teams_lock = teams.read().await;
             for (_team_name, team) in teams_lock.iter() {
                 for (_agent_name, agent) in team.members.iter() {
-                    let _ = agent.handle_message(message.clone()).await;
+                    if let Err(e) = agent.handle_message(message.clone()).await {
+                        tracing::warn!(
+                            agent = %_agent_name,
+                            error = %e,
+                            "Failed to deliver broadcast message to agent"
+                        );
+                    }
                 }
             }
         } else {
@@ -1971,11 +1991,18 @@ impl AgentCoordinator {
                                 task_id = %task.id,
                                 "Auto-claimed task for idle agent via heartbeat"
                             );
-                            let _ = event_sender.send(CoordinatorEvent::TaskAutoClaimed {
+                            if let Err(e) = event_sender.send(CoordinatorEvent::TaskAutoClaimed {
                                 task_id: task.id,
                                 team: team_name.clone(),
                                 agent: agent_name.clone(),
-                            });
+                            }) {
+                                tracing::warn!(
+                                    task_id = %task.id,
+                                    agent = %agent_name,
+                                    error = %e,
+                                    "Failed to send TaskAutoClaimed event"
+                                );
+                            }
                         }
                         Err(e) => {
                             tracing::debug!(
@@ -2094,7 +2121,14 @@ impl AgentCoordinator {
                     reason: "Team disbanded".to_string(),
                 },
             );
-            let _ = teammate.handle_message(shutdown_msg).await;
+            if let Err(e) = teammate.handle_message(shutdown_msg).await {
+                tracing::warn!(
+                    team = %team_name,
+                    agent = %agent_name,
+                    error = %e,
+                    "Failed to send shutdown message during disband"
+                );
+            }
             if let Err(e) = self.event_sender.send(CoordinatorEvent::AgentLeft {
                 team: team_name.to_string(),
                 agent: agent_name.clone(),
@@ -2113,14 +2147,27 @@ impl AgentCoordinator {
         for member in &member_names {
             let agent_tasks = self.task_board.get_agent_tasks(member).await;
             for task in agent_tasks {
-                let _ = self.task_board.fail_task(task.id, "Team disbanded".to_string()).await;
+                if let Err(e) = self.task_board.fail_task(task.id, "Team disbanded".to_string()).await {
+                    tracing::warn!(
+                        task_id = %task.id,
+                        agent = %member,
+                        error = %e,
+                        "Failed to fail task during team disband"
+                    );
+                }
             }
         }
 
         // Clean up process agents for this team
         if let Some(ref pm) = self.process_manager {
             for member in &member_names {
-                let _ = pm.graceful_shutdown_agent(member, Duration::from_secs(5)).await;
+                if let Err(e) = pm.graceful_shutdown_agent(member, Duration::from_secs(5)).await {
+                    tracing::warn!(
+                        agent = %member,
+                        error = %e,
+                        "Failed to gracefully shutdown process agent during disband"
+                    );
+                }
             }
         }
 
@@ -2434,7 +2481,14 @@ impl AgentCoordinator {
                     },
                 );
 
-                let _ = teammate.handle_message(shutdown_msg).await;
+                if let Err(e) = teammate.handle_message(shutdown_msg).await {
+                    tracing::warn!(
+                        team = %team_name,
+                        agent = %agent_name,
+                        error = %e,
+                        "Failed to send shutdown message during coordinator shutdown"
+                    );
+                }
                 if let Err(e) = self.event_sender.send(CoordinatorEvent::AgentLeft {
                     team: team_name.clone(),
                     agent: agent_name.clone(),
@@ -2451,7 +2505,9 @@ impl AgentCoordinator {
 
         // Cleanup worktrees if enabled
         if let Some(manager) = &self.worktree_manager {
-            let _ = manager.cleanup_all().await;
+            if let Err(e) = manager.cleanup_all().await {
+                tracing::warn!(error = %e, "Failed to cleanup worktrees during shutdown");
+            }
         }
 
         Ok(())

@@ -394,9 +394,13 @@ impl LspClient {
     /// Shut down the language server gracefully.
     pub async fn shutdown(&mut self) -> Result<(), String> {
         // Send shutdown request
-        let _ = self.send_request("shutdown", &json!(null)).await;
+        if let Err(e) = self.send_request("shutdown", &json!(null)).await {
+            tracing::warn!("LSP shutdown request failed: {e}");
+        }
         // Send exit notification
-        let _ = self.send_notification("exit", &json!(null)).await;
+        if let Err(e) = self.send_notification("exit", &json!(null)).await {
+            tracing::warn!("LSP exit notification failed: {e}");
+        }
         Ok(())
     }
 }

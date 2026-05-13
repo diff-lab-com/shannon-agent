@@ -1130,8 +1130,7 @@ mod tests {
         assert_eq!(report.checks.len(), 7);
         assert_eq!(report.total_pass + report.total_warn + report.total_fail + report.total_skip, 7);
 
-        // Duration should be recorded
-        assert!(report.duration_ms >= 0);
+        // Duration should be recorded (u64 is always >= 0)
         assert!(!report.timestamp.to_rfc3339().is_empty());
     }
 

@@ -189,7 +189,9 @@ impl Drop for StdioTransport {
             // Clean up the child process to prevent resource leaks.
             // kill_on_drop(true) is set, so the child will be killed when dropped.
             // Best-effort synchronous kill — start_kill is non-async.
-            let _ = child.start_kill();
+            if let Err(e) = child.start_kill() {
+                tracing::warn!("Failed to kill child process during drop: {e}");
+            }
         }
     }
 }
@@ -706,7 +708,9 @@ impl Transport for WebSocketTransport {
                         Message::Close(_) => return Ok(None),
                         Message::Ping(data) => {
                             // Respond to ping automatically
-                            let _ = stream.send(Message::Pong(data)).await;
+                            if let Err(e) = stream.send(Message::Pong(data)).await {
+                                tracing::debug!("Failed to send websocket pong: {e}");
+                            }
                             continue;
                         }
                         _ => continue,
