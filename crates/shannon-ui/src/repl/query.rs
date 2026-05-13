@@ -521,7 +521,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
 
             let chat = &repl.chat;
             let prompt = &repl.prompt;
-            let state = repl.state.clone();
+            let state = &repl.state;
             let sidebar_info = repl.sidebar_info();
 
             if let Some(ref mut term) = terminal {
