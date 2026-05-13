@@ -346,7 +346,12 @@ impl SidebarTab {
     }
 }
 
-/// Display info for a single sub-agent in the sidebar
+/// Display info for a single sub-agent in the sidebar.
+///
+/// The sidebar Agents tab shows all active sub-agents from `SubAgentRegistry`.
+/// Each agent displays its name, status (spawning→running→idle/completed/failed),
+/// team affiliation, and turn budget usage. Active agents are highlighted;
+/// completed/failed agents are dimmed.
 #[derive(Debug, Clone)]
 pub struct AgentDisplay {
     /// Agent name

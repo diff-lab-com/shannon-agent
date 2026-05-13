@@ -1,6 +1,19 @@
 //! Progress display widgets for Shannon UI
 //!
-//! Provides progress bars with various styles and animations
+//! Provides progress bars with various styles and animations.
+//!
+//! # Widgets
+//!
+//! - **ProgressBarWidget**: Single progress bar with fill/empty styles, optional title,
+//!   percentage display, and animation support.
+//!
+//! - **SpinnerWidget**: Animated braille-dot spinner for indeterminate progress
+//!   (tool execution, loading states). Supports static mode (●) for paused states.
+//!
+//! - **MultiProgressWidget**: Shows multiple labeled progress bars simultaneously.
+//!   Used for parallel tool execution — each running tool gets its own bar with
+//!   label, fill percentage, and color. Bars can be added/updated dynamically
+//!   as tools start and complete.
 
 use crate::theme::Theme;
 use ratatui::{

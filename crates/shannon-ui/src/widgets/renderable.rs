@@ -6,11 +6,51 @@
 //!
 //! This module is wired into `ChatWidget` but does **not** replace the active
 //! render path yet.  Phase 2 will switch rendering to use these cells.
+//!
+//! # Tool & Agent Status Display
+//!
+//! ## Tool Execution Animation
+//!
+//! While a tool is running, a braille-dot spinner (`TOOL_SPINNER`) animates next
+//! to the tool name. When the tool completes, the spinner is replaced by a
+//! checkmark (success) or cross (error). Duration is shown after completion.
+//!
+//! ## Tool Categories
+//!
+//! Each tool is classified by `tool_category()` into one of five categories, each
+//! with a distinct icon and theme color:
+//!
+//! | Category | Icon | Theme Color | Example Tools |
+//! |----------|------|-------------|---------------|
+//! | Read     | ▸    | `tool_read` | read_file, glob, grep |
+//! | Write    | ✎    | `tool_write`| write_file, edit |
+//! | Search   | ⊛    | `tool_search`| web_search, search |
+//! | Bash     | $    | `tool_bash` | bash, shell |
+//! | Agent    | ◆    | `accent`    | sub-agent dispatch |
+//!
+//! ## Tool Result Display
+//!
+//! Tool results render with the category icon, tool name, and optional duration.
+//! Long outputs are collapsed by default (showing first/last few lines with a
+//! "N lines collapsed" indicator). Users can expand/collapse with Enter or click.
+//! ANSI escape codes in tool output are stripped for clean display.
+//!
+//! ## Role Gutter
+//!
+//! Each message gets a colored left-gutter bar (`▕ `) for visual lane separation:
+//! user messages, assistant messages, and tool results each use a distinct color.
+//!
+//! ## Parallel Tool Progress
+//!
+//! When multiple tools execute in parallel (see `MultiProgressWidget` in
+//! `progress.rs`), each gets its own progress bar with label, fill percentage,
+//! and color. The widget supports dynamic add/update/clear for live tracking.
 
 use super::chat::{
     ChatMessage, ChatRole, MdSegment,
     parse_markdown_segments, parse_inline_formatting, highlight_search_in_text,
     wrap_line, highlight_code_cached, truncate_to,
+    detect_diff_language, highlight_diff_line,
 };
 use crate::tool_format::{strip_ansi, tool_category, ToolCategory};
 use crate::theme::Theme;
@@ -20,14 +60,23 @@ use parking_lot::Mutex;
 use ratatui::{
     layout::Rect,
     text::{Line, Span},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     widgets::{Clear, Paragraph, Widget},
 };
-#[cfg(test)]
-use ratatui::style::Color;
 
 /// Braille-dot spinner frames for tool execution animation.
 const TOOL_SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// Returns (icon, prefix, color) for a tool category.
+fn category_style(cat: ToolCategory, theme: &Theme) -> (&'static str, &'static str, Color) {
+    match cat {
+        ToolCategory::Read => ("\u{25B8}", "", theme.tool_read),
+        ToolCategory::Write => ("\u{270E}", "", theme.tool_write),
+        ToolCategory::Search => ("\u{229B}", "", theme.tool_search),
+        ToolCategory::Bash => ("", "$ ", theme.tool_bash),
+        ToolCategory::Agent => ("\u{25C6}", "", theme.accent),
+    }
+}
 
 /// Prepend a colored role gutter `▕ ` to every line for visual lane separation.
 fn add_role_gutter(lines: &mut Vec<Line<'static>>, color: ratatui::style::Color) {
@@ -266,13 +315,7 @@ impl MessageCell {
             let tool_label = msg.tool_name.as_deref().unwrap_or("tool");
 
             let cat = tool_category(tool_label);
-            let (icon, prefix, cat_color) = match cat {
-                ToolCategory::Read => ("\u{25B8}", "", theme.tool_read),
-                ToolCategory::Write => ("\u{270E}", "", theme.tool_write),
-                ToolCategory::Search => ("\u{229B}", "", theme.tool_search),
-                ToolCategory::Bash => ("", "$ ", theme.tool_bash),
-                ToolCategory::Agent => ("\u{25C6}", "", theme.accent),
-            };
+            let (icon, prefix, cat_color) = category_style(cat, theme);
 
             // Status icon + duration badge (spinner animation for running tools)
             let (status_icon, status_color, dur_badge) = if msg.duration_secs.is_none() && !msg.is_error {
@@ -352,13 +395,7 @@ impl MessageCell {
             let border_w = inner_width.clamp(20, 200);
 
             // Category icon and border color
-            let (cat_icon, cat_prefix, tool_border) = match cat {
-                ToolCategory::Read => ("\u{25B8}", "", theme.tool_read),
-                ToolCategory::Write => ("\u{270E}", "", theme.tool_write),
-                ToolCategory::Search => ("\u{229B}", "", theme.tool_search),
-                ToolCategory::Bash => ("", "$ ", theme.tool_bash),
-                ToolCategory::Agent => ("\u{25C6}", "", theme.accent),
-            };
+            let (cat_icon, cat_prefix, tool_border) = category_style(cat, theme);
 
             // Top border: ╭─ toolname ── ✓ duration ──╮
             let (status_icon, status_color) = if msg.is_error {
@@ -466,6 +503,8 @@ impl MessageCell {
                 let mut old_line: usize = 0;
                 let mut new_line: usize = 0;
 
+                let diff_lang = detect_diff_language(&content);
+
                 for raw_line in content.lines() {
                     // Parse hunk headers: @@ -old_start,old_count +new_start,new_count @@
                     if raw_line.starts_with("@@") {
@@ -505,12 +544,12 @@ impl MessageCell {
                         continue;
                     }
 
-                    let (prefix, color, bg, ln_color, inc_old, inc_new) = if raw_line.starts_with('+') {
-                        ("+", theme.diff_added, theme.diff_added_bg, theme.diff_line_number, false, true)
+                    let (color, bg, ln_color, inc_old, inc_new) = if raw_line.starts_with('+') {
+                        (theme.diff_added, theme.diff_added_bg, theme.diff_line_number, false, true)
                     } else if raw_line.starts_with('-') {
-                        ("-", theme.diff_removed, theme.diff_removed_bg, theme.diff_line_number, true, false)
+                        (theme.diff_removed, theme.diff_removed_bg, theme.diff_line_number, true, false)
                     } else {
-                        (" ", theme.diff_context, theme.diff_context_bg, theme.diff_line_number, true, true)
+                        (theme.diff_context, theme.diff_context_bg, theme.diff_line_number, true, true)
                     };
 
                     if inc_old { old_line += 1; }
@@ -518,23 +557,22 @@ impl MessageCell {
 
                     let old_ln = if inc_old { format!("{old_line:>ln_width$}") } else { " ".repeat(ln_width) };
                     let new_ln = if inc_new { format!("{new_line:>ln_width$}") } else { " ".repeat(ln_width) };
-                    let text = if prefix == " " || raw_line.is_empty() {
-                        raw_line.to_string()
-                    } else if raw_line.is_char_boundary(1) {
-                        raw_line[1..].to_string()
-                    } else {
-                        raw_line.chars().skip(1).collect()
-                    };
 
-                    lines.push(Line::from(vec![
+                    // Syntax-highlighted content spans from highlight_diff_line
+                    let mut content_spans = highlight_diff_line(raw_line, diff_lang.as_deref(), color, None);
+                    for span in &mut content_spans {
+                        span.style = span.style.bg(bg);
+                    }
+
+                    let mut all_spans = vec![
                         Span::styled("│", Style::default().fg(status_color)),
                         Span::styled(old_ln, Style::default().fg(ln_color).bg(bg)),
                         Span::styled(" ", Style::default().bg(bg)),
                         Span::styled(new_ln, Style::default().fg(ln_color).bg(bg)),
                         Span::styled(" \u{2502}", Style::default().fg(ln_color).bg(bg)),
-                        Span::styled(prefix, Style::default().fg(color).add_modifier(Modifier::BOLD).bg(bg)),
-                        Span::styled(text, Style::default().fg(color).bg(bg)),
-                    ]));
+                    ];
+                    all_spans.extend(content_spans);
+                    lines.push(Line::from(all_spans));
                 }
                 let bottom = format!("╰{}╯", "─".repeat(border_w.saturating_sub(2)));
                 lines.push(Line::from(Span::styled(bottom, Style::default().fg(tool_border))));
@@ -546,23 +584,16 @@ impl MessageCell {
             if cat == ToolCategory::Bash {
                 let row_budget: usize = 10;
                 let mut in_output = false;
-                let all_lines: Vec<String> = content.lines()
+                // Single-pass: collect non-empty lines once
+                let non_empty: Vec<&str> = content.lines()
                     .filter(|l| !l.trim().is_empty())
-                    .flat_map(|raw_line| {
-                        if raw_line.trim_start().starts_with('$') || raw_line.starts_with("> Using: bash") {
-                            let cmd = raw_line.trim_start().trim_start_matches('$').trim_start();
-                            vec![format!("│ $ {cmd}")]
-                        } else {
-                            wrap_line(raw_line, tool_width.saturating_sub(2))
-                        }
-                    })
                     .collect();
 
-                if all_lines.len() > row_budget {
+                if non_empty.len() > row_budget {
                     let head = row_budget / 2;
                     let tail = row_budget - head;
-                    // Render head lines with proper border prefix
-                    for raw_line in content.lines().filter(|l| !l.trim().is_empty()).take(head) {
+                    // Render head
+                    for raw_line in non_empty.iter().take(head) {
                         if raw_line.trim_start().starts_with('$') || raw_line.starts_with("> Using: bash") {
                             let cmd = raw_line.trim_start().trim_start_matches('$').trim_start();
                             lines.push(Line::from(vec![
@@ -577,13 +608,12 @@ impl MessageCell {
                             ]));
                         }
                     }
-                    let hidden = all_lines.len() - row_budget;
+                    let hidden = non_empty.len() - row_budget;
                     lines.push(Line::from(Span::styled(
                         format!("│ ⋯ +{hidden} more lines"),
                         Style::default().fg(theme.muted),
                     )));
-                    // Render tail lines with proper border prefix
-                    let non_empty: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+                    // Render tail
                     for raw_line in non_empty.iter().rev().take(tail).rev() {
                         if raw_line.trim_start().starts_with('$') || raw_line.starts_with("> Using: bash") {
                             let cmd = raw_line.trim_start().trim_start_matches('$').trim_start();
@@ -600,8 +630,7 @@ impl MessageCell {
                         }
                     }
                 } else {
-                    for raw_line in content.lines() {
-                        if raw_line.trim().is_empty() { continue; }
+                    for raw_line in &non_empty {
                         if raw_line.trim_start().starts_with('$') || raw_line.starts_with("> Using: bash") {
                             let cmd = raw_line.trim_start().trim_start_matches('$').trim_start();
                             lines.push(Line::from(vec![
