@@ -357,7 +357,7 @@ pub fn topological_sort(
                 .or_default()
                 .push(agent.name.as_str());
             *in_degree.get_mut(agent.name.as_str()).unwrap_or_else(|| {
-                unreachable!("in_degree entry initialized for all agents above")
+                panic!("dependency '{dep}' references unknown agent in in_degree map")
             }) += 1;
         }
     }

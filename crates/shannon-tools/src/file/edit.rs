@@ -220,7 +220,8 @@ pub fn perform_edit(content: &str, old_string: &str, new_string: &str, replace_a
         new_content = content.replace(old_string, new_string);
     } else {
         replacements = 1;
-        let offset = content.find(old_string).unwrap(); // guaranteed by contains check above
+        let offset = content.find(old_string)
+            .ok_or_else(|| EditError::NotFound("old_string not found (race condition or encoding mismatch)".to_string()))?;
         let (line, col) = byte_offset_to_line_col(content, offset);
         locations = vec![ReplacementLocation { line, column: col }];
         new_content = content.replacen(old_string, new_string, 1);

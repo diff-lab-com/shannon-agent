@@ -302,7 +302,9 @@ impl Default for SessionPersistManager {
             Err(e) => {
                 tracing::error!("failed to create SessionPersistManager with default dir: {e}");
                 Self::with_dir(std::env::temp_dir().join(".shannon").join("sessions"))
-                    .expect("SessionPersistManager fallback dir must succeed")
+                    .unwrap_or_else(|fallback_err| {
+                        panic!("SessionPersistManager: both default and temp fallback dirs failed: {fallback_err}");
+                    })
             }
         }
     }

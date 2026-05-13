@@ -618,7 +618,9 @@ impl Default for SessionRecovery {
             Err(e) => {
                 tracing::error!("failed to create SessionRecovery with default dir: {e}");
                 Self::with_dir(std::env::temp_dir().join(".shannon").join("sessions"))
-                    .expect("SessionRecovery fallback dir must succeed")
+                    .unwrap_or_else(|fallback_err| {
+                        panic!("SessionRecovery: both default and temp fallback dirs failed: {fallback_err}");
+                    })
             }
         }
     }

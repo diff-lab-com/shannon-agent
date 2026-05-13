@@ -14,6 +14,15 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
+/// Log a non-critical error instead of silently swallowing it.
+macro_rules! log_err {
+    ($result:expr, $msg:expr) => {
+        if let Err(e) = $result {
+            tracing::warn!("{}: {e}", $msg);
+        }
+    };
+}
+
 /// Maximum number of checkpoints to retain per session.
 const MAX_CHECKPOINTS: usize = 50;
 
@@ -92,14 +101,14 @@ impl CheckpointManager {
             storage_dir,
         };
         // Try to load persisted checkpoints for this session
-        let _ = mgr.load_from_disk();
+        log_err!(mgr.load_from_disk(), "failed to load checkpoints from disk");
         mgr
     }
 
     /// Set the session ID (for persistence).
     pub fn set_session_id(&mut self, session_id: &str) {
         self.session_id = session_id.to_string();
-        let _ = self.load_from_disk();
+        log_err!(self.load_from_disk(), "failed to load checkpoints from disk");
     }
 
     /// Check if the current directory is inside a git repo.
@@ -198,10 +207,8 @@ impl CheckpointManager {
             checkpoints.drain(..drain_count);
         }
 
-        let _ = self.save_to_disk();
+        log_err!(self.save_to_disk(), "failed to save checkpoints after push");
     }
-
-    /// List all stored turn checkpoints (most recent last).
     pub fn list_checkpoints(&self) -> Vec<TurnCheckpoint> {
         recover_lock(self.checkpoints.lock()).clone()
     }
@@ -246,7 +253,7 @@ impl CheckpointManager {
 
         // Remove checkpoints after the reverted one
         recover_lock(self.checkpoints.lock()).truncate(index + 1);
-        let _ = self.save_to_disk();
+        log_err!(self.save_to_disk(), "failed to save checkpoints after revert");
 
         Ok(tc)
     }
@@ -264,14 +271,14 @@ impl CheckpointManager {
     /// Pop (discard) the most recent checkpoint without reverting.
     pub fn discard_last(&self) -> Option<TurnCheckpoint> {
         let popped = recover_lock(self.checkpoints.lock()).pop();
-        let _ = self.save_to_disk();
+        log_err!(self.save_to_disk(), "failed to save checkpoints after discard");
         popped
     }
 
     /// Clear all checkpoints.
     pub fn clear(&self) {
         recover_lock(self.checkpoints.lock()).clear();
-        let _ = self.save_to_disk();
+        log_err!(self.save_to_disk(), "failed to save checkpoints after clear");
     }
 
     /// Number of stored checkpoints.
@@ -302,7 +309,7 @@ impl CheckpointManager {
         };
 
         if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
+            log_err!(fs::create_dir_all(parent), "failed to create checkpoint directory");
         }
 
         let checkpoints = recover_lock(self.checkpoints.lock());
@@ -369,7 +376,7 @@ impl CheckpointManager {
                         .unwrap_or_default()
                         .as_secs() as i64;
                     if mod_time < cutoff_ts {
-                        let _ = fs::remove_file(&path);
+                        log_err!(fs::remove_file(&path), "failed to remove old checkpoint file");
                         removed += 1;
                     }
                 }

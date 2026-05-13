@@ -491,11 +491,15 @@ impl Default for CredentialManager {
             })
             .join(".shannon")
             .join("credentials");
-        Self::with_dir(credentials_dir).unwrap_or_else(|_| {
+        Self::with_dir(credentials_dir).unwrap_or_else(|first_err| {
             let fallback = std::env::temp_dir().join(".shannon").join("credentials");
-            Self::with_dir(fallback).unwrap_or_else(|_| {
+            Self::with_dir(fallback).unwrap_or_else(|second_err| {
                 Self::with_dir(PathBuf::from("/tmp/.shannon/credentials"))
-                    .expect("credential manager fallback should succeed")
+                    .unwrap_or_else(|third_err| {
+                        panic!(
+                            "all credential dir fallbacks failed:\n  home: {first_err}\n  temp: {second_err}\n  /tmp: {third_err}"
+                        );
+                    })
             })
         })
     }
