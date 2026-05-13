@@ -210,7 +210,7 @@ fn compact_summarize(
     messages: &[Message],
     system_end: usize,
     keep_recent: usize,
-    _budget: usize,
+    budget: usize,
 ) -> CompactMessagesResult {
     let original_count = messages.len();
     let original_tokens = estimate_tokens(messages);
@@ -231,8 +231,9 @@ fn compact_summarize(
     let old_messages = &non_system[..split_point];
 
     let summarizer = RuleBasedSummarizer::new();
+    let summary_budget = budget.min(4000).max(500);
     let summary_text = summarizer
-        .summarize(old_messages, 2000)
+        .summarize(old_messages, summary_budget)
         .unwrap_or_else(|_| format!("[{} older messages compacted]", old_messages.len()));
 
     let summary_msg = Message {
