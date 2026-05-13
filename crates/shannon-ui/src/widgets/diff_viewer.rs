@@ -75,11 +75,15 @@ impl DiffViewerWidget {
 
         let lines = match output {
             Ok(o) if o.status.success() => {
-                String::from_utf8_lossy(&o.stdout)
-                    .lines()
-                    .take(200) // cap to avoid huge diffs
-                    .map(String::from)
-                    .collect()
+                let stdout = String::from_utf8_lossy(&o.stdout).into_owned();
+                let all_lines: Vec<&str> = stdout.lines().collect();
+                if all_lines.len() > 200 {
+                    let mut capped: Vec<String> = all_lines[..200].iter().map(|s| s.to_string()).collect();
+                    capped.push(format!("  ... diff truncated ({} more lines)", all_lines.len() - 200));
+                    capped
+                } else {
+                    all_lines.into_iter().map(String::from).collect()
+                }
             }
             _ => {
                 // Fallback: try unstaged diff
@@ -87,11 +91,17 @@ impl DiffViewerWidget {
                     .args(["diff", "--", path])
                     .output();
                 match output2 {
-                    Ok(o) => String::from_utf8_lossy(&o.stdout)
-                        .lines()
-                        .take(200)
-                        .map(String::from)
-                        .collect(),
+                    Ok(o) => {
+                        let stdout = String::from_utf8_lossy(&o.stdout).into_owned();
+                        let all_lines: Vec<&str> = stdout.lines().collect();
+                        if all_lines.len() > 200 {
+                            let mut capped: Vec<String> = all_lines[..200].iter().map(|s| s.to_string()).collect();
+                            capped.push(format!("  ... diff truncated ({} more lines)", all_lines.len() - 200));
+                            capped
+                        } else {
+                            all_lines.into_iter().map(String::from).collect()
+                        }
+                    }
                     Err(_) => vec!["(unable to read diff)".to_string()],
                 }
             }

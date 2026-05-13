@@ -601,7 +601,7 @@ mod tests {
         let mut response = Vec::new();
         stream.read_to_end(&mut response).await.unwrap();
 
-        let response_str = String::from_utf8(response).unwrap();
+        let response_str = String::from_utf8_lossy(&response).into_owned();
 
         // Parse status code from first line.
         let status_line = response_str.lines().next().unwrap_or("");
