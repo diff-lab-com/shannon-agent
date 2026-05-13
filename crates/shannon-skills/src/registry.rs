@@ -552,7 +552,7 @@ impl SkillRegistry {
                         meta.description.push_str("...");
                         let truncated_tokens = meta.estimated_tokens();
                         result.push(meta);
-                        let _ = tokens_used + truncated_tokens;
+                        tokens_used += truncated_tokens;
                     }
                 }
                 // Budget exhausted, stop adding skills
