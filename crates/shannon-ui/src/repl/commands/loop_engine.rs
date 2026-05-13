@@ -1228,6 +1228,50 @@ fn looks_like_interval(s: &str) -> bool {
         && s[..s.len() - 1].chars().all(|c| c.is_ascii_digit())
 }
 
+/// Parse trailing "every <interval>" clause from input.
+///
+/// Returns `(prompt_part, Some(interval))` if a trailing time expression is found,
+/// or `(original_input, None)` otherwise.
+///
+/// Matches:
+///   "check deploy every 20m"       → ("check deploy", Some("20m"))
+///   "run tests every 5 minutes"    → ("run tests", Some("5m"))
+///   "build every 2 hours"          → ("build", Some("2h"))
+///   "check every PR"               → ("check every PR", None) — not a time expr
+fn parse_trailing_every(input: &str) -> (String, Option<String>) {
+    // Find the last occurrence of " every " (space-bounded to avoid matching "everyone")
+    if let Some(pos) = input.rfind(" every ") {
+        let before = input[..pos].trim();
+        let after = input[pos + 7..].trim(); // skip " every "
+
+        // Try compact form: "every 20m", "every 2h"
+        if looks_like_interval(after) {
+            return (before.to_string(), Some(after.to_string()));
+        }
+
+        // Try word form: "every 5 minutes", "every 2 hours", "every 1 day", "every 30 seconds"
+        let words: Vec<&str> = after.split_whitespace().collect();
+        if words.len() == 2 {
+            if let Ok(n) = words[0].parse::<u32>() {
+                if n > 0 {
+                    let unit = match words[1].to_lowercase().as_str() {
+                        "second" | "seconds" | "sec" | "secs" => Some(format!("{n}s")),
+                        "minute" | "minutes" | "min" | "mins" => Some(format!("{n}m")),
+                        "hour" | "hours" | "hr" | "hrs" => Some(format!("{n}h")),
+                        "day" | "days" => Some(format!("{n}d")),
+                        _ => None,
+                    };
+                    if let Some(interval) = unit {
+                        return (before.to_string(), Some(interval));
+                    }
+                }
+            }
+        }
+    }
+
+    (input.to_string(), None)
+}
+
 /// Handle `/schedule` command — time-based task scheduling.
 ///
 /// Modes:
@@ -1245,6 +1289,7 @@ pub(crate) fn handle_schedule(repl: &mut Repl, args: &str) -> Result<()> {
             "Schedule — time-based task scheduling\n\n\
              Usage:\n\
                /schedule <interval> <prompt>           — recurring task\n\
+               /schedule <prompt> every <interval>     — trailing every clause\n\
                /schedule --cron \"0 9 * * *\" <prompt> — full cron expression\n\
                /schedule --once <interval> <prompt>    — one-shot schedule\n\
                /schedule list                          — show all tasks\n\
@@ -1256,6 +1301,8 @@ pub(crate) fn handle_schedule(repl: &mut Repl, args: &str) -> Result<()> {
                1d   — every day at midnight\n\n\
              Examples:\n\
                /schedule 5m check the deploy status\n\
+               /schedule check the deploy every 20m\n\
+               /schedule run tests every 5 minutes\n\
                /schedule --once 2h remind me to review the PR\n\
                /schedule --cron \"0 9 * * 1-5\" morning standup check\n\n\
              Recurring jobs auto-expire after 7 days.\n\
@@ -1285,7 +1332,19 @@ pub(crate) fn handle_schedule(repl: &mut Repl, args: &str) -> Result<()> {
         (true, input)
     };
 
-    let (cron_expr, prompt) = if let Some(rest) = remaining.strip_prefix("--cron ") {
+    // Check for trailing "every <N><unit>" clause (e.g. "check deploy every 20m")
+    // Only match when "every" is followed by a time expression, not words like "PR"
+    let (remaining, trailing_interval) = parse_trailing_every(remaining);
+
+    let (cron_expr, prompt) = if let Some(ref interval) = trailing_interval {
+        match interval_to_cron(interval) {
+            Ok(cron) => (cron, remaining.to_string()),
+            Err(e) => {
+                super::set_error(repl, &e);
+                return Ok(());
+            }
+        }
+    } else if let Some(rest) = remaining.strip_prefix("--cron ") {
         let rest = rest.trim();
         if rest.starts_with('"') {
             if let Some(end) = rest[1..].find('"') {

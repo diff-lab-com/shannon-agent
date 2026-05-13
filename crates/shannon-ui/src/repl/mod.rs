@@ -1281,10 +1281,17 @@ impl Repl {
             }
 
             // Check cron-based scheduled tasks and inject due prompts
-            let cron_due = self.state.cron_tool.drain_due();
-            for (id, prompt) in cron_due {
-                self.chat.add_message(ChatRole::System,
-                    format!("[Scheduled: {:.8}] {}", id, prompt));
+            if std::env::var("SHANNON_DISABLE_CRON").is_err() {
+                let cron_due = self.state.cron_tool.drain_due();
+                for job in cron_due {
+                    let overdue = if job.was_overdue { " (catch-up)" } else { "" };
+                    let next = match &job.next_run {
+                        Some(n) => format!(" — next: {n}"),
+                        None => String::new(),
+                    };
+                    self.chat.add_message(ChatRole::System,
+                        format!("[Scheduled: {:.8}]{overdue}{next} {}", job.id, job.prompt));
+                }
             }
 
             render::draw_frame(&mut terminal, self)?;

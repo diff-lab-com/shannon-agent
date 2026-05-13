@@ -422,7 +422,11 @@ impl Default for ReplState {
             theme_picker: None,
             completion_suggestions: Vec::new(),
             routine_manager: shannon_core::scheduled_routines::RoutineManager::new(),
-            cron_tool: shannon_tools::CronTool::new(),
+            cron_tool: if std::env::var("SHANNON_DISABLE_CRON").is_ok() {
+                shannon_tools::CronTool::new()
+            } else {
+                shannon_tools::CronTool::with_persistence()
+            },
             completion_suggestion_index: 0,
             plan: PlanState::default(),
             sandbox_mode: shannon_tools::SandboxMode::Direct,

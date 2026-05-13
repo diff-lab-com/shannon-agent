@@ -164,6 +164,39 @@ type CronStore = Arc<RwLock<HashMap<String, CronJob>>>;
 /// Number of days before recurring jobs auto-expire
 const RECURRING_EXPIRY_DAYS: i64 = 7;
 
+/// A due job returned by [`CronTool::drain_due`].
+#[derive(Debug, Clone)]
+pub struct DueJob {
+    /// Job ID
+    pub id: String,
+    /// Prompt to execute
+    pub prompt: String,
+    /// Human-readable next fire time for recurring jobs, None for one-shot
+    pub next_run: Option<String>,
+    /// True if this job was overdue (missed while offline)
+    pub was_overdue: bool,
+}
+
+/// Format a datetime as a human-readable relative or absolute time string.
+fn format_next_run_human(dt: &chrono::DateTime<chrono::Local>) -> String {
+    let now = chrono::Local::now();
+    let diff = *dt - now;
+    let mins = diff.num_minutes();
+    if mins <= 0 {
+        "now".to_string()
+    } else if mins < 60 {
+        format!("in {mins}m")
+    } else {
+        let hrs = mins / 60;
+        let rem_mins = mins % 60;
+        if rem_mins == 0 {
+            format!("in {hrs}h")
+        } else {
+            format!("in {hrs}h {rem_mins}m")
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Cron expression parsing & validation
 // ---------------------------------------------------------------------------
@@ -979,7 +1012,7 @@ impl CronTool {
     /// Check for due jobs, fire them, and return their prompts.
     /// Recurring jobs get their `next_run` recalculated with jitter.
     /// One-shot jobs are removed from the store.
-    pub fn drain_due(&self) -> Vec<(String, String)> {
+    pub fn drain_due(&self) -> Vec<DueJob> {
         let now = Local::now();
         let now_ts = now.timestamp();
         let mut due = Vec::new();
@@ -1003,7 +1036,16 @@ impl CronTool {
 
             for id in &due_ids {
                 if let Some(job) = store.get_mut(id) {
-                    due.push((id.clone(), job.prompt.clone()));
+                    let was_overdue = job.next_run.as_ref().is_some_and(|nr| {
+                        chrono::DateTime::parse_from_rfc3339(nr)
+                            .is_ok_and(|t| t.timestamp() < now_ts - 300)
+                    });
+                    due.push(DueJob {
+                        id: id.clone(),
+                        prompt: job.prompt.clone(),
+                        next_run: None,
+                        was_overdue,
+                    });
                     if !job.recurring {
                         job.fired = true;
                     } else if let Some(next) = calculate_next_fire(&job.cron, now.naive_local()) {
@@ -1012,7 +1054,11 @@ impl CronTool {
                         let local =
                             Local.from_local_datetime(&next).single().unwrap_or(now);
                         let jittered = local + chrono::Duration::seconds(jitter_secs as i64);
-                        job.next_run = Some(jittered.to_rfc3339());
+                        let next_str = jittered.to_rfc3339();
+                        if let Some(last) = due.last_mut() {
+                            last.next_run = Some(format_next_run_human(&jittered));
+                        }
+                        job.next_run = Some(next_str);
                     }
                 }
             }
