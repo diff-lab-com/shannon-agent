@@ -224,7 +224,9 @@ impl ChatWidget {
         let index = self.messages.len();
         self.messages.push_back(message.clone());
         self.column.push(super::renderable::MessageCell::new(message, self.collapsed_tools));
-        self.mark_continuation(self.messages.back().unwrap().role);
+        if let Some(msg) = self.messages.back() {
+            self.mark_continuation(msg.role);
+        }
 
         // Auto-scroll to bottom
         if !self.messages.is_empty() {
@@ -261,7 +263,9 @@ impl ChatWidget {
         let index = self.messages.len();
         self.messages.push_back(message.clone());
         self.column.push(super::renderable::MessageCell::new(message, self.collapsed_tools));
-        self.mark_continuation(self.messages.back().unwrap().role);
+        if let Some(msg) = self.messages.back() {
+            self.mark_continuation(msg.role);
+        }
 
         if !self.messages.is_empty() {
             self.scroll_offset = self.messages.len() - 1;
@@ -1317,11 +1321,12 @@ pub(super) fn parse_inline_formatting(text: &str, base_color: ratatui::style::Co
                 }
             }
             // Not a valid link — treat [ as plain text
+            let ch = text[pos..].chars().next().unwrap();
             spans.push(Span::styled(
-                text[pos..pos+1].to_string(),
+                ch.to_string(),
                 Style::default().fg(base_color),
             ));
-            pos += 1;
+            pos += ch.len_utf8();
         } else if bytes[pos] == b'`' {
             // `inline code`
             let search_start = pos + 1;
@@ -1387,13 +1392,16 @@ pub(super) fn parse_inline_formatting(text: &str, base_color: ratatui::style::Co
                 text[plain_start..pos].to_string(),
                 Style::default().fg(base_color),
             ));
-        } else {
-            // Unmatched *, `, or ~, treat as plain
+        } else if pos < text.len() {
+            // Unmatched *, `, or ~, treat as plain (use char-safe extraction)
+            let ch = text[pos..].chars().next().unwrap();
             spans.push(Span::styled(
-                text[pos..pos+1].to_string(),
+                ch.to_string(),
                 Style::default().fg(base_color),
             ));
-            pos += 1;
+            pos += ch.len_utf8();
+        } else {
+            break;
         }
     }
 
