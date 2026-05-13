@@ -631,6 +631,7 @@ fn humanize_field(field: &str, name: &str, names: Option<&[(&str, u32)]>) -> Str
 // ---------------------------------------------------------------------------
 
 /// Cron management tool
+#[derive(Debug, Clone)]
 pub struct CronTool {
     description: String,
     store: CronStore,
@@ -973,6 +974,54 @@ impl CronTool {
         }
 
         Ok(should_delete)
+    }
+
+    /// Check for due jobs, fire them, and return their prompts.
+    /// Recurring jobs get their `next_run` recalculated with jitter.
+    /// One-shot jobs are removed from the store.
+    pub fn drain_due(&self) -> Vec<(String, String)> {
+        let now = Local::now();
+        let now_ts = now.timestamp();
+        let mut due = Vec::new();
+
+        if let Ok(mut store) = self.store.write() {
+            let due_ids: Vec<String> = store
+                .iter()
+                .filter(|(_, job)| {
+                    if job.fired {
+                        return false;
+                    }
+                    if let Some(ref next_run) = job.next_run {
+                        if let Ok(next) = chrono::DateTime::parse_from_rfc3339(next_run) {
+                            return next.timestamp() <= now_ts;
+                        }
+                    }
+                    false
+                })
+                .map(|(id, _)| id.clone())
+                .collect();
+
+            for id in &due_ids {
+                if let Some(job) = store.get_mut(id) {
+                    due.push((id.clone(), job.prompt.clone()));
+                    if !job.recurring {
+                        job.fired = true;
+                    } else if let Some(next) = calculate_next_fire(&job.cron, now.naive_local()) {
+                        let jitter_secs =
+                            shannon_core::scheduled_routines::apply_jitter(300, 900);
+                        let local =
+                            Local.from_local_datetime(&next).single().unwrap_or(now);
+                        let jittered = local + chrono::Duration::seconds(jitter_secs as i64);
+                        job.next_run = Some(jittered.to_rfc3339());
+                    }
+                }
+            }
+
+            store.retain(|_, job| !job.fired);
+        }
+
+        self.save_durable_jobs();
+        due
     }
 }
 

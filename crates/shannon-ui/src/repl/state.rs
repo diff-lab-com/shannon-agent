@@ -101,6 +101,8 @@ pub struct ReplState {
     pub completion_suggestions: Vec<String>,
     /// Scheduled routine manager for recurring tasks
     pub routine_manager: shannon_core::scheduled_routines::RoutineManager,
+    /// Cron-based scheduler for /schedule command
+    pub cron_tool: shannon_tools::CronTool,
     /// Index of the currently highlighted completion suggestion
     pub completion_suggestion_index: usize,
     /// Plan mode state
@@ -420,6 +422,7 @@ impl Default for ReplState {
             theme_picker: None,
             completion_suggestions: Vec::new(),
             routine_manager: shannon_core::scheduled_routines::RoutineManager::new(),
+            cron_tool: shannon_tools::CronTool::new(),
             completion_suggestion_index: 0,
             plan: PlanState::default(),
             sandbox_mode: shannon_tools::SandboxMode::Direct,

@@ -1280,6 +1280,13 @@ impl Repl {
                     format!("[Routine: {name}] {prompt}"));
             }
 
+            // Check cron-based scheduled tasks and inject due prompts
+            let cron_due = self.state.cron_tool.drain_due();
+            for (id, prompt) in cron_due {
+                self.chat.add_message(ChatRole::System,
+                    format!("[Scheduled: {:.8}] {}", id, prompt));
+            }
+
             render::draw_frame(&mut terminal, self)?;
 
             // Handle events

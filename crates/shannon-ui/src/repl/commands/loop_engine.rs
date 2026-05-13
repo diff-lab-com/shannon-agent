@@ -2,6 +2,7 @@
 //! /sandbox, /notify, and related helpers.
 
 use crate::{widgets::ChatRole, Result};
+use shannon_tools::Tool;
 
 use super::super::Repl;
 
@@ -1185,4 +1186,276 @@ pub(crate) fn handle_routine(repl: &mut Repl, args: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// /schedule command — time-based task scheduling (like Claude Code's /loop)
+// ---------------------------------------------------------------------------
+
+/// Parse an interval string like "5m", "2h", "30s", "1d" into a cron expression.
+fn interval_to_cron(interval: &str) -> std::result::Result<String, String> {
+    let s = interval.trim();
+    if s.len() < 2 {
+        return Err(format!("Invalid interval '{s}'. Use format like 5m, 2h, 30s, 1d"));
+    }
+    let unit = s.chars().last().unwrap();
+    let num_str = &s[..s.len() - 1];
+    let n: u32 = num_str.parse().map_err(|_| format!("Invalid number in '{s}'"))?;
+    if n == 0 {
+        return Err("Interval must be > 0".to_string());
+    }
+    match unit {
+        's' => {
+            let mins = ((n as f64) / 60.0).ceil() as u32;
+            Ok(format!("*/{} * * * *", mins.max(1)))
+        }
+        'm' if n <= 59 => Ok(format!("*/{n} * * * *")),
+        'm' => Ok(format!("0 */{} * * *", (n / 60).max(1))),
+        'h' if n <= 23 => Ok(format!("0 */{n} * * *")),
+        'h' => Ok(format!("0 0 */{} * *", (n / 24).max(1))),
+        'd' => Ok(format!("0 0 */{n} * *")),
+        _ => Err(format!(
+            "Invalid unit '{unit}'. Use s (seconds), m (minutes), h (hours), or d (days)"
+        )),
+    }
+}
+
+/// Check if a string looks like an interval (e.g., "5m", "2h").
+fn looks_like_interval(s: &str) -> bool {
+    let s = s.trim();
+    s.len() >= 2
+        && s.chars().last().is_some_and(|c| matches!(c, 's' | 'm' | 'h' | 'd'))
+        && s[..s.len() - 1].chars().all(|c| c.is_ascii_digit())
+}
+
+/// Handle `/schedule` command — time-based task scheduling.
+///
+/// Modes:
+///   /schedule <interval> <prompt>             — recurring (e.g. 5m check deploy)
+///   /schedule --cron "0 9 * * *" <prompt>     — full cron expression
+///   /schedule --once <interval> <prompt>      — one-shot schedule
+///   /schedule list                            — show all scheduled tasks
+///   /schedule remove <id>                     — remove a task
+pub(crate) fn handle_schedule(repl: &mut Repl, args: &str) -> Result<()> {
+    let input = args.trim();
+
+    if input.is_empty() || input == "help" || input == "--help" {
+        repl.chat.add_message(
+            ChatRole::System,
+            "Schedule — time-based task scheduling\n\n\
+             Usage:\n\
+               /schedule <interval> <prompt>           — recurring task\n\
+               /schedule --cron \"0 9 * * *\" <prompt> — full cron expression\n\
+               /schedule --once <interval> <prompt>    — one-shot schedule\n\
+               /schedule list                          — show all tasks\n\
+               /schedule remove <id>                   — cancel a task\n\n\
+             Intervals: <N><unit> where unit = s/m/h/d\n\
+               30s  — every 30 seconds (rounded to minutes)\n\
+               5m   — every 5 minutes\n\
+               2h   — every 2 hours\n\
+               1d   — every day at midnight\n\n\
+             Examples:\n\
+               /schedule 5m check the deploy status\n\
+               /schedule --once 2h remind me to review the PR\n\
+               /schedule --cron \"0 9 * * 1-5\" morning standup check\n\n\
+             Recurring jobs auto-expire after 7 days.\n\
+             Use /schedule remove <id> to cancel sooner."
+                .to_string(),
+        );
+        return Ok(());
+    }
+
+    if input == "list" || input == "ls" || input == "status" {
+        return schedule_list(repl);
+    }
+
+    if let Some(rest) = input
+        .strip_prefix("remove ")
+        .or_else(|| input.strip_prefix("rm "))
+        .or_else(|| input.strip_prefix("delete "))
+        .or_else(|| input.strip_prefix("cancel "))
+    {
+        return schedule_remove(repl, rest.trim());
+    }
+
+    // Parse creation flags
+    let (recurring, remaining) = if let Some(rest) = input.strip_prefix("--once ") {
+        (false, rest.trim())
+    } else {
+        (true, input)
+    };
+
+    let (cron_expr, prompt) = if let Some(rest) = remaining.strip_prefix("--cron ") {
+        let rest = rest.trim();
+        if rest.starts_with('"') {
+            if let Some(end) = rest[1..].find('"') {
+                let cron = &rest[1..end + 1];
+                let prompt = rest[end + 2..].trim();
+                (cron.to_string(), prompt.to_string())
+            } else {
+                super::set_error(repl, "Unclosed quote in cron expression");
+                return Ok(());
+            }
+        } else {
+            let parts: Vec<&str> = rest.splitn(6, ' ').collect();
+            if parts.len() < 6 {
+                super::set_error(
+                    repl,
+                    "Expected 5-field cron expression followed by a prompt",
+                );
+                return Ok(());
+            }
+            (parts[..5].join(" "), parts[5].trim().to_string())
+        }
+    } else if looks_like_interval(remaining.split_whitespace().next().unwrap_or("")) {
+        let parts: Vec<&str> = remaining.splitn(2, ' ').collect();
+        if parts.len() < 2 {
+            super::set_error(repl, "Expected: /schedule <interval> <prompt>");
+            return Ok(());
+        }
+        match interval_to_cron(parts[0]) {
+            Ok(cron) => (cron, parts[1].trim().to_string()),
+            Err(e) => {
+                super::set_error(repl, &e);
+                return Ok(());
+            }
+        }
+    } else {
+        super::set_error(
+            repl,
+            "Expected interval (e.g. 5m) or --cron. Use /schedule help for usage.",
+        );
+        return Ok(());
+    };
+
+    if prompt.is_empty() {
+        super::set_error(repl, "no prompt provided");
+        return Ok(());
+    }
+
+    if let Err(e) = shannon_tools::cron::validate_cron(&cron_expr) {
+        super::set_error(repl, &format!("Invalid cron expression: {e}"));
+        return Ok(());
+    }
+
+    match repl.runtime.block_on(repl.state.cron_tool.execute(serde_json::json!({
+        "operation": "Create",
+        "cron": cron_expr,
+        "prompt": prompt,
+        "recurring": recurring,
+    }))) {
+        Ok(output) => {
+            let id = output.metadata.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let human = output.metadata.get("human_schedule").and_then(|v| v.as_str()).unwrap_or(&cron_expr);
+            let next_run = output.metadata.get("next_run").and_then(|v| v.as_str()).unwrap_or("pending");
+            let expires = output.metadata.get("expires_at").and_then(|v| v.as_str()).unwrap_or("N/A");
+            let kind = if recurring { "Recurring" } else { "One-shot" };
+
+            repl.chat.add_message(
+                ChatRole::System,
+                format!(
+                    "Scheduled task created.\n  ID: {id}\n  Type: {kind}\n  Schedule: {human}\n  Next run: {next_run}\n  Expires: {expires}\n  Prompt: {prompt}\n\nUse /schedule remove {id} to cancel."
+                ),
+            );
+
+            // Immediately execute the prompt (like Claude Code's /loop)
+            repl.chat.add_message(ChatRole::System, format!("[Executing scheduled task now] {prompt}"));
+            repl.prompt.set_input(prompt.clone());
+            super::submit_input(repl, None)?;
+        }
+        Err(e) => {
+            super::set_error(repl, &format!("Failed to create schedule: {e}"));
+        }
+    }
+
+    Ok(())
+}
+
+/// List all scheduled cron jobs.
+fn schedule_list(repl: &mut Repl) -> Result<()> {
+    match repl.runtime.block_on(repl.state.cron_tool.execute(serde_json::json!({
+        "operation": "List"
+    }))) {
+        Ok(output) => {
+            let jobs = output.metadata.get("jobs").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            if jobs.is_empty() {
+                repl.chat.add_message(ChatRole::System,
+                    "No scheduled tasks. Use /schedule <interval> <prompt> to create one.".to_string());
+                return Ok(());
+            }
+
+            let mut msg = format!("Scheduled Tasks ({}):\n\n", jobs.len());
+            for job in &jobs {
+                let id = job["id"].as_str().unwrap_or("?");
+                let cron = job["cron"].as_str().unwrap_or("?");
+                let human = job["human_schedule"].as_str().unwrap_or("?");
+                let prompt = job["prompt"].as_str().unwrap_or("?");
+                let recurring = job["recurring"].as_bool().unwrap_or(true);
+                let next = job["next_run"].as_str().unwrap_or("pending");
+                let kind = if recurring { "recurring" } else { "one-shot" };
+                msg.push_str(&format!(
+                    "  [{:.8}] {}\n    Schedule: {} ({})\n    Next: {}\n    Prompt: {}\n\n",
+                    id, kind, human, cron, next, prompt
+                ));
+            }
+            msg.push_str("Use /schedule remove <id> to cancel a task.");
+            repl.chat.add_message(ChatRole::System, msg);
+        }
+        Err(e) => {
+            super::set_error(repl, &format!("Failed to list schedules: {e}"));
+        }
+    }
+    Ok(())
+}
+
+/// Remove a scheduled cron job by ID (supports prefix matching).
+fn schedule_remove(repl: &mut Repl, id_prefix: &str) -> Result<()> {
+    if id_prefix.is_empty() {
+        repl.chat.add_message(ChatRole::System, "Usage: /schedule remove <id>".to_string());
+        return Ok(());
+    }
+
+    // Resolve the job ID (exact or prefix match) without holding a borrow on repl
+    let job_id = resolve_job_id(&repl.state.cron_tool, id_prefix);
+    let job_id = match job_id {
+        Ok(id) => id,
+        Err(msg) => {
+            repl.chat.add_message(ChatRole::System, msg);
+            return Ok(());
+        }
+    };
+
+    match repl.runtime.block_on(repl.state.cron_tool.execute(serde_json::json!({
+        "operation": "Delete",
+        "id": job_id
+    }))) {
+        Ok(_) => {
+            repl.chat.add_message(ChatRole::System, format!("Cancelled scheduled task {:.8}.", job_id));
+        }
+        Err(e) => {
+            super::set_error(repl, &format!("Failed to cancel: {e}"));
+        }
+    }
+    Ok(())
+}
+
+/// Resolve a job ID from a prefix, returning the full ID or an error message.
+fn resolve_job_id(cron_tool: &shannon_tools::CronTool, id_prefix: &str) -> std::result::Result<String, String> {
+    let store = cron_tool.store();
+    let store = store.read().map_err(|e| format!("Store error: {e}"))?;
+
+    if store.contains_key(id_prefix) {
+        return Ok(id_prefix.to_string());
+    }
+
+    let matches: Vec<&String> = store.keys().filter(|id| id.starts_with(id_prefix)).collect();
+    match matches.len() {
+        0 => Err(format!("No scheduled task matching '{id_prefix}'.")),
+        1 => Ok(matches[0].clone()),
+        _ => Err(format!(
+            "Ambiguous ID '{}'. Matches: {}",
+            id_prefix,
+            matches.iter().map(|m| m[..8.min(m.len())].to_string()).collect::<Vec<_>>().join(", ")
+        )),
+    }
 }

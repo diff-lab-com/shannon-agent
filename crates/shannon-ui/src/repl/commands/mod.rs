@@ -293,6 +293,7 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "notify" => web::handle_notify(repl, args)?,
             "webhook" => web::handle_webhook(repl, args)?,
             "routine" => loop_engine::handle_routine(repl, args)?,
+            "schedule" | "cron" => loop_engine::handle_schedule(repl, args)?,
             "create-pr" => git::handle_create_pr(repl, args)?,
             "patch" => git::handle_patch(repl, args)?,
             "copy" | "clip" => media::handle_copy(repl, args)?,
