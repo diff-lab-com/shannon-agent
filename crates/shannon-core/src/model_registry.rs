@@ -8,6 +8,7 @@
 //! task type, cost, and speed requirements.
 
 use crate::api::LlmProvider;
+use serde::{Deserialize, Serialize};
 
 /// Model capability flags for routing decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -352,8 +353,170 @@ pub fn model_info_for(model_id: &str) -> Option<&'static ModelInfo> {
 }
 
 // ============================================================================
+// Model Aliases
+// ============================================================================
+
+/// Tier names that resolve to the best matching model per provider.
+const TIER_OPUS: &[&str] = &["opus"];
+const TIER_SONNET: &[&str] = &["sonnet"];
+const TIER_HAIKU: &[&str] = &["haiku", "fast", "mini"];
+
+/// Resolve a model alias (tier name) to an actual model ID.
+///
+/// Recognized aliases:
+/// - `"opus"` → most capable reasoning model for the given provider
+/// - `"sonnet"` → mid-tier coding model for the given provider
+/// - `"haiku"`, `"fast"`, `"mini"` → cheapest/fastest model for the given provider
+///
+/// If `alias` is not a recognized alias, returns `None` (caller should use it as-is).
+/// If `provider` is `None`, returns the best match across all providers.
+pub fn resolve_model_alias(alias: &str, provider: Option<&LlmProvider>) -> Option<&'static str> {
+    let tier = if TIER_OPUS.contains(&alias) {
+        ModelTier::Opus
+    } else if TIER_SONNET.contains(&alias) {
+        ModelTier::Sonnet
+    } else if TIER_HAIKU.contains(&alias) {
+        ModelTier::Haiku
+    } else {
+        return None;
+    };
+
+    let candidates: Vec<&ModelInfo> = MODEL_CATALOG
+        .iter()
+        .filter(|m| match provider {
+            Some(p) => m.provider == *p,
+            None => true,
+        })
+        .filter(|m| m.capabilities.has(tier.required_capability()))
+        .collect();
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    Some(tier.select(&candidates).id)
+}
+
+/// Resolve a model string that might be an alias or a literal model ID.
+///
+/// If the string is a recognized alias, resolves it. Otherwise returns it as-is.
+pub fn resolve_model(model: &str, provider: Option<&LlmProvider>) -> String {
+    resolve_model_alias(model, provider)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| model.to_string())
+}
+
+/// Model tier for alias resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModelTier {
+    Opus,
+    Sonnet,
+    Haiku,
+}
+
+impl ModelTier {
+    fn required_capability(self) -> ModelCapabilities {
+        match self {
+            Self::Opus => ModelCapabilities::reasoning(),
+            Self::Sonnet => ModelCapabilities::coding(),
+            Self::Haiku => ModelCapabilities::cheap().or(ModelCapabilities::speed()),
+        }
+    }
+
+    fn select<'a>(self, candidates: &[&'a ModelInfo]) -> &'a ModelInfo {
+        match self {
+            // Opus: pick most expensive (most capable)
+            Self::Opus => candidates
+                .iter()
+                .max_by(|a, b| {
+                    (a.cost_per_m_input + a.cost_per_m_output)
+                        .partial_cmp(&(b.cost_per_m_input + b.cost_per_m_output))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .copied()
+                .unwrap(),
+            // Sonnet: pick mid-range cost
+            Self::Sonnet => {
+                let mut sorted: Vec<&ModelInfo> = candidates.iter().copied().collect();
+                sorted.sort_by(|a, b| {
+                    (a.cost_per_m_input + a.cost_per_m_output)
+                        .partial_cmp(&(b.cost_per_m_input + b.cost_per_m_output))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                let idx = (sorted.len() - 1) / 2;
+                sorted[idx]
+            }
+            // Haiku: pick cheapest
+            Self::Haiku => candidates
+                .iter()
+                .min_by(|a, b| {
+                    (a.cost_per_m_input + a.cost_per_m_output)
+                        .partial_cmp(&(b.cost_per_m_input + b.cost_per_m_output))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .copied()
+                .unwrap(),
+        }
+    }
+}
+
+/// Return all recognized alias names (for tab completion).
+pub fn model_aliases() -> &'static [&'static str] {
+    &["opus", "sonnet", "haiku"]
+}
+
+/// Check if a string is a recognized model alias.
+pub fn is_model_alias(s: &str) -> bool {
+    resolve_model_alias(s, None).is_some()
+}
+
+// ============================================================================
 // Model Router
 // ============================================================================
+
+/// Effort level controlling reasoning depth and token budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EffortLevel {
+    Low,
+    Medium,
+    High,
+}
+
+impl Default for EffortLevel {
+    fn default() -> Self {
+        Self::Medium
+    }
+}
+
+impl EffortLevel {
+    /// Parse from string (case-insensitive). Returns None for unrecognized values.
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "low" => Some(Self::Low),
+            "medium" | "med" => Some(Self::Medium),
+            "high" | "max" => Some(Self::High),
+            _ => None,
+        }
+    }
+
+    /// Suggested `thinking_budget` (extended thinking tokens) for this effort level.
+    pub fn thinking_budget(self) -> Option<usize> {
+        match self {
+            Self::Low => None,
+            Self::Medium => Some(10_000),
+            Self::High => Some(32_000),
+        }
+    }
+
+    /// Suggested `max_tokens` multiplier relative to the model's default.
+    pub fn max_tokens_factor(self) -> f64 {
+        match self {
+            Self::Low => 0.5,
+            Self::Medium => 1.0,
+            Self::High => 1.5,
+        }
+    }
+}
 
 /// Task type hint for model routing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -519,5 +682,91 @@ mod tests {
     #[test]
     fn test_router_estimate_cost_unknown() {
         assert_eq!(ModelRouter::estimate_cost("nonexistent", 1000, 1000), 0.0);
+    }
+
+    // ── Alias tests ──
+
+    #[test]
+    fn test_resolve_alias_opus() {
+        let resolved = resolve_model_alias("opus", None);
+        assert!(resolved.is_some());
+        let id = resolved.unwrap();
+        let info = model_info_for(id).unwrap();
+        assert!(info.capabilities.has(ModelCapabilities::reasoning()));
+    }
+
+    #[test]
+    fn test_resolve_alias_sonnet() {
+        let resolved = resolve_model_alias("sonnet", None);
+        assert!(resolved.is_some());
+        let id = resolved.unwrap();
+        let info = model_info_for(id).unwrap();
+        assert!(info.capabilities.has(ModelCapabilities::coding()));
+    }
+
+    #[test]
+    fn test_resolve_alias_haiku() {
+        let resolved = resolve_model_alias("haiku", None);
+        assert!(resolved.is_some());
+        let id = resolved.unwrap();
+        let info = model_info_for(id).unwrap();
+        assert!(info.capabilities.has(ModelCapabilities::cheap()));
+    }
+
+    #[test]
+    fn test_resolve_alias_per_provider() {
+        let anthropic = resolve_model_alias("opus", Some(&LlmProvider::Anthropic));
+        assert!(anthropic.is_some());
+        assert!(anthropic.unwrap().starts_with("claude-opus"));
+
+        let openai = resolve_model_alias("haiku", Some(&LlmProvider::OpenAI));
+        assert!(openai.is_some());
+        assert!(openai.unwrap().contains("mini"));
+    }
+
+    #[test]
+    fn test_resolve_alias_unknown() {
+        assert!(resolve_model_alias("claude-sonnet-4-20250514", None).is_none());
+        assert!(resolve_model_alias("gpt-4o", None).is_none());
+    }
+
+    #[test]
+    fn test_resolve_model_passthrough() {
+        assert_eq!(resolve_model("claude-sonnet-4-20250514", None), "claude-sonnet-4-20250514");
+    }
+
+    #[test]
+    fn test_resolve_model_alias_resolved() {
+        let resolved = resolve_model("haiku", None);
+        // Should resolve to an actual model ID, not "haiku"
+        assert_ne!(resolved, "haiku");
+        assert!(model_info_for(&resolved).is_some());
+    }
+
+    #[test]
+    fn test_is_model_alias() {
+        assert!(is_model_alias("opus"));
+        assert!(is_model_alias("sonnet"));
+        assert!(is_model_alias("haiku"));
+        assert!(is_model_alias("fast"));
+        assert!(is_model_alias("mini"));
+        assert!(!is_model_alias("gpt-4o"));
+        assert!(!is_model_alias("claude-sonnet-4"));
+    }
+
+    #[test]
+    fn test_effort_level_parse() {
+        assert_eq!(EffortLevel::from_str_opt("low"), Some(EffortLevel::Low));
+        assert_eq!(EffortLevel::from_str_opt("HIGH"), Some(EffortLevel::High));
+        assert_eq!(EffortLevel::from_str_opt("medium"), Some(EffortLevel::Medium));
+        assert_eq!(EffortLevel::from_str_opt("med"), Some(EffortLevel::Medium));
+        assert_eq!(EffortLevel::from_str_opt("unknown"), None);
+    }
+
+    #[test]
+    fn test_effort_level_budget() {
+        assert!(EffortLevel::Low.thinking_budget().is_none());
+        assert!(EffortLevel::Medium.thinking_budget().unwrap() > 0);
+        assert!(EffortLevel::High.thinking_budget().unwrap() > EffortLevel::Medium.thinking_budget().unwrap());
     }
 }
