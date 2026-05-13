@@ -228,14 +228,21 @@ impl PathSandboxAdapter {
     /// 1. It is not in the denied commands list
     /// 2. If allowed_commands is non-empty, it must be in the list
     pub fn check_command_safety(&self, command: &str) -> SandboxResult {
-        let base_command = command.split_whitespace().next().unwrap_or(command);
+        let raw_base = command.split_whitespace().next().unwrap_or(command);
+        // Normalize: strip leading "./" and extract filename after last "/" to prevent bypass
+        let normalized = raw_base
+            .strip_prefix("./").unwrap_or(raw_base)
+            .rsplit('/').next().unwrap_or(raw_base);
 
         // Check denied commands
         for denied in &self.config.denied_commands {
             let denied_base = denied.split_whitespace().next().unwrap_or(denied);
-            if base_command == denied_base || command.contains(denied) {
+            if raw_base == denied_base
+                || normalized == denied_base
+                || command.contains(denied)
+            {
                 return SandboxResult::denied(&format!(
-                    "Command '{base_command}' is in the denied list"
+                    "Command '{raw_base}' is in the denied list"
                 ));
             }
         }
@@ -246,15 +253,15 @@ impl PathSandboxAdapter {
                 .config
                 .allowed_commands
                 .iter()
-                .any(|allowed| base_command == allowed);
+                .any(|allowed| raw_base == allowed || normalized == allowed);
             if !found {
                 return SandboxResult::denied(&format!(
-                    "Command '{base_command}' is not in the allowed list"
+                    "Command '{raw_base}' is not in the allowed list"
                 ));
             }
         }
 
-        SandboxResult::allowed(&format!("Command '{base_command}' is safe to execute"))
+        SandboxResult::allowed(&format!("Command '{raw_base}' is safe to execute"))
     }
 
     /// Check if a file size is within limits.
