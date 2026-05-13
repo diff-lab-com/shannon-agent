@@ -33,3 +33,9 @@ bytes = { workspace = true }
 # Testing dependencies
 tempfile = "3.15"
 futures-util = { workspace = true }
+tokio-test = "0.4"
+criterion = "0.5"
+
+[[bench]]
+name = "protocol_benchmarks"
+harness = false

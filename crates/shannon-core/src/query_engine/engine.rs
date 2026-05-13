@@ -532,10 +532,10 @@ impl QueryEngine {
 
         // Resolve model aliases in fast_model and plan_model
         let fast_model = self.config.fast_model.as_ref().map(|m| {
-            crate::model_registry::resolve_model(m, Some(&self.client.provider()))
+            crate::model_registry::resolve_model(m, Some(self.client.provider()))
         });
         let plan_model = self.config.plan_model.as_ref().map(|m| {
-            crate::model_registry::resolve_model(m, Some(&self.client.provider()))
+            crate::model_registry::resolve_model(m, Some(self.client.provider()))
         });
 
         // Multi-tier model routing
@@ -1613,11 +1613,8 @@ impl QueryEngine {
                                         while let Some(event_result) = retry_stream.next().await {
                                             match event_result {
                                                 Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
-                                                    match delta {
-                                                        ContentDelta::TextDelta { text } => {
-                                                            let _ = tx.send(Ok(QueryEvent::Text { query_id, content: text }));
-                                                        }
-                                                        _ => {}
+                                                    if let ContentDelta::TextDelta { text } = delta {
+                                                        let _ = tx.send(Ok(QueryEvent::Text { query_id, content: text }));
                                                     }
                                                 }
                                                 Ok(StreamEvent::MessageDelta { delta, .. }) => {

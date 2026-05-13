@@ -126,6 +126,7 @@ pub struct MemoryFile {
     pub auto_enabled: bool,
 }
 
+#[allow(dead_code)]
 impl MemoryFile {
     /// Get the memory directory path
     pub fn memory_dir() -> std::path::PathBuf {
@@ -179,6 +180,7 @@ impl MemoryFile {
 }
 
 /// Simple hash for project paths (no external dependency)
+#[allow(dead_code)]
 fn simple_hash(s: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -187,6 +189,7 @@ fn simple_hash(s: &str) -> String {
 }
 
 /// Timestamp without chrono dependency
+#[allow(dead_code)]
 fn chrono_like_now() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

@@ -31,6 +31,13 @@ walkdir = "2.5"
 # Testing
 tempfile = "3.16"
 
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "codegen_benchmarks"
+harness = false
+
 [features]
 default = ["rust", "python", "javascript", "typescript", "go"]
 rust = ["tree-sitter-rust"]

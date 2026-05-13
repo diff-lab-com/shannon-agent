@@ -29,7 +29,7 @@ mod methods {
 }
 
 #[derive(Parser, Debug, Clone)]
-#[command(name = "shannon-agent", about = "Standalone agent process")]
+#[command(name = "shannon-agent", about = "Standalone agent process", version)]
 struct Args {
     /// Agent name (must be unique within the team)
     #[arg(long)]

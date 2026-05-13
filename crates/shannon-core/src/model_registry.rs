@@ -433,11 +433,10 @@ impl ModelTier {
                         .partial_cmp(&(b.cost_per_m_input + b.cost_per_m_output))
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
-                .copied()
-                .unwrap(),
+                .expect("at least one candidate for Opus selection"),
             // Sonnet: pick mid-range cost
             Self::Sonnet => {
-                let mut sorted: Vec<&ModelInfo> = candidates.iter().copied().collect();
+                let mut sorted: Vec<&ModelInfo> = candidates.to_vec();
                 sorted.sort_by(|a, b| {
                     (a.cost_per_m_input + a.cost_per_m_output)
                         .partial_cmp(&(b.cost_per_m_input + b.cost_per_m_output))
@@ -454,8 +453,7 @@ impl ModelTier {
                         .partial_cmp(&(b.cost_per_m_input + b.cost_per_m_output))
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
-                .copied()
-                .unwrap(),
+                .expect("at least one candidate for Haiku selection"),
         }
     }
 }

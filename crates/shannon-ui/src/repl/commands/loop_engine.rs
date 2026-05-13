@@ -1346,10 +1346,10 @@ pub(crate) fn handle_schedule(repl: &mut Repl, args: &str) -> Result<()> {
         }
     } else if let Some(rest) = remaining.strip_prefix("--cron ") {
         let rest = rest.trim();
-        if rest.starts_with('"') {
-            if let Some(end) = rest[1..].find('"') {
-                let cron = &rest[1..end + 1];
-                let prompt = rest[end + 2..].trim();
+        if let Some(rest) = rest.strip_prefix('"') {
+            if let Some(end) = rest.find('"') {
+                let cron = &rest[..end];
+                let prompt = rest[end + 1..].trim();
                 (cron.to_string(), prompt.to_string())
             } else {
                 super::set_error(repl, "Unclosed quote in cron expression");
@@ -1453,8 +1453,7 @@ fn schedule_list(repl: &mut Repl) -> Result<()> {
                 let next = job["next_run"].as_str().unwrap_or("pending");
                 let kind = if recurring { "recurring" } else { "one-shot" };
                 msg.push_str(&format!(
-                    "  [{:.8}] {}\n    Schedule: {} ({})\n    Next: {}\n    Prompt: {}\n\n",
-                    id, kind, human, cron, next, prompt
+                    "  [{id:.8}] {kind}\n    Schedule: {human} ({cron})\n    Next: {next}\n    Prompt: {prompt}\n\n",
                 ));
             }
             msg.push_str("Use /schedule remove <id> to cancel a task.");
@@ -1489,7 +1488,7 @@ fn schedule_remove(repl: &mut Repl, id_prefix: &str) -> Result<()> {
         "id": job_id
     }))) {
         Ok(_) => {
-            repl.chat.add_message(ChatRole::System, format!("Cancelled scheduled task {:.8}.", job_id));
+            repl.chat.add_message(ChatRole::System, format!("Cancelled scheduled task {job_id:.8}."));
         }
         Err(e) => {
             super::set_error(repl, &format!("Failed to cancel: {e}"));

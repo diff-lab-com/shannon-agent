@@ -24,6 +24,9 @@ tauri = { version = "2", optional = true }
 [build-dependencies]
 tauri-build = { version = "2", optional = true }
 
+[dev-dependencies]
+tokio-test = "0.4"
+
 [package.metadata.tauri]
 # Tauri build configuration — these settings control the native window
 productName = "Shannon Code"

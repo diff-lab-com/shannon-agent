@@ -41,3 +41,8 @@ dirs.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+criterion = "0.5"
+
+[[bench]]
+name = "skills_benchmarks"
+harness = false

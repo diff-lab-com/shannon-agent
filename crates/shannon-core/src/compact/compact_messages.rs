@@ -231,7 +231,7 @@ fn compact_summarize(
     let old_messages = &non_system[..split_point];
 
     let summarizer = RuleBasedSummarizer::new();
-    let summary_budget = budget.min(4000).max(500);
+    let summary_budget = budget.clamp(500, 4000);
     let summary_text = summarizer
         .summarize(old_messages, summary_budget)
         .unwrap_or_else(|_| format!("[{} older messages compacted]", old_messages.len()));

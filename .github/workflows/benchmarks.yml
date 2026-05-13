@@ -1,0 +1,22 @@
+name: Benchmarks
+on:
+  schedule:
+    - cron: '0 3 * * 0'  # Weekly Sunday 3am UTC
+  workflow_dispatch:
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.85"
+      - uses: Swatinem/rust-cache@v2
+      - name: Run benchmarks
+        run: cargo bench --workspace 2>&1 | tee benchmark-results.txt
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmark-results.txt

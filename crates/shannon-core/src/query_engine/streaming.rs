@@ -85,7 +85,7 @@ impl ConversationState {
     pub fn estimate_tokens_with_system_prompt(&self, system_prompt: Option<&str>) -> usize {
         use crate::compact::helpers::estimate_text_tokens;
         let msg_tokens = self.estimate_tokens();
-        let system_tokens = system_prompt.map(|sp| estimate_text_tokens(sp)).unwrap_or(0);
+        let system_tokens = system_prompt.map(estimate_text_tokens).unwrap_or(0);
         msg_tokens + system_tokens
     }
 

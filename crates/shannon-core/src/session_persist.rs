@@ -347,7 +347,6 @@ fn default_storage_dir() -> PathBuf {
 /// Uses a simple XOR-fold of the bytes in the canonical JSON representation.
 /// This is not cryptographically secure but is sufficient for detecting
 /// whether the session data has changed between saves.
-
 /// Apply format migrations to bring an older session up to the current version.
 /// Add version-specific migration steps as the format evolves.
 fn migrate_session(file: &mut SessionFile) {
