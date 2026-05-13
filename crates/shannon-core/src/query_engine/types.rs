@@ -575,6 +575,10 @@ pub enum QueryEvent {
         input_tokens: u64,
         output_tokens: u64,
         cost_usd: f64,
+        /// Tokens written to prompt cache this request
+        cache_creation_tokens: u64,
+        /// Tokens read from prompt cache this request
+        cache_read_tokens: u64,
     },
 
     /// Cost summary event

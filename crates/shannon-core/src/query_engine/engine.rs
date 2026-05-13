@@ -936,11 +936,16 @@ impl QueryEngine {
                                                 }
                                             }
 
+                                            let cache_creation_tokens = usage.cache_creation_input_tokens as u64;
+                                            let cache_read_tokens = usage.cache_read_input_tokens as u64;
+
                                             let _ = tx.send(Ok(QueryEvent::Usage {
                                                 query_id,
                                                 input_tokens,
                                                 output_tokens,
                                                 cost_usd,
+                                                cache_creation_tokens,
+                                                cache_read_tokens,
                                             }));
 
                                             if !tool_inputs.is_empty() {

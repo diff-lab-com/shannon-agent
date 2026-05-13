@@ -54,6 +54,7 @@ struct StreamingState {
     progress: f64,
     multi_progress: Vec<(String, f64, ratatui::style::Color)>,
     tokens: (u64, u64), // (input, output)
+    cached_tokens: u64,
     tools: usize,
     budget: Option<f64>,
     delta: String,
@@ -75,6 +76,7 @@ impl Default for StreamingState {
             progress: 0.0,
             multi_progress: Vec::new(),
             tokens: (0, 0),
+            cached_tokens: 0,
             tools: 0,
             budget: None,
             delta: String::new(),
@@ -296,8 +298,11 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                         s.buffer = response_text.clone();
                     }
                 }
-                Ok(QueryEvent::Usage { input_tokens, output_tokens, cost_usd: _, .. }) => {
-                    if let Ok(mut s) = ss.lock() { s.tokens = (input_tokens, output_tokens); }
+                Ok(QueryEvent::Usage { input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, .. }) => {
+                    if let Ok(mut s) = ss.lock() {
+                        s.tokens = (input_tokens, output_tokens);
+                        s.cached_tokens += cache_read_tokens + cache_creation_tokens;
+                    }
                 }
                 Ok(QueryEvent::Cost { total_cost_usd, input_tokens, output_tokens, .. }) => {
                     tokens_in_turn = input_tokens + output_tokens;
@@ -458,6 +463,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                     repl.state.tokens_used = pre_stream_tokens + input + output;
                     repl.state.input_tokens = input;
                     repl.state.output_tokens = output;
+                    repl.state.cached_tokens = s.cached_tokens;
                     // Track token output rate
                     if output > 0 {
                         let output_start = repl.state.streaming_output_start.get_or_insert_with(std::time::Instant::now);
@@ -525,6 +531,12 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                 let mut render_ctx = crate::widgets::RenderContext::new(chat, prompt, &state.theme, &state.status);
                 render_ctx.model = state.model.as_deref();
                 render_ctx.tokens_used = Some(state.tokens_used);
+                render_ctx.max_tokens = state.model.as_ref()
+                    .map(|m| shannon_core::model_registry::context_window_for(m) as u64);
+                render_ctx.cost_usd = Some(state.total_cost_usd);
+                render_ctx.token_breakdown = Some((state.input_tokens, state.output_tokens));
+                render_ctx.diag_counts = Some((state.diagnostic_store.error_count(), state.diagnostic_store.warning_count()));
+                render_ctx.rate_limit = state.rate_limit_5h;
                 render_ctx.git_branch = state.git_branch.as_deref();
                 render_ctx.spinner = Some(spinner);
                 render_ctx.progress_bar = pb;

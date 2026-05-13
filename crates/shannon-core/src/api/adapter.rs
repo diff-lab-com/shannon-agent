@@ -499,14 +499,8 @@ pub fn normalize_response(
                 stop_reason: choice.finish_reason,
                 usage: resp
                     .usage
-                    .map(|u| super::types::Usage {
-                        input_tokens: u.prompt_tokens.unwrap_or(0),
-                        output_tokens: u.completion_tokens.unwrap_or(0),
-                    })
-                    .unwrap_or(super::types::Usage {
-                        input_tokens: 0,
-                        output_tokens: 0,
-                    }),
+                    .map(|u| super::types::Usage { input_tokens: u.prompt_tokens.unwrap_or(0), output_tokens: u.completion_tokens.unwrap_or(0), ..Default::default() })
+                    .unwrap_or(super::types::Usage { input_tokens: 0, output_tokens: 0, ..Default::default() }),
             })
         }
         LlmProvider::Ollama => {
@@ -546,10 +540,7 @@ pub fn normalize_response(
                 } else {
                     None
                 },
-                usage: super::types::Usage {
-                    input_tokens: resp.prompt_eval_count.unwrap_or(0),
-                    output_tokens: resp.eval_count.unwrap_or(0),
-                },
+                usage: super::types::Usage { input_tokens: resp.prompt_eval_count.unwrap_or(0), output_tokens: resp.eval_count.unwrap_or(0), ..Default::default() },
             })
         }
         LlmProvider::Gemini => normalize_gemini_response(json_str),
@@ -656,6 +647,7 @@ fn normalize_openai_event(
             usage: Usage {
                 input_tokens: usage.prompt_tokens.unwrap_or(0),
                 output_tokens: usage.completion_tokens.unwrap_or(0),
+                ..Default::default()
             },
         })];
     }
@@ -676,6 +668,7 @@ fn normalize_openai_event(
             usage: Usage {
                 input_tokens: 0,
                 output_tokens: 0,
+                ..Default::default()
             },
         })];
     }
@@ -781,6 +774,7 @@ fn normalize_ollama_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> 
             usage: Usage {
                 input_tokens: chunk.prompt_eval_count.unwrap_or(0),
                 output_tokens: chunk.eval_count.unwrap_or(0),
+                ..Default::default()
             },
         })];
     }
@@ -1021,14 +1015,8 @@ fn normalize_gemini_response(
         stop_reason,
         usage: resp
             .usage_metadata
-            .map(|u| super::types::Usage {
-                input_tokens: u.prompt_token_count.unwrap_or(0),
-                output_tokens: u.candidates_token_count.unwrap_or(0),
-            })
-            .unwrap_or(super::types::Usage {
-                input_tokens: 0,
-                output_tokens: 0,
-            }),
+            .map(|u| super::types::Usage { input_tokens: u.prompt_token_count.unwrap_or(0), output_tokens: u.candidates_token_count.unwrap_or(0), ..Default::default() })
+            .unwrap_or(super::types::Usage { input_tokens: 0, output_tokens: 0, ..Default::default() }),
     })
 }
 
@@ -1089,10 +1077,7 @@ fn normalize_gemini_event(
                         stop_reason: Some(stop_reason),
                         stop_sequence: None,
                     },
-                    usage: Usage {
-                        input_tokens: 0,
-                        output_tokens: 0,
-                    },
+                    usage: Usage { input_tokens: 0, output_tokens: 0, ..Default::default() },
                 });
             }
         }
@@ -1105,10 +1090,7 @@ fn normalize_gemini_event(
                 stop_reason: None,
                 stop_sequence: None,
             },
-            usage: Usage {
-                input_tokens: usage.prompt_token_count.unwrap_or(0),
-                output_tokens: usage.candidates_token_count.unwrap_or(0),
-            },
+            usage: Usage { input_tokens: usage.prompt_token_count.unwrap_or(0), output_tokens: usage.candidates_token_count.unwrap_or(0), ..Default::default() },
         });
     }
 

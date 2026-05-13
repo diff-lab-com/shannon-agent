@@ -975,6 +975,23 @@ pub struct ToolDefinition {
 pub struct Usage {
     pub input_tokens: u32,
     pub output_tokens: u32,
+    /// Tokens written to the prompt cache (Anthropic-specific)
+    #[serde(default)]
+    pub cache_creation_input_tokens: u32,
+    /// Tokens read from the prompt cache (Anthropic-specific)
+    #[serde(default)]
+    pub cache_read_input_tokens: u32,
+}
+
+impl Default for Usage {
+    fn default() -> Self {
+        Self {
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+        }
+    }
 }
 
 /// API response (non-streaming)

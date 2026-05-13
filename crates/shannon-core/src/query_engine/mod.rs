@@ -561,20 +561,46 @@ mod tests {
             input_tokens: 1000,
             output_tokens: 500,
             cost_usd: 0.015,
+            cache_creation_tokens: 200,
+            cache_read_tokens: 500,
         };
         match event {
             QueryEvent::Usage {
                 input_tokens,
                 output_tokens,
                 cost_usd,
+                cache_creation_tokens,
+                cache_read_tokens,
                 ..
             } => {
                 assert_eq!(input_tokens, 1000);
                 assert_eq!(output_tokens, 500);
                 assert!((cost_usd - 0.015).abs() < 0.0001);
+                assert_eq!(cache_creation_tokens, 200);
+                assert_eq!(cache_read_tokens, 500);
             }
             _ => panic!("Expected Usage variant"),
         }
+    }
+
+    #[test]
+    fn test_usage_cache_tokens_deserialize() {
+        // Simulate Anthropic API response with cache tokens
+        let json = r#"{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":200,"cache_read_input_tokens":500}"#;
+        let usage: crate::api::Usage = serde_json::from_str(json).unwrap();
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 50);
+        assert_eq!(usage.cache_creation_input_tokens, 200);
+        assert_eq!(usage.cache_read_input_tokens, 500);
+    }
+
+    #[test]
+    fn test_usage_cache_tokens_default() {
+        // API response without cache tokens should default to 0
+        let json = r#"{"input_tokens":100,"output_tokens":50}"#;
+        let usage: crate::api::Usage = serde_json::from_str(json).unwrap();
+        assert_eq!(usage.cache_creation_input_tokens, 0);
+        assert_eq!(usage.cache_read_input_tokens, 0);
     }
 
     #[test]
