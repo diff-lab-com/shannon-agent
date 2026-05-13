@@ -617,10 +617,14 @@ impl Default for SessionRecovery {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!("failed to create SessionRecovery with default dir: {e}");
-                Self::with_dir(std::env::temp_dir().join(".shannon").join("sessions"))
-                    .unwrap_or_else(|fallback_err| {
-                        panic!("SessionRecovery: both default and temp fallback dirs failed: {fallback_err}");
-                    })
+                let fallback_dir = std::env::temp_dir().join(".shannon").join("sessions");
+                match Self::with_dir(fallback_dir.clone()) {
+                    Ok(s) => s,
+                    Err(fallback_err) => {
+                        tracing::error!("SessionRecovery: temp fallback also failed: {fallback_err}. Using non-persisting instance.");
+                        Self { sessions_dir: fallback_dir }
+                    }
+                }
             }
         }
     }

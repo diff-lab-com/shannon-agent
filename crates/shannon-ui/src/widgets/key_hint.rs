@@ -16,8 +16,12 @@ use ratatui::{
 pub enum HintContext {
     /// Browsing chat history
     Normal,
-    /// Typing in prompt input
-    Input,
+    /// Vim insert mode
+    VimInsert,
+    /// Vim normal mode
+    VimNormal,
+    /// Vim visual mode
+    VimVisual,
 }
 
 /// Key hint overlay widget
@@ -33,14 +37,28 @@ impl KeyHintWidget {
                 ("?", "Help"),
                 ("Ctrl+Q", "Quit"),
             ],
-            HintContext::Input => vec![
+            HintContext::VimInsert => vec![
+                ("Esc", "Normal"),
                 ("Enter", "Send"),
                 ("Tab", "Complete"),
-                ("PgUp/Dn", "Scroll"),
-                ("Ctrl+E", "Editor"),
                 ("Ctrl+Y", "Copy"),
+                ("Ctrl+E", "Editor"),
                 ("Ctrl+H", "Chat search"),
-                ("Ctrl+R", "History"),
+                ("?", "Help"),
+            ],
+            HintContext::VimNormal => vec![
+                ("i", "Insert"),
+                ("v", "Visual"),
+                (":", "Command"),
+                ("h/j/k/l", "Move"),
+                ("dd", "Del line"),
+                ("Esc", "Cancel"),
+            ],
+            HintContext::VimVisual => vec![
+                ("y", "Yank"),
+                ("d", "Delete"),
+                ("Esc", "Normal"),
+                ("PgUp/Dn", "Scroll"),
                 ("?", "Help"),
             ],
         };
@@ -99,6 +117,21 @@ impl KeyHintWidget {
                 ("Alt+F", "Toggle all tool folding"),
                 ("Ctrl+V", "Paste image from clipboard"),
                 ("Ctrl+P", "Command palette"),
+            ]),
+            ("Vim", vec![
+                ("i", "Enter insert mode"),
+                ("v", "Visual mode (select text)"),
+                ("V", "Visual line mode"),
+                ("h/j/k/l", "Move cursor"),
+                ("w / b", "Word forward / back"),
+                ("0 / $", "Line start / end"),
+                ("dd", "Delete line"),
+                ("yy", "Yank (copy) line"),
+                ("p", "Paste after cursor"),
+                ("u", "Undo"),
+                ("Ctrl+R", "Redo"),
+                (":", "Command mode"),
+                ("Esc", "Return to normal mode"),
             ]),
             ("Help & System", vec![
                 ("F1 / ?", "This help overlay"),

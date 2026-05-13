@@ -492,14 +492,22 @@ impl Default for CredentialManager {
             .join(".shannon")
             .join("credentials");
         Self::with_dir(credentials_dir).unwrap_or_else(|first_err| {
+            tracing::error!("CredentialManager: home dir failed: {first_err}");
             let fallback = std::env::temp_dir().join(".shannon").join("credentials");
-            Self::with_dir(fallback).unwrap_or_else(|second_err| {
-                Self::with_dir(PathBuf::from("/tmp/.shannon/credentials"))
-                    .unwrap_or_else(|third_err| {
-                        panic!(
-                            "all credential dir fallbacks failed:\n  home: {first_err}\n  temp: {second_err}\n  /tmp: {third_err}"
-                        );
-                    })
+            Self::with_dir(fallback.clone()).unwrap_or_else(|second_err| {
+                tracing::error!("CredentialManager: temp dir failed: {second_err}");
+                let last_resort = PathBuf::from("/tmp/.shannon/credentials");
+                match Self::with_dir(last_resort.clone()) {
+                    Ok(s) => s,
+                    Err(third_err) => {
+                        tracing::error!("CredentialManager: all fallbacks failed: {third_err}. Using non-persisting instance.");
+                        Self {
+                            credentials_dir: fallback,
+                            store: CredentialStore::default(),
+                            dirty: false,
+                        }
+                    }
+                }
             })
         })
     }

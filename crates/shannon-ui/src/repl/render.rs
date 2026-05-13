@@ -185,6 +185,52 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             );
         }
 
+        // Render pending background notifications as a compact stack
+        {
+            let theme = &state.theme;
+            let now = std::time::Instant::now();
+            let fresh: Vec<_> = state.pending_notifications.iter()
+                .filter(|(_, t)| now.duration_since(*t).as_secs() < 8)
+                .collect();
+            let count = fresh.len().min(3);
+            if count > 0 {
+                let max_w = (f.area().width as usize).saturating_sub(6);
+                let base_y = f.area().bottom().saturating_sub(6 + if toast_visible { 3 } else { 0 });
+                for (i, (msg, _)) in fresh.iter().rev().take(count).enumerate() {
+                    let display: String = {
+                        let msg_width = unicode_width::UnicodeWidthStr::width(msg.as_str());
+                        if msg_width > max_w {
+                            let mut s = String::new();
+                            let mut len = 0;
+                            for c in msg.chars() {
+                                let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+                                if len + cw + 3 > max_w { break; }
+                                s.push(c);
+                                len += cw;
+                            }
+                            format!("{s}...")
+                        } else {
+                            msg.clone()
+                        }
+                    };
+                    let line = ratatui::text::Line::from(vec![
+                        ratatui::text::Span::styled(" ℹ ", ratatui::style::Style::default().fg(theme.muted)),
+                        ratatui::text::Span::styled(display, ratatui::style::Style::default().fg(theme.text_dim)),
+                    ]);
+                    let y = base_y.saturating_sub((count - i) as u16);
+                    f.render_widget(
+                        Paragraph::new(line),
+                        ratatui::layout::Rect {
+                            x: f.area().x + 1,
+                            y,
+                            width: f.area().width.saturating_sub(2),
+                            height: 1,
+                        },
+                    );
+                }
+            }
+        }
+
         // Streaming queue hint — show "Enter=queue" near the prompt when streaming
         // Offset down by 1 when toast is visible to avoid overlap
         if state.streaming_active && state.queued_message.is_none() {
@@ -322,7 +368,11 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             let ctx = if state.streaming_active || state.thinking_phase {
                 crate::widgets::key_hint::HintContext::Normal
             } else {
-                crate::widgets::key_hint::HintContext::Input
+                match state.vim_mode.as_str() {
+                    "NORMAL" => crate::widgets::key_hint::HintContext::VimNormal,
+                    "VISUAL" => crate::widgets::key_hint::HintContext::VimVisual,
+                    _ => crate::widgets::key_hint::HintContext::VimInsert,
+                }
             };
             crate::widgets::KeyHintWidget::render(f, hint_area, &state.theme, &ctx);
         }

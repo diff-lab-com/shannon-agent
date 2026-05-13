@@ -785,10 +785,24 @@ impl QueryEngine {
                     let estimated_tokens = crate::compact::helpers::estimate_tokens(&messages)
                         + config.system_prompt.as_ref().map(|sp| crate::compact::helpers::estimate_text_tokens(sp)).unwrap_or(0);
                     let max_context = config.max_context_tokens.unwrap_or(200_000);
-                    if estimated_tokens as f32 / max_context as f32 > 0.8 {
+                    let usage_ratio = estimated_tokens as f32 / max_context as f32;
+
+                    // Pre-compaction warning at 60% — gives users visibility before compression fires
+                    if usage_ratio > 0.6 && usage_ratio <= config.compression_threshold {
+                        let _ = tx.send(Ok(QueryEvent::Progress {
+                            query_id,
+                            message: format!(
+                                "Context: {:.0}% full ({}/{}) — compaction will trigger at {:.0}%",
+                                usage_ratio * 100.0, estimated_tokens, max_context,
+                                config.compression_threshold * 100.0,
+                            ),
+                        }));
+                    }
+
+                    if usage_ratio > config.compression_threshold {
                         // Circuit breaker: if compaction has failed repeatedly, skip it and just truncate
                         if compaction_failures >= MAX_COMPACTION_FAILURES {
-                            let keep = 20;
+                            let keep = config.keep_recent_messages;
                             if messages.len() > keep {
                                 messages = messages.split_off(messages.len() - keep);
                             }
@@ -1573,7 +1587,7 @@ impl QueryEngine {
                     Err(e) => {
                         // Check if this is a token overflow — attempt auto-compaction and retry once
                         if e.is_token_overflow() {
-                            let compact_keep = 20;
+                            let compact_keep = config.keep_recent_messages;
                             if messages.len() > compact_keep {
                                 tracing::warn!("Token overflow detected, auto-compacting and retrying");
                                 messages = messages.split_off(messages.len() - compact_keep);

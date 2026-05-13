@@ -449,16 +449,6 @@ impl StreamingToolExecutor {
         let _ = self.progress_tx.send(progress);
     }
 
-    /// Get a cloned receiver for the progress channel.
-    pub async fn progress_receiver(&self) -> mpsc::UnboundedReceiver<ProgressMessage> {
-        let rx = self.progress_rx.lock().await;
-        // We return a new subscription by creating a broadcast-like pattern.
-        // For simplicity, callers should use `try_recv` on the shared receiver
-        // via the `recv_progress` method instead.
-        drop(rx);
-        panic!("Use recv_progress() instead of progress_receiver()")
-    }
-
     /// Try to receive a progress message without blocking.
     pub async fn recv_progress(&self) -> Option<ProgressMessage> {
         let mut rx = self.progress_rx.lock().await;

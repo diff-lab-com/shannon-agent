@@ -315,10 +315,14 @@ impl Default for SessionPersistManager {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!("failed to create SessionPersistManager with default dir: {e}");
-                Self::with_dir(std::env::temp_dir().join(".shannon").join("sessions"))
-                    .unwrap_or_else(|fallback_err| {
-                        panic!("SessionPersistManager: both default and temp fallback dirs failed: {fallback_err}");
-                    })
+                let fallback_dir = std::env::temp_dir().join(".shannon").join("sessions");
+                match Self::with_dir(fallback_dir.clone()) {
+                    Ok(s) => s,
+                    Err(fallback_err) => {
+                        tracing::error!("SessionPersistManager: temp fallback also failed: {fallback_err}. Using non-persisting instance.");
+                        Self { storage_dir: fallback_dir }
+                    }
+                }
             }
         }
     }
