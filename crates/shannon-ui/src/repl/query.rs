@@ -972,7 +972,9 @@ fn extract_memory_content(response: &str) -> String {
     let mut content = content_lines.join("\n");
     // Cap at 500 chars
     if content.len() > 500 {
-        content.truncate(500);
+        let mut end = 500;
+        while !content.is_char_boundary(end) { end -= 1; }
+        content.truncate(end);
         content.push_str("...");
     }
     content

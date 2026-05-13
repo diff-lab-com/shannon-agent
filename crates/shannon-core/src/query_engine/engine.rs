@@ -1115,7 +1115,9 @@ impl QueryEngine {
                                                                             // New file — show that it's being created
                                                                             if let Some(content) = tool_input.get("content").and_then(|v| v.as_str()) {
                                                                                 let preview = if content.len() > 500 {
-                                                                                    format!("+ Creating new file ({} bytes)\n{}\n... (truncated)", content.len(), &content[..500])
+                                                                                    let mut end = 500.min(content.len());
+                                                                                    while !content.is_char_boundary(end) { end -= 1; }
+                                                                                    format!("+ Creating new file ({} bytes)\n{}\n... (truncated)", content.len(), &content[..end])
                                                                                 } else {
                                                                                     format!("+ Creating new file\n{content}")
                                                                                 };
@@ -1738,7 +1740,9 @@ fn save_conversation_to_disk(
         .and_then(|m| match &m.content {
             MessageContent::Text(text) => {
                 let preview = if text.len() > 50 {
-                    format!("{}...", &text[..47])
+                    let mut end = 47.min(text.len());
+                    while !text.is_char_boundary(end) { end -= 1; }
+                    format!("{}...", &text[..end])
                 } else {
                     text.clone()
                 };
@@ -1748,7 +1752,9 @@ fn save_conversation_to_disk(
                 blocks.iter().find_map(|b| match b {
                     ContentBlock::Text { text } => {
                         let preview = if text.len() > 50 {
-                            format!("{}...", &text[..47])
+                            let mut end = 47.min(text.len());
+                            while !text.is_char_boundary(end) { end -= 1; }
+                            format!("{}...", &text[..end])
                         } else {
                             text.clone()
                         };

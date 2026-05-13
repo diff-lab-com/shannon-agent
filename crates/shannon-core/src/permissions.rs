@@ -1270,7 +1270,9 @@ impl PermissionManager {
         } else {
             let s = input.to_string();
             if s.len() > 50 {
-                format!("{}...", &s[..47])
+                let mut end = 47.min(s.len());
+                while !s.is_char_boundary(end) { end -= 1; }
+                format!("{}...", &s[..end])
             } else {
                 s
             }
@@ -1281,7 +1283,9 @@ impl PermissionManager {
     fn truncate_value(value: &serde_json::Value) -> String {
         let s = serde_json::to_string(value).unwrap_or_else(|_| "?".to_string());
         if s.len() > 30 {
-            format!("{}...", &s[..27])
+            let mut end = 27.min(s.len());
+            while !s.is_char_boundary(end) { end -= 1; }
+            format!("{}...", &s[..end])
         } else {
             s
         }
