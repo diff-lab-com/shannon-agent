@@ -14,6 +14,7 @@ pub mod session_tab;
 pub mod tool_approval;
 pub mod attachment_bar;
 pub mod command_palette;
+pub mod agents_panel;
 pub mod renderable;
 pub mod column;
 

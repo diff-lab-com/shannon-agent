@@ -49,6 +49,33 @@ pub(crate) fn handle_cost(repl: &mut Repl, args: &str) -> Result<()> {
 
     report.push_str(&detailed);
 
+    // Cache savings breakdown
+    let cache_read = repl.state.cache_read_tokens;
+    let cache_creation = repl.state.cache_creation_tokens;
+    if cache_read > 0 || cache_creation > 0 {
+        report.push_str("  Cache:\n");
+        if cache_read > 0 {
+            report.push_str(&format!("    ↻ Cache hits (read): {} ({:.1}k tokens)\n", cache_read, cache_read as f64 / 1000.0));
+        }
+        if cache_creation > 0 {
+            report.push_str(&format!("    ✦ Cache writes (creation): {} ({:.1}k tokens)\n", cache_creation, cache_creation as f64 / 1000.0));
+        }
+        let total_cache = cache_read + cache_creation;
+        if total_cache > 0 {
+            let hit_rate = cache_read as f64 / total_cache as f64 * 100.0;
+            report.push_str(&format!("    Hit rate: {hit_rate:.0}%\n"));
+            // Estimate savings: cache reads cost ~10% of full input price
+            let input_tokens = repl.state.input_tokens;
+            let estimated_saved_tokens = cache_read;
+            let estimated_saved_pct = if input_tokens + cache_read > 0 {
+                estimated_saved_tokens as f64 / (input_tokens as f64 + cache_read as f64) * 100.0
+            } else {
+                0.0
+            };
+            report.push_str(&format!("    Estimated token savings: {estimated_saved_pct:.0}%\n"));
+        }
+    }
+
     if let Some(started) = &repl.session_started_at {
         let elapsed = chrono::Utc::now() - *started;
         let mins = elapsed.num_minutes();

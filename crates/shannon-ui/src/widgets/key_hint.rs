@@ -117,6 +117,7 @@ impl KeyHintWidget {
                 ("Alt+F", "Toggle all tool folding"),
                 ("Ctrl+V", "Paste image from clipboard"),
                 ("Ctrl+P", "Command palette"),
+                ("Ctrl+A", "Show active agents"),
             ]),
             ("Vim", vec![
                 ("i", "Enter insert mode"),

@@ -213,6 +213,8 @@ pub struct ReplState {
     pub attachment_bar: AttachmentBarWidget,
     /// Command palette overlay widget (Ctrl+P)
     pub command_palette: Option<CommandPaletteWidget>,
+    /// Agents panel overlay visible (Ctrl+A to toggle)
+    pub agents_panel_visible: bool,
     /// Session tab bar widget (top of terminal, Ctrl+T to toggle)
     pub session_tab: SessionTabWidget,
     /// Detailed streaming state for status indicator
@@ -486,6 +488,7 @@ impl Default for ReplState {
             tool_approval: ToolApprovalWidget::new(),
             attachment_bar: AttachmentBarWidget::new(5),
             command_palette: None,
+            agents_panel_visible: false,
             session_tab: SessionTabWidget::new(),
             streaming_state: StreamingState::Idle,
             loop_state: None,

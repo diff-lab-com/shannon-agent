@@ -317,6 +317,13 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             palette.render(f, f.area(), &state.theme);
         }
 
+        // Overlay agents panel when visible
+        if state.agents_panel_visible {
+            crate::widgets::agents_panel::render_agents_panel(
+                f, f.area(), &state.active_agents, &state.theme,
+            );
+        }
+
         // Render attachment bar above prompt area
         // Offset up when toast or streaming hint is also visible to avoid overlap
         if !state.attachment_bar.is_empty() {

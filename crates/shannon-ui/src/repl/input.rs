@@ -132,6 +132,20 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
         return handle_command_palette_input(repl, key);
     }
 
+    // If agents panel overlay is active, dismiss on Escape or Ctrl+A
+    if repl.state.agents_panel_visible {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                repl.state.agents_panel_visible = false;
+                return Ok(());
+            }
+            _ => {
+                repl.state.agents_panel_visible = false;
+                return Ok(());
+            }
+        }
+    }
+
     // If plan overlay is active and not yet approved, handle scroll
     if repl.state.plan.active && !repl.state.plan.approved {
         return handle_plan_input(repl, key);
@@ -203,6 +217,10 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
         }
         KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             open_command_palette(repl);
+            Ok(())
+        }
+        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            repl.state.agents_panel_visible = !repl.state.agents_panel_visible;
             Ok(())
         }
         KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
