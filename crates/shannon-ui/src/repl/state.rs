@@ -252,6 +252,8 @@ pub struct ReplState {
     pub prev_output_tokens: u64,
     /// Desktop notification sent for current query
     pub desktop_notified: bool,
+    /// Auto-compact deferred until after streaming completes
+    pub pending_auto_compact: bool,
     /// Persisted UI state for session restore (fold states, scroll, view mode)
     pub persisted_ui_state: Option<PersistedUiState>,
 }
@@ -508,6 +510,7 @@ impl Default for ReplState {
             streaming_output_start: None,
             prev_output_tokens: 0u64,
             desktop_notified: false,
+            pending_auto_compact: false,
             persisted_ui_state: None,
         }
     }

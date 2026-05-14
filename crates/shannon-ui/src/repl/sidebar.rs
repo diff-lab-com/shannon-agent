@@ -108,12 +108,22 @@ impl super::Repl {
 
         let usage_ratio = self.state.tokens_used as f64 / context_window as f64;
 
-        if usage_ratio > 0.85 {
-            // Auto-compact: context pressure critical (>85%)
-            self.do_auto_compact();
-            return true;
-        } else if usage_ratio > 0.70 {
-            // Warning: context pressure high (>70%)
+        if usage_ratio > 0.75 {
+            if self.state.streaming_active {
+                // Defer auto-compact until streaming completes
+                self.state.pending_auto_compact = true;
+                let pct = (usage_ratio * 100.0) as u32;
+                self.state.toast = Some((
+                    format!("  Context: {pct}% used — will auto-compact when response completes  "),
+                    std::time::Instant::now(),
+                ));
+            } else {
+                // Auto-compact: context pressure high (>75%)
+                self.do_auto_compact();
+                return true;
+            }
+        } else if usage_ratio > 0.60 {
+            // Info: context pressure moderate (>60%)
             let pct = (usage_ratio * 100.0) as u32;
             let remaining = context_window.saturating_sub(self.state.tokens_used);
             self.state.toast = Some((
@@ -184,42 +194,92 @@ impl super::Repl {
         }
     }
 
-    /// Perform auto-compaction using LLM-powered summarization.
+    /// Perform auto-compaction using progressive strategy based on pressure level.
+    ///
+    /// - High (75-85%): Prune stale tool results only (lightest touch)
+    /// - Critical (85-95%): Micro-compact large messages + prune
+    /// - Emergency (95%+): Full summarization + micro-compact
     pub(crate) fn do_auto_compact(&mut self) {
         use shannon_core::compact::CompactEngine;
 
-        let Some(ref mut engine) = self.query_engine else { return };
-
-        let history = engine.conversation_history();
-        if history.len() < 4 {
-            return; // Not enough to compact
+        if self.query_engine.is_none() {
+            return;
         }
 
-        // Use LLM summarizer for higher quality compression, fallback to rule-based
-        let client = engine.client().clone();
-        let compact_engine = match CompactEngine::with_llm_summarizer(client) {
-            Ok(e) => e,
-            Err(_) => match CompactEngine::with_defaults() {
-                Ok(e) => e,
-                Err(_) => return,
-            },
+        // Snapshot state values before borrowing engine
+        let context_window = self.state.model.as_deref()
+            .map(shannon_core::model_registry::context_window_for)
+            .unwrap_or(200_000) as u64;
+        let tokens_used = self.state.tokens_used;
+
+        let engine = self.query_engine.as_mut().unwrap();
+        let history = engine.conversation_history();
+        if history.len() < 4 {
+            return;
+        }
+
+        let usage_ratio = if context_window > 0 {
+            tokens_used as f64 / context_window as f64
+        } else {
+            0.0
         };
 
         let before = history.len();
         let mut messages = history;
+        let mut toast_msg: Option<String> = None;
 
-        // Use truncate strategy for auto-compact — fast, no extra API call
-        if let Ok(result) = compact_engine.micro_compact(&mut messages) {
-            let _ = compact_engine.post_compact_cleanup(&mut messages);
+        if usage_ratio > 0.95 {
+            // Emergency: full summarization + micro-compact
+            let client = engine.client().clone();
+            if let Ok(mut compact_engine) = CompactEngine::with_llm_summarizer(client) {
+                let _ = compact_engine.micro_compact(&mut messages);
+                if let Ok(_result) = compact_engine.compact(&mut messages) {
+                    let _ = compact_engine.post_compact_cleanup(&mut messages);
+                    engine.replace_conversation(messages);
+                    let after = engine.conversation_history().len();
+                    toast_msg = Some(format!("  Emergency compact: {before}→{after} messages  "));
+                } else {
+                    // Fallback: micro-compact only
+                    if let Ok(fb) = CompactEngine::with_defaults() {
+                        let _ = fb.micro_compact(&mut messages);
+                        let _ = fb.post_compact_cleanup(&mut messages);
+                        engine.replace_conversation(messages);
+                        let after = engine.conversation_history().len();
+                        toast_msg = Some(format!("  Auto-compacted: {before}→{after} messages  "));
+                    }
+                }
+            } else {
+                // Fallback: micro-compact only
+                if let Ok(fb) = CompactEngine::with_defaults() {
+                    let _ = fb.micro_compact(&mut messages);
+                    let _ = fb.post_compact_cleanup(&mut messages);
+                    engine.replace_conversation(messages);
+                    let after = engine.conversation_history().len();
+                    toast_msg = Some(format!("  Auto-compacted: {before}→{after} messages  "));
+                }
+            }
+        } else if usage_ratio > 0.85 {
+            // Critical: micro-compact large messages
+            let client = engine.client().clone();
+            let compact_engine = CompactEngine::with_llm_summarizer(client)
+                .or_else(|_| CompactEngine::with_defaults());
+            if let Ok(compact_engine) = compact_engine {
+                if let Ok(_result) = compact_engine.micro_compact(&mut messages) {
+                    let _ = compact_engine.post_compact_cleanup(&mut messages);
+                    engine.replace_conversation(messages);
+                    let after = engine.conversation_history().len();
+                    toast_msg = Some(format!("  Auto-compacted: {before}→{after} messages  "));
+                }
+            }
+        } else if usage_ratio > 0.75 {
+            // High: just prune stale tool results (no API call needed)
+            CompactEngine::prune_stale_tool_results(&mut messages);
             engine.replace_conversation(messages);
+            toast_msg = Some(format!("  Context pruned: {before} messages (stale tool results removed)  "));
+        }
 
-            let after = engine.conversation_history().len();
-            self.state.toast = Some((
-                format!("  Auto-compacted: {before}→{after} messages  "),
-                std::time::Instant::now(),
-            ));
-            tracing::info!("Auto-compacted context: {before}→{after} messages, {:.0}% reduction",
-                result.reduction_ratio * 100.0);
+        if let Some(msg) = toast_msg {
+            self.state.toast = Some((msg, std::time::Instant::now()));
         }
     }
 }

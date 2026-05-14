@@ -213,14 +213,21 @@ impl CompactEngine {
         let keep_count = self.config.keep_recent_count;
         let split_point = messages.len().saturating_sub(keep_count);
 
-        // Extract older messages for summarization
-        let old_messages: Vec<Message> = messages[..split_point].to_vec();
+        // Prune stale tool results from older messages before summarizing
+        let mut old_messages: Vec<Message> = messages[..split_point].to_vec();
+        Self::prune_stale_tool_results(&mut old_messages);
+
         let messages_removed = old_messages.len();
 
         // Summarize the older messages
         let summary_text =
             self.summarizer
                 .summarize(&old_messages, self.config.max_output_tokens)?;
+
+        // Verify summary quality — reject if clearly degenerate
+        if !Self::verify_summary_quality(&summary_text, &old_messages) {
+            tracing::warn!("Summary quality check failed, using fallback summary");
+        }
 
         // Create a summary system message
         let summary_message = Message {
@@ -250,6 +257,92 @@ impl CompactEngine {
             duration: Duration::ZERO, // set by caller
             strategy: CompactStrategy::SummarizeOld,
         })
+    }
+
+    // ========================================================================
+    // Context Editing
+    // ========================================================================
+
+    /// Strip content from stale tool results in older messages, keeping only a
+    /// truncated preview. This reduces token count before summarization.
+    pub fn prune_stale_tool_results(messages: &mut [Message]) {
+        use crate::api::{ContentBlock, ToolResultContent};
+        let preview_limit = 200;
+
+        for msg in messages.iter_mut() {
+            if let MessageContent::Blocks(blocks) = &mut msg.content {
+                for block in blocks.iter_mut() {
+                    if let ContentBlock::ToolResult {
+                        content,
+                        is_error,
+                        ..
+                    } = block
+                    {
+                        let is_err = is_error.unwrap_or(false);
+                        if is_err {
+                            continue; // keep error results in full
+                        }
+                        if let Some(ToolResultContent::Single(text)) = content {
+                            if text.len() > preview_limit * 2 {
+                                *text = format!("{}...[truncated, {} chars]", &text[..preview_limit], text.len());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ========================================================================
+    // Summary Quality Verification
+    // ========================================================================
+
+    /// Check that a summary is reasonable quality before accepting it.
+    /// Returns false only for clearly degenerate summaries (empty, too short,
+    /// or literally echoing back the prompt).
+    fn verify_summary_quality(summary: &str, original_messages: &[Message]) -> bool {
+        let text = summary.trim();
+
+        // Must not be empty
+        if text.is_empty() {
+            tracing::warn!("Summary quality: empty");
+            return false;
+        }
+
+        // Must be at least 50 chars for any non-trivial conversation
+        if original_messages.len() >= 3 && text.len() < 50 {
+            tracing::warn!("Summary quality: too short ({} chars for {} messages)", text.len(), original_messages.len());
+            return false;
+        }
+
+        // Must not be a near-copy of a single message (degenerate echo)
+        if original_messages.len() >= 3 {
+            let msg_texts: Vec<&str> = original_messages.iter()
+                .filter_map(|m| match &m.content {
+                    MessageContent::Text(t) => Some(t.as_str()),
+                    _ => None,
+                })
+                .collect();
+            for mt in &msg_texts {
+                if !mt.is_empty() && text.len() > 20 {
+                    // Simple overlap check: if summary is 90%+ contained in a source message
+                    let shorter_len = text.len().min(mt.len());
+                    if shorter_len > 0 {
+                        let common: usize = text
+                            .split_whitespace()
+                            .filter(|w| mt.contains(w))
+                            .count();
+                        let total = text.split_whitespace().count();
+                        if total > 0 && common * 100 / total > 90 {
+                            tracing::warn!("Summary quality: near-identical to source message");
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+
+        true
     }
 
     // ========================================================================

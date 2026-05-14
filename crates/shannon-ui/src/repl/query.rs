@@ -696,6 +696,12 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
 
         // Clear streaming state
         repl.state.streaming_active = false;
+
+        // Handle deferred auto-compact
+        if repl.state.pending_auto_compact {
+            repl.state.pending_auto_compact = false;
+            repl.check_context_pressure();
+        }
         repl.state.thinking_phase = false;
         repl.state.streaming_start = None;
         repl.state.streaming_token_rate = 0.0;
