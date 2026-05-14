@@ -616,7 +616,38 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
 
     let history = engine.conversation_history();
 
-    // Early exit before creating the engine
+    // Parse subcommand early — "status" should work even with empty history
+    let subcmd = args.trim();
+    if subcmd == "status" || subcmd == "info" {
+        // Create compact engine using the REPL's existing tokio runtime handle.
+        let client = engine.client().clone();
+        let rt_handle = repl.runtime.handle().clone();
+        let compact_engine = match CompactEngine::with_llm_summarizer_on_runtime(client, rt_handle) {
+            Ok(e) => e,
+            Err(_) => match CompactEngine::with_defaults() {
+                Ok(e) => e,
+                Err(e) => {
+                    repl.chat.add_message(ChatRole::System, format!("Compact engine error: {e}"));
+                    return Ok(());
+                }
+            },
+        };
+        let analysis = compact_engine.analyze_context(&history);
+        let info = format!(
+            "Context Analysis:\n  Estimated tokens: {}\n  Context usage: {:.1}%\n  Messages: {}\n  Should compact: {}\n  Recommended strategy: {}\n  Compactable messages: {}\n  Micro-compact candidates: {}",
+            analysis.estimated_tokens,
+            analysis.context_usage_ratio * 100.0,
+            history.len(),
+            if analysis.should_compact { "yes" } else { "no" },
+            analysis.recommended_strategy,
+            analysis.compactable_message_count,
+            analysis.micro_compact_candidates,
+        );
+        repl.chat.add_message(ChatRole::System, info);
+        return Ok(());
+    }
+
+    // Early exit for other subcommands when there's nothing to compact
     if history.is_empty() {
         repl.chat.add_message(ChatRole::System, "No conversation to compact.".to_string());
         return Ok(());
@@ -638,23 +669,6 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
     };
 
     let analysis = compact_engine.analyze_context(&history);
-
-    // Parse subcommand
-    let subcmd = args.trim();
-    if subcmd == "status" || subcmd == "info" {
-        let info = format!(
-            "Context Analysis:\n  Estimated tokens: {}\n  Context usage: {:.1}%\n  Messages: {}\n  Should compact: {}\n  Recommended strategy: {}\n  Compactable messages: {}\n  Micro-compact candidates: {}",
-            analysis.estimated_tokens,
-            analysis.context_usage_ratio * 100.0,
-            history.len(),
-            if analysis.should_compact { "yes" } else { "no" },
-            analysis.recommended_strategy,
-            analysis.compactable_message_count,
-            analysis.micro_compact_candidates,
-        );
-        repl.chat.add_message(ChatRole::System, info);
-        return Ok(());
-    }
 
     // /compact preview — show what will be compacted without doing it
     if subcmd == "preview" || subcmd == "--preview" {

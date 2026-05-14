@@ -524,7 +524,7 @@ mod tests {
             folded: true,
             exit_code: None,
             thinking_content: None,
-            thinking_expanded: true,
+            thinking_expanded: false,
         };
         assert_eq!(msg.content, "Test message");
         assert_eq!(msg.role, ChatRole::User);
@@ -797,6 +797,35 @@ mod tests {
         let msg = &chat.messages[0];
         assert!(msg.is_error);
         assert_eq!(msg.tool_name.as_deref(), Some("bash"));
+    }
+
+    // ── Event::Html Regression Tests ─────────────────────────────────────
+
+    #[test]
+    fn test_parse_markdown_html_brackets() {
+        // << and >> should not be silently dropped (regression test for Event::Html fix)
+        let segments = chat::parse_markdown_segments("result << 5 >> 3");
+        assert!(!segments.is_empty(), "segments should not be empty");
+        let all_text: String = segments.iter().flat_map(|s| match s {
+            chat::MdSegment::Text(lines) => lines.clone(),
+            chat::MdSegment::Header { text, .. } => vec![text.clone()],
+            _ => vec![],
+        }).collect::<Vec<_>>().join(" ");
+        assert!(
+            all_text.contains("<") || all_text.contains(">") || all_text.contains("&lt;"),
+            "angle brackets should appear in output, got: {all_text}"
+        );
+    }
+
+    #[test]
+    fn test_parse_markdown_inline_html() {
+        let segments = chat::parse_markdown_segments("text <b>bold</b> more");
+        assert!(!segments.is_empty(), "segments should not be empty");
+        let all_text: String = segments.iter().flat_map(|s| match s {
+            chat::MdSegment::Text(lines) => lines.clone(),
+            _ => vec![],
+        }).collect::<Vec<_>>().join(" ");
+        assert!(!all_text.is_empty(), "should have text content");
     }
 
     // ── SidebarInfo Tests ───────────────────────────────────────────────

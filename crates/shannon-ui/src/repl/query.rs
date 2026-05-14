@@ -456,7 +456,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
 
             {
                 let s = recover_lock(streaming.lock());
-                if s.cost > 0.0 { repl.state.total_cost_usd = s.cost; }
+                if s.cost > 0.0 { repl.state.total_cost_usd = pre_stream_cost + s.cost; }
 
                 // Update token display in real-time during streaming
                 let (input, output) = s.tokens;

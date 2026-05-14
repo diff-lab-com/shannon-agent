@@ -367,7 +367,7 @@ mod tests {
             folded: true,
             exit_code: None,
             thinking_content: None,
-            thinking_expanded: true,
+            thinking_expanded: false,
         }
     }
 

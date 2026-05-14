@@ -157,7 +157,7 @@ pub struct ChatMessage {
     pub exit_code: Option<i32>,
     /// AI thinking/reasoning content (extended thinking mode)
     pub thinking_content: Option<String>,
-    /// Whether thinking content is expanded (default: true)
+    /// Whether thinking content is expanded (default: false, collapsed)
     pub thinking_expanded: bool,
 }
 
@@ -209,7 +209,7 @@ impl ChatWidget {
             folded: true,
             exit_code: None,
             thinking_content: None,
-            thinking_expanded: true,
+            thinking_expanded: false,
         };
 
         let index = self.messages.len();
@@ -250,7 +250,7 @@ impl ChatWidget {
             folded: true,
             exit_code: None,
             thinking_content: None,
-            thinking_expanded: true,
+            thinking_expanded: false,
         };
 
         let index = self.messages.len();
@@ -354,7 +354,7 @@ impl ChatWidget {
             folded: true,
             exit_code: None,
             thinking_content: None,
-            thinking_expanded: true,
+            thinking_expanded: false,
         };
         let index = self.messages.len();
         self.messages.push_back(message.clone());

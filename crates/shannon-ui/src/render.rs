@@ -1583,4 +1583,27 @@ mod tests {
         let renderer = Renderer::default();
         assert_eq!(renderer.status_message, "Ready");
     }
+
+    // ── Event::Html Regression Tests ─────────────────────────────────────
+
+    #[test]
+    fn test_render_markdown_html_brackets() {
+        // << and >> should not be silently dropped (regression test for Event::Html fix)
+        let renderer = Renderer::new();
+        let lines = renderer.render_markdown("result << 5 >> 3", &Theme::default_dark());
+        let text: String = lines.iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.clone()))
+            .collect();
+        assert!(
+            text.contains("<") || text.contains("&lt;") || text.contains("<<"),
+            "angle brackets should appear in rendered output, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_render_markdown_inline_html() {
+        let renderer = Renderer::new();
+        let lines = renderer.render_markdown("text <br/> more", &Theme::default_dark());
+        assert!(!lines.is_empty(), "should produce output lines");
+    }
 }

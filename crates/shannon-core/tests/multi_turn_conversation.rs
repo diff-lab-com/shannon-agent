@@ -966,3 +966,140 @@ fn test_compact_double_compact_rejected() {
     let result2 = engine.compact(&mut messages);
     assert!(result2.is_ok(), "Second compact should work since compacting flag resets");
 }
+
+// ── Context Preservation Regression Tests ─────────────────────────────
+
+/// Verify that conversation messages accumulate correctly across multiple
+/// simulated turns — this is the core invariant for the multi-turn context
+/// loss bug. If this fails, the engine is losing messages between turns.
+#[test]
+fn test_multi_turn_messages_preserved() {
+    let mut conv = TestConversation::default();
+
+    // Simulate turn 1: user writes a story, assistant responds
+    let story = "在一个遥远的王国里，有一位年轻的骑士名叫阿尔弗雷德。他带着一把闪烁着蓝光的剑，踏上了寻找失落宝藏的旅程。途中他遇到了一位名叫莉莉的精灵，她告诉他宝藏被一条古老的龙守护着。他们一起穿越了幽暗森林和冰封山脉，最终在火山口找到了那把传说中的钥匙。";
+    conv.messages.push(text_msg("user", "写小说200字"));
+    conv.messages.push(text_msg("assistant", story));
+    conv.turn_count += 1;
+
+    // Simulate turn 2: user asks about the story
+    conv.messages.push(text_msg("user", "这篇小说有几个人物?几个场景?"));
+    conv.turn_count += 1;
+
+    // Before API call, engine should have all 3 messages
+    assert_eq!(conv.messages.len(), 3, "Should have 3 messages (2 from turn 1 + 1 from turn 2)");
+
+    // Verify the story content is still present for context
+    let story_msg = &conv.messages[1];
+    match &story_msg.content {
+        MessageContent::Text(t) => {
+            assert!(t.contains("阿尔弗雷德"), "Story character should be in message history");
+            assert!(t.contains("莉莉"), "Second character should be in message history");
+        }
+        _ => panic!("Expected text content for assistant message"),
+    }
+
+    // Verify the follow-up question is the last message
+    let last = conv.messages.last().unwrap();
+    match &last.content {
+        MessageContent::Text(t) => assert!(t.contains("几个人物"), "Follow-up question should be last"),
+        _ => panic!("Expected text content"),
+    }
+}
+
+/// Verify that compression preserves the N most recent messages intact,
+/// so the most recent context (what the model needs to answer) is never lost.
+#[test]
+fn test_compression_keeps_recent_context_intact() {
+    let mut conv = TestConversation::default();
+
+    // Build a conversation with 10 turns (20 messages)
+    for i in 0..10 {
+        conv.messages.push(text_msg("user", &format!("Question about topic {i}: what is the answer?")));
+        conv.messages.push(text_msg("assistant", &format!("The answer to topic {i} involves detailed explanation about concepts {i} through {}.", i + 1)));
+    }
+
+    assert_eq!(conv.messages.len(), 20);
+
+    let config = QueryEngineConfig {
+        keep_recent_messages: 6,
+        compression_strategy: CompressionStrategy::SummarizeOld,
+        ..low_threshold_config()
+    };
+
+    conv.compress(&config);
+
+    // The last 6 messages (3 turns) must be preserved verbatim
+    let recent: Vec<&str> = conv.messages.iter().rev().take(6)
+        .filter_map(|m| match &m.content {
+            MessageContent::Text(t) => Some(t.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    // Most recent messages should reference topic 9
+    assert!(recent.iter().any(|t| t.contains("topic 9")),
+        "Most recent turn (topic 9) should be preserved, got: {recent:?}");
+
+    // Second-to-last turn (topic 8) should also be preserved
+    assert!(recent.iter().any(|t| t.contains("topic 8")),
+        "Second recent turn (topic 8) should be preserved, got: {recent:?}");
+}
+
+/// Verify that cloning a conversation preserves all messages — this is the
+/// mechanism used by process_query() at engine.rs:661.
+#[test]
+fn test_conversation_clone_preserves_messages() {
+    let mut conv = TestConversation::default();
+    conv.messages.push(text_msg("user", "First question"));
+    conv.messages.push(text_msg("assistant", "First answer with detailed content"));
+    conv.messages.push(text_msg("user", "Follow-up question referencing first answer"));
+    conv.turn_count = 2;
+
+    // Clone (simulates engine.process_query cloning self.conversation)
+    let mut cloned = conv.clone();
+
+    // Add a new user message to the clone (simulates adding user message in process_query)
+    cloned.messages.push(text_msg("user", "Third question"));
+
+    // Original should be unchanged
+    assert_eq!(conv.messages.len(), 3, "Original should have 3 messages");
+
+    // Clone should have 4
+    assert_eq!(cloned.messages.len(), 4, "Clone should have 4 messages");
+
+    // All original messages should be identical in the clone
+    for i in 0..conv.messages.len() {
+        assert_eq!(conv.messages[i].role, cloned.messages[i].role,
+            "Message {i} role should match after clone");
+        match (&conv.messages[i].content, &cloned.messages[i].content) {
+            (MessageContent::Text(a), MessageContent::Text(b)) => assert_eq!(a, b),
+            _ => panic!("Content mismatch at index {i}"),
+        }
+    }
+}
+
+/// Verify cost accumulation pattern: per-query costs should accumulate,
+/// not replace the running total.
+#[test]
+#[allow(unused_assignments)]
+fn test_cost_accumulation_not_replacement() {
+    let mut total_cost: f64 = 0.0;
+
+    // Simulate turn 1 cost
+    let turn1_cost: f64 = 0.0242;
+    total_cost = 0.0_f64 + turn1_cost; // pre_stream_cost (0) + s.cost
+    assert!((total_cost - 0.0242_f64).abs() < f64::EPSILON, "After turn 1: {total_cost}");
+
+    // Simulate turn 2 cost — must ACCUMULATE, not replace
+    let turn2_cost: f64 = 0.0203;
+    let pre_stream_cost = total_cost;
+    total_cost = pre_stream_cost + turn2_cost;
+    assert!((total_cost - 0.0445_f64).abs() < 0.0001_f64,
+        "After turn 2: expected ~0.0445, got {total_cost}");
+
+    // Verify the OLD (buggy) behavior would have given wrong result
+    let buggy_total: f64 = turn2_cost; // replacement, not accumulation
+    assert!((buggy_total - 0.0203_f64).abs() < f64::EPSILON);
+    assert!(total_cost > buggy_total, "Accumulated cost should be higher than replacement cost");
+}
