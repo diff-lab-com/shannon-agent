@@ -879,10 +879,10 @@ mod tests {
             assignment_index: 0,
         };
         persist.save_team(&team).unwrap();
-        assert!(persist.team_dir("doomed").exists());
+        assert!(persist.team_dir("doomed").unwrap().exists());
 
         persist.delete_team("doomed").unwrap();
-        assert!(!persist.team_dir("doomed").exists());
+        assert!(!persist.team_dir("doomed").unwrap().exists());
     }
 
     #[test]
@@ -955,7 +955,7 @@ mod tests {
         persist.deliver_message("team", "agent-1", &msg2).unwrap();
 
         // Verify the file is JSONL (one JSON object per line)
-        let inbox_path = persist.team_dir("team")
+        let inbox_path = persist.team_dir("team").unwrap()
             .join("inboxes")
             .join("agent-1.jsonl");
         let raw_content = std::fs::read_to_string(&inbox_path).unwrap();

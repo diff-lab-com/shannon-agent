@@ -38,6 +38,12 @@ pub fn start_prevent_sleep() {
 /// Stop preventing sleep (reference counted)
 pub fn stop_prevent_sleep() {
     let prev = PREVENT_SLEEP_REF_COUNT.fetch_sub(1, Ordering::SeqCst);
+    if prev == 0 {
+        // Underflow — restore the count and return
+        PREVENT_SLEEP_REF_COUNT.fetch_add(1, Ordering::SeqCst);
+        tracing::warn!("stop_prevent_sleep called without matching start_prevent_sleep");
+        return;
+    }
     if prev == 1 {
         #[cfg(target_os = "macos")]
         {

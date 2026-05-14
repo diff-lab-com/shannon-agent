@@ -244,6 +244,8 @@ pub struct ReplState {
     pub streaming_token_rate: f64,
     /// When the first output token arrived during streaming (for rate calculation)
     pub streaming_output_start: Option<std::time::Instant>,
+    /// Previous output token count (for instantaneous rate calculation)
+    pub prev_output_tokens: u64,
     /// Desktop notification sent for current query
     pub desktop_notified: bool,
     /// Persisted UI state for session restore (fold states, scroll, view mode)
@@ -498,6 +500,7 @@ impl Default for ReplState {
             rate_limit_7d: None,
             streaming_token_rate: 0.0,
             streaming_output_start: None,
+            prev_output_tokens: 0u64,
             desktop_notified: false,
             persisted_ui_state: None,
         }

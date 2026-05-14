@@ -222,17 +222,10 @@ impl GitBranchTool {
 
         // Safety check: warn if working directory is dirty
         if is_working_dir_dirty(cwd)? {
-            // We still allow switching but warn
-            return Ok(ToolOutput {
-                content: "[SAFETY WARNING] Working directory has uncommitted changes. Switching branches may cause conflicts.\n".to_string(),
-                is_error: false,
-                metadata: {
-                    let mut map = HashMap::new();
-                    map.insert("dirty_working_dir".to_string(), json!(true));
-                    map.insert("target_branch".to_string(), json!(name));
-                    map
-                },
-            });
+            tracing::warn!(
+                branch = %name,
+                "Switching branches with uncommitted changes — may cause conflicts"
+            );
         }
 
         let (stdout, stderr, success) = run_git(&["checkout", name], cwd)?;
@@ -419,7 +412,7 @@ impl GitDiffTool {
         }
     }
 
-    fn build_diff_args(&self, input: &GitDiffInput) -> Vec<String> {
+    fn build_diff_args(&self, input: &GitDiffInput) -> Result<Vec<String>, ToolError> {
         let mut args = Vec::new();
 
         if input.staged.unwrap_or(false) {
@@ -427,10 +420,12 @@ impl GitDiffTool {
         }
 
         if let Some(ref range) = input.commit_range {
+            validate_git_arg(range)?;
             args.push(range.clone());
         }
 
         if let Some(ref file) = input.file {
+            validate_git_arg(file)?;
             args.push("--".to_string());
             args.push(file.clone());
         }
@@ -449,7 +444,7 @@ impl GitDiffTool {
 
         args.push("--color=never".to_string());
 
-        args
+        Ok(args)
     }
 }
 
@@ -504,7 +499,7 @@ impl Tool for GitDiffTool {
             return Err(ToolError::ExecutionFailed(e.to_string()));
         }
 
-        let args = self.build_diff_args(&diff_input);
+        let args = self.build_diff_args(&diff_input)?;
         let mut full_args = vec!["diff"];
         for arg in &args {
             full_args.push(arg.as_str());
@@ -604,7 +599,7 @@ impl GitLogTool {
         }
     }
 
-    fn build_log_args(&self, input: &GitLogInput) -> Vec<String> {
+    fn build_log_args(&self, input: &GitLogInput) -> Result<Vec<String>, ToolError> {
         let mut args = Vec::new();
 
         let count = input.count.unwrap_or(10).min(100);
@@ -619,10 +614,12 @@ impl GitLogTool {
         }
 
         if let Some(ref author) = input.author {
+            validate_git_arg(author)?;
             args.push(format!("--author={author}"));
         }
 
         if let Some(ref since) = input.since {
+            validate_git_arg(since)?;
             args.push(format!("--since={since}"));
         }
 
@@ -631,15 +628,17 @@ impl GitLogTool {
         }
 
         if let Some(ref branch) = input.branch {
+            validate_git_arg(branch)?;
             args.push(branch.clone());
         }
 
         if let Some(ref file) = input.file {
+            validate_git_arg(file)?;
             args.push("--".to_string());
             args.push(file.clone());
         }
 
-        args
+        Ok(args)
     }
 }
 
@@ -698,7 +697,7 @@ impl Tool for GitLogTool {
             return Err(ToolError::ExecutionFailed(e.to_string()));
         }
 
-        let args = self.build_log_args(&log_input);
+        let args = self.build_log_args(&log_input)?;
         let mut full_args = vec!["log"];
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         full_args.extend(&arg_refs);
@@ -1678,7 +1677,7 @@ mod tests {
             ignore_whitespace: None,
             stat: None,
         };
-        let args = tool.build_diff_args(&input);
+        let args = tool.build_diff_args(&input).unwrap();
         assert!(args.contains(&"--cached".to_string()));
     }
 
@@ -1693,7 +1692,7 @@ mod tests {
             ignore_whitespace: None,
             stat: None,
         };
-        let args = tool.build_diff_args(&input);
+        let args = tool.build_diff_args(&input).unwrap();
         assert!(args.contains(&"abc123..def456".to_string()));
     }
 
@@ -1708,7 +1707,7 @@ mod tests {
             ignore_whitespace: Some(true),
             stat: None,
         };
-        let args = tool.build_diff_args(&input);
+        let args = tool.build_diff_args(&input).unwrap();
         assert!(args.contains(&"--".to_string()));
         assert!(args.contains(&"src/lib.rs".to_string()));
         assert!(args.contains(&"-U5".to_string()));
@@ -1765,7 +1764,7 @@ mod tests {
             patch: None,
             branch: None,
         };
-        let args = tool.build_log_args(&input);
+        let args = tool.build_log_args(&input).unwrap();
         assert!(args.contains(&"-10".to_string()));
         // Should contain the format string
         assert!(args.iter().any(|a| a.contains("%h %ad")));
@@ -1783,7 +1782,7 @@ mod tests {
             patch: None,
             branch: None,
         };
-        let args = tool.build_log_args(&input);
+        let args = tool.build_log_args(&input).unwrap();
         assert!(args.contains(&"-3".to_string()));
         assert!(args.contains(&"--oneline".to_string()));
     }
@@ -1800,7 +1799,7 @@ mod tests {
             patch: None,
             branch: Some("feature".to_string()),
         };
-        let args = tool.build_log_args(&input);
+        let args = tool.build_log_args(&input).unwrap();
         assert!(args.contains(&"-20".to_string()));
         assert!(args.iter().any(|a| a.contains("bob@example.com")));
         assert!(args.iter().any(|a| a.contains("2 weeks ago")));

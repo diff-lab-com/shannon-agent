@@ -388,6 +388,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
         repl.state.streaming_start = Some(stream_start);
         repl.state.streaming_token_rate = 0.0;
         repl.state.streaming_output_start = None;
+        repl.state.prev_output_tokens = 0;
         repl.state.desktop_notified = false;
         repl.chat.streaming_active = true;
 
@@ -463,13 +464,21 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                     repl.state.input_tokens = input;
                     repl.state.output_tokens = output;
                     repl.state.cached_tokens = s.cached_tokens;
-                    // Track token output rate
+                    // Track token output rate (instantaneous)
                     if output > 0 {
-                        let output_start = repl.state.streaming_output_start.get_or_insert_with(std::time::Instant::now);
-                        let elapsed = output_start.elapsed().as_secs_f64();
-                        if elapsed > 0.1 {
-                            repl.state.streaming_token_rate = output as f64 / elapsed;
+                        let now = std::time::Instant::now();
+                        let prev = repl.state.prev_output_tokens;
+                        if prev > 0 {
+                            let delta_tokens = output.saturating_sub(prev);
+                            if let Some(last_time) = repl.state.streaming_output_start {
+                                let delta_secs = now.duration_since(last_time).as_secs_f64();
+                                if delta_secs > 0.1 && delta_tokens > 0 {
+                                    repl.state.streaming_token_rate = delta_tokens as f64 / delta_secs;
+                                }
+                            }
                         }
+                        repl.state.streaming_output_start = Some(now);
+                        repl.state.prev_output_tokens = output;
                     }
                 }
 
@@ -591,6 +600,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
         repl.state.streaming_start = None;
         repl.state.streaming_token_rate = 0.0;
         repl.state.streaming_output_start = None;
+        repl.state.prev_output_tokens = 0;
         // Transfer rate limit from streaming state
         if let Ok(s) = streaming.lock() {
             repl.state.rate_limit_5h = s.rate_limit;

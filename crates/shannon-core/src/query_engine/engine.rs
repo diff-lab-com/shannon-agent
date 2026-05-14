@@ -1270,6 +1270,7 @@ impl QueryEngine {
                                                                 // Execute read-only tools concurrently
                                                                 let mut exec_handles = Vec::new();
                                                                 for (tool_id, tool_name, effective_input) in tool_calls {
+                                                                    let id_for_error = tool_id.clone();
                                                                     // Emit progress: tool started
                                                                     let _ = tx.send(Ok(QueryEvent::ToolProgress {
                                                                         query_id,
@@ -1284,10 +1285,11 @@ impl QueryEngine {
                                                                     let handle = tokio::spawn(async move {
                                                                         (tool_id, tool_name, effective_input, tools_exec.execute(&exec_name, exec_input).await)
                                                                     });
-                                                                    exec_handles.push(handle);
+                                                                    exec_handles.push((id_for_error, handle));
                                                                 }
 
-                                                                for handle in exec_handles {
+                                                                let mut batch_had_denial = false;
+                                                                for (saved_tool_id, handle) in exec_handles {
                                                                     match handle.await {
                                                                         Ok((tool_id, tool_name, effective_input, result)) => {
                                                                             // Run PostToolUse hooks
@@ -1316,7 +1318,7 @@ impl QueryEngine {
                                                                             match result {
                                                                                 Ok(output) => {
                                                                                     let is_err = output.is_error;
-                                                                                    consecutive_denials = 0; // reset on success
+                                                                                    if is_err { batch_had_denial = true; }
                                                                                     let _ = tx.send(Ok(QueryEvent::ToolUseResult {
                                                                                         query_id,
                                                                                         tool_use_id: tool_id.clone(),
@@ -1327,6 +1329,7 @@ impl QueryEngine {
                                                                                     tool_results.push((tool_id, output.content.clone(), is_err));
                                                                                 }
                                                                                 Err(e) => {
+                                                                                    batch_had_denial = true;
                                                                                     let error_msg = format!("Tool error: {e}");
                                                                                     let _ = tx.send(Ok(QueryEvent::ToolUseResult {
                                                                                         query_id,
@@ -1340,16 +1343,21 @@ impl QueryEngine {
                                                                             }
                                                                         }
                                                                         Err(e) => {
+                                                                            batch_had_denial = true;
                                                                             let error_msg = format!("Task join error: {e}");
                                                                             let _ = tx.send(Ok(QueryEvent::ToolUseResult {
                                                                                 query_id,
-                                                                                tool_use_id: String::new(),
+                                                                                tool_use_id: saved_tool_id.clone(),
                                                                                 tool_name: String::new(),
                                                                                 result: error_msg.clone(),
                                                                                 is_error: true,
                                                                             }));
+                                                                            tool_results.push((saved_tool_id, error_msg, true));
                                                                         }
                                                                     }
+                                                                }
+                                                                if !batch_had_denial {
+                                                                    consecutive_denials = 0;
                                                                 }
                                                             }
                                                             crate::tools::ToolBatch::Serial((tool_id, tool_name, effective_input)) => {
