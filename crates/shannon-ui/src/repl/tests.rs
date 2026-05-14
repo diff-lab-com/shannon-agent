@@ -1596,8 +1596,8 @@ fn test_repl_web_search_in_help() {
 #[test]
 fn test_repl_web_search_tab_completion() {
     let args = crate::repl::input::complete_command_args("web-search", "");
-    // No subcommand args, but function should return empty vec (not error)
-    assert!(args.is_empty());
+    assert!(!args.is_empty(), "web-search should have tab completions");
+    assert!(args.contains(&"--limit".to_string()));
 }
 
 // ── /review Command Tests ─────────────────────────────────────────
@@ -1668,7 +1668,8 @@ fn test_repl_local_models_in_help() {
 #[test]
 fn test_repl_local_models_tab_completion() {
     let args = crate::repl::input::complete_command_args("local-models", "");
-    assert!(args.is_empty());
+    assert!(!args.is_empty(), "local-models should have tab completions");
+    assert!(args.contains(&"list".to_string()));
 }
 
 // ── Enhanced /diff Command Tests ──────────────────────────────────

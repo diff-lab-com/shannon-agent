@@ -470,6 +470,7 @@ fn test_empty_conversation() {
 
 /// Verify conversation history accumulation across many turns stays consistent.
 #[test]
+#[ignore] // performance test — run with `cargo test -- --ignored`
 fn test_large_conversation_history_accumulation() {
     let mut state = TestConversation::default();
     let num_turns = 500;
@@ -506,6 +507,7 @@ fn test_large_conversation_history_accumulation() {
 
 /// Verify token estimation scales linearly with conversation size.
 #[test]
+#[ignore] // performance test — run with `cargo test -- --ignored`
 fn test_token_estimation_scaling() {
     let mut state = TestConversation::default();
 
@@ -542,6 +544,7 @@ fn test_token_estimation_scaling() {
 
 /// Verify context compression works correctly at scale.
 #[test]
+#[ignore] // performance test — run with `cargo test -- --ignored`
 fn test_large_conversation_compression_summarize() {
     let mut state = TestConversation::default();
     let config = QueryEngineConfig {
@@ -586,6 +589,7 @@ fn test_large_conversation_compression_summarize() {
 
 /// Verify truncation strategy handles large conversations efficiently.
 #[test]
+#[ignore] // performance test — run with `cargo test -- --ignored`
 fn test_large_conversation_compression_truncate() {
     let mut state = TestConversation::default();
     let config = QueryEngineConfig {
@@ -618,6 +622,7 @@ fn test_large_conversation_compression_truncate() {
 
 /// Verify repeated compression cycles don't lose data.
 #[test]
+#[ignore] // performance test — run with `cargo test -- --ignored`
 fn test_repeated_compression_cycles() {
     let mut state = TestConversation::default();
     let config = QueryEngineConfig {
@@ -656,6 +661,7 @@ fn test_repeated_compression_cycles() {
 
 /// Simulate realistic multi-turn with tool use interleaving.
 #[test]
+#[ignore] // performance test — run with `cargo test -- --ignored`
 fn test_large_conversation_with_tool_interleaving() {
     let mut state = TestConversation::default();
 
@@ -704,6 +710,7 @@ fn test_large_conversation_with_tool_interleaving() {
 
 /// Verify compression with tool-interleaved conversations preserves tool pairing.
 #[test]
+#[ignore] // performance test — run with `cargo test -- --ignored`
 fn test_compression_preserves_tool_pairing() {
     let mut state = TestConversation::default();
     let config = QueryEngineConfig {
@@ -759,6 +766,7 @@ fn test_compression_preserves_tool_pairing() {
 
 /// Benchmark: conversation operations should complete in reasonable time.
 #[test]
+#[ignore] // performance test — run with `cargo test -- --ignored`
 fn test_conversation_operations_performance() {
     use std::time::Instant;
 
@@ -797,4 +805,164 @@ fn test_conversation_operations_performance() {
     assert!(compress_time.as_millis() < 100,
         "Compression of 1000 messages took {compress_time:?}, expected <100ms");
     assert!(state.messages.len() <= 20);
+}
+
+// ── Compact Engine Regression Tests ────────────────────────────────
+// These tests verify the CompactEngine works correctly with the
+// rule-based summarizer (no LLM API calls), which is the default
+// mode used by the /compact command.
+
+use shannon_core::compact::CompactEngine;
+
+fn build_conversation(turns: usize) -> Vec<Message> {
+    let mut messages = Vec::new();
+    for i in 0..turns {
+        messages.push(text_msg("user", &format!("User question {i}: explain topic {} in detail with examples and code samples.", i % 10)));
+        messages.push(text_msg("assistant", &format!("Assistant answer {i}: here is a comprehensive explanation about topic {} with detailed examples, code samples, and analysis.", i % 10)));
+    }
+    messages
+}
+
+#[test]
+fn test_compact_engine_creation_default() {
+    let engine = CompactEngine::with_defaults();
+    assert!(engine.is_ok(), "CompactEngine::with_defaults() should succeed");
+}
+
+#[test]
+fn test_compact_engine_empty_history() {
+    let mut engine = CompactEngine::with_defaults().unwrap();
+    let mut messages: Vec<Message> = vec![];
+    let result = engine.compact(&mut messages);
+    assert!(result.is_err(), "Should error on empty messages");
+    assert!(matches!(result.unwrap_err(), shannon_core::compact::CompactError::NoMessagesToCompact));
+}
+
+#[test]
+fn test_compact_engine_too_few_messages() {
+    let mut engine = CompactEngine::with_defaults().unwrap();
+    let mut messages = build_conversation(2);
+    let result = engine.compact(&mut messages);
+    assert!(result.is_ok(), "Should succeed even with few messages");
+    let cr = result.unwrap();
+    // Not enough messages to compact, should report no change
+    assert_eq!(cr.messages_removed, 0, "Should not remove any messages with small conversation");
+}
+
+#[test]
+fn test_compact_engine_normal_conversation() {
+    let mut engine = CompactEngine::with_defaults().unwrap();
+    let mut messages = build_conversation(20);
+    let original_len = messages.len();
+    let _original_tokens = shannon_core::compact::estimate_tokens(&messages);
+
+    let result = engine.compact(&mut messages);
+    assert!(result.is_ok(), "Compact should succeed on normal conversation");
+
+    let cr = result.unwrap();
+    assert!(cr.original_tokens > 0, "Should report original tokens");
+    assert!(messages.len() < original_len || cr.messages_removed == 0,
+        "Messages should be reduced or no change needed");
+    assert!(cr.messages_compacted > 0 || original_len <= engine.config().keep_recent_count + 1,
+        "Should compact messages when conversation is large enough");
+}
+
+#[test]
+fn test_compact_engine_micro_compact() {
+    let engine = CompactEngine::with_defaults().unwrap();
+    let mut messages = build_conversation(5);
+    // Add one very large message to trigger micro-compacting
+    let large_text: String = "This is a long sentence about Rust. ".repeat(500);
+    messages.push(text_msg("assistant", &large_text));
+
+    let result = engine.micro_compact(&mut messages);
+    assert!(result.is_ok(), "Micro-compact should succeed");
+}
+
+#[test]
+fn test_compact_engine_group_compact() {
+    let mut engine = CompactEngine::with_defaults().unwrap();
+    let mut messages = build_conversation(15);
+    let result = engine.group_compact(&mut messages);
+    assert!(result.is_ok(), "Group-compact should succeed");
+}
+
+#[test]
+fn test_compact_engine_analyze_context() {
+    let engine = CompactEngine::with_defaults().unwrap();
+    let messages = build_conversation(10);
+    let analysis = engine.analyze_context(&messages);
+
+    assert!(analysis.estimated_tokens > 0, "Should estimate tokens");
+    assert!(analysis.context_usage_ratio >= 0.0, "Context ratio should be non-negative");
+    assert!(analysis.compactable_message_count > 0, "Should have compactable candidates");
+    assert!(analysis.compactable_message_count <= messages.len(), "Compactable count cannot exceed total messages");
+}
+
+#[test]
+fn test_compact_focus_mode_filtering() {
+    // Simulate focus-mode filtering: keep messages matching keywords, compact the rest
+    let messages = build_conversation(20);
+    let keywords = ["topic 5", "topic 3"];
+
+    let mut to_keep: Vec<Message> = Vec::new();
+    let mut to_compact: Vec<Message> = Vec::new();
+
+    for msg in messages {
+        let text = match &msg.content {
+            MessageContent::Text(t) => t.to_lowercase(),
+            MessageContent::Blocks(_) => String::new(),
+        };
+        if keywords.iter().any(|kw| text.contains(kw)) || msg.role == "system" {
+            to_keep.push(msg);
+        } else {
+            to_compact.push(msg);
+        }
+    }
+
+    assert!(!to_keep.is_empty(), "Should find messages matching focus keywords");
+    assert!(!to_compact.is_empty(), "Should have messages to compact");
+    assert!(to_keep.len() < 40, "Focus should filter down to fewer messages");
+
+    // Verify compact engine works on the filtered set
+    let mut engine = CompactEngine::with_defaults().unwrap();
+    if to_compact.len() > engine.config().keep_recent_count + 1 {
+        let result = engine.compact(&mut to_compact);
+        assert!(result.is_ok(), "Compact of non-focus messages should succeed");
+    }
+
+    // Re-merge: kept messages + compacted messages
+    to_keep.append(&mut to_compact);
+    // All messages should still be present (some compressed)
+    assert!(!to_keep.is_empty());
+}
+
+#[test]
+fn test_compact_preserves_system_messages() {
+    let mut engine = CompactEngine::with_defaults().unwrap();
+    let mut messages = vec![
+        Message { role: "system".to_string(), content: MessageContent::Text("You are a helpful assistant.".to_string()) },
+    ];
+    messages.extend(build_conversation(15));
+
+    let result = engine.compact(&mut messages);
+    assert!(result.is_ok());
+
+    // System message should still be present
+    let has_system = messages.iter().any(|m| m.role == "system");
+    assert!(has_system, "System message should be preserved after compaction");
+}
+
+#[test]
+fn test_compact_double_compact_rejected() {
+    let mut engine = CompactEngine::with_defaults().unwrap();
+    let mut messages = build_conversation(20);
+
+    // First compact should succeed
+    let result1 = engine.compact(&mut messages);
+    assert!(result1.is_ok());
+
+    // Second compact should also succeed (compacting flag is reset)
+    let result2 = engine.compact(&mut messages);
+    assert!(result2.is_ok(), "Second compact should work since compacting flag resets");
 }

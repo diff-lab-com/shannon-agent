@@ -616,23 +616,32 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
 
     let history = engine.conversation_history();
 
-    // Analyze first — use LLM summarizer for quality, fallback to rule-based
-    let client = engine.client().clone();
-    let compact_engine = match CompactEngine::with_llm_summarizer(client) {
-        Ok(e) => e,
-        Err(_) => match CompactEngine::with_defaults() {
+    // Use rule-based summarizer by default (no API calls, no nested runtime risk).
+    // Only use LLM summarizer when --llm flag is explicitly passed.
+    let use_llm = args.contains("--llm");
+    let compact_engine = if use_llm {
+        let client = engine.client().clone();
+        match CompactEngine::with_llm_summarizer(client) {
             Ok(e) => e,
             Err(e) => {
                 repl.chat.add_message(ChatRole::System, format!("Compact engine error: {e}"));
                 return Ok(());
             }
-        },
+        }
+    } else {
+        match CompactEngine::with_defaults() {
+            Ok(e) => e,
+            Err(e) => {
+                repl.chat.add_message(ChatRole::System, format!("Compact engine error: {e}"));
+                return Ok(());
+            }
+        }
     };
 
     let analysis = compact_engine.analyze_context(&history);
 
-    // Parse subcommand
-    let subcmd = args.trim();
+    // Parse subcommand (strip --llm flag if present)
+    let subcmd = args.trim().replace("--llm", "").trim().to_string();
     if subcmd == "status" || subcmd == "info" {
         let info = format!(
             "Context Analysis:\n  Estimated tokens: {}\n  Context usage: {:.1}%\n  Messages: {}\n  Should compact: {}\n  Recommended strategy: {}\n  Compactable messages: {}\n  Micro-compact candidates: {}",
@@ -655,7 +664,7 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
     }
 
     // /compact preview — show what will be compacted without doing it
-    if subcmd == "preview" {
+    if subcmd == "preview" || subcmd == "--preview" {
         let total = history.len();
         let recent_keep = 6; // matches default keep_recent_count
         let old_count = total.saturating_sub(recent_keep);
@@ -693,30 +702,13 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
     // /compact focus <topic> — compact but preserve messages about topic
     let (strategy, focus_keywords) = if let Some(focus) = subcmd.strip_prefix("focus ") {
         let keywords: Vec<&str> = focus.split_whitespace().collect();
-        let mut filtered: Vec<shannon_core::api::Message> = Vec::new();
-        let mut preserved = 0;
-        for msg in &history {
-            let text = match &msg.content {
-                shannon_core::api::MessageContent::Text(t) => t.to_lowercase(),
-                shannon_core::api::MessageContent::Blocks(blocks) => blocks.iter()
-                    .filter_map(|b| match b { shannon_core::api::ContentBlock::Text { text } => Some(text.clone()), _ => None })
-                    .collect::<Vec<_>>().join(" ").to_lowercase(),
-            };
-            let matches_focus = keywords.iter().any(|kw| text.contains(kw));
-            if matches_focus || msg.role == "system" {
-                preserved += 1;
-                filtered.push(msg.clone());
-            } else {
-                filtered.push(msg.clone());
-            }
-        }
         repl.chat.add_message(ChatRole::System, format!(
-            "Focus compact: preserving {preserved} messages matching '{}'\nCompacting remaining messages...",
+            "Focus compact: preserving messages matching '{}'\nCompacting remaining messages...",
             keywords.join("', '")
         ));
         (CompactStrategy::SummarizeOld, Some(keywords.into_iter().map(String::from).collect::<Vec<_>>()))
     } else {
-        let strategy = match subcmd {
+        let strategy = match subcmd.as_str() {
             "truncate" => CompactStrategy::TruncateOld,
             "micro" => CompactStrategy::MicroCompress,
             "group" => CompactStrategy::GroupCompress,

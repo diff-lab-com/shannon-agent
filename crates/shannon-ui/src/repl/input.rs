@@ -946,7 +946,7 @@ pub(crate) fn complete_file_path(prefix: &str) -> Vec<String> {
 pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String> {
     let candidates: &[&str] = match cmd_name {
         "team" => &["create", "add", "task", "assign", "status", "list", "run", "shutdown", "help"],
-        "model" => &[
+        "model" | "models" => &[
             "claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5",
             "claude-sonnet-4-5", "claude-opus-4-5",
             "claude-3-5-sonnet", "claude-3-opus",
@@ -959,13 +959,14 @@ pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String>
         "worktree" => &["enter", "exit", "status"],
         "debug" | "dbg" | "dev" => &["info", "log", "profile", "trace", "help"],
         "diff" => &["--staged", "--stat", "--overview", "--word-diff"],
-        "ci" => &["status", "runs", "workflows", "view", "trigger"],
-        "compact" => &["status", "truncate", "micro", "group", "--preview"],
+        "ci" | "gh-actions" => &["status", "runs", "workflows", "view", "trigger"],
+        "compact" => &["status", "truncate", "micro", "group", "preview", "--preview", "--llm"],
         "permissions" | "perm" | "perms" => &["allow", "deny", "reset", "status"],
         "plan" => &["create", "approve", "reject", "done", "status"],
         "review" => &["HEAD~1", "main...HEAD", "--staged", "--full"],
         "history" => &["--export"],
         "export" | "save" => &["--format json", "--format markdown"],
+        "import" | "load" => &["--format json", "--format markdown"],
         "theme" => &[
             "dark", "light", "dracula", "tokyonight", "catppuccin_mocha",
             "gruvbox_dark", "nord", "kanagawa", "monokai", "onedark",
@@ -976,6 +977,60 @@ pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String>
         "schedule" | "cron" => &["list", "remove", "--cron", "--once", "5m", "10m", "30m", "1h"],
         "ralph" => &["stop", "status", "--max", "--done"],
         "routine" => &["list", "add", "remove", "toggle", "fire", "save"],
+        "status" | "st" | "git-status" => &["--short", "--verbose"],
+        "search" | "?" | "hist" | "history-search" => &["--limit", "--export"],
+        "find" | "grep" | "conv-search" => &["--regex", "--limit", "--role"],
+        "browse" | "files" => &["--hidden", "--limit"],
+        "select-tools" | "tools" => &["enable", "disable", "list", "reset"],
+        "cost" => &["summary", "breakdown", "--session", "--today"],
+        "billing" | "usage" => &["summary", "details"],
+        "suggest" => &["--model", "--context"],
+        "agents" => &["list", "status"],
+        "agent" => &["spawn", "list", "status", "stop"],
+        "route" => &["list", "set", "auto"],
+        "mcp" => &["list", "connect", "disconnect", "tools", "status"],
+        "branch" | "fork" => &["--name", "--from"],
+        "web-search" | "websearch" | "search-web" => &["--limit", "--depth"],
+        "stage" => &["--all", "--interactive"],
+        "stats" | "perf" => &["summary", "tokens", "timing", "cache"],
+        "sandbox" => &["run", "status", "stop"],
+        "local-models" | "local" => &["list", "pull", "remove"],
+        "hooks" => &["list", "add", "remove", "enable", "disable", "test"],
+        "remember" | "mem" | "memo" => &["--permanent", "--session"],
+        "recall" | "search-memory" => &["--limit", "--recent"],
+        "forget" => &["--all", "--confirm"],
+        "memory" => &["list", "clear", "export", "stats"],
+        "image" | "img" | "screenshot" => &["--paste", "--path"],
+        "mode" => &["default", "plan", "bypass", "auto"],
+        "context" => &["list", "add", "remove", "clear"],
+        "undo" => &["--dry-run"],
+        "rewind" => &["1", "2", "3", "5", "--dry-run"],
+        "notify" => &["on", "off", "test"],
+        "webhook" => &["list", "add", "remove", "test"],
+        "create-pr" => &["--draft", "--title", "--body"],
+        "patch" => &["--stat", "--apply", "--reverse"],
+        "copy" | "clip" => &["1", "2", "3", "last", "response"],
+        "paste" => &[],
+        "add" => &["--glob", "--pattern"],
+        "add-dir" | "adddir" => &[],
+        "watch" => &["--pattern", "--interval", "stop"],
+        "bind" => &["list", "set", "remove"],
+        "project" => &["info", "reset", "save"],
+        "session" => &["list", "save", "delete", "export"],
+        "rename" => &[],
+        "recap" => &["--full", "--recent"],
+        "effort" => &["low", "medium", "high"],
+        "focus" => &["--add", "--remove", "--clear", "--list"],
+        "accessibility" | "a11y" => &["on", "off", "status"],
+        "color" => &["on", "off", "auto"],
+        "diag" => &["--full", "--json"],
+        "commands" => &["list", "reload"],
+        "statusline" => &["on", "off", "config"],
+        "terminal-setup" => &[],
+        "help" => &[],
+        "init" => &[],
+        "sessions" => &["list", "delete", "export"],
+        "resume" => &["--last", "--list"],
         _ => &[],
     };
 
@@ -2104,5 +2159,95 @@ fn handle_chat_search_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             Ok(())
         }
         _ => Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_complete_command_args_compact() {
+        let completions = complete_command_args("compact", "");
+        assert!(completions.contains(&"status".to_string()), "compact should complete 'status'");
+        assert!(completions.contains(&"truncate".to_string()), "compact should complete 'truncate'");
+        assert!(completions.contains(&"micro".to_string()), "compact should complete 'micro'");
+        assert!(completions.contains(&"group".to_string()), "compact should complete 'group'");
+        assert!(completions.contains(&"--preview".to_string()), "compact should complete '--preview'");
+        assert!(completions.contains(&"--llm".to_string()), "compact should complete '--llm'");
+    }
+
+    #[test]
+    fn test_complete_command_args_loop() {
+        let completions = complete_command_args("loop", "");
+        assert!(completions.contains(&"stop".to_string()));
+        assert!(completions.contains(&"status".to_string()));
+        assert!(completions.contains(&"--max".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_schedule() {
+        let completions = complete_command_args("schedule", "");
+        assert!(completions.contains(&"list".to_string()));
+        assert!(completions.contains(&"remove".to_string()));
+        assert!(completions.contains(&"--cron".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_ralph() {
+        let completions = complete_command_args("ralph", "");
+        assert!(completions.contains(&"stop".to_string()));
+        assert!(completions.contains(&"--done".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_routine() {
+        let completions = complete_command_args("routine", "");
+        assert!(completions.contains(&"list".to_string()));
+        assert!(completions.contains(&"add".to_string()));
+        assert!(completions.contains(&"fire".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_unknown_returns_empty() {
+        let completions = complete_command_args("nonexistent_cmd", "");
+        assert!(completions.is_empty(), "Unknown command should return empty completions");
+    }
+
+    #[test]
+    fn test_complete_command_args_with_prefix() {
+        let completions = complete_command_args("compact", "st");
+        assert!(completions.contains(&"status".to_string()), "Prefix 'st' should match 'status'");
+        assert!(!completions.contains(&"truncate".to_string()), "Prefix 'st' should not match 'truncate'");
+    }
+
+    #[test]
+    fn test_complete_command_args_all_core_commands_have_completions() {
+        let core_commands = [
+            "team", "model", "config", "credentials", "worktree", "debug",
+            "diff", "ci", "compact", "permissions", "plan", "review",
+            "history", "export", "theme", "loop", "schedule", "ralph", "routine",
+            "status", "find", "browse", "cost", "agents", "mcp", "hooks",
+            "remember", "recall", "memory", "image", "mode", "undo", "rewind",
+            "notify", "create-pr", "copy", "add", "watch", "session", "effort",
+            "focus", "accessibility", "color", "diag", "commands", "statusline",
+        ];
+
+        for cmd in &core_commands {
+            let completions = complete_command_args(cmd, "");
+            assert!(!completions.is_empty(),
+                "Command '/{cmd}' should have tab completions but returned empty");
+        }
+    }
+
+    #[test]
+    fn test_complete_command_args_aliases() {
+        let creds = complete_command_args("credentials", "");
+        let creds_alias = complete_command_args("creds", "");
+        assert_eq!(creds, creds_alias, "credentials and creds should have same completions");
+
+        let perm = complete_command_args("permissions", "");
+        let perm_alias = complete_command_args("perms", "");
+        assert_eq!(perm, perm_alias, "permissions and perms should have same completions");
     }
 }
