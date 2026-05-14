@@ -63,6 +63,7 @@ const DESTRUCTIVE_PATTERNS: &[&str] = &[
     "rm -rf /*",          // Delete all files
     ":>",                  // Zero out files
     "dd if=/dev/zero",    // Disk destruction
+    "dd if=",             // Disk destruction (any input)
     "mkfs",               // Format filesystem
     "fdisk",              // Partition manipulation
     "shutdown",           // System shutdown
@@ -70,6 +71,9 @@ const DESTRUCTIVE_PATTERNS: &[&str] = &[
     "init 0",             // Switch to runlevel 0
     "kill -9",            // Force kill processes
     "chmod 000",          // Remove all permissions
+    "chmod -r 777 /",     // Open up root permissions
+    "chmod -r 777",       // Recursive permission change
+    "chown -r",           // Recursive ownership change
 ];
 
 /// Confirmation-required patterns
@@ -150,6 +154,29 @@ const PS_CONFIRMATION_PATTERNS: &[&str] = &[
     "taskkill",             // Kill process
 ];
 
+/// Shell variable expansion patterns used for bypass detection
+const SHELL_EXPANSION_PATTERNS: &[&str] = &[
+    "$'",                  // ANSI-C quoting
+    "$(",                  // Command substitution
+    "${",                  // Parameter expansion
+    "`",                   // Backtick command substitution
+    "$((",                 // Arithmetic expansion
+    "$[",                  // Legacy arithmetic expansion
+];
+
+/// Sensitive system paths that should never be accessed
+const SENSITIVE_PATHS: &[&str] = &[
+    "/etc/passwd",         // Password database
+    "/etc/shadow",         // Shadow password file
+    "/etc/sudoers",        // Sudo configuration
+    "/root/",              // Root home directory
+    "/boot/",              // Boot files
+    "/sys/",               // System filesystem
+    "/proc/sys/",          // System configuration
+];
+
+
+
 /// Analyze a bash command for security risks
 pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
     let mut warnings = Vec::new();
@@ -161,13 +188,69 @@ pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
 
     let lower_command = command.to_lowercase();
 
-    // Check for destructive patterns
+    // FIRST: Check for shell expansion bypass attempts
+    // These patterns indicate attempts to hide dangerous commands
+    for pattern in SHELL_EXPANSION_PATTERNS {
+        if command.contains(pattern) {
+            risk_level = SecurityLevel::Critical;
+            warnings.push(format!("Shell expansion bypass detected: {pattern} - variable expansion or command substitution can hide dangerous commands"));
+
+            // Check if it contains ANSI-C quoting (common bypass technique)
+            if command.contains("$'") {
+                warnings.push("ANSI-C quoting detected: Can encode dangerous commands as hex escapes".to_string());
+            }
+
+            // Check for command substitution
+            if command.contains("$(") || command.contains('`') {
+                warnings.push("Command substitution detected: Can execute arbitrary commands".to_string());
+            }
+
+            // Check for parameter expansion
+            if command.contains("${") {
+                warnings.push("Parameter expansion detected: Can be used for obfuscation".to_string());
+            }
+
+            is_destructive = true;
+            break;
+        }
+    }
+
+    // Check for sensitive system paths in arguments
+    for path in SENSITIVE_PATHS {
+        if lower_command.contains(path) {
+            risk_level = SecurityLevel::Critical;
+            warnings.push(format!("Sensitive system path access detected: {path}"));
+            is_destructive = true;
+            break;
+        }
+    }
+
+    // Check for IFS (Internal Field Separator) manipulation
+    // Used to bypass word splitting detection
+    if lower_command.contains("${ifs}") || lower_command.contains("ifs=") {
+        risk_level = SecurityLevel::Critical;
+        warnings.push("IFS manipulation detected: Common technique to bypass security checks".to_string());
+        is_destructive = true;
+    }
+
+    // Check for base64/xxd encoding bypasses
+    if lower_command.contains("base64") || lower_command.contains("xxd") || lower_command.contains("od ") {
+        if lower_command.contains("|") || lower_command.contains("$(") {
+            risk_level = SecurityLevel::Critical;
+            warnings.push("Encoded command execution detected: base64/xxd used to hide commands".to_string());
+            is_destructive = true;
+        }
+    }
+
+    // Check for destructive patterns (including the newly added ones)
     for pattern in DESTRUCTIVE_PATTERNS {
         if lower_command.contains(pattern) {
-            risk_level = SecurityLevel::Critical;
+            if risk_level < SecurityLevel::Critical {
+                risk_level = SecurityLevel::Critical;
+            }
             is_destructive = true;
             warnings.push(format!("Destructive pattern detected: {pattern}"));
-            break;
+            // Don't break - collect all destructive patterns
         }
     }
 
@@ -183,7 +266,7 @@ pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
         }
     }
 
-    // Check for path traversal
+    // Check for path traversal (enhanced to catch more patterns)
     for pattern in PATH_TRAVERSAL_PATTERNS {
         if lower_command.contains(pattern) {
             contains_path_traversal = true;
@@ -195,12 +278,53 @@ pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
         }
     }
 
+    // Additional path traversal checks for encoded variants
+    if lower_command.contains("..\\") || lower_command.contains("%2e%2e") {
+        contains_path_traversal = true;
+        if risk_level < SecurityLevel::Medium {
+            risk_level = SecurityLevel::Medium;
+        }
+        warnings.push("Encoded or Windows-style path traversal detected".to_string());
+    }
+
     // Check for sed injection
     for pattern in SED_INJECTION_PATTERNS {
         if lower_command.contains(pattern) {
-            risk_level = SecurityLevel::Critical;
+            if risk_level < SecurityLevel::Critical {
+                risk_level = SecurityLevel::Critical;
+            }
             warnings.push(format!("Sed injection pattern detected: {pattern}"));
-            break;
+            // Don't break - collect all injection patterns
+        }
+    }
+
+    // Check for pipe-based command chaining that could bypass filters
+    if command.contains('|') && !is_read_only {
+        // Check what's being piped to
+        let parts: Vec<&str> = command.split('|').collect();
+        if parts.len() > 1 {
+            for part in &parts[1..] {
+                let part_lower = part.to_lowercase();
+                // Check if piping to dangerous commands
+                if part_lower.trim().starts_with("sh")
+                    || part_lower.trim().starts_with("bash")
+                    || part_lower.trim().starts_with("python")
+                    || part_lower.trim().starts_with("perl")
+                    || part_lower.trim().starts_with("ruby")
+                    || part_lower.trim().starts_with("node")
+                    || part_lower.trim().starts_with("eval") {
+                    if risk_level < SecurityLevel::Critical {
+                        risk_level = SecurityLevel::Critical;
+                    }
+                    warnings.push(format!("Dangerous pipe-to-shell detected: | {}", part.trim()));
+                    is_destructive = true;
+                }
+            }
+        }
+
+        // Regular pipes are still medium risk
+        if risk_level < SecurityLevel::Medium {
+            risk_level = SecurityLevel::Medium;
         }
     }
 
@@ -224,17 +348,11 @@ pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
         warnings.push("Elevated privileges requested (sudo)".to_string());
     }
 
-    // Pipe chains are medium risk
-    if command.contains('|') && !is_read_only
-        && risk_level < SecurityLevel::Medium {
-            risk_level = SecurityLevel::Medium;
-        }
-
     // Redirects that overwrite files are medium risk
     if command.contains(">") && !is_read_only
         && risk_level < SecurityLevel::Medium {
-            risk_level = SecurityLevel::Medium;
-        }
+        risk_level = SecurityLevel::Medium;
+    }
 
     SecurityAnalysis {
         risk_level,
@@ -1421,3 +1539,85 @@ mod tests {
         assert!(analysis2.is_read_only);
     }
 }
+
+    // ── Security bypass detection tests ─────────────────────────────────────
+
+    #[test]
+    fn test_shell_expansion_bypass_detection() {
+        // ANSI-C quoting bypass
+        let analysis = analyze_command_security("$'rm\\x20-rf\\x20/'");
+        assert_eq!(analysis.risk_level, SecurityLevel::Critical);
+        assert!(analysis.warnings.iter().any(|w| w.contains("ANSI-C quoting")));
+
+        // Command substitution bypass
+        let analysis = analyze_command_security("echo $(rm -rf /)");
+        assert_eq!(analysis.risk_level, SecurityLevel::Critical);
+        assert!(analysis.warnings.iter().any(|w| w.contains("Command substitution")));
+
+        // Parameter expansion bypass
+        let analysis = analyze_command_security("echo ${HOME}/../../etc/passwd");
+        assert_eq!(analysis.risk_level, SecurityLevel::Critical);
+        assert!(analysis.warnings.iter().any(|w| w.contains("Parameter expansion")));
+    }
+
+    #[test]
+    fn test_ifs_manipulation_detection() {
+        let analysis = analyze_command_security("IFS=/; echo rm");
+        assert_eq!(analysis.risk_level, SecurityLevel::Critical);
+        assert!(analysis.warnings.iter().any(|w| w.contains("IFS manipulation")));
+
+        let analysis2 = analyze_command_security("cat ${IFS}etc${IFS}passwd");
+        assert_eq!(analysis2.risk_level, SecurityLevel::Critical);
+    }
+
+    #[test]
+    fn test_base64_encoding_bypass_detection() {
+        let analysis = analyze_command_security("echo 'cm0gLXJmIC8=' | base64 -d | bash");
+        assert_eq!(analysis.risk_level, SecurityLevel::Critical);
+        assert!(analysis.warnings.iter().any(|w| w.contains("Encoded command")));
+    }
+
+    #[test]
+    fn test_sensitive_path_detection() {
+        let analysis = analyze_command_security("cat /etc/passwd");
+        assert_eq!(analysis.risk_level, SecurityLevel::Critical);
+        assert!(analysis.warnings.iter().any(|w| w.contains("/etc/passwd")));
+
+        let analysis2 = analyze_command_security("cat /etc/shadow");
+        assert_eq!(analysis2.risk_level, SecurityLevel::Critical);
+    }
+
+    #[test]
+    fn test_pipe_to_shell_detection() {
+        let analysis = analyze_command_security("cat file | sh");
+        assert_eq!(analysis.risk_level, SecurityLevel::Critical);
+        assert!(analysis.warnings.iter().any(|w| w.contains("pipe-to-shell")));
+
+        let analysis2 = analyze_command_security("ls | bash");
+        assert_eq!(analysis2.risk_level, SecurityLevel::Critical);
+    }
+
+    #[test]
+    fn test_encoded_path_traversal_detection() {
+        let analysis = analyze_command_security("cat %2e%2e/%2e%2e/etc/passwd");
+        assert!(analysis.contains_path_traversal);
+        assert!(analysis.warnings.iter().any(|w| w.contains("Encoded")));
+
+        let analysis2 = analyze_command_security("cat ..\\..\\windows\\system32");
+        assert!(analysis2.contains_path_traversal);
+    }
+
+    #[test]
+    fn test_new_destructive_patterns() {
+        // dd if= pattern
+        let analysis = analyze_command_security("dd if=/dev/zero of=file");
+        assert_eq!(analysis.risk_level, SecurityLevel::Critical);
+
+        // chmod -r 777 pattern
+        let analysis2 = analyze_command_security("chmod -r 777 /etc");
+        assert_eq!(analysis2.risk_level, SecurityLevel::Critical);
+
+        // chown -r pattern
+        let analysis3 = analyze_command_security("chown -r user file");
+        assert_eq!(analysis3.risk_level, SecurityLevel::Critical);
+    }
