@@ -140,8 +140,9 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
                 return Ok(());
             }
             _ => {
+                // Any other key dismisses the panel but is NOT consumed —
+                // fall through so normal input handling continues.
                 repl.state.agents_panel_visible = false;
-                return Ok(());
             }
         }
     }
@@ -855,6 +856,13 @@ fn handle_tab_completion(repl: &mut Repl) -> Result<()> {
             }
         }
         repl.prompt.set_input(new_input);
+    }
+
+    // Populate completion_suggestions for display and cycling
+    let candidates = &repl.tab_completion_state.candidates;
+    if !candidates.is_empty() {
+        repl.state.completion_suggestions = candidates.clone();
+        repl.state.completion_suggestion_index = 0;
     }
 
     Ok(())
