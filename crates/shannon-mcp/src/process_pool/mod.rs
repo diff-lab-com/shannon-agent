@@ -1942,6 +1942,9 @@ impl Drop for McpProcessPool {
         self.handles.clear();
         self.remote_handles.clear();
 
+        // Clone the health_task handle so we can abort it from the cleanup thread.
+        let health_task = self.health_task.clone();
+
         if tokio::runtime::Handle::try_current().is_ok() {
             // We're inside a tokio runtime — spawn a detached thread with its
             // own runtime to avoid the "cannot block_on inside async" panic.
@@ -1953,6 +1956,11 @@ impl Drop for McpProcessPool {
                         .build();
                     let Ok(rt) = rt else { return };
                     rt.block_on(async {
+                        // Abort the background health check task first.
+                        if let Some(task) = health_task.lock().await.take() {
+                            task.abort();
+                        }
+
                         let _ = tokio::time::timeout(
                             Duration::from_secs(5),
                             async {
