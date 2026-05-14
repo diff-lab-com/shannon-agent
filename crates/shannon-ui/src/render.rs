@@ -497,6 +497,20 @@ impl Renderer {
                     )));
                 }
                 Event::FootnoteReference(_) => {}
+                Event::Html(html) | Event::InlineHtml(html) => {
+                    // Terminal can't render HTML — emit as styled text so
+                    // content with <> (e.g. <<星空>>) isn't silently dropped.
+                    let style = Style::default().fg(theme.text);
+                    for (i, line) in html.split('\n').enumerate() {
+                        if i > 0 {
+                            prepend_blockquote(&mut inline_spans, blockquote_depth, theme);
+                            flush_inline(&mut inline_spans, &mut output);
+                        }
+                        if !line.is_empty() {
+                            inline_spans.push(Span::styled(line.to_string(), style));
+                        }
+                    }
+                }
                 _ => {}
             }
         }

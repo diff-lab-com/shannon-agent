@@ -868,6 +868,15 @@ impl QueryEngine {
                     }
                 }
 
+                // Diagnostic: log conversation state before API call
+                tracing::debug!(
+                    "API call: {} messages, ~{} tokens, turn {}/{}",
+                    messages.len(),
+                    crate::compact::helpers::estimate_tokens(&messages),
+                    turn + 1,
+                    config.max_turns,
+                );
+
                 // Call the API — use structured system blocks when available for prompt caching
                 let stream_result = if let Some(ref blocks) = system_blocks_opt {
                     client.send_message_stream_structured_with_retry(messages.clone(), tools_schema.clone(), blocks.clone()).await

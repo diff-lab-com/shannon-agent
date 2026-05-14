@@ -1319,6 +1319,13 @@ pub(super) fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
                 current_row.push(current_cell.trim().to_string());
                 in_table_cell = false;
             }
+            Event::Html(html) | Event::InlineHtml(html) => {
+                // Terminal renderer can't display HTML — treat as plain text
+                // to prevent content (especially text with <> like <<星空>>)
+                // from being silently dropped.
+                let text_str = html.to_string();
+                current_text.extend(text_str.lines().map(|l| l.to_string()));
+            }
             _ => {}
         }
     }
