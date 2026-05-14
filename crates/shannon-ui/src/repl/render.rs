@@ -123,9 +123,23 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         } else if let Some(ref input_dlg) = state.input_dialog {
             input_dlg.render(f, f.area(), &state.theme);
         } else if let Some(ref picker) = state.fuzzy_picker {
-            picker.render(f, f.area(), &state.theme);
+            // Render as a popup near the input area, not full-screen overlay
+            let popup_height = 15u16.min(f.area().height.saturating_sub(5));
+            let popup_width = (f.area().width as f32 * 0.6).min(60.0) as u16;
+            let popup_x = f.area().width.saturating_sub(popup_width) / 2;
+            let popup_y = f.area().height.saturating_sub(popup_height).saturating_sub(3);
+            let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+            // Clear the popup area first
+            f.render_widget(ratatui::widgets::Clear, popup_area);
+            picker.render(f, popup_area, &state.theme);
         } else if let Some(ref selector) = state.file_selector {
-            selector.render(f, f.area(), &state.theme);
+            let popup_height = 15u16.min(f.area().height.saturating_sub(5));
+            let popup_width = (f.area().width as f32 * 0.6).min(60.0) as u16;
+            let popup_x = f.area().width.saturating_sub(popup_width) / 2;
+            let popup_y = f.area().height.saturating_sub(popup_height).saturating_sub(3);
+            let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+            f.render_widget(ratatui::widgets::Clear, popup_area);
+            selector.render(f, popup_area, &state.theme);
         } else if let Some(ref msel) = state.multi_select {
             msel.render(f, f.area(), &state.theme);
         } else if let Some(ref mp) = state.model_picker {

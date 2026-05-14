@@ -972,6 +972,10 @@ pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String>
             "everforest", "ayu", "flexoki", "dark_daltonized", "light_daltonized",
             "pick",
         ],
+        "loop" => &["stop", "status", "--max"],
+        "schedule" | "cron" => &["list", "remove", "--cron", "--once", "5m", "10m", "30m", "1h"],
+        "ralph" => &["stop", "status", "--max", "--done"],
+        "routine" => &["list", "add", "remove", "toggle", "fire", "save"],
         _ => &[],
     };
 

@@ -15,14 +15,9 @@ const THINKING_PHRASES: &[&str] = &[
     "Reflecting",
 ];
 
-/// Animated trailing dots: cycles "·", "··", "···" every 400ms.
-fn animated_dots(elapsed: std::time::Duration) -> &'static str {
-    let phase = (elapsed.as_millis() / 400) % 3;
-    match phase {
-        0 => "·",
-        1 => "··",
-        _ => "···",
-    }
+/// Fixed trailing dots (avoids flickering from animated dot count changes).
+fn animated_dots(_elapsed: std::time::Duration) -> &'static str {
+    "···"
 }
 
 use crate::{

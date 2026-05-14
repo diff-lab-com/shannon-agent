@@ -243,19 +243,27 @@ impl MessageCell {
                     ChatRole::System => theme.system_msg,
                     ChatRole::User => unreachable!(),
                 };
-                // Separator with dimmed timestamp: "── 14:23 ──"
-                let time_str = msg.timestamp.format("%H:%M").to_string();
-                let time_w = unicode_width::UnicodeWidthStr::width(time_str.as_str());
-                let max_sep = (width as usize).saturating_sub(2);
-                let total_dash = max_sep.saturating_sub(time_w + 4); // 4 for spaces around time
-                let left_dash = total_dash / 2;
-                let right_dash = total_dash.saturating_sub(left_dash);
-                let sep = Line::from(vec![
-                    Span::styled("\u{2500}".repeat(left_dash), Style::default().fg(sep_color)),
-                    Span::styled(format!(" {time_str} "), Style::default().fg(theme.text_dim)),
-                    Span::styled("\u{2500}".repeat(right_dash), Style::default().fg(sep_color)),
-                ]);
-                l.insert(0, sep);
+                // Separator: show timestamp only on first message of a role group
+                if !self.is_continuation {
+                    let time_str = msg.timestamp.format("%H:%M").to_string();
+                    let time_w = unicode_width::UnicodeWidthStr::width(time_str.as_str());
+                    let max_sep = (width as usize).saturating_sub(2);
+                    let total_dash = max_sep.saturating_sub(time_w + 4);
+                    let left_dash = total_dash / 2;
+                    let right_dash = total_dash.saturating_sub(left_dash);
+                    let sep = Line::from(vec![
+                        Span::styled("\u{2500}".repeat(left_dash), Style::default().fg(sep_color)),
+                        Span::styled(format!(" {time_str} "), Style::default().fg(theme.text_dim)),
+                        Span::styled("\u{2500}".repeat(right_dash), Style::default().fg(sep_color)),
+                    ]);
+                    l.insert(0, sep);
+                } else {
+                    // Continuation: just a thin separator without timestamp
+                    let sep = Line::from(vec![
+                        Span::styled("\u{2500}".repeat(width as usize), Style::default().fg(sep_color)),
+                    ]);
+                    l.insert(0, sep);
+                }
 
                 // Thinking content for assistant messages
                 if msg.role == ChatRole::Assistant {

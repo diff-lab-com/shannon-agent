@@ -465,3 +465,336 @@ fn test_empty_conversation() {
     let config = QueryEngineConfig::default();
     assert!(!state.needs_compression(&config));
 }
+
+// ── Performance tests ──
+
+/// Verify conversation history accumulation across many turns stays consistent.
+#[test]
+fn test_large_conversation_history_accumulation() {
+    let mut state = TestConversation::default();
+    let num_turns = 500;
+
+    for i in 0..num_turns {
+        state.messages.push(text_msg("user", &format!("User question {i}: tell me about topic {}", i % 50)));
+        state.messages.push(text_msg("assistant", &format!("Assistant answer {i}: here is a detailed explanation about topic {} with enough content to be realistic.", i % 50)));
+        state.turn_count += 1;
+    }
+
+    assert_eq!(state.turn_count, num_turns);
+    assert_eq!(state.messages.len(), num_turns * 2);
+
+    // Verify ordering preserved across all 500 turns
+    for i in 0..num_turns {
+        let user_idx = i * 2;
+        let asst_idx = i * 2 + 1;
+        assert_eq!(state.messages[user_idx].role, "user",
+            "Message {user_idx} should be user, got {}", state.messages[user_idx].role);
+        assert_eq!(state.messages[asst_idx].role, "assistant",
+            "Message {asst_idx} should be assistant, got {}", state.messages[asst_idx].role);
+    }
+
+    // Verify first and last turn content preserved
+    match &state.messages[0].content {
+        MessageContent::Text(t) => assert!(t.contains("question 0")),
+        _ => panic!("Expected text"),
+    }
+    match &state.messages[state.messages.len() - 1].content {
+        MessageContent::Text(t) => assert!(t.contains("answer 499")),
+        _ => panic!("Expected text"),
+    }
+}
+
+/// Verify token estimation scales linearly with conversation size.
+#[test]
+fn test_token_estimation_scaling() {
+    let mut state = TestConversation::default();
+
+    let tokens_100 = {
+        for i in 0..50 {
+            state.messages.push(text_msg("user", &format!("Question {i}")));
+            state.messages.push(text_msg("assistant", &format!("Answer {i} with some extra text")));
+        }
+        state.estimate_tokens()
+    };
+
+    let tokens_200 = {
+        for i in 50..100 {
+            state.messages.push(text_msg("user", &format!("Question {i}")));
+            state.messages.push(text_msg("assistant", &format!("Answer {i} with some extra text")));
+        }
+        state.estimate_tokens()
+    };
+
+    let tokens_400 = {
+        for i in 100..200 {
+            state.messages.push(text_msg("user", &format!("Question {i}")));
+            state.messages.push(text_msg("assistant", &format!("Answer {i} with some extra text")));
+        }
+        state.estimate_tokens()
+    };
+
+    // Should scale roughly linearly (2x messages = ~2x tokens)
+    assert!(tokens_200 > tokens_100 * 180 / 100,
+        "Tokens should grow proportionally: {tokens_100} -> {tokens_200}");
+    assert!(tokens_400 > tokens_200 * 180 / 100,
+        "Tokens should grow proportionally: {tokens_200} -> {tokens_400}");
+}
+
+/// Verify context compression works correctly at scale.
+#[test]
+fn test_large_conversation_compression_summarize() {
+    let mut state = TestConversation::default();
+    let config = QueryEngineConfig {
+        max_context_tokens: Some(500),
+        compression_threshold: 0.5, // trigger at 250 tokens
+        keep_recent_messages: 20,
+        compression_strategy: CompressionStrategy::SummarizeOld,
+        ..QueryEngineConfig::default()
+    };
+
+    // Build 500 turns
+    for i in 0..500 {
+        state.messages.push(text_msg("user", &format!("Q{i}")));
+        state.messages.push(text_msg("assistant", &format!("A{i}")));
+    }
+    assert_eq!(state.messages.len(), 1000);
+
+    // Compression should trigger
+    assert!(state.needs_compression(&config));
+
+    state.compress(&config);
+
+    // After compression: 1 summary + up to 20 recent messages
+    assert!(state.messages.len() <= 21,
+        "After compression should have ≤21 messages, got {}", state.messages.len());
+
+    // Summary at front
+    assert_eq!(state.messages[0].role, "system");
+    match &state.messages[0].content {
+        MessageContent::Text(t) => assert!(t.contains("[Previous conversation summary]")),
+        _ => panic!("Expected summary text"),
+    }
+
+    // Recent messages preserved (last 20 = turns 490-499)
+    let last_user = &state.messages[state.messages.len() - 2];
+    assert_eq!(last_user.role, "user");
+    match &last_user.content {
+        MessageContent::Text(t) => assert!(t.contains("Q49"), "Should preserve recent turns"),
+        _ => panic!("Expected text"),
+    }
+}
+
+/// Verify truncation strategy handles large conversations efficiently.
+#[test]
+fn test_large_conversation_compression_truncate() {
+    let mut state = TestConversation::default();
+    let config = QueryEngineConfig {
+        max_context_tokens: Some(500),
+        compression_threshold: 0.5,
+        keep_recent_messages: 10,
+        compression_strategy: CompressionStrategy::TruncateOldest,
+        ..QueryEngineConfig::default()
+    };
+
+    for i in 0..250 {
+        state.messages.push(text_msg("user", &format!("Q{i}")));
+        state.messages.push(text_msg("assistant", &format!("A{i}")));
+    }
+
+    state.compress(&config);
+
+    assert_eq!(state.messages.len(), 10,
+        "Should keep exactly 10 recent messages");
+
+    // Should be the most recent messages
+    match &state.messages[0].content {
+        MessageContent::Text(t) => {
+            let num: usize = t[1..].parse().unwrap();
+            assert!(num >= 245, "Should keep recent messages (>=245), got {num}");
+        }
+        _ => panic!("Expected text"),
+    }
+}
+
+/// Verify repeated compression cycles don't lose data.
+#[test]
+fn test_repeated_compression_cycles() {
+    let mut state = TestConversation::default();
+    let config = QueryEngineConfig {
+        max_context_tokens: Some(300),
+        compression_threshold: 0.5,
+        keep_recent_messages: 6,
+        compression_strategy: CompressionStrategy::TruncateOldest,
+        ..QueryEngineConfig::default()
+    };
+
+    // Simulate 5 rounds of: add messages → compress
+    for round in 0..5 {
+        let base = round * 20;
+        for i in base..(base + 20) {
+            // Use longer messages to ensure compression triggers
+            state.messages.push(text_msg("user", &format!("Question number {i} with some extra text to increase token count significantly")));
+            state.messages.push(text_msg("assistant", &format!("Answer number {i} with enough text to push token estimation well above the compression threshold value")));
+        }
+        if state.needs_compression(&config) {
+            state.compress(&config);
+        }
+    }
+
+    // After all cycles, should still have at most keep_recent_messages
+    assert!(state.messages.len() <= 6,
+        "Should have at most 6 messages after repeated compression, got {}", state.messages.len());
+
+    // Most recent messages should be from the last round
+    let last = &state.messages[state.messages.len() - 1];
+    match &last.content {
+        MessageContent::Text(t) => assert!(t.contains("Answer number 9") || t.contains("Answer number 8"),
+            "Should preserve most recent: got {t}"),
+        _ => panic!("Expected text"),
+    }
+}
+
+/// Simulate realistic multi-turn with tool use interleaving.
+#[test]
+fn test_large_conversation_with_tool_interleaving() {
+    let mut state = TestConversation::default();
+
+    // 100 turns, each with a tool use cycle (user → assistant+tool → tool_result → assistant)
+    for i in 0..100 {
+        state.messages.push(text_msg("user", &format!("Read file {}", i)));
+        state.messages.push(Message {
+            role: "assistant".to_string(),
+            content: MessageContent::Blocks(vec![
+                ContentBlock::Text { text: format!("Reading file {i}...") },
+                ContentBlock::ToolUse {
+                    id: format!("t_{i}"),
+                    name: "read_file".to_string(),
+                    input: serde_json::json!({"path": format!("/tmp/file{i}.txt")}),
+                },
+            ]),
+        });
+        state.messages.push(Message {
+            role: "user".to_string(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: format!("t_{i}"),
+                content: Some(ToolResultContent::Single(format!("Content of file {i}"))),
+                is_error: None,
+            }]),
+        });
+        state.messages.push(text_msg("assistant", &format!("File {i} contains: some data")));
+    }
+
+    // 100 turns × 4 messages = 400 messages
+    assert_eq!(state.messages.len(), 400);
+
+    // Verify structure is correct throughout
+    for i in 0..100 {
+        let base = i * 4;
+        assert_eq!(state.messages[base].role, "user");
+        assert_eq!(state.messages[base + 1].role, "assistant");
+        assert_eq!(state.messages[base + 2].role, "user"); // tool result
+        assert_eq!(state.messages[base + 3].role, "assistant");
+    }
+
+    // Token estimation should be reasonable
+    let tokens = state.estimate_tokens();
+    assert!(tokens > 0);
+    assert!(tokens < 100_000, "Token estimate should be bounded, got {tokens}");
+}
+
+/// Verify compression with tool-interleaved conversations preserves tool pairing.
+#[test]
+fn test_compression_preserves_tool_pairing() {
+    let mut state = TestConversation::default();
+    let config = QueryEngineConfig {
+        max_context_tokens: Some(200),
+        compression_threshold: 0.5,
+        keep_recent_messages: 8, // 2 full tool-use cycles
+        compression_strategy: CompressionStrategy::TruncateOldest,
+        ..QueryEngineConfig::default()
+    };
+
+    // Add 5 tool-use cycles
+    for i in 0..5 {
+        state.messages.push(text_msg("user", &format!("Q{i}")));
+        state.messages.push(Message {
+            role: "assistant".to_string(),
+            content: MessageContent::Blocks(vec![
+                ContentBlock::Text { text: format!("Working on {i}") },
+                ContentBlock::ToolUse {
+                    id: format!("t{i}"),
+                    name: "bash".to_string(),
+                    input: serde_json::json!({"command": format!("echo {i}")}),
+                },
+            ]),
+        });
+        state.messages.push(Message {
+            role: "user".to_string(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: format!("t{i}"),
+                content: Some(ToolResultContent::Single(format!("output {i}"))),
+                is_error: None,
+            }]),
+        });
+        state.messages.push(text_msg("assistant", &format!("Done {i}")));
+    }
+
+    assert_eq!(state.messages.len(), 20);
+    state.compress(&config);
+
+    // Should keep 8 messages = 2 complete tool-use cycles
+    assert_eq!(state.messages.len(), 8);
+
+    // Tool_use and tool_result should be properly paired
+    // (assistant has tool_use, followed by user with tool_result)
+    if let MessageContent::Blocks(blocks) = &state.messages[1].content {
+        assert!(blocks.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. })),
+            "Kept assistant message should still have tool_use");
+    }
+    if let MessageContent::Blocks(blocks) = &state.messages[2].content {
+        assert!(blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. })),
+            "Kept user message should still have tool_result");
+    }
+}
+
+/// Benchmark: conversation operations should complete in reasonable time.
+#[test]
+fn test_conversation_operations_performance() {
+    use std::time::Instant;
+
+    let mut state = TestConversation::default();
+
+    // Build 500-turn conversation
+    let build_start = Instant::now();
+    for i in 0..500 {
+        state.messages.push(text_msg("user", &format!("Question {i} with enough content to be realistic")));
+        state.messages.push(text_msg("assistant", &format!("Answer {i} with detailed explanation")));
+    }
+    let build_time = build_start.elapsed();
+    assert!(build_time.as_millis() < 100,
+        "Building 500-turn conversation took {build_time:?}, expected <100ms");
+
+    // Token estimation
+    let est_start = Instant::now();
+    let tokens = state.estimate_tokens();
+    let est_time = est_start.elapsed();
+    assert!(est_time.as_millis() < 50,
+        "Token estimation for 1000 messages took {est_time:?}, expected <50ms");
+    assert!(tokens > 0);
+
+    // Compression check
+    let config = QueryEngineConfig {
+        max_context_tokens: Some(5000),
+        compression_threshold: 0.5,
+        keep_recent_messages: 20,
+        compression_strategy: CompressionStrategy::TruncateOldest,
+        ..QueryEngineConfig::default()
+    };
+
+    let compress_start = Instant::now();
+    state.compress(&config);
+    let compress_time = compress_start.elapsed();
+    assert!(compress_time.as_millis() < 100,
+        "Compression of 1000 messages took {compress_time:?}, expected <100ms");
+    assert!(state.messages.len() <= 20);
+}
