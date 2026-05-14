@@ -1915,4 +1915,279 @@ mod tests {
             );
         }
     }
+
+    // ── Multi-turn conversation history tests ──────────────────────────
+    //
+    // Simulate realistic multi-turn sessions where later turns reference
+    // content from earlier turns. Verify that compact preserves the
+    // information needed for cross-turn references.
+
+    /// Generate a novel chapter for testing (~2k chars)
+    fn novel_chapter(chapter_num: usize) -> String {
+        let title = format!("Chapter {chapter_num}: The Journey Begins");
+        let paragraphs = vec![
+            format!("{title}\n"),
+            "The morning sun cast golden rays across the ancient stone bridge. \
+             Eleanor stood at its edge, clutching the weathered map her grandmother \
+             had given her. The parchment showed a path leading deep into the Whispering \
+             Woods, a place where few dared to venture.".to_string(),
+            "\"Are you certain about this?\" asked Marcus, his voice barely above a whisper. \
+             He adjusted his leather satchel and glanced nervously at the dark treeline. \
+             The trees seemed to lean inward, their branches intertwining like grasping fingers.".to_string(),
+            "Eleanor nodded firmly. \"The amulet must be returned before the next \
+             full moon. If it isn't, the seal on the Shadow Gate will break, and \
+             what lies beyond will flood into our world.\" She pulled the silver \
+             amulet from beneath her cloak, and it pulsed with a faint blue light.".to_string(),
+            "They had been walking for three days since leaving the village of \
+             Thornhaven. The journey had been uneventful until now, but the woods \
+             ahead carried an unnatural silence. No birds sang. No insects buzzed. \
+             Even the wind seemed to die at the treeline.".to_string(),
+            "Marcus consulted his own notes from the Academy of Arcane Studies. \
+             According to the texts, the Whispering Woods were once a sacred grove \
+             where the Elders communed with spirits of the ancient world. The trees \
+             themselves were said to be sentient, their roots reaching deep into ley \
+             lines of magical energy.".to_string(),
+            "\"The path splits ahead,\" Eleanor observed, studying the map. \"One \
+             leads to the Moonwell, where the amulet was originally forged. The other \
+             goes to the Shadow Gate itself.\" She traced the route with her finger, \
+             frowning. \"We need to purify the amulet at the Moonwell first.\"".to_string(),
+            "As they stepped onto the forest path, a low humming sound began. \
+             It came from everywhere and nowhere at once. The amulet's glow intensified, \
+             and Eleanor felt a warmth spreading through her chest. The forest was testing them.".to_string(),
+            "The seventh sentinel, a creature of bark and shadow, emerged from the \
+             largest oak. Its eyes glowed with amber fire. \"State your purpose, \
+             travelers,\" it intoned, its voice like creaking timber.".to_string(),
+            "Eleanor held up the amulet. \"I carry the Moonstone of Aelindra, \
+             forged in the Moonwell by the Elder priestess Seraphina. I seek to \
+             return it and renew the seal upon the Shadow Gate.\"".to_string(),
+            "\"Proceed,\" it said. \"But know this: the path to the Moonwell is guarded \
+             by the Echo Wraiths. They will show you illusions drawn from your deepest \
+             memories. Do not trust your eyes.\" The sentinel dissolved back into the oak.".to_string(),
+        ];
+        paragraphs.join("\n\n")
+    }
+
+    /// Build a novel-writing conversation with 4 turns
+    fn build_novel_session() -> Vec<Message> {
+        let mut messages = vec![
+            system_msg("You are a creative writing assistant."),
+        ];
+        messages.push(user_msg("Please write me a short novel with multiple chapters. Make it about a fantasy adventure."));
+        messages.push(assistant_msg(&novel_chapter(1)));
+        messages.push(user_msg("Great! Now please summarize the chapter outline of the novel you just wrote. List all the key plot points."));
+        messages.push(assistant_msg(
+            "Chapter 1: The Journey Begins\n\
+             - Eleanor and Marcus arrive at the Whispering Woods\n\
+             - Eleanor carries the Moonstone amulet of Aelindra\n\
+             - They must return it before the full moon to prevent the Shadow Gate seal from breaking\n\
+             - The amulet was forged by Elder priestess Seraphina at the Moonwell\n\
+             - A sentinel of bark and shadow guards the forest entrance\n\
+             - The sentinel warns about Echo Wraiths that create illusions from memories\n\
+             - The path splits: one to the Moonwell, one to the Shadow Gate"
+        ));
+        messages.push(user_msg("In the novel you wrote in your first response, what was the name of the amulet that Eleanor carried?"));
+        messages.push(assistant_msg(
+            "The amulet was called the Moonstone of Aelindra. It was forged by \
+             the Elder priestess Seraphina at the Moonwell, and it pulsed with \
+             a faint blue light."
+        ));
+        messages.push(user_msg("Based on the chapter outline you created, please suggest how to add a plot twist involving Marcus."));
+        messages.push(assistant_msg(
+            "Plot twist suggestion for Marcus:\n\
+             - Marcus is secretly a descendant of the Elder priestess Seraphina\n\
+             - His notes from the Academy are actually Seraphina's original scrolls\n\
+             - When they reach the Moonwell, Marcus discovers he can activate the \
+               purification ritual, only Seraphina's bloodline can do this\n\
+             - This reveals why Marcus was so insistent on joining the journey\n\
+             - The Echo Wraiths show Marcus visions of Seraphina, confirming his heritage"
+        ));
+        messages
+    }
+
+    #[test]
+    fn test_conversation_history_preserves_novel_content() {
+        let mut engine = CompactEngine::with_defaults().unwrap();
+        let mut messages = build_novel_session();
+        engine.compact(&mut messages).unwrap();
+
+        assert_eq!(messages[0].role, "system");
+
+        let all_text: String = messages.iter()
+            .filter_map(|m| match &m.content {
+                MessageContent::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(all_text.contains("Eleanor") || all_text.contains("eleanor"),
+            "compaction lost character name 'Eleanor'");
+        assert!(all_text.contains("Moonstone") || all_text.contains("amulet"),
+            "compaction lost key artifact 'Moonstone/amulet'");
+        assert!(all_text.contains("Seraphina") || all_text.contains("seraphina"),
+            "compaction lost key character 'Seraphina'");
+    }
+
+    #[test]
+    fn test_conversation_history_cross_turn_reference_preserved() {
+        let mut engine = CompactEngine::with_defaults().unwrap();
+        let mut messages = build_novel_session();
+        engine.compact(&mut messages).unwrap();
+
+        let all_text: String = messages.iter()
+            .filter_map(|m| match &m.content {
+                MessageContent::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(all_text.contains("Moonstone of Aelindra") || all_text.contains("Seraphina"),
+            "compaction lost the cross-turn reference answer about the amulet name");
+    }
+
+    #[test]
+    fn test_conversation_history_outline_modification_preserved() {
+        let mut engine = CompactEngine::with_defaults().unwrap();
+        let mut messages = build_novel_session();
+        engine.compact(&mut messages).unwrap();
+
+        let all_text: String = messages.iter()
+            .filter_map(|m| match &m.content {
+                MessageContent::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(all_text.contains("Marcus") || all_text.contains("marcus"),
+            "compaction lost character 'Marcus' from modification suggestions");
+        assert!(all_text.contains("Seraphina") || all_text.contains("bloodline") || all_text.contains("Moonwell"),
+            "compaction lost plot twist details involving Marcus's heritage");
+    }
+
+    #[test]
+    fn test_conversation_history_repeated_compact_preserves_key_facts() {
+        let mut engine = CompactEngine::with_defaults().unwrap();
+        let mut messages = build_novel_session();
+
+        for i in 0..5 {
+            messages.push(user_msg(&format!("Can you elaborate more on chapter {} of the novel?", i + 2)));
+            messages.push(assistant_msg(&novel_chapter(i + 2)));
+        }
+
+        for _ in 0..3 {
+            let _ = engine.compact(&mut messages);
+        }
+
+        let all_text: String = messages.iter()
+            .filter_map(|m| match &m.content {
+                MessageContent::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(all_text.contains("Eleanor") || all_text.contains("Marcus"),
+            "repeated compaction lost all character names");
+        assert!(all_text.contains("Shadow") || all_text.contains("amulet") || all_text.contains("Moonstone"),
+            "repeated compaction lost all key artifacts");
+    }
+
+    #[test]
+    fn test_conversation_history_specific_detail_retrieval() {
+        let mut engine = CompactEngine::with_defaults().unwrap();
+        let mut messages = vec![
+            system_msg("You are a helpful coding assistant."),
+            user_msg("Write a Rust function called calculate_fibonacci that returns the nth Fibonacci number with overflow handling."),
+            assistant_msg("fn calculate_fibonacci(n: u32) -> Result<u64, &'static str> { ... uses checked_add for overflow ... }"),
+            user_msg("What parameters does the calculate_fibonacci function take?"),
+            assistant_msg("The function takes n: u32 and returns Result<u64, &'static str>. The Ok variant contains the Fibonacci number, Err for overflow."),
+            user_msg("What line handles the overflow check?"),
+            assistant_msg("The overflow check uses checked_add on a and b, converting None to an error string."),
+            user_msg("Add memoization to the function."),
+            assistant_msg("Use HashMap<u32, u64> as a cache parameter. On each call, check cache first, then recurse and store result. Still uses checked_add for overflow safety."),
+        ];
+
+        engine.compact(&mut messages).unwrap();
+
+        let all_text: String = messages.iter()
+            .filter_map(|m| match &m.content {
+                MessageContent::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(all_text.contains("fibonacci") || all_text.contains("Fibonacci"),
+            "compaction lost the main function name");
+        assert!(all_text.contains("overflow") || all_text.contains("checked_add"),
+            "compaction lost the overflow handling detail");
+        assert!(all_text.contains("memoiz") || all_text.contains("cache") || all_text.contains("HashMap"),
+            "compaction lost the memoization detail from the final turn");
+    }
+
+    #[test]
+    fn test_conversation_history_qa_chain_preservation() {
+        let mut engine = CompactEngine::with_defaults().unwrap();
+        let mut messages = vec![
+            system_msg("You are a research assistant."),
+            user_msg("What is the capital of France?"),
+            assistant_msg("The capital of France is Paris. It is known for the Eiffel Tower, the Louvre museum, and its rich cultural heritage."),
+            user_msg("What is the population of that city?"),
+            assistant_msg("Paris has a population of approximately 2.1 million within the city proper, and about 12 million in the greater metropolitan area."),
+            user_msg("What river flows through it?"),
+            assistant_msg("The Seine River flows through Paris, dividing the city into the Left Bank and the Right Bank."),
+            user_msg("Name three famous bridges across that river."),
+            assistant_msg("Three famous bridges across the Seine: Pont Neuf (oldest, 1607), Pont Alexandre III (ornate arch), Pont de l'Alma (flame statue)."),
+            user_msg("Which of those bridges is the oldest?"),
+            assistant_msg("Pont Neuf is the oldest, completed in 1607 during the reign of Henry IV."),
+        ];
+
+        engine.compact(&mut messages).unwrap();
+
+        let all_text: String = messages.iter()
+            .filter_map(|m| match &m.content {
+                MessageContent::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(all_text.contains("Paris") || all_text.contains("paris"),
+            "compaction lost 'Paris' from Q&A chain");
+        assert!(all_text.contains("Seine") || all_text.contains("Pont") || all_text.contains("bridge"),
+            "compaction lost river/bridge details from Q&A chain");
+    }
+
+    #[test]
+    fn test_conversation_history_code_review_preserves_context() {
+        let mut engine = CompactEngine::with_defaults().unwrap();
+        let mut messages = vec![
+            system_msg("You are a code reviewer."),
+            user_msg("Review this authentication module. It uses JWT tokens with 24-hour expiry and stores refresh tokens in an encrypted database column."),
+            assistant_msg("Key findings:\n1. JWT expiry of 24 hours is reasonable\n2. Refresh token storage is good\n3. Token refresh endpoint lacks rate limiting\n4. Password hashing uses bcrypt cost 10 (recommend 12)\n5. Missing session cleanup cron for expired refresh tokens"),
+            user_msg("What rate limit would you suggest for the token refresh endpoint?"),
+            assistant_msg("Suggest 10 req/min per user, 100 req/min globally, sliding window algorithm, 429 with Retry-After header, log violations for security monitoring."),
+            user_msg("Should we migrate existing bcrypt hashes from cost 10 to 12?"),
+            assistant_msg("Yes: keep old verifier during transition, re-hash on next login with cost 12, store migration flag, force-reset remaining cost-10 accounts after 90 days, then remove old verifier code."),
+        ];
+
+        engine.compact(&mut messages).unwrap();
+
+        let all_text: String = messages.iter()
+            .filter_map(|m| match &m.content {
+                MessageContent::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(all_text.contains("JWT") || all_text.contains("token") || all_text.contains("auth"),
+            "compaction lost authentication context");
+        assert!(all_text.contains("rate limit") || all_text.contains("rate_limit") || all_text.contains("bcrypt") || all_text.contains("cost"),
+            "compaction lost the rate limiting or bcrypt discussion");
+        assert!(all_text.contains("migrat") || all_text.contains("refresh") || all_text.contains("hash"),
+            "compaction lost the migration strategy discussion");
+    }
 }

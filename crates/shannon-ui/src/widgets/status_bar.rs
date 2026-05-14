@@ -306,21 +306,21 @@ impl StatusBarWidget {
         // Render line 1
         render_line(frame, line1, left, right, theme);
 
-        // ── LINE 2: files, tools, duration, diagnostics, rate limit, git ──
+        // ── LINE 2: files, tools, cache, turns, memory, duration, diagnostics, rate limit, git ──
         let mut left2: Vec<Span<'static>> = Vec::new();
         let mut right2: Vec<Span<'static>> = Vec::new();
 
-        // Files modified (📝 icon)
+        // Files modified
         if let Some((count, additions, deletions)) = files_info {
             if count > 0 {
                 left2.push(Span::styled(
-                    format!(" \u{1F4DD}+{additions}/-{deletions}"), // 📝
+                    format!(" File +{additions}/-{deletions}"),
                     Style::default().fg(theme.secondary),
                 ));
             }
         }
 
-        // Tools invoked (⚒ icon)
+        // Tools invoked
         if let Some(tools) = tools_invoked {
             if tools > 0 {
                 left2.push(Span::styled(
@@ -328,13 +328,41 @@ impl StatusBarWidget {
                     Style::default().fg(theme.border_dim),
                 ));
                 left2.push(Span::styled(
-                    format!("\u{2692}{tools}"), // ⚒
+                    format!("Tool {tools}"),
                     Style::default().fg(theme.secondary),
                 ));
             }
         }
 
-        // Turn count (🔄 icon)
+        // Cache hit rate on line 2
+        let cache_read = cache_read_tokens.unwrap_or(0);
+        let cache_written = cache_creation_tokens.unwrap_or(0);
+        if cache_read > 0 || cache_written > 0 {
+            let total_input = token_breakdown.map(|(i, _)| i).unwrap_or(0);
+            let hit_rate = if total_input > 0 || cache_read > 0 {
+                cache_read as f64 / (total_input as f64 + cache_read as f64) * 100.0
+            } else {
+                0.0
+            };
+            let pct = hit_rate.min(100.0) as u64;
+            let color = if pct > 50 {
+                theme.success
+            } else if pct > 20 {
+                theme.warning
+            } else {
+                theme.text_dim
+            };
+            left2.push(Span::styled(
+                " · ",
+                Style::default().fg(theme.border_dim),
+            ));
+            left2.push(Span::styled(
+                format!("Cache {pct}%"),
+                Style::default().fg(color),
+            ));
+        }
+
+        // Turn count
         if let Some(turns) = turn_count {
             if turns > 0 {
                 left2.push(Span::styled(
@@ -342,13 +370,13 @@ impl StatusBarWidget {
                     Style::default().fg(theme.border_dim),
                 ));
                 left2.push(Span::styled(
-                    format!("\u{1F504}{turns}"), // 🔄
+                    format!("Turn {turns}"),
                     Style::default().fg(theme.text_dim),
                 ));
             }
         }
 
-        // Memory RSS (📊 icon, always shown)
+        // Memory RSS (always shown)
         if let Some(rss_kb) = memory_rss_kb {
             if rss_kb > 0 {
                 let mem_label = if rss_kb >= 1_048_576 {
@@ -368,7 +396,7 @@ impl StatusBarWidget {
                     Style::default().fg(theme.border_dim),
                 ));
                 left2.push(Span::styled(
-                    format!("\u{1F4CA}{mem_label}"), // 📊
+                    format!("MEM {mem_label}"),
                     Style::default().fg(mem_color),
                 ));
             }
@@ -386,7 +414,7 @@ impl StatusBarWidget {
             ));
         }
 
-        // Diagnostics (⚠ icon with e/w counts)
+        // Diagnostics
         if let Some((errors, warnings)) = diag_counts {
             if errors > 0 || warnings > 0 {
                 right2.push(Span::styled(" · ", Style::default().fg(theme.border_dim)));
@@ -406,15 +434,13 @@ impl StatusBarWidget {
                         Style::default().fg(theme.warning),
                     ));
                 }
-                right2.push(Span::styled(
-                    "\u{26A0}", // ⚠
-                    Style::default().fg(if errors > 0 { theme.error } else { theme.warning }),
-                ));
+                let diag_color = if errors > 0 { theme.error } else { theme.warning };
+                right2.push(Span::styled("Diag ", Style::default().fg(diag_color)));
                 right2.extend(diag_parts);
             }
         }
 
-        // Rate limit (⏱ icon)
+        // Rate limit
         if let Some((used, total)) = rate_limit {
             if total > 0 {
                 let pct = used as f64 / total as f64;
@@ -427,7 +453,7 @@ impl StatusBarWidget {
                 };
                 right2.push(Span::styled(" · ", Style::default().fg(theme.border_dim)));
                 right2.push(Span::styled(
-                    format!("\u{23F1}{used}/{total}"), // ⏱
+                    format!("RL {used}/{total}"),
                     Style::default().fg(color),
                 ));
             }

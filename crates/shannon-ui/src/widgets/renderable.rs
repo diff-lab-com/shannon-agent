@@ -1049,7 +1049,8 @@ impl MessageCell {
         }
 
         // ── Inline role prefix: prepend to first line, indent remaining ──
-        if !lines.is_empty() {
+        // Skip for user messages — the header line already shows "▸ You · HH:MM"
+        if !lines.is_empty() && msg.role != ChatRole::User {
             // Prepend role prefix spans to the first content line
             let mut first = lines.remove(0);
             let mut new_spans = role_prefix_spans;
@@ -1061,8 +1062,8 @@ impl MessageCell {
             for line in lines.iter_mut().skip(1) {
                 line.spans.insert(0, Span::styled(indent_str.clone(), Style::default()));
             }
-        } else {
-            // Empty content — just show role label
+        } else if lines.is_empty() && msg.role != ChatRole::User {
+            // Empty non-user content — just show role label
             lines.push(Line::from(role_prefix_spans));
         }
 

@@ -488,7 +488,7 @@ impl Default for ReplState {
             tool_approval: ToolApprovalWidget::new(),
             attachment_bar: AttachmentBarWidget::new(5),
             command_palette: None,
-            agents_panel_visible: false,
+            agents_panel_visible: true,
             session_tab: SessionTabWidget::new(),
             streaming_state: StreamingState::Idle,
             loop_state: None,

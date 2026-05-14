@@ -1,7 +1,9 @@
 //! Agents dropdown panel — triggered by Ctrl+A
 //!
 //! Shows all active and recent sub-agents with their status, team, and turn usage.
+//! Each agent gets its own row with clear visual separation.
 
+use crate::repl::state::AgentDisplay;
 use crate::theme::Theme;
 use ratatui::{
     layout::Rect,
@@ -15,7 +17,7 @@ use ratatui::{
 pub fn render_agents_panel(
     frame: &mut Frame,
     area: Rect,
-    agents: &[super::super::repl::state::AgentDisplay],
+    agents: &[AgentDisplay],
     theme: &Theme,
 ) {
     if agents.is_empty() {
@@ -35,8 +37,9 @@ pub fn render_agents_panel(
         return;
     }
 
+    // Each agent takes 1 line, plus 2 for borders
     let max_h = (agents.len() as u16 + 2).min(area.height.saturating_sub(4));
-    let popup = centered_rect(area, 50, max_h);
+    let popup = centered_rect(area, 60, max_h);
 
     frame.render_widget(Clear, popup);
 
@@ -44,21 +47,34 @@ pub fn render_agents_panel(
         .iter()
         .map(|a| {
             let (status_icon, status_color) = agent_status_style(&a.status, a.active, theme);
-            let name = if a.name.len() > 20 {
-                format!("{}…", &a.name[..19])
+            let name = if a.name.len() > 18 {
+                format!("{}…", &a.name[..17])
             } else {
                 a.name.clone()
             };
 
-            let mut spans = vec![
-                Span::styled(format!("{status_icon} "), Style::default().fg(status_color)),
-                Span::styled(name, Style::default().fg(if a.active { theme.text } else { theme.text_dim })),
-            ];
+            let mut spans = Vec::new();
+
+            // Status icon + name
+            spans.push(Span::styled(
+                format!(" {status_icon} "),
+                Style::default().fg(status_color),
+            ));
+            spans.push(Span::styled(
+                name,
+                Style::default().fg(if a.active { theme.text } else { theme.text_dim }),
+            ));
+
+            // Status text
+            spans.push(Span::styled(
+                format!("  {}", a.status),
+                Style::default().fg(status_color),
+            ));
 
             // Team
             if let Some(team) = &a.team {
                 spans.push(Span::styled(
-                    format!(" [{team}]"),
+                    format!("  [{}]", team),
                     Style::default().fg(theme.secondary),
                 ));
             }
@@ -66,18 +82,18 @@ pub fn render_agents_panel(
             // Turn usage
             if a.max_turns > 0 {
                 let pct = a.turns_used as f64 / a.max_turns as f64;
-                let turn_color = if pct < 0.5 { theme.success } else if pct < 0.8 { theme.warning } else { theme.error };
+                let turn_color = if pct < 0.5 {
+                    theme.success
+                } else if pct < 0.8 {
+                    theme.warning
+                } else {
+                    theme.error
+                };
                 spans.push(Span::styled(
-                    format!(" {}{}/{}", turn_icon(), a.turns_used, a.max_turns),
+                    format!("  {}/{} turns", a.turns_used, a.max_turns),
                     Style::default().fg(turn_color),
                 ));
             }
-
-            // Status text
-            spans.push(Span::styled(
-                format!(" {}", a.status),
-                Style::default().fg(status_color),
-            ));
 
             ListItem::new(Line::from(spans))
         })
@@ -107,10 +123,6 @@ fn agent_status_style(status: &str, active: bool, theme: &Theme) -> (&'static st
         _ if active => ("\u{25CF}", theme.primary),        // ●
         _ => ("\u{25CB}", theme.text_dim),                 // ○
     }
-}
-
-fn turn_icon() -> &'static str {
-    "\u{21BB}" // ↻
 }
 
 /// Calculate a centered rect within `area` with given width and height.
