@@ -1799,8 +1799,8 @@ impl QueryEngine {
     /// Called after each streaming response to keep `conversation.total_tokens`
     /// and `conversation.total_cost` in sync with the cost tracker.
     pub fn update_usage(&mut self, input_tokens: u64, output_tokens: u64, cost_usd: f64) {
-        self.conversation.total_tokens = input_tokens + output_tokens;
-        self.conversation.total_cost = cost_usd;
+        self.conversation.total_tokens += input_tokens + output_tokens;
+        self.conversation.total_cost += cost_usd;
     }
 }
 

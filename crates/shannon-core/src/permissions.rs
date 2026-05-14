@@ -305,7 +305,7 @@ impl PermissionRule {
             // Simple glob matching for command
             if cmd_pattern.contains('*') {
                 // Convert glob to simple regex
-                let regex_pattern = cmd_pattern.replace('*', ".*");
+                let regex_pattern = regex::escape(cmd_pattern).replace("\\*", ".*");
                 if let Ok(re) = regex::Regex::new(&format!("^{regex_pattern}$")) {
                     re.is_match(command)
                 } else {
@@ -489,7 +489,7 @@ impl PermissionRuleChecker {
             return command.contains(pattern);
         }
         // Convert glob to regex
-        let regex_pattern = pattern.replace('*', ".*");
+        let regex_pattern = regex::escape(pattern).replace("\\*", ".*");
         if let Ok(re) = regex::Regex::new(&format!("(?i)^{regex_pattern}$")) {
             re.is_match(command)
         } else {

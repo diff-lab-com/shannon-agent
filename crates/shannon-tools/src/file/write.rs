@@ -29,11 +29,20 @@ pub struct WriteOutput {
 pub async fn execute(input: WriteInput) -> Result<ToolOutput, ToolError> {
     use tokio::fs;
 
-    fs::write(&input.file_path, &input.content)
+    let bytes = input.content.len();
+
+    // Atomic write: write to temp file then rename to avoid partial writes on crash.
+    let temp_path = format!("{}.shannon-tmp", input.file_path);
+    fs::write(&temp_path, &input.content)
         .await
         .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write file: {e}")))?;
-
-    let bytes = input.content.len();
+    fs::rename(&temp_path, &input.file_path)
+        .await
+        .map_err(|e| {
+            // Clean up temp file if rename fails
+            let _ = std::fs::remove_file(&temp_path);
+            ToolError::ExecutionFailed(format!("Failed to rename temp file: {e}"))
+        })?;
 
     Ok(ToolOutput {
         content: format!("Successfully wrote {bytes} bytes to file"),

@@ -14,7 +14,7 @@ use crate::{Tool, ToolError, ToolResult, ToolOutput};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub mod read;
 pub mod write;
@@ -39,13 +39,13 @@ pub enum FileOperation {
 }
 
 /// Validate a file path against the sandbox, converting sandbox errors
-/// to tool errors that the tool trait expects.
-async fn validate_path(sandbox: &PathSandbox, path: &str) -> ToolResult<()> {
+/// to tool errors that the tool trait expects. Returns the canonical path
+/// to avoid TOCTOU issues when the tool later accesses the filesystem.
+async fn validate_path(sandbox: &PathSandbox, path: &str) -> ToolResult<PathBuf> {
     sandbox
         .validate(Path::new(path))
         .await
-        .map_err(|e| ToolError::InvalidInput(format!("Path sandbox: {e}")))?;
-    Ok(())
+        .map_err(|e| ToolError::InvalidInput(format!("Path sandbox: {e}")))
 }
 
 /// Read tool implementation
@@ -112,9 +112,11 @@ impl Tool for ReadTool {
         let read_input: read::ReadInput = serde_json::from_value(input)
             .map_err(|e| ToolError::InvalidInput(format!("Invalid read input: {e}")))?;
 
-        validate_path(&self.sandbox, &read_input.file_path).await?;
+        let canonical = validate_path(&self.sandbox, &read_input.file_path).await?;
+        let mut input = read_input;
+        input.file_path = canonical.to_string_lossy().to_string();
 
-        read::execute(read_input).await
+        read::execute(input).await
     }
     fn is_read_only(&self) -> bool {        true    }
 }
@@ -179,9 +181,11 @@ impl Tool for WriteTool {
         let write_input: write::WriteInput = serde_json::from_value(input)
             .map_err(|e| ToolError::InvalidInput(format!("Invalid write input: {e}")))?;
 
-        validate_path(&self.sandbox, &write_input.file_path).await?;
+        let canonical = validate_path(&self.sandbox, &write_input.file_path).await?;
+        let mut input = write_input;
+        input.file_path = canonical.to_string_lossy().to_string();
 
-        write::execute(write_input).await
+        write::execute(input).await
     }
 }
 
@@ -253,9 +257,11 @@ impl Tool for EditTool {
         let edit_input: edit::EditInput = serde_json::from_value(input)
             .map_err(|e| ToolError::InvalidInput(format!("Invalid edit input: {e}")))?;
 
-        validate_path(&self.sandbox, &edit_input.file_path).await?;
+        let canonical = validate_path(&self.sandbox, &edit_input.file_path).await?;
+        let mut input = edit_input;
+        input.file_path = canonical.to_string_lossy().to_string();
 
-        edit::execute(edit_input).await
+        edit::execute(input).await
     }
 }
 

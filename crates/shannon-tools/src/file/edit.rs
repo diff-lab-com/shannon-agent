@@ -162,7 +162,11 @@ pub fn perform_edit(content: &str, old_string: &str, new_string: &str, replace_a
         }
         // Truncate old_string display to 120 chars
         let display_old = if old_string.len() > 120 {
-            format!("{}...(truncated, {} bytes total)", &old_string[..120], old_string.len())
+            let mut end = 120;
+            while !old_string.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}...(truncated, {} bytes total)", &old_string[..end], old_string.len())
         } else {
             old_string.to_string()
         };
