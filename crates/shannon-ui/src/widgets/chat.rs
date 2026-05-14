@@ -155,6 +155,10 @@ pub struct ChatMessage {
     pub folded: bool,
     /// Exit code from tool execution (None if not applicable or not captured)
     pub exit_code: Option<i32>,
+    /// AI thinking/reasoning content (extended thinking mode)
+    pub thinking_content: Option<String>,
+    /// Whether thinking content is expanded (default: true)
+    pub thinking_expanded: bool,
 }
 
 /// Role of the chat message sender
@@ -204,6 +208,8 @@ impl ChatWidget {
             spinner_frame: 0,
             folded: true,
             exit_code: None,
+            thinking_content: None,
+            thinking_expanded: true,
         };
 
         let index = self.messages.len();
@@ -243,6 +249,8 @@ impl ChatWidget {
             spinner_frame: 0,
             folded: true,
             exit_code: None,
+            thinking_content: None,
+            thinking_expanded: true,
         };
 
         let index = self.messages.len();
@@ -268,6 +276,34 @@ impl ChatWidget {
                 cell.set_message(msg.clone());
             }
         }
+    }
+
+    /// Set thinking content on a message (for AI reasoning display)
+    pub fn set_thinking_content(&mut self, index: usize, thinking: String) {
+        if thinking.is_empty() { return; }
+        if let Some(msg) = self.messages.get_mut(index) {
+            msg.thinking_content = Some(thinking);
+            if let Some(cell) = self.column.get_mut(index) {
+                cell.set_message(msg.clone());
+            }
+        }
+    }
+
+    /// Toggle thinking expand/collapse on a message
+    pub fn toggle_thinking(&mut self, index: usize) {
+        if let Some(msg) = self.messages.get_mut(index) {
+            msg.thinking_expanded = !msg.thinking_expanded;
+            if let Some(cell) = self.column.get_mut(index) {
+                cell.set_message(msg.clone());
+            }
+        }
+    }
+
+    /// Find the index of the most recent assistant message with thinking content
+    pub fn last_assistant_with_thinking(&self) -> Option<usize> {
+        self.messages.iter().enumerate().rev()
+            .find(|(_, msg)| msg.role == ChatRole::Assistant && msg.thinking_content.is_some())
+            .map(|(i, _)| i)
     }
 
     /// Update a streaming message with newline-gated optimization.
@@ -317,6 +353,8 @@ impl ChatWidget {
             spinner_frame: 0,
             folded: true,
             exit_code: None,
+            thinking_content: None,
+            thinking_expanded: true,
         };
         let index = self.messages.len();
         self.messages.push_back(message.clone());

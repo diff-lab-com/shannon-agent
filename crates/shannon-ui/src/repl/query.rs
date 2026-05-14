@@ -184,6 +184,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
         let mut stream = query_engine.process_query(context, permission_channel).await;
 
         let mut response_text = String::new();
+        let mut accumulated_thinking = String::new();
         let mut tokens_in_turn = 0u64;
         let mut tool_calls: Vec<String> = Vec::new();
         let mut tool_start_times: HashMap<String, Instant> = HashMap::new();
@@ -210,20 +211,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                     if let Ok(mut s) = ss.lock() {
                         if s.thinking_phase && !s.thinking_content.is_empty() {
                             let thinking = std::mem::take(&mut s.thinking_content);
-                            let cap = 4000;
-                            let truncated = thinking.len() > cap;
-                            let mut end = cap.min(thinking.len());
-                            while !thinking.is_char_boundary(end) { end -= 1; }
-                            let text = &thinking[..end];
-                            let block: String = text.lines()
-                                .map(|line| format!("> {line}"))
-                                .collect::<Vec<_>>()
-                                .join("\n");
-                            response_text.push_str(&block);
-                            if truncated {
-                                response_text.push_str("\n> …");
-                            }
-                            response_text.push_str("\n\n");
+                            accumulated_thinking = thinking;
                         }
                         s.thinking_phase = false;
                         response_text.push_str(&content);
@@ -350,6 +338,17 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                         summary_parts.push(format!("{turn_fmt} tokens this turn"));
                     }
                     if let Ok(s) = ss.lock() {
+                        let cache_read = s.cache_read_tokens;
+                        let cache_written = s.cache_creation_tokens;
+                        if cache_read > 0 || cache_written > 0 {
+                            let total_cache = cache_read + cache_written;
+                            let hit_rate = if total_cache > 0 {
+                                cache_read as f64 / total_cache as f64 * 100.0
+                            } else {
+                                0.0
+                            };
+                            summary_parts.push(format!("cache {hit_rate:.0}% hit"));
+                        }
                         if s.cost > 0.0 {
                             summary_parts.push(format!("${:.4} total", s.cost));
                         }
@@ -375,8 +374,8 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
             }
         }
 
-        Ok::<(shannon_core::query_engine::QueryEngine, String, u64, usize, TurnDiff, String, usize), (Option<shannon_core::query_engine::QueryEngine>, String)>(
-            (query_engine, response_text, tokens_in_turn, _tools_in_session, turn_diff, progress_status, steps_done)
+        Ok::<(shannon_core::query_engine::QueryEngine, String, String, u64, usize, TurnDiff, String, usize), (Option<shannon_core::query_engine::QueryEngine>, String)>(
+            (query_engine, response_text, accumulated_thinking, tokens_in_turn, _tools_in_session, turn_diff, progress_status, steps_done)
         )
     });
 
@@ -747,7 +746,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
     });
 
     match query_result {
-        Ok((mut engine, response, tokens, tools, turn, _final_status, steps)) => {
+        Ok((mut engine, response, thinking, tokens, tools, turn, _final_status, steps)) => {
             engine.add_user_message(input.to_string());
             engine.add_assistant_message(vec![shannon_core::api::ContentBlock::Text {
                 text: response.clone(),
@@ -756,6 +755,9 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
 
             let rendered = repl.output_renderer.render_output(&response, "assistant");
             repl.chat.update_message(assistant_msg_index, rendered);
+            if !thinking.is_empty() {
+                repl.chat.set_thinking_content(assistant_msg_index, thinking);
+            }
             repl.state.tokens_used = pre_stream_tokens + tokens;
             repl.tools_invoked = pre_stream_tools + tools;
 

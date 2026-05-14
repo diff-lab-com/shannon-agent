@@ -523,6 +523,8 @@ mod tests {
             spinner_frame: 0,
             folded: true,
             exit_code: None,
+            thinking_content: None,
+            thinking_expanded: true,
         };
         assert_eq!(msg.content, "Test message");
         assert_eq!(msg.role, ChatRole::User);

@@ -256,6 +256,18 @@ impl MessageCell {
                     Span::styled("\u{2500}".repeat(right_dash), Style::default().fg(sep_color)),
                 ]);
                 l.insert(0, sep);
+
+                // Thinking content for assistant messages
+                if msg.role == ChatRole::Assistant {
+                    if let Some(ref thinking) = msg.thinking_content {
+                        let thinking_lines = build_thinking_lines(thinking, msg.thinking_expanded, width, theme);
+                        // Insert after separator (index 1), before content
+                        let mut new_l = vec![l.remove(0)]; // separator
+                        new_l.extend(thinking_lines);
+                        new_l.extend(l);
+                        l = new_l;
+                    }
+                }
             }
             l.push(Line::from(""));
         }
@@ -1154,6 +1166,95 @@ impl Renderable for MessageCell {
     }
 }
 
+/// Build styled lines for thinking/reasoning content with expand/collapse.
+fn build_thinking_lines(
+    thinking: &str,
+    expanded: bool,
+    width: u16,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let indent = 2usize;
+    let max_w = (width as usize).saturating_sub(4);
+
+    if expanded {
+        // Header: "▼ Thinking (N chars)"
+        let char_count = thinking.chars().count();
+        let label = if char_count >= 1000 {
+            format!("\u{25BC} Thinking ({}k chars)", char_count / 1000)
+        } else {
+            format!("\u{25BC} Thinking ({char_count} chars)")
+        };
+        lines.push(Line::from(Span::styled(
+            format!(" {label}"),
+            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+        )));
+
+        // Content lines, dimmed and indented
+        let cap = 4000;
+        let truncated = thinking.len() > cap;
+        let mut end = cap.min(thinking.len());
+        while !thinking.is_char_boundary(end) { end -= 1; }
+        let text = &thinking[..end];
+        for line in text.lines() {
+            let wrapped = wrap_text(line, max_w);
+            for chunk in wrapped {
+                lines.push(Line::from(Span::styled(
+                    format!("{}{}", " ".repeat(indent), chunk),
+                    Style::default().fg(theme.text_dim),
+                )));
+            }
+        }
+        if truncated {
+            lines.push(Line::from(Span::styled(
+                format!("{}...", " ".repeat(indent)),
+                Style::default().fg(theme.text_dim),
+            )));
+        }
+        // Blank line separator
+        lines.push(Line::from(""));
+    } else {
+        // Collapsed: "▶ Thinking (N chars) — press T to expand"
+        let char_count = thinking.chars().count();
+        let label = if char_count >= 1000 {
+            format!("\u{25B6} Thinking ({}k chars)", char_count / 1000)
+        } else {
+            format!("\u{25B6} Thinking ({char_count} chars)")
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {label}"), Style::default().fg(theme.text_dim)),
+            Span::styled("  (Alt+T to expand)", Style::default().fg(theme.border_dim)),
+        ]));
+    }
+
+    lines
+}
+
+/// Simple word-wrap for thinking content.
+fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
+    if max_width == 0 { return vec![text.to_string()]; }
+    let mut result = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        if current.is_empty() {
+            current = word.to_string();
+        } else if current.len() + 1 + word.len() <= max_width {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            result.push(current);
+            current = word.to_string();
+        }
+    }
+    if !current.is_empty() {
+        result.push(current);
+    }
+    if result.is_empty() {
+        result.push(String::new());
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1172,6 +1273,8 @@ mod tests {
             spinner_frame: 0,
             folded: true,
             exit_code: None,
+            thinking_content: None,
+            thinking_expanded: true,
         }
     }
 

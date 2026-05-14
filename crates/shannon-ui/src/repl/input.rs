@@ -355,6 +355,13 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
             repl.chat.collapsed_tools = !repl.chat.collapsed_tools;
             Ok(())
         }
+        // Alt+T: toggle thinking expand/collapse on most recent assistant message
+        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::ALT) => {
+            if let Some(idx) = repl.chat.last_assistant_with_thinking() {
+                repl.chat.toggle_thinking(idx);
+            }
+            Ok(())
+        }
         // Ctrl+G: toggle transcript pager
         KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             repl.toggle_pager();
@@ -379,19 +386,17 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
             }
             Ok(())
         }
-        // Home: jump to top of chat
+        // Home: move cursor to start of input line
         KeyCode::Home => {
-            repl.chat.scroll_to_top();
-            if repl.state.auto_follow {
-                repl.state.messages_at_scroll_pause = repl.chat.message_count();
-            }
-            repl.state.auto_follow = false;
+            let col = repl.prompt.cursor_position();
+            for _ in 0..col { repl.prompt.cursor_left(); }
             Ok(())
         }
-        // End: jump to bottom (latest message)
+        // End: move cursor to end of input line
         KeyCode::End => {
-            repl.chat.scroll_to_latest();
-            repl.state.auto_follow = true;
+            let len = repl.prompt.current_line_len();
+            let col = repl.prompt.cursor_position();
+            for _ in 0..len.saturating_sub(col) { repl.prompt.cursor_right(); }
             Ok(())
         }
         // Ctrl+T: toggle transcript pager (alternative keybinding)
