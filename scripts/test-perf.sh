@@ -89,7 +89,11 @@ if $USE_OLLAMA; then
     echo "Phase 2 completed in ${PHASE2_ELAPSED}s."
 fi
 
-TOTAL_ELAPSED=$((END_TIME - START_TIME + (${USE_OLLAMA:-false} && $PHASE2_ELAPSED || 0)))
+if $USE_OLLAMA; then
+    TOTAL_ELAPSED=$((END_TIME - START_TIME + ${PHASE2_ELAPSED:-0}))
+else
+    TOTAL_ELAPSED=$((END_TIME - START_TIME))
+fi
 
 echo ""
 echo "========================================"
