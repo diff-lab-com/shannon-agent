@@ -1301,4 +1301,146 @@ mod tests {
         assert!(!result.did_compact);
         assert_eq!(result.messages.len(), 2);
     }
+
+    // -- Long context compact tests --
+
+    /// Generate a large conversation simulating a long session.
+    fn generate_long_conversation(turns: usize, msg_len: usize) -> Vec<Message> {
+        let mut messages = Vec::new();
+        let text = "x".repeat(msg_len);
+        for i in 0..turns {
+            messages.push(user_msg(&format!("Turn {i}: {text}")));
+            messages.push(assistant_msg(&format!("Response {i}: {text}")));
+        }
+        messages
+    }
+
+    #[test]
+    fn test_long_context_compact_reduces_tokens() {
+        // Simulate 100 turns with 200-char messages = ~40k chars
+        let mut engine = CompactEngine::new(
+            CompactConfig {
+                keep_recent_count: 10,
+                ..Default::default()
+            },
+            Box::new(RuleBasedSummarizer::new()),
+        )
+        .unwrap();
+
+        let mut messages = generate_long_conversation(100, 200);
+        let tokens_before = estimate_tokens(&messages);
+        assert!(tokens_before > 1000, "should have substantial tokens");
+
+        let result = engine.compact(&mut messages).unwrap();
+        let _ = &result; // used above for assertions
+        let tokens_after = estimate_tokens(&messages);
+
+        assert!(result.messages_removed > 0, "should remove some messages");
+        assert!(
+            tokens_after < tokens_before,
+            "tokens should decrease: {tokens_after} vs {tokens_before}"
+        );
+    }
+
+    #[test]
+    fn test_long_context_compact_preserves_system_and_recent() {
+        let mut engine = CompactEngine::new(
+            CompactConfig {
+                keep_recent_count: 4,
+                ..Default::default()
+            },
+            Box::new(RuleBasedSummarizer::new()),
+        )
+        .unwrap();
+
+        let mut messages = vec![system_msg("You are a helpful assistant.")];
+        messages.extend(generate_long_conversation(50, 100));
+
+        let total = messages.len();
+        let result = engine.compact(&mut messages).unwrap();
+
+        // System message should still be first
+        assert_eq!(messages[0].role, "system");
+        match &messages[0].content {
+            MessageContent::Text(t) => assert!(t.contains("helpful assistant")),
+            _ => panic!("expected text content"),
+        }
+
+        // Recent messages preserved at the tail
+        assert!(messages.len() < total, "should have fewer messages: {} vs {total}", messages.len());
+        assert!(messages.len() >= 5, "should keep system + summary + 4 recent");
+    }
+
+    #[test]
+    fn test_compact_multiple_rounds_stable() {
+        // Verify compact doesn't break on repeated compaction
+        let mut engine = CompactEngine::new(
+            CompactConfig {
+                keep_recent_count: 4,
+                ..Default::default()
+            },
+            Box::new(RuleBasedSummarizer::new()),
+        )
+        .unwrap();
+
+        let mut messages = generate_long_conversation(30, 100);
+
+        // First round
+        let r1 = engine.compact(&mut messages).unwrap();
+        assert!(r1.messages_removed > 0);
+        let count_after_r1 = messages.len();
+
+        // Add more messages and compact again
+        for i in 0..20 {
+            messages.push(user_msg(&format!("New turn {i}")));
+            messages.push(assistant_msg(&format!("New response {i}")));
+        }
+
+        let r2 = engine.compact(&mut messages).unwrap();
+        assert!(r2.messages_removed > 0);
+        // After second compact, count should be similar to first (stable, not growing)
+        assert!(
+            messages.len() <= count_after_r1 + 4 + 20, // summary + 4 recent + some buffer
+            "repeated compaction should remain stable: {} vs {count_after_r1}",
+            messages.len()
+        );
+    }
+
+    #[test]
+    fn test_compact_with_tool_use_messages() {
+        let mut engine = CompactEngine::new(
+            CompactConfig {
+                keep_recent_count: 4,
+                ..Default::default()
+            },
+            Box::new(RuleBasedSummarizer::new()),
+        )
+        .unwrap();
+
+        let mut messages = vec![
+            user_msg("Read the file"),
+            tool_use_msg("tu_1", "read_file", r#"{"path":"/src/main.rs"}"#),
+            tool_result_msg("tu_1", "fn main() { println!(\"hello\"); }"),
+        ];
+        for i in 0..20 {
+            messages.push(user_msg(&format!("User query {i}")));
+            messages.push(assistant_msg(&format!("Answer {i}")));
+        }
+
+        let result = engine.compact(&mut messages).unwrap();
+        assert!(result.messages_removed > 0);
+        // Recent user/assistant pairs should be preserved
+        assert!(messages.len() >= 5);
+    }
+
+    #[test]
+    fn test_compact_token_estimation_accuracy() {
+        // Verify estimate_tokens produces reasonable numbers
+        let messages = generate_long_conversation(10, 100);
+        let tokens = estimate_tokens(&messages);
+
+        // ~200 chars per turn pair × 10 turns × ~0.25 tokens/char ≈ 500+ tokens
+        assert!(tokens > 100, "should estimate at least 100 tokens for 10 turns");
+        assert!(tokens < 50_000, "should not wildly overestimate");
+    }
 }

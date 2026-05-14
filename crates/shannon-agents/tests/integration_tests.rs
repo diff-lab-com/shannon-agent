@@ -1645,3 +1645,182 @@ mod conversation_history_tests {
         assert_eq!(decoded.content, "Hello world");
     }
 }
+
+// =========================================================================
+// 6. Sub-Agent Context & Error Handling Tests
+// =========================================================================
+
+mod sub_agent_context_tests {
+    use super::*;
+
+    #[test]
+    fn agent_config_carries_context() {
+        let config = AgentConfig {
+            name: "reviewer".to_string(),
+            model: "claude-sonnet-4".to_string(),
+            system_prompt: "You are a code reviewer. Review files for bugs.".to_string(),
+            tools: vec!["read".to_string(), "grep".to_string()],
+            working_directory: std::env::current_dir().unwrap(),
+            max_turns: 10,
+            team: None,
+        };
+
+        assert_eq!(config.name, "reviewer");
+        assert_eq!(config.model, "claude-sonnet-4");
+        assert!(config.system_prompt.contains("code reviewer"));
+        assert_eq!(config.tools.len(), 2);
+        assert_eq!(config.max_turns, 10);
+        assert!(config.team.is_none());
+    }
+
+    #[test]
+    fn agent_config_team_assignment() {
+        let config = AgentConfig {
+            name: "worker-1".to_string(),
+            model: "claude-sonnet-4".to_string(),
+            system_prompt: "Fix bugs".to_string(),
+            tools: vec!["read".to_string(), "write".to_string()],
+            working_directory: std::env::current_dir().unwrap(),
+            max_turns: 5,
+            team: Some("bugfix-team".to_string()),
+        };
+
+        assert_eq!(config.team.as_deref(), Some("bugfix-team"));
+    }
+
+    #[test]
+    fn spawn_agent_config_includes_task_context() {
+        let config = SpawnAgentConfig::new("analyzer", "Analyze src/lib.rs for performance issues")
+            .with_model("claude-sonnet-4")
+            .with_tools(vec!["read".to_string(), "grep".to_string()]);
+
+        // Task description serves as context for the sub-agent
+        assert!(config.task.contains("performance issues"));
+        assert_eq!(config.name, "analyzer");
+        assert_eq!(config.model.as_deref(), Some("claude-sonnet-4"));
+        assert_eq!(config.tools.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn multi_agent_dependency_chain_defines_context_order() {
+        // Agent B depends on A — A's output becomes B's context
+        let config = MultiAgentConfig::new(vec![
+            SpawnAgentConfig::new("reader", "Read all source files")
+                .with_tools(vec!["read".to_string(), "glob".to_string()]),
+            SpawnAgentConfig::new("analyzer", "Analyze code quality based on reader output")
+                .depends_on("reader")
+                .with_tools(vec!["read".to_string()]),
+            SpawnAgentConfig::new("writer", "Write report based on analysis")
+                .depends_on("analyzer")
+                .with_tools(vec!["write".to_string()]),
+        ]);
+
+        assert_eq!(config.agents.len(), 3);
+        assert!(config.agents[0].depends_on.is_empty());
+        assert_eq!(config.agents[1].depends_on, vec!["reader"]);
+        assert_eq!(config.agents[2].depends_on, vec!["analyzer"]);
+    }
+
+    #[test]
+    fn multi_agent_result_tracks_individual_failures() {
+        use shannon_core::tools::ToolOutput;
+
+        // Mixed results: 2 succeeded, 1 failed
+        let result = MultiAgentResult {
+            agent_results: vec![
+                MultiAgentTaskResult::completed("a".to_string(), ToolOutput {
+                    content: "Success A".to_string(),
+                    is_error: false,
+                    metadata: std::collections::HashMap::new(),
+                }, Duration::ZERO),
+                MultiAgentTaskResult::completed("b".to_string(), ToolOutput {
+                    content: "Error: file not found".to_string(),
+                    is_error: true,
+                    metadata: std::collections::HashMap::new(),
+                }, Duration::ZERO),
+                MultiAgentTaskResult::completed("c".to_string(), ToolOutput {
+                    content: "Success C".to_string(),
+                    is_error: false,
+                    metadata: std::collections::HashMap::new(),
+                }, Duration::ZERO),
+            ],
+            total_duration: Duration::from_secs(5),
+            success_count: 2,
+            failure_count: 1,
+        };
+
+        assert!(!result.all_succeeded());
+        assert_eq!(result.success_count, 2);
+        assert_eq!(result.failure_count, 1);
+
+        // Verify individual error is captured
+        let failed = result.agent_results.iter().find(|r| r.agent_name == "b").unwrap();
+        assert!(failed.output.as_ref().unwrap().is_error);
+        assert!(failed.output.as_ref().unwrap().content.contains("Error"));
+    }
+
+    #[test]
+    fn multi_agent_result_all_succeeded() {
+        use shannon_core::tools::ToolOutput;
+
+        let result = MultiAgentResult {
+            agent_results: vec![
+                MultiAgentTaskResult::completed("a".to_string(), ToolOutput {
+                    content: String::new(),
+                    is_error: false,
+                    metadata: std::collections::HashMap::new(),
+                }, Duration::ZERO),
+                MultiAgentTaskResult::completed("b".to_string(), ToolOutput {
+                    content: String::new(),
+                    is_error: false,
+                    metadata: std::collections::HashMap::new(),
+                }, Duration::ZERO),
+            ],
+            total_duration: Duration::ZERO,
+            success_count: 2,
+            failure_count: 0,
+        };
+
+        assert!(result.all_succeeded());
+    }
+
+    #[test]
+    fn agent_error_propagation_via_message() {
+        // Sub-agent sends error back to coordinator via AgentMessage
+        let mut error_msg = AgentMessage::new_text(
+            "worker-1".to_string(),
+            "coordinator".to_string(),
+            "TASK_FAILED: Permission denied writing to /etc/config".to_string(),
+        );
+        error_msg.priority = MessagePriority::High;
+
+        assert_eq!(error_msg.from, "worker-1");
+        assert_eq!(error_msg.to, "coordinator");
+        assert_eq!(error_msg.priority, MessagePriority::High);
+        match &error_msg.content {
+            MessageContent::Text(t) => assert!(t.contains("TASK_FAILED")),
+            _ => panic!("expected text content"),
+        }
+    }
+
+    #[test]
+    fn multi_agent_config_fail_fast_mode() {
+        let config = MultiAgentConfig::new(vec![
+            SpawnAgentConfig::new("a", "task a"),
+            SpawnAgentConfig::new("b", "task b"),
+        ])
+        .with_fail_fast();
+
+        assert!(config.fail_fast, "fail_fast should stop on first error");
+    }
+
+    #[test]
+    fn multi_agent_config_timeout_limits_execution() {
+        let config = MultiAgentConfig::new(vec![
+            SpawnAgentConfig::new("slow-agent", "long running task"),
+        ])
+        .with_timeout(Duration::from_secs(30));
+
+        assert_eq!(config.timeout_secs, 30, "timeout should limit agent execution time");
+    }
+}

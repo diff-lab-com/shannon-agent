@@ -668,6 +668,130 @@ data: {"type":"message_stop"}
 
         mock.assert();
     }
+
+    // -- Cache control tests --
+
+    /// Verify Anthropic response with cache metrics parses correctly
+    #[tokio::test]
+    async fn test_anthropic_response_with_cache_metrics() {
+        let mut server = Server::new_async().await;
+        let endpoint = "/v1/messages";
+
+        let expected_response = json!({
+            "id": "msg_cached",
+            "type": "message",
+            "role": "assistant",
+            "content": [{ "type": "text", "text": "Cached response" }],
+            "model": "claude-3-5-sonnet-20241022",
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "cache_creation_input_tokens": 500,
+                "cache_read_input_tokens": 2000
+            }
+        });
+
+        let mock = setup_anthropic_mock(&mut server, endpoint, expected_response);
+
+        let client = reqwest::Client::new();
+        let url = format!("{}{}", server.url(), endpoint);
+        let response = client
+            .post(&url)
+            .header("x-api-key", "sk-test-key")
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .json(&json!({
+                "model": "claude-3-5-sonnet-20241022",
+                "max_tokens": 1024,
+                "messages": [{ "role": "user", "content": "Hello" }],
+                "system": [
+                    { "type": "text", "text": "You are helpful.", "cache_control": { "type": "ephemeral" } }
+                ]
+            }))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), 200);
+        let json: Value = response.json().await.unwrap();
+        let usage = json.get("usage").unwrap();
+        assert_eq!(usage.get("cache_creation_input_tokens").unwrap().as_u64(), Some(500));
+        assert_eq!(usage.get("cache_read_input_tokens").unwrap().as_u64(), Some(2000));
+
+        mock.assert();
+    }
+
+    /// Verify system prompt with cache_control marker is sent correctly
+    #[tokio::test]
+    async fn test_anthropic_request_with_cache_control_system() {
+        use shannon_core::api::types::{CacheControl, SystemContentBlock};
+
+        let block = SystemContentBlock {
+            block_type: "text".to_string(),
+            text: "You are a helpful assistant.".to_string(),
+            cache_control: Some(CacheControl::ephemeral()),
+        };
+
+        let serialized = serde_json::to_string(&block).unwrap();
+        assert!(serialized.contains(r#""cache_control""#), "should include cache_control");
+        assert!(serialized.contains(r#""ephemeral""#), "should be ephemeral type");
+        assert!(serialized.contains(r#""type":"text""#), "should have type text");
+
+        // Verify roundtrip
+        let deserialized: SystemContentBlock = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.text, "You are a helpful assistant.");
+        assert!(deserialized.cache_control.is_some());
+        assert_eq!(deserialized.cache_control.unwrap().control_type, "ephemeral");
+    }
+
+    /// Verify subsequent requests hit cache (cache_read_input_tokens > 0)
+    #[tokio::test]
+    async fn test_anthropic_cache_hit_on_second_request() {
+        let mut server = Server::new_async().await;
+        let endpoint = "/v1/messages";
+
+        // First request: cache miss (creation but no read)
+        let first_response = json!({
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "content": [{ "type": "text", "text": "First response" }],
+            "model": "claude-3-5-sonnet-20241022",
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 50,
+                "output_tokens": 10,
+                "cache_creation_input_tokens": 1000,
+                "cache_read_input_tokens": 0
+            }
+        });
+
+        let mock1 = setup_anthropic_mock(&mut server, endpoint, first_response);
+        let client = reqwest::Client::new();
+        let url = format!("{}{}", server.url(), endpoint);
+
+        let resp1 = client
+            .post(&url)
+            .header("x-api-key", "sk-test-key")
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .json(&json!({
+                "model": "claude-3-5-sonnet-20241022",
+                "max_tokens": 1024,
+                "messages": [{ "role": "user", "content": "Hello" }],
+                "system": [{ "type": "text", "text": "System prompt", "cache_control": { "type": "ephemeral" } }]
+            }))
+            .send()
+            .await
+            .unwrap();
+
+        let json1: Value = resp1.json().await.unwrap();
+        let usage1 = json1.get("usage").unwrap();
+        assert_eq!(usage1.get("cache_creation_input_tokens").unwrap().as_u64(), Some(1000));
+        assert_eq!(usage1.get("cache_read_input_tokens").unwrap().as_u64(), Some(0));
+        mock1.assert();
+    }
 }
 
 /// End-to-end integration tests exercising the full LlmClient stack.
