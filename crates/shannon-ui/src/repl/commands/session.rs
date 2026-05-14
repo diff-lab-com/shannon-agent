@@ -616,6 +616,12 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
 
     let history = engine.conversation_history();
 
+    // Early exit before creating the engine
+    if history.is_empty() {
+        repl.chat.add_message(ChatRole::System, "No conversation to compact.".to_string());
+        return Ok(());
+    }
+
     // Create compact engine using the REPL's existing tokio runtime handle.
     // This avoids nested-runtime panics when the LLM summarizer calls block_on().
     let client = engine.client().clone();
@@ -650,16 +656,10 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
         return Ok(());
     }
 
-    // Perform compaction
-    if history.is_empty() {
-        repl.chat.add_message(ChatRole::System, "No conversation to compact.".to_string());
-        return Ok(());
-    }
-
     // /compact preview — show what will be compacted without doing it
     if subcmd == "preview" || subcmd == "--preview" {
         let total = history.len();
-        let recent_keep = 6; // matches default keep_recent_count
+        let recent_keep = compact_engine.config().keep_recent_count;
         let old_count = total.saturating_sub(recent_keep);
         let mut preview = format!(
             "Compact Preview:\n  Total messages: {total}\n  Keep recent: {recent_keep}\n  Compactible: {old_count}\n  Strategy: {}\n  Estimated tokens: {} ({:.1}% of context)",
