@@ -94,8 +94,12 @@ pub struct RenderContext<'a> {
     pub git_branch: Option<&'a str>,
     pub token_breakdown: Option<(u64, u64)>,
     pub cached_tokens: Option<u64>,
+    pub cache_read_tokens: Option<u64>,
+    pub cache_creation_tokens: Option<u64>,
     pub diag_counts: Option<(usize, usize)>,
     pub rate_limit: Option<(u32, u32)>,
+    pub turn_count: Option<usize>,
+    pub memory_rss_kb: Option<u64>,
 
     // UI state
     pub spinner: Option<&'a crate::widgets::progress::SpinnerWidget>,
@@ -126,7 +130,9 @@ impl<'a> RenderContext<'a> {
         Self {
             chat, prompt, theme, status,
             model: None, tokens_used: None, max_tokens: None, cost_usd: None,
-            git_branch: None, token_breakdown: None, cached_tokens: None, diag_counts: None, rate_limit: None,
+            git_branch: None, token_breakdown: None, cached_tokens: None,
+            cache_read_tokens: None, cache_creation_tokens: None,
+            diag_counts: None, rate_limit: None, turn_count: None, memory_rss_kb: None,
             spinner: None, progress_bar: None, sidebar_info: None,
             sidebar_tab: crate::repl::SidebarTab::default(),
             approval_mode: None,

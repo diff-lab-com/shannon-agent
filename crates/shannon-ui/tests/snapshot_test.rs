@@ -98,8 +98,9 @@ fn test_status_bar_shows_no_model_configured() {
             None, // No effort level
             None, None, None, None, None, None,
             &theme,
-            None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None,
             false, 0, // thinking
+            None, None, // turn_count, memory_rss_kb
         );
     }).unwrap();
 
@@ -122,8 +123,9 @@ fn test_status_bar_shows_model_name() {
             None, // No effort level
             None, None, None, None, None, None,
             &theme,
-            None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None,
             false, 0, // thinking
+            None, None, // turn_count, memory_rss_kb
         );
     }).unwrap();
 
@@ -147,8 +149,9 @@ fn test_status_bar_shows_effort_level() {
             Some("high"),
             None, None, None, None, None, None,
             &theme,
-            None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None,
             false, 0,
+            None, None, // turn_count, memory_rss_kb
         );
     }).unwrap();
 
@@ -172,8 +175,9 @@ fn test_status_bar_shows_thinking_indicator() {
             None,
             None, None, None, None, None, None,
             &theme,
-            None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None,
             true, 5000, // thinking phase with 5k chars
+            None, None, // turn_count, memory_rss_kb
         );
     }).unwrap();
 

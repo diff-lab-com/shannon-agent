@@ -53,8 +53,10 @@ pub struct ReplState {
     pub input_tokens: u64,
     /// Detailed token breakdown: output tokens
     pub output_tokens: u64,
-    /// Detailed token breakdown: cached tokens
-    pub cached_tokens: u64,
+    /// Detailed token breakdown: cache read tokens (hits)
+    pub cache_read_tokens: u64,
+    /// Detailed token breakdown: cache creation tokens (writes/misses)
+    pub cache_creation_tokens: u64,
     /// Total cost in USD accumulated across all queries
     pub total_cost_usd: f64,
     /// Working directory for the session
@@ -400,7 +402,8 @@ impl Default for ReplState {
             tokens_used: 0,
             input_tokens: 0,
             output_tokens: 0,
-            cached_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
             total_cost_usd: 0.0,
             working_directory: cwd,
             permission_dialog: None,

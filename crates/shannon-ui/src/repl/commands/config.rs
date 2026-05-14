@@ -241,7 +241,7 @@ pub(crate) fn handle_context(repl: &mut Repl, args: &str) -> Result<()> {
         let total = repl.state.tokens_used;
         let input = repl.state.input_tokens;
         let output = repl.state.output_tokens;
-        let cached = repl.state.cached_tokens;
+        let cached = repl.state.cache_read_tokens + repl.state.cache_creation_tokens;
         let other = total.saturating_sub(input + output + cached);
 
         // Build a colored bar using Unicode block chars

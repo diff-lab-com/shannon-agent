@@ -54,7 +54,8 @@ struct StreamingState {
     progress: f64,
     multi_progress: Vec<(String, f64, ratatui::style::Color)>,
     tokens: (u64, u64), // (input, output)
-    cached_tokens: u64,
+    cache_read_tokens: u64,
+    cache_creation_tokens: u64,
     tools: usize,
     budget: Option<f64>,
     delta: String,
@@ -76,7 +77,8 @@ impl Default for StreamingState {
             progress: 0.0,
             multi_progress: Vec::new(),
             tokens: (0, 0),
-            cached_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
             tools: 0,
             budget: None,
             delta: String::new(),
@@ -300,7 +302,8 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                 Ok(QueryEvent::Usage { input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, .. }) => {
                     if let Ok(mut s) = ss.lock() {
                         s.tokens = (input_tokens, output_tokens);
-                        s.cached_tokens += cache_read_tokens + cache_creation_tokens;
+                        s.cache_read_tokens += cache_read_tokens;
+                        s.cache_creation_tokens += cache_creation_tokens;
                     }
                 }
                 Ok(QueryEvent::Cost { total_cost_usd, input_tokens, output_tokens, .. }) => {
@@ -463,7 +466,8 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                     repl.state.tokens_used = pre_stream_tokens + input + output;
                     repl.state.input_tokens = input;
                     repl.state.output_tokens = output;
-                    repl.state.cached_tokens = s.cached_tokens;
+                    repl.state.cache_read_tokens = s.cache_read_tokens;
+                    repl.state.cache_creation_tokens = s.cache_creation_tokens;
                     // Track token output rate (instantaneous)
                     if output > 0 {
                         let now = std::time::Instant::now();
@@ -557,6 +561,11 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                 render_ctx.fullscreen_mode = state.fullscreen_mode;
                 render_ctx.auto_follow = state.auto_follow;
                 render_ctx.effort_level = state.effort_level.as_deref();
+                render_ctx.cached_tokens = Some(state.cache_read_tokens + state.cache_creation_tokens);
+                render_ctx.cache_read_tokens = Some(state.cache_read_tokens);
+                render_ctx.cache_creation_tokens = Some(state.cache_creation_tokens);
+                render_ctx.turn_count = sidebar_info.as_ref().map(|si| si.turn_count);
+                render_ctx.memory_rss_kb = sidebar_info.as_ref().map(|si| si.memory_rss_kb);
                 // Pass thinking phase and char count from streaming state
                 if let Ok(s) = streaming.lock() {
                     render_ctx.thinking_phase = s.thinking_phase;

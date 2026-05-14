@@ -1357,7 +1357,7 @@ mod tests {
         messages.extend(generate_long_conversation(50, 100));
 
         let total = messages.len();
-        let result = engine.compact(&mut messages).unwrap();
+        let _result = engine.compact(&mut messages).unwrap();
 
         // System message should still be first
         assert_eq!(messages[0].role, "system");
@@ -1442,5 +1442,477 @@ mod tests {
         // ~200 chars per turn pair × 10 turns × ~0.25 tokens/char ≈ 500+ tokens
         assert!(tokens > 100, "should estimate at least 100 tokens for 10 turns");
         assert!(tokens < 50_000, "should not wildly overestimate");
+    }
+
+    // ==========================================================================
+    // Comprehensive multi-turn long context tests
+    // ==========================================================================
+
+    /// Simulate a realistic multi-turn coding session with tool calls interleaved.
+    fn generate_coding_session(turns: usize) -> Vec<Message> {
+        let mut messages = vec![system_msg(
+            "You are a Rust coding assistant. Follow project conventions.",
+        )];
+        for i in 0..turns {
+            messages.push(user_msg(&format!(
+                "Can you help me implement feature {i}? I need a function that processes data."
+            )));
+            messages.push(assistant_msg(&format!(
+                "I'll implement feature {i}. Let me read the existing code first."
+            )));
+            messages.push(tool_use_msg(
+                &format!("tu_read_{i}"),
+                "read_file",
+                &format!("{{\"path\":\"src/feature_{i}.rs\"}}"),
+            ));
+            messages.push(tool_result_msg(
+                &format!("tu_read_{i}"),
+                &format!("fn process_{i}() {{ /* existing code */ }}"),
+            ));
+            messages.push(assistant_msg(&format!(
+                "Here's the implementation for feature {i}:\n```rust\nfn process_{i}_v2(data: &[u8]) -> Result<(), Error> {{\n    // implementation\n    Ok(())\n}}\n```"
+            )));
+            if i % 3 == 0 {
+                // Every 3rd turn, run tests
+                messages.push(user_msg(&format!("Run the tests for feature {i}")));
+                messages.push(tool_use_msg(
+                    &format!("tu_test_{i}"),
+                    "bash",
+                    &format!("cargo test feature_{i}"),
+                ));
+                messages.push(tool_result_msg(
+                    &format!("tu_test_{i}"),
+                    &format!("test feature_{i} ... ok\ntest result: ok. 1 passed; 0 failed"),
+                ));
+                messages.push(assistant_msg(&format!("All tests pass for feature {i}.")));
+            }
+        }
+        messages
+    }
+
+    #[test]
+    fn test_multiturn_compact_preserves_conversation_history() {
+        // Verify that across multiple compact cycles, key conversation
+        // landmarks (system prompt, recent exchanges) are never lost.
+        let mut engine = CompactEngine::new(
+            CompactConfig {
+                keep_recent_count: 6,
+                ..Default::default()
+            },
+            Box::new(RuleBasedSummarizer::new()),
+        )
+        .unwrap();
+
+        let mut messages = generate_coding_session(20);
+
+        // Phase 1: compact
+        let r1 = engine.compact(&mut messages).unwrap();
+        assert!(r1.messages_removed > 0);
+        // System prompt preserved
+        assert_eq!(messages[0].role, "system");
+        let sys0 = match &messages[0].content {
+            MessageContent::Text(t) => t.clone(),
+            _ => String::new(),
+        };
+        assert!(
+            sys0.contains("Rust coding assistant"),
+            "system prompt should be preserved after first compact"
+        );
+
+        // Phase 2: add more turns and compact again
+        for i in 20..40 {
+            messages.push(user_msg(&format!("Now implement feature {i}")));
+            messages.push(assistant_msg(&format!("Done with feature {i}")));
+        }
+        let r2 = engine.compact(&mut messages).unwrap();
+        assert!(r2.messages_removed > 0);
+
+        // System prompt STILL preserved after second compact
+        let sys_after = match &messages[0].content {
+            MessageContent::Text(t) => t.clone(),
+            _ => String::new(),
+        };
+        assert!(
+            sys_after.contains("Rust coding assistant"),
+            "system prompt should survive multiple compacts"
+        );
+
+        // Recent messages should reference the latest turns
+        let recent_text: String = messages
+            .iter()
+            .flat_map(|m| match &m.content {
+                MessageContent::Text(t) => t.chars().collect::<Vec<_>>(),
+                _ => vec![],
+            })
+            .collect::<String>();
+        assert!(
+            recent_text.contains("feature 39"),
+            "most recent turn should be present, got: {:?}",
+            recent_text
+        );
+    }
+
+    #[test]
+    fn test_multiturn_memory_does_not_grow_unboundedly() {
+        // Repeatedly add turns and compact. Total message count should stay bounded.
+        let mut engine = CompactEngine::new(
+            CompactConfig {
+                keep_recent_count: 6,
+                ..Default::default()
+            },
+            Box::new(RuleBasedSummarizer::new()),
+        )
+        .unwrap();
+
+        let mut messages = vec![system_msg("System")];
+        let mut peak_count = 0usize;
+        let mut post_compact_counts = Vec::new();
+
+        // Simulate 5 rounds of: add 30 messages → compact
+        for round in 0..5 {
+            for i in 0..15 {
+                let idx = round * 15 + i;
+                messages.push(user_msg(&format!(
+                    "Round {round} question {i} with index {idx} and enough text to be meaningful"
+                )));
+                messages.push(assistant_msg(&format!(
+                    "Round {round} answer {i} for index {idx} with sufficient content to avoid being too short"
+                )));
+            }
+            peak_count = peak_count.max(messages.len());
+            let result = engine.compact(&mut messages).unwrap();
+            if result.messages_removed > 0 {
+                post_compact_counts.push(messages.len());
+            }
+        }
+
+        // Post-compact counts should be roughly similar (bounded by keep_recent + summary)
+        if post_compact_counts.len() >= 2 {
+            let first = post_compact_counts[0] as f64;
+            let last = *post_compact_counts.last().unwrap() as f64;
+            // Should not grow by more than 3x from first compact to last
+            assert!(
+                last / first < 3.0,
+                "post-compact message count should stay bounded: first={first}, last={last}"
+            );
+        }
+
+        // Peak count should be much larger than final count
+        assert!(
+            peak_count > messages.len(),
+            "peak {peak_count} should exceed final {}",
+            messages.len()
+        );
+    }
+
+    #[test]
+    fn test_multiturn_compact_maintains_message_ordering() {
+        // After compact, messages should remain in valid conversation order:
+        // system → summary → user/assistant alternating (with tool calls).
+        let mut engine = CompactEngine::new(
+            CompactConfig {
+                keep_recent_count: 8,
+                ..Default::default()
+            },
+            Box::new(RuleBasedSummarizer::new()),
+        )
+        .unwrap();
+
+        let mut messages = generate_coding_session(25);
+        engine.compact(&mut messages).unwrap();
+
+        // First message should be system or system summary
+        assert!(
+            messages[0].role == "system",
+            "first message should be system, got: {}",
+            messages[0].role
+        );
+
+        // Verify no orphaned tool_result (must have preceding tool_use)
+        for i in 1..messages.len() {
+            match &messages[i].content {
+                MessageContent::Blocks(blocks) => {
+                    for block in blocks {
+                        if let ContentBlock::ToolResult { tool_use_id, .. } = block {
+                            // Look back for a matching tool_use
+                            let has_matching_use = messages[..i].iter().any(|m| {
+                                match &m.content {
+                                    MessageContent::Blocks(bs) => bs.iter().any(|b| {
+                                        if let ContentBlock::ToolUse { id, .. } = b {
+                                            id == tool_use_id
+                                        } else {
+                                            false
+                                        }
+                                    }),
+                                    _ => false,
+                                }
+                            });
+                            // Tool results in recent section should have matching use
+                            // (summarized section may have orphans, which is acceptable)
+                            if i > messages.len().saturating_sub(8) {
+                                assert!(
+                                    has_matching_use,
+                                    "tool_result {tool_use_id} at index {i} has no matching tool_use"
+                                );
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn test_multiturn_progressive_compaction_reduces_tokens() {
+        // Each compact cycle should produce meaningful token reduction.
+        let mut engine = CompactEngine::new(
+            CompactConfig {
+                keep_recent_count: 6,
+                ..Default::default()
+            },
+            Box::new(RuleBasedSummarizer::new()),
+        )
+        .unwrap();
+
+        let mut messages = vec![system_msg("System")];
+
+        // 3 rounds of add + compact, tracking tokens each time
+        let mut pre_compact_tokens = Vec::new();
+        let mut post_compact_tokens = Vec::new();
+
+        for round in 0..3 {
+            for i in 0..50 {
+                let idx = round * 20 + i;
+                messages.push(user_msg(&format!(
+                    "Turn {idx}: This is a longer message with enough content to contribute meaningfully to the token count"
+                )));
+                messages.push(assistant_msg(&format!(
+                    "Response {idx}: Here is a detailed answer with sufficient content to represent a realistic exchange between user and assistant"
+                )));
+            }
+
+            let tokens_before = estimate_tokens(&messages);
+            pre_compact_tokens.push(tokens_before);
+
+            let result = engine.compact(&mut messages).unwrap();
+            if result.messages_removed > 0 {
+                let tokens_after = estimate_tokens(&messages);
+                post_compact_tokens.push(tokens_after);
+
+                // Only check reduction ratio after the first round — the first
+                // compact may produce a summary larger than the short originals.
+                if round > 0 {
+                    let reduction = tokens_before as f64 - tokens_after as f64;
+                    let reduction_pct = reduction / tokens_before as f64;
+                    assert!(
+                        reduction_pct > 0.1,
+                        "round {round}: compact should reduce tokens by >10%, got {:.1}%",
+                        reduction_pct * 100.0
+                    );
+                }
+            }
+        }
+
+        // Final token count should be less than any pre-compact peak
+        if let (Some(&final_post), Some(&max_pre)) = (
+            post_compact_tokens.last(),
+            pre_compact_tokens.iter().max(),
+        ) {
+            assert!(
+                final_post < max_pre,
+                "final tokens {final_post} should be less than max pre-compact {max_pre}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_multiturn_compact_with_oversized_tool_results() {
+        // Simulate tool results that individually exceed micro_compact_threshold.
+        let mut engine = CompactEngine::new(
+            CompactConfig {
+                keep_recent_count: 6,
+                micro_compact_threshold: 200, // low threshold to trigger micro-compact
+                enable_micro_compact: true,
+                ..Default::default()
+            },
+            Box::new(RuleBasedSummarizer::new()),
+        )
+        .unwrap();
+
+        let mut messages = vec![system_msg("System")];
+
+        // Add turns with oversized tool results
+        for i in 0..15 {
+            messages.push(user_msg(&format!("Read file {i}")));
+            messages.push(tool_use_msg(
+                &format!("tu_{i}"),
+                "read_file",
+                &format!("{{\"path\":\"src/file_{i}.rs\"}}"),
+            ));
+            let large_result = format!("fn func_{i}() {{\n{}\n}}", "let x = 1;\n".repeat(100));
+            messages.push(tool_result_msg(&format!("tu_{i}"), &large_result));
+            messages.push(assistant_msg(&format!("I've read file {i}.")));
+        }
+
+        let tokens_before = estimate_tokens(&messages);
+        let result = engine.compact(&mut messages).unwrap();
+        assert!(result.messages_removed > 0);
+
+        let tokens_after = estimate_tokens(&messages);
+        assert!(
+            tokens_after < tokens_before,
+            "tokens should decrease after compact: {tokens_after} vs {tokens_before}"
+        );
+
+        // System preserved
+        assert_eq!(messages[0].role, "system");
+    }
+
+    #[test]
+    fn test_multiturn_compact_never_drops_system_prompt() {
+        // Extreme test: many rounds of compaction, a system-role message must
+        // always be present at the head of the message list.
+        let mut engine = CompactEngine::new(
+            CompactConfig {
+                keep_recent_count: 4,
+                ..Default::default()
+            },
+            Box::new(RuleBasedSummarizer::new()),
+        )
+        .unwrap();
+
+        let mut messages = vec![system_msg(
+            "CRITICAL: You must follow all project conventions.",
+        )];
+
+        for round in 0..10 {
+            for i in 0..10 {
+                let idx = round * 10 + i;
+                messages.push(user_msg(&format!(
+                    "Round {round} message {i} (idx {idx}) with padding to ensure sufficient token consumption"
+                )));
+                messages.push(assistant_msg(&format!(
+                    "Round {round} response {i} (idx {idx}) with meaningful content for compaction testing"
+                )));
+            }
+
+            let result = engine.compact(&mut messages).unwrap();
+            if result.messages_removed > 0 {
+                // The first message must always be a system-role message
+                assert_eq!(
+                    messages[0].role,
+                    "system",
+                    "round {round}: first message must be system role, got: {:?}",
+                    messages.iter().map(|m| m.role.clone()).collect::<Vec<_>>()
+                );
+                // It should be either the original prompt or a summary containing context
+                let first_text = match &messages[0].content {
+                    MessageContent::Text(t) => t.clone(),
+                    _ => String::new(),
+                };
+                assert!(
+                    first_text.contains("CRITICAL")
+                        || first_text.contains("[Previous conversation summary"),
+                    "round {round}: system message should be original or summary, got: {first_text:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_multiturn_compact_stable_under_repeated_auto_compact_check() {
+        // Verify auto_compact_check and compact work together correctly
+        // across many turns without panics or corrupt state.
+        let mut engine = CompactEngine::new(
+            CompactConfig {
+                max_context_tokens: 500, // low threshold to trigger auto-compact quickly
+                trigger_threshold: 0.5,
+                keep_recent_count: 4,
+                ..Default::default()
+            },
+            Box::new(RuleBasedSummarizer::new()),
+        )
+        .unwrap();
+
+        let mut messages = vec![system_msg("System")];
+
+        for i in 0..100 {
+            messages.push(user_msg(&format!(
+                "Turn {i}: {}",
+                "This is a standard message with enough text. ".repeat(5)
+            )));
+            messages.push(assistant_msg(&format!(
+                "Response {i}: {}",
+                "Here is the assistant response with adequate content. ".repeat(5)
+            )));
+
+            // Auto-compact check on every iteration
+            if engine.auto_compact_check(&messages) {
+                let result = engine.compact(&mut messages);
+                // Should not error
+                assert!(
+                    result.is_ok(),
+                    "compact failed at turn {i}: {:?}",
+                    result.err()
+                );
+            }
+        }
+
+        // After 100 turns with auto-compact, we should have a manageable message count
+        assert!(
+            messages.len() < 50,
+            "after 100 turns with auto-compact, messages should be bounded: {}",
+            messages.len()
+        );
+
+        // System prompt still present
+        assert_eq!(messages[0].role, "system");
+    }
+
+    #[test]
+    fn test_multiturn_compact_preserves_recent_turns_verbatim() {
+        // The last N messages should be kept exactly as-is (not summarized).
+        let keep_count = 6;
+        let mut engine = CompactEngine::new(
+            CompactConfig {
+                keep_recent_count: keep_count,
+                ..Default::default()
+            },
+            Box::new(RuleBasedSummarizer::new()),
+        )
+        .unwrap();
+
+        let mut messages = vec![system_msg("System")];
+        // 30 turns = 60 messages + 1 system = 61
+        for i in 0..30 {
+            messages.push(user_msg(&format!("Unique user query #{i}")));
+            messages.push(assistant_msg(&format!("Unique assistant response #{i}")));
+        }
+
+        let original_total = messages.len();
+        // Capture the exact last `keep_count` messages before compact
+        let recent_originals: Vec<String> = messages[original_total - keep_count..]
+            .iter()
+            .map(|m| match &m.content {
+                MessageContent::Text(t) => t.clone(),
+                _ => String::new(),
+            })
+            .collect();
+
+        engine.compact(&mut messages).unwrap();
+
+        // The tail of the compacted messages should exactly match the originals
+        let tail_start = messages.len().saturating_sub(keep_count);
+        for (idx, original_text) in recent_originals.iter().enumerate() {
+            let actual = match &messages[tail_start + idx].content {
+                MessageContent::Text(t) => t.as_str(),
+                _ => "",
+            };
+            assert_eq!(
+                actual, original_text,
+                "recent message at tail position {idx} was altered during compact"
+            );
+        }
     }
 }
