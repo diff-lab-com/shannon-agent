@@ -960,7 +960,7 @@ pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String>
         "debug" | "dbg" | "dev" => &["info", "log", "profile", "trace", "help"],
         "diff" => &["--staged", "--stat", "--overview", "--word-diff"],
         "ci" | "gh-actions" => &["status", "runs", "workflows", "view", "trigger"],
-        "compact" => &["status", "truncate", "micro", "group", "preview", "--preview", "--llm"],
+        "compact" => &["status", "truncate", "micro", "group", "preview", "--preview"],
         "permissions" | "perm" | "perms" => &["allow", "deny", "reset", "status"],
         "plan" => &["create", "approve", "reject", "done", "status"],
         "review" => &["HEAD~1", "main...HEAD", "--staged", "--full"],
@@ -2174,7 +2174,6 @@ mod tests {
         assert!(completions.contains(&"micro".to_string()), "compact should complete 'micro'");
         assert!(completions.contains(&"group".to_string()), "compact should complete 'group'");
         assert!(completions.contains(&"--preview".to_string()), "compact should complete '--preview'");
-        assert!(completions.contains(&"--llm".to_string()), "compact should complete '--llm'");
     }
 
     #[test]

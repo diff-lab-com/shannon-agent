@@ -183,19 +183,52 @@ impl Summarizer for RuleBasedSummarizer {
 /// AI-powered summarizer that uses the configured LLM to produce high-quality
 /// conversation summaries. Falls back to [`RuleBasedSummarizer`] on errors.
 ///
-/// Uses a dedicated tokio runtime to bridge the sync `Summarizer` trait with
-/// the async `LlmClient`, avoiding nested-runtime panics.
+/// When created with [`LlmSummarizer::with_handle`], reuses an existing tokio
+/// runtime instead of creating a new one per call — this avoids "cannot start a
+/// runtime from within a runtime" panics and cross-runtime `reqwest` issues.
 pub struct LlmSummarizer {
     client: crate::api::LlmClient,
     fallback: RuleBasedSummarizer,
+    runtime_handle: Option<tokio::runtime::Handle>,
 }
 
 impl LlmSummarizer {
     /// Create a new LLM summarizer wrapping the given client.
+    ///
+    /// Each call to `summarize` / `micro_summarize` will create a temporary
+    /// tokio runtime. Prefer [`with_handle`] when a runtime is already available.
     pub fn new(client: crate::api::LlmClient) -> Self {
         Self {
             client,
             fallback: RuleBasedSummarizer::new(),
+            runtime_handle: None,
+        }
+    }
+
+    /// Create an LLM summarizer that reuses an existing tokio runtime handle.
+    ///
+    /// This avoids creating a new runtime per summarization call, which can
+    /// panic if called from within an existing runtime context.
+    pub fn with_handle(client: crate::api::LlmClient, handle: tokio::runtime::Handle) -> Self {
+        Self {
+            client,
+            fallback: RuleBasedSummarizer::new(),
+            runtime_handle: Some(handle),
+        }
+    }
+
+    /// Execute an async LLM call using the stored handle or a fresh runtime.
+    fn block_on_llm<F, T>(&self, fut: F) -> Result<T, String>
+    where
+        F: std::future::Future<Output = Result<T, String>>,
+    {
+        if let Some(handle) = &self.runtime_handle {
+            handle.block_on(fut)
+        } else {
+            match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt.block_on(fut),
+                Err(e) => Err(format!("Failed to create runtime: {e}")),
+            }
         }
     }
 
@@ -259,29 +292,26 @@ impl Summarizer for LlmSummarizer {
 
         let payload = self.build_summarize_messages(messages, max_tokens);
 
-        let result = match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt.block_on(async {
-                match self.client.send_message(payload, None, None).await {
-                    Ok(blocks) => {
-                        let text: String = blocks
-                            .into_iter()
-                            .filter_map(|b| match b {
-                                ContentBlock::Text { text } => Some(text),
-                                _ => None,
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        if text.trim().is_empty() {
-                            Err("LLM returned empty summary".to_string())
-                        } else {
-                            Ok(text)
-                        }
+        let result = self.block_on_llm(async {
+            match self.client.send_message(payload, None, None).await {
+                Ok(blocks) => {
+                    let text: String = blocks
+                        .into_iter()
+                        .filter_map(|b| match b {
+                            ContentBlock::Text { text } => Some(text),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if text.trim().is_empty() {
+                        Err("LLM returned empty summary".to_string())
+                    } else {
+                        Ok(text)
                     }
-                    Err(e) => Err(format!("LLM summarization API error: {e}")),
                 }
-            }),
-            Err(e) => Err(format!("Failed to create runtime: {e}")),
-        };
+                Err(e) => Err(format!("LLM summarization API error: {e}")),
+            }
+        });
 
         match result {
             Ok(summary) => Ok(summary),
@@ -298,29 +328,26 @@ impl Summarizer for LlmSummarizer {
     fn micro_summarize(&self, message: &Message, max_tokens: usize) -> Result<String, CompactError> {
         let payload = self.build_micro_messages(message, max_tokens);
 
-        let result = match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt.block_on(async {
-                match self.client.send_message(payload, None, None).await {
-                    Ok(blocks) => {
-                        let text: String = blocks
-                            .into_iter()
-                            .filter_map(|b| match b {
-                                ContentBlock::Text { text } => Some(text),
-                                _ => None,
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        if text.trim().is_empty() {
-                            Err("LLM returned empty micro-summary".to_string())
-                        } else {
-                            Ok(text)
-                        }
+        let result = self.block_on_llm(async {
+            match self.client.send_message(payload, None, None).await {
+                Ok(blocks) => {
+                    let text: String = blocks
+                        .into_iter()
+                        .filter_map(|b| match b {
+                            ContentBlock::Text { text } => Some(text),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if text.trim().is_empty() {
+                        Err("LLM returned empty micro-summary".to_string())
+                    } else {
+                        Ok(text)
                     }
-                    Err(e) => Err(format!("LLM micro-summarization API error: {e}")),
                 }
-            }),
-            Err(e) => Err(format!("Failed to create runtime: {e}")),
-        };
+                Err(e) => Err(format!("LLM micro-summarization API error: {e}")),
+            }
+        });
 
         match result {
             Ok(summary) => Ok(summary),

@@ -56,6 +56,17 @@ impl CompactEngine {
         Self::new(config, Box::new(LlmSummarizer::new(client)))
     }
 
+    /// Create with an LLM-powered summarizer that reuses an existing tokio runtime.
+    ///
+    /// This avoids creating a new runtime per summarization call, which can
+    /// panic if the caller is already inside a tokio runtime context.
+    pub fn with_llm_summarizer_on_runtime(
+        client: crate::api::LlmClient,
+        handle: tokio::runtime::Handle,
+    ) -> Result<Self, CompactError> {
+        Self::new(CompactConfig::default(), Box::new(LlmSummarizer::with_handle(client, handle)))
+    }
+
     /// Get a reference to the config
     pub fn config(&self) -> &CompactConfig {
         &self.config

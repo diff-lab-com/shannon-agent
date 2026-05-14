@@ -616,32 +616,25 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
 
     let history = engine.conversation_history();
 
-    // Use rule-based summarizer by default (no API calls, no nested runtime risk).
-    // Only use LLM summarizer when --llm flag is explicitly passed.
-    let use_llm = args.contains("--llm");
-    let compact_engine = if use_llm {
-        let client = engine.client().clone();
-        match CompactEngine::with_llm_summarizer(client) {
+    // Create compact engine using the REPL's existing tokio runtime handle.
+    // This avoids nested-runtime panics when the LLM summarizer calls block_on().
+    let client = engine.client().clone();
+    let rt_handle = repl.runtime.handle().clone();
+    let compact_engine = match CompactEngine::with_llm_summarizer_on_runtime(client, rt_handle) {
+        Ok(e) => e,
+        Err(_) => match CompactEngine::with_defaults() {
             Ok(e) => e,
             Err(e) => {
                 repl.chat.add_message(ChatRole::System, format!("Compact engine error: {e}"));
                 return Ok(());
             }
-        }
-    } else {
-        match CompactEngine::with_defaults() {
-            Ok(e) => e,
-            Err(e) => {
-                repl.chat.add_message(ChatRole::System, format!("Compact engine error: {e}"));
-                return Ok(());
-            }
-        }
+        },
     };
 
     let analysis = compact_engine.analyze_context(&history);
 
-    // Parse subcommand (strip --llm flag if present)
-    let subcmd = args.trim().replace("--llm", "").trim().to_string();
+    // Parse subcommand
+    let subcmd = args.trim();
     if subcmd == "status" || subcmd == "info" {
         let info = format!(
             "Context Analysis:\n  Estimated tokens: {}\n  Context usage: {:.1}%\n  Messages: {}\n  Should compact: {}\n  Recommended strategy: {}\n  Compactable messages: {}\n  Micro-compact candidates: {}",
@@ -708,7 +701,7 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
         ));
         (CompactStrategy::SummarizeOld, Some(keywords.into_iter().map(String::from).collect::<Vec<_>>()))
     } else {
-        let strategy = match subcmd.as_str() {
+        let strategy = match subcmd {
             "truncate" => CompactStrategy::TruncateOld,
             "micro" => CompactStrategy::MicroCompress,
             "group" => CompactStrategy::GroupCompress,
