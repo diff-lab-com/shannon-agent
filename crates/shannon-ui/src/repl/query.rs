@@ -572,7 +572,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
 
             if query_finished { break; }
 
-            // Check for cancel key (Escape or Ctrl+C) during streaming
+            // Handle key events during streaming: cancel, scroll, and input
             if crossterm::event::poll(std::time::Duration::ZERO).unwrap_or(false) {
                 if let Ok(crossterm::event::Event::Key(key)) = crossterm::event::read() {
                     let is_cancel = matches!(key.code,
@@ -587,6 +587,91 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                             s.status = t!("status.cancelled_status").to_string();
                         }
                         break;
+                    }
+
+                    // Allow scrolling and input during streaming
+                    match key.code {
+                        // Scroll navigation during streaming
+                        crossterm::event::KeyCode::PageUp => {
+                            let page = repl.chat.chat_viewport_height() as usize;
+                            repl.chat.scroll_up_by(page.saturating_sub(2).max(1));
+                            if repl.state.auto_follow {
+                                repl.state.messages_at_scroll_pause = repl.chat.message_count();
+                            }
+                            repl.state.auto_follow = false;
+                        }
+                        crossterm::event::KeyCode::PageDown => {
+                            let page = repl.chat.chat_viewport_height() as usize;
+                            repl.chat.scroll_down_by(page.saturating_sub(2).max(1));
+                            if repl.chat.is_at_bottom() {
+                                repl.state.auto_follow = true;
+                            }
+                        }
+                        crossterm::event::KeyCode::Home => {
+                            repl.chat.scroll_to_top();
+                            if repl.state.auto_follow {
+                                repl.state.messages_at_scroll_pause = repl.chat.message_count();
+                            }
+                            repl.state.auto_follow = false;
+                        }
+                        crossterm::event::KeyCode::End => {
+                            repl.chat.scroll_to_latest();
+                            repl.state.auto_follow = true;
+                        }
+                        crossterm::event::KeyCode::Up if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                            let step = (repl.chat.chat_viewport_height() as usize / 4).max(3);
+                            repl.chat.scroll_up_by(step);
+                            if repl.state.auto_follow {
+                                repl.state.messages_at_scroll_pause = repl.chat.message_count();
+                            }
+                            repl.state.auto_follow = false;
+                        }
+                        crossterm::event::KeyCode::Down if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                            let step = (repl.chat.chat_viewport_height() as usize / 4).max(3);
+                            repl.chat.scroll_down_by(step);
+                            if repl.chat.is_at_bottom() {
+                                repl.state.auto_follow = true;
+                            }
+                        }
+                        // Allow typing in the prompt during streaming
+                        crossterm::event::KeyCode::Char(c) if !key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) && !key.modifiers.contains(crossterm::event::KeyModifiers::ALT) => {
+                            repl.prompt.add_char(c);
+                        }
+                        crossterm::event::KeyCode::Backspace => {
+                            repl.prompt.backspace();
+                        }
+                        crossterm::event::KeyCode::Delete => {
+                            repl.prompt.delete_forward();
+                        }
+                        crossterm::event::KeyCode::Left => {
+                            repl.prompt.cursor_left();
+                        }
+                        crossterm::event::KeyCode::Right => {
+                            repl.prompt.cursor_right();
+                        }
+                        // Enter during streaming queues the message (consistent with input.rs behavior)
+                        crossterm::event::KeyCode::Enter if !key.modifiers.contains(crossterm::event::KeyModifiers::SHIFT) => {
+                            let input = repl.prompt.input().trim().to_string();
+                            if !input.is_empty() {
+                                repl.state.queued_message = Some(input);
+                                repl.prompt.clear();
+                                repl.state.status = "Message queued (will send after current response)".to_string();
+                                repl.state.toast = Some(("Queued".to_string(), std::time::Instant::now()));
+                            }
+                        }
+                        crossterm::event::KeyCode::Enter => {
+                            // Shift+Enter → newline
+                            repl.prompt.insert_newline();
+                        }
+                        crossterm::event::KeyCode::Tab => {
+                            let input = repl.prompt.input();
+                            if !input.trim().is_empty() {
+                                repl.state.queued_message = Some(input);
+                                repl.prompt.clear();
+                                repl.state.status = "Message queued (will send after current response)".to_string();
+                            }
+                        }
+                        _ => {} // Ignore other keys during streaming
                     }
                 }
             }

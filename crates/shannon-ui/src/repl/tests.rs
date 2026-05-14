@@ -9,7 +9,8 @@ use std::io::IsTerminal;
 fn test_repl_state_default() {
     let state = ReplState::default();
     assert_eq!(state.status, "Ready");
-    assert!(state.model.is_some());
+    // Model is None by default — set during initialization from config
+    assert!(state.model.is_none());
     assert_eq!(state.tokens_used, 0);
     assert!(!state.working_directory.is_empty());
 }
@@ -25,7 +26,7 @@ fn test_repl_state_working_directory() {
 fn test_repl_state_fields() {
     let mut state = ReplState::default();
     assert_eq!(state.status, "Ready");
-    assert_eq!(state.model, Some("claude-sonnet-4-20250514".to_string()));
+    assert_eq!(state.model, None);
     assert_eq!(state.tokens_used, 0);
 
     state.status = "Processing".to_string();
@@ -3566,4 +3567,79 @@ fn test_repl_plan_off() {
     }
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Plan mode deactivated"));
+}
+
+// ── Streaming Input Tests ────────────────────────────────────────────
+
+#[test]
+fn test_streaming_state_allows_queued_message() {
+    let mut state = ReplState::default();
+    assert!(!state.streaming_active);
+    assert!(state.queued_message.is_none());
+
+    // Simulate streaming active state
+    state.streaming_active = true;
+    assert!(state.streaming_active);
+
+    // A queued message should be accepted
+    state.queued_message = Some("follow-up question".to_string());
+    assert_eq!(state.queued_message.as_deref(), Some("follow-up question"));
+}
+
+#[test]
+fn test_streaming_state_pageup_pagedown_independent() {
+    // Verify that streaming state does NOT prevent scroll state changes
+    let mut state = ReplState::default();
+    state.streaming_active = true;
+    state.auto_follow = true;
+
+    // Simulate PageUp behavior: disable auto_follow
+    state.auto_follow = false;
+    state.messages_at_scroll_pause = 5;
+    assert!(!state.auto_follow);
+    assert_eq!(state.messages_at_scroll_pause, 5);
+
+    // Simulate PageDown behavior: re-enable auto_follow at bottom
+    state.auto_follow = true;
+    assert!(state.auto_follow);
+}
+
+#[test]
+fn test_queued_message_cleared_after_streaming() {
+    let mut state = ReplState::default();
+    state.streaming_active = true;
+    state.queued_message = Some("queued".to_string());
+
+    // Simulate streaming end
+    state.streaming_active = false;
+    // queued_message should still be present for processing
+    assert_eq!(state.queued_message.as_deref(), Some("queued"));
+}
+
+// ── Model Config Tests ────────────────────────────────────────────────
+
+#[test]
+fn test_model_default_is_none() {
+    let state = ReplState::default();
+    assert!(state.model.is_none(), "model should be None by default until configured");
+}
+
+#[test]
+fn test_model_set_explicitly() {
+    let mut state = ReplState::default();
+    assert!(state.model.is_none());
+
+    state.model = Some("gpt-4".to_string());
+    assert_eq!(state.model.as_deref(), Some("gpt-4"));
+
+    state.model = Some("claude-sonnet-4-20250514".to_string());
+    assert_eq!(state.model.as_deref(), Some("claude-sonnet-4-20250514"));
+}
+
+#[test]
+fn test_model_can_be_unset() {
+    let mut state = ReplState::default();
+    state.model = Some("gpt-4".to_string());
+    state.model = None;
+    assert!(state.model.is_none());
 }

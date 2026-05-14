@@ -703,6 +703,9 @@ impl Repl {
         }
         tracing::info!("LLM config: {}", client_config.describe());
 
+        // Capture model name before client_config is moved
+        let config_model = client_config.model.clone();
+
         let client = if client_config.provider.requires_auth() {
             shannon_core::api::LlmClient::new(client_config)
         } else {
@@ -1021,6 +1024,8 @@ impl Repl {
                 let prefs = preferences::load_preferences();
                 if let Some(model) = prefs.model {
                     s.model = Some(model);
+                } else if !config_model.is_empty() {
+                    s.model = Some(config_model);
                 }
                 if let Some(provider) = prefs.provider {
                     s.selected_provider = Some(provider);

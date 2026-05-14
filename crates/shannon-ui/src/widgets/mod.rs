@@ -1293,4 +1293,67 @@ mod tests {
         chat.toggle_last_tool_fold();
         assert!(!chat.messages[1].folded);
     }
+
+    // ── Timestamp Rendering Tests ──────────────────────────────────────
+
+    #[test]
+    fn test_user_message_has_header_with_timestamp() {
+        let theme = crate::theme::Theme::default_dark();
+        let mut chat = ChatWidget::new(100);
+        chat.add_message(ChatRole::User, "Hello".to_string());
+
+        let lines = chat.cell_lines(0, 80, &theme).unwrap();
+        // First line should be the header "▸ You · HH:MM"
+        let header = &lines[0];
+        let header_text: String = header.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(header_text.contains("You"), "user header should contain 'You'");
+        assert!(header_text.contains("·"), "user header should contain time separator");
+    }
+
+    #[test]
+    fn test_consecutive_user_messages_suppress_timestamp() {
+        let theme = crate::theme::Theme::default_dark();
+        let mut chat = ChatWidget::new(100);
+        chat.add_message(ChatRole::User, "First".to_string());
+        chat.add_message(ChatRole::User, "Second".to_string());
+
+        // First user message: has timestamp
+        let first_lines = chat.cell_lines(0, 80, &theme).unwrap();
+        let first_header: String = first_lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(first_header.contains("·"), "first user message should have timestamp");
+
+        // Second user message (continuation): no timestamp
+        assert!(chat.is_cell_continuation(1), "second user message should be marked as continuation");
+        let second_lines = chat.cell_lines(1, 80, &theme).unwrap();
+        let second_header: String = second_lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(!second_header.contains("·"), "continuation user message should NOT have timestamp");
+    }
+
+    #[test]
+    fn test_non_user_message_has_separator_with_timestamp() {
+        let theme = crate::theme::Theme::default_dark();
+        let mut chat = ChatWidget::new(100);
+        chat.add_message(ChatRole::User, "Hello".to_string());
+        chat.add_message(ChatRole::Assistant, "Hi there".to_string());
+
+        // Assistant message should have separator with dashes and timestamp
+        let lines = chat.cell_lines(1, 80, &theme).unwrap();
+        let sep_line = &lines[0];
+        let sep_text: String = sep_line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(sep_text.contains("─"), "assistant message separator should contain dashes");
+    }
+
+    #[test]
+    fn test_no_turn_separator_before_user_message() {
+        let theme = crate::theme::Theme::default_dark();
+        let mut chat = ChatWidget::new(100);
+        chat.add_message(ChatRole::User, "Hello".to_string());
+
+        let lines = chat.cell_lines(0, 80, &theme).unwrap();
+        // There should be NO standalone dash separator line before user messages.
+        // The first line should be the header "▸ You · HH:MM", not a dash separator.
+        let first_text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(!first_text.starts_with("─"), "first line should be header, not a dash separator");
+        assert!(first_text.contains("You"), "first line should be the user header");
+    }
 }

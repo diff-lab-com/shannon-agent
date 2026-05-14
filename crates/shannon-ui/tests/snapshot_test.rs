@@ -84,6 +84,51 @@ fn test_status_bar_renders_status() {
     assert!(text.contains("Ready"), "status bar should show status text");
 }
 
+#[test]
+fn test_status_bar_shows_no_model_configured() {
+    let mut terminal = test_terminal(80, 2);
+    let theme = Theme::default_dark();
+
+    terminal.draw(|f| {
+        let area = Rect::new(0, 0, 80, 2);
+        StatusBarWidget::render_with_spinner(
+            f, area,
+            "Ready",
+            None, // No model configured
+            None, None, None, None, None, None,
+            &theme,
+            None, None, None, None, None, None, None, None,
+        );
+    }).unwrap();
+
+    let buf = terminal.backend().buffer().clone();
+    let text = buffer_text(&buf, Rect::new(0, 0, 80, 2));
+    assert!(text.contains("No model configured"), "should show 'No model configured' when model is None");
+}
+
+#[test]
+fn test_status_bar_shows_model_name() {
+    let mut terminal = test_terminal(80, 2);
+    let theme = Theme::default_dark();
+
+    terminal.draw(|f| {
+        let area = Rect::new(0, 0, 80, 2);
+        StatusBarWidget::render_with_spinner(
+            f, area,
+            "Ready",
+            Some("gpt-4"),
+            None, None, None, None, None, None,
+            &theme,
+            None, None, None, None, None, None, None, None,
+        );
+    }).unwrap();
+
+    let buf = terminal.backend().buffer().clone();
+    let text = buffer_text(&buf, Rect::new(0, 0, 80, 2));
+    assert!(text.contains("gpt-4"), "should show model name when configured");
+    assert!(!text.contains("No model configured"), "should NOT show 'No model configured' when model is set");
+}
+
 // ── Chat Widget ────────────────────────────────────────────────────
 
 #[test]

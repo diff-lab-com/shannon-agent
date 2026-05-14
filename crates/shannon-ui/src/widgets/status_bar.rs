@@ -139,6 +139,12 @@ impl StatusBarWidget {
                 format!("[{}]", truncate_model(m)),
                 Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
             ));
+        } else {
+            left.push(Span::styled(" ", Style::default().fg(theme.border_dim)));
+            left.push(Span::styled(
+                "[No model configured]".to_string(),
+                Style::default().fg(theme.warning),
+            ));
         }
 
         // Context window

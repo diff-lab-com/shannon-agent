@@ -717,6 +717,16 @@ impl ChatWidget {
         self.messages.get(index)
     }
 
+    /// Get the rendered lines for a message cell at the given index.
+    pub fn cell_lines(&self, index: usize, width: u16, theme: &crate::theme::Theme) -> Option<Vec<ratatui::text::Line<'static>>> {
+        self.column.get(index).map(|cell| cell.lines(width, theme))
+    }
+
+    /// Check if the message cell at the given index is a continuation.
+    pub fn is_cell_continuation(&self, index: usize) -> bool {
+        self.column.get(index).map(|cell| cell.is_continuation()).unwrap_or(false)
+    }
+
     /// Get the last message
     pub fn last_message(&self) -> Option<&ChatMessage> {
         self.messages.back()

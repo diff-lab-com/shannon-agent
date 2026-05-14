@@ -206,6 +206,11 @@ impl MessageCell {
         }
     }
 
+    /// Whether this cell is a continuation of the same role.
+    pub fn is_continuation(&self) -> bool {
+        self.is_continuation
+    }
+
     /// Invalidate cached height (e.g., on content change during streaming).
     pub fn invalidate_cache(&self) {
         self.cached_width.store(u16::MAX, Ordering::Relaxed);
@@ -219,14 +224,17 @@ impl MessageCell {
         if !l.is_empty() {
             let msg = &self.message;
             if msg.role == ChatRole::User {
-                // User message label: "▸ You  ·  14:23"
-                let time_str = msg.timestamp.format("%H:%M").to_string();
-                l.insert(0, Line::from(vec![
+                // User message label: "▸ You  ·  14:23" (omit time on continuations)
+                let mut header_spans = vec![
                     Span::styled("▸ ", Style::default().fg(theme.user_msg)),
                     Span::styled("You", Style::default().fg(theme.user_msg).add_modifier(Modifier::BOLD)),
-                    Span::styled("  ·  ", Style::default().fg(theme.border_dim)),
-                    Span::styled(time_str, Style::default().fg(theme.text_dim)),
-                ]));
+                ];
+                if !self.is_continuation {
+                    let time_str = msg.timestamp.format("%H:%M").to_string();
+                    header_spans.push(Span::styled("  ·  ", Style::default().fg(theme.border_dim)));
+                    header_spans.push(Span::styled(time_str, Style::default().fg(theme.text_dim)));
+                }
+                l.insert(0, Line::from(header_spans));
             } else {
                 let sep_color = match msg.role {
                     ChatRole::Assistant => theme.assistant_msg,
@@ -300,13 +308,7 @@ impl MessageCell {
         };
         let mut lines: Vec<Line<'static>> = Vec::new();
 
-        // ── Turn separator before user messages ──
-        if msg.role == ChatRole::User && !self.is_continuation {
-            lines.push(Line::from(Span::styled(
-                "\u{2500}".repeat(inner_width),
-                Style::default().fg(theme.border_dim),
-            )));
-        }
+        // ── Turn separator before user messages (removed — header serves as separator)
 
         // ── Collapsed tool messages ──
         if msg.role == ChatRole::Tool && (self.collapsed || msg.folded) {
