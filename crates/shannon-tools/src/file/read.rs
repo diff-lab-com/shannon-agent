@@ -98,6 +98,18 @@ pub struct ReadOutput {
 pub async fn execute(input: ReadInput) -> Result<ToolOutput, ToolError> {
     use tokio::fs;
 
+    // Check file size before reading to prevent memory exhaustion
+    const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
+    let metadata = fs::metadata(&input.file_path)
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to stat file: {e}")))?;
+    if metadata.len() > MAX_FILE_SIZE {
+        return Err(ToolError::ExecutionFailed(format!(
+            "File too large: {} bytes (max {} bytes). Use offset/limit to read portions.",
+            metadata.len(), MAX_FILE_SIZE
+        )));
+    }
+
     // Check if file appears to be an image
     if is_image_path(&input.file_path) {
         // Read as binary

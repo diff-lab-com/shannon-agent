@@ -18,7 +18,10 @@ use super::types::{
 pub fn serialize_request(request: &MessageRequest, provider: &LlmProvider) -> Value {
     match provider {
         LlmProvider::Anthropic | LlmProvider::Custom => serde_json::to_value(request)
-            .unwrap_or_default(),
+            .unwrap_or_else(|e| {
+                tracing::error!("Failed to serialize Anthropic request: {e}");
+                serde_json::json!({})
+            }),
         LlmProvider::OpenAI
         | LlmProvider::Azure
         | LlmProvider::Mistral
@@ -913,7 +916,10 @@ fn serialize_gemini_request(request: &MessageRequest) -> Value {
 fn serialize_bedrock_request(request: &MessageRequest) -> Value {
     // Use Anthropic passthrough format — Bedrock's invoke endpoint for
     // Claude models accepts the native Anthropic request body.
-    serde_json::to_value(request).unwrap_or_default()
+    serde_json::to_value(request).unwrap_or_else(|e| {
+        tracing::error!("Failed to serialize Bedrock request: {e}");
+        serde_json::json!({})
+    })
 }
 
 // ── Gemini Response Parsing ─────────────────────────────────────────────────

@@ -1044,9 +1044,12 @@ fn auto_save_memory(repl: &mut Repl, response: &str) {
     };
 
     let id = entry.id.clone();
-    let _ = store.add(entry);
+    if let Err(e) = store.add(entry) {
+        tracing::warn!("Auto-memory add failed: {e}");
+        return;
+    }
     if let Err(e) = store.save() {
-        tracing::debug!("Auto-memory save failed: {e}");
+        tracing::warn!("Auto-memory save failed: {e}");
         return;
     }
     drop(store);

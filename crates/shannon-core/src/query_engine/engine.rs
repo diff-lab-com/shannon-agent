@@ -131,7 +131,9 @@ pub struct QueryEngine {
 /// Helper to create a loaded HookManager
 fn hook_mgr() -> crate::hooks::HookManager {
     let mut mgr = crate::hooks::HookManager::new();
-    let _ = mgr.load();
+    if let Err(e) = mgr.load() {
+        tracing::warn!("Failed to load hooks configuration: {e}");
+    }
     mgr
 }
 
@@ -977,19 +979,33 @@ impl QueryEngine {
                                         }
                                         StreamEvent::ContentBlockStop { .. } => {
                                             if let Some((id, name)) = current_tool_use.take() {
-                                                if let Ok(json_val) =
-                                                    serde_json::from_str::<serde_json::Value>(
-                                                        &accumulated_tool_input,
-                                                    )
-                                                {
-                                                    tool_inputs.push((id.clone(), name.clone(), json_val.clone()));
-                                                    assistant_tool_uses.push(ContentBlock::ToolUse {
-                                                        id,
-                                                        name,
-                                                        input: json_val,
-                                                    });
+                                                let raw = std::mem::take(&mut accumulated_tool_input);
+                                                match serde_json::from_str::<serde_json::Value>(&raw) {
+                                                    Ok(json_val) => {
+                                                        tool_inputs.push((id.clone(), name.clone(), json_val.clone()));
+                                                        assistant_tool_uses.push(ContentBlock::ToolUse {
+                                                            id,
+                                                            name,
+                                                            input: json_val,
+                                                        });
+                                                    }
+                                                    Err(e) => {
+                                                        tracing::warn!("Tool input JSON parse failed for '{name}': {e}");
+                                                        let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                            query_id,
+                                                            tool_use_id: id.clone(),
+                                                            tool_name: name.clone(),
+                                                            result: format!("Failed to parse tool arguments: {e}"),
+                                                            is_error: true,
+                                                        }));
+                                                        tool_results.push((id, format!("Malformed tool input: {e}"), true));
+                                                        assistant_tool_uses.push(ContentBlock::ToolUse {
+                                                            id: String::new(),
+                                                            name,
+                                                            input: serde_json::Value::Null,
+                                                        });
+                                                    }
                                                 }
-                                                accumulated_tool_input.clear();
                                             }
                                         }
                                         StreamEvent::MessageDelta { usage, .. } => {
@@ -1373,7 +1389,7 @@ impl QueryEngine {
                                                                                     tool_results.push((tool_id, output.content.clone(), is_err));
                                                                                 }
                                                                                 Err(e) => {
-                                                                                    batch_had_denial = true;
+                                                                                    // Tool execution errors are not permission denials
                                                                                     let error_msg = format!("Tool error: {e}");
                                                                                     let _ = tx.send(Ok(QueryEvent::ToolUseResult {
                                                                                         query_id,
@@ -1387,7 +1403,7 @@ impl QueryEngine {
                                                                             }
                                                                         }
                                                                         Err(e) => {
-                                                                            batch_had_denial = true;
+                                                                            // Task join errors are not permission denials
                                                                             let error_msg = format!("Task join error: {e}");
                                                                             let _ = tx.send(Ok(QueryEvent::ToolUseResult {
                                                                                 query_id,

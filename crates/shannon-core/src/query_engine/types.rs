@@ -159,6 +159,14 @@ fn apply_pricing_overrides(table: &mut HashMap<String, ModelPricing>, json: &str
     match serde_json::from_str::<HashMap<String, ModelPricing>>(json) {
         Ok(overrides) => {
             for (k, v) in overrides {
+                // Reject negative prices — a malicious override could bypass budget limits
+                if v.input_price_per_mtok < 0.0 || v.output_price_per_mtok < 0.0 {
+                    tracing::warn!(
+                        "Ignoring pricing override from {}: {} has negative price (in=${:.2}, out=${:.2})",
+                        source, k, v.input_price_per_mtok, v.output_price_per_mtok
+                    );
+                    continue;
+                }
                 tracing::debug!(
                     "Pricing override from {}: {} -> in=${:.2}/Mtok, out=${:.2}/Mtok",
                     source, k, v.input_price_per_mtok, v.output_price_per_mtok
