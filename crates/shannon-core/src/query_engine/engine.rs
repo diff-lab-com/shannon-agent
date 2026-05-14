@@ -124,6 +124,8 @@ pub struct QueryEngine {
     /// plan mode is active. When `true`, the engine blocks write tools before
     /// the permission check.
     pub(crate) plan_mode_active: Arc<RwLock<bool>>,
+    /// Git-based checkpoint manager for undo/revert support before file-modifying tools.
+    pub(crate) checkpoint_manager: crate::checkpoint::CheckpointManager,
 }
 
 /// Helper to create a loaded HookManager
@@ -207,6 +209,7 @@ impl QueryEngine {
             hook_manager: Arc::new(tokio::sync::RwLock::new(hook_mgr())),
             context_injector: None,
             plan_mode_active: Arc::new(RwLock::new(false)),
+            checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(&session_id.to_string()),
         }
     }
 
@@ -245,6 +248,7 @@ impl QueryEngine {
             hook_manager: Arc::new(tokio::sync::RwLock::new(hook_mgr())),
             context_injector: None,
             plan_mode_active: Arc::new(RwLock::new(false)),
+            checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(&session_id.to_string()),
         }
     }
 
@@ -274,6 +278,7 @@ impl QueryEngine {
             hook_manager: Arc::new(tokio::sync::RwLock::new(hook_mgr())),
             context_injector: None,
             plan_mode_active: Arc::new(RwLock::new(false)),
+            checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(&session_id.to_string()),
         }
     }
 
@@ -561,8 +566,9 @@ impl QueryEngine {
         let session_id_for_save = self.session_id;
         let cost_tracker = self.cost_tracker.clone();
         let hook_manager = self.hook_manager.clone();
-        let _context_injector = self.context_injector.clone();
+        let context_injector = self.context_injector.clone();
         let plan_mode_active = self.plan_mode_active.clone();
+        let checkpoint_manager = self.checkpoint_manager.clone();
 
         // Search for relevant memories to augment the system prompt
         let memory_entries = if let Some(ref mem_store) = self.memory {
@@ -819,9 +825,28 @@ impl QueryEngine {
                                 Ok(mut compact_engine) => {
                                     // Build re-injection context from ContextInjector if available,
                                     // otherwise fall back to the system prompt (truncated).
+                                    // Build re-injection context from ContextInjector if available
+                                    let reinjection = context_injector.as_ref()
+                                        .map(|ci| ci.reinjection_context())
+                                        .unwrap_or_default();
+
                                     match compact_engine.compact(&mut messages) {
                                         Ok(result) => {
                                             compaction_failures = 0; // reset on success
+
+                                            // Re-inject critical context after compaction so
+                                            // the model retains project instructions, MEMORY.md,
+                                            // and preference memory across the compaction boundary.
+                                            if !reinjection.is_empty() && !messages.is_empty() {
+                                                let ctx_msg = crate::api::Message {
+                                                    role: "system".to_string(),
+                                                    content: crate::api::MessageContent::Text(
+                                                        format!("[Re-injected context after compaction]\n\n{reinjection}")
+                                                    ),
+                                                };
+                                                messages.insert(0, ctx_msg);
+                                            }
+
                                             let _ = tx.send(Ok(QueryEvent::Progress {
                                                 query_id,
                                                 message: format!(
@@ -1375,6 +1400,14 @@ impl QueryEngine {
                                                             }
                                                             crate::tools::ToolBatch::Serial((tool_id, tool_name, effective_input)) => {
                                                                 // Execute write tools sequentially (one at a time)
+                                                                // Create a checkpoint before file-modifying tools for undo support
+                                                                if matches!(tool_name.as_str(), "Edit" | "Write" | "Bash") {
+                                                                    if checkpoint_manager.is_enabled() {
+                                                                        if let Err(e) = checkpoint_manager.create_checkpoint(&tool_name, &format!("Before {tool_name} tool execution")) {
+                                                                            tracing::debug!("Checkpoint creation skipped: {e}");
+                                                                        }
+                                                                    }
+                                                                }
                                                                 // Emit progress: tool started
                                                                 let _ = tx.send(Ok(QueryEvent::ToolProgress {
                                                                     query_id,

@@ -359,14 +359,13 @@ fn migrate_session(file: &mut SessionFile) {
 fn compute_hash(state: &PersistedSessionState) -> String {
     let json = serde_json::to_string(state).unwrap_or_default();
 
-    // Use a simple byte-fold hash to remain stable across process restarts
-    // (std::collections::hash_map::DefaultHasher seeds are per-process).
-    let mut hash: u64 = 0xcbf29ce484222325; // FNV offset basis
-    for byte in json.bytes() {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(0x100000001b3); // FNV prime
-    }
-    format!("{hash:016x}")
+    // Use SHA-256 for collision-resistant content hashing.
+    // Previously used FNV-1a 64-bit which risks collisions at scale.
+    use sha2::{Sha256, Digest};
+    let mut hasher = Sha256::new();
+    hasher.update(json.as_bytes());
+    let result = hasher.finalize();
+    hex::encode(result)
 }
 
 // ============================================================================
