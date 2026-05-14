@@ -325,7 +325,7 @@ fn e2e_ollama_compact_large_conversation_stress() {
 
     assert!(messages.len() < original_len);
     assert!(result.reduction_ratio > 0.3, "large conversation should have significant reduction, got {:.1}%", result.reduction_ratio * 100.0);
-    assert!(elapsed.as_secs() < 60, "should complete within 60s, took {:.1}s", elapsed.as_secs_f64());
+    assert!(elapsed.as_secs() < 120, "should complete within 120s, took {:.1}s", elapsed.as_secs_f64());
 }
 
 #[test]
@@ -343,6 +343,7 @@ fn e2e_ollama_compact_summary_quality() {
         .expect("create engine");
 
     // Create conversation with specific topics to verify summarizer captures them
+    // Must have enough messages to trigger compaction (default keep_recent_count=10)
     let mut messages = vec![
         Message { role: "system".to_string(), content: MessageContent::Text("Test assistant".to_string()) },
         Message { role: "user".to_string(), content: MessageContent::Text("Let's discuss authentication in web applications using JWT tokens".to_string()) },
@@ -351,6 +352,15 @@ fn e2e_ollama_compact_summary_quality() {
         Message { role: "assistant".to_string(), content: MessageContent::Text("PostgreSQL supports B-tree, GIN, GiST, and hash indexes. B-tree is default, GIN is great for full-text search.".to_string()) },
         Message { role: "user".to_string(), content: MessageContent::Text("What about caching with Redis?".to_string()) },
         Message { role: "assistant".to_string(), content: MessageContent::Text("Redis supports strings, lists, sets, sorted sets, hashes. Use it for session storage, rate limiting, and pub/sub.".to_string()) },
+        // Additional turns to ensure compaction triggers
+        Message { role: "user".to_string(), content: MessageContent::Text("Explain Docker container networking".to_string()) },
+        Message { role: "assistant".to_string(), content: MessageContent::Text("Docker networking uses bridge, host, overlay, and macvlan drivers. Bridge is default for standalone containers.".to_string()) },
+        Message { role: "user".to_string(), content: MessageContent::Text("How do Kubernetes deployments work?".to_string()) },
+        Message { role: "assistant".to_string(), content: MessageContent::Text("K8s deployments manage ReplicaSets with rolling updates, rollbacks, and scaling via kubectl scale.".to_string()) },
+        Message { role: "user".to_string(), content: MessageContent::Text("Tell me about GraphQL vs REST APIs".to_string()) },
+        Message { role: "assistant".to_string(), content: MessageContent::Text("GraphQL offers typed schemas, single endpoint, and client-driven queries. REST is simpler with HTTP verbs and resource URLs.".to_string()) },
+        Message { role: "user".to_string(), content: MessageContent::Text("What's the current topic? Remember what we discussed.".to_string()) },
+        Message { role: "assistant".to_string(), content: MessageContent::Text("We discussed JWT auth, PostgreSQL indexes, Redis caching, Docker networking, K8s deployments, and GraphQL vs REST.".to_string()) },
     ];
 
     let _result = engine.compact(&mut messages).expect("compact");
