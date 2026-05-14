@@ -443,6 +443,7 @@ async fn query_stream_handler(
                     QueryEvent::Thinking { .. } => "thinking",
                     QueryEvent::Info { .. } => "info",
                     QueryEvent::RateLimit { .. } => "rate_limit",
+                    QueryEvent::ConversationUpdate { .. } => "conversation_update",
                 };
                 let data = serde_json::to_string(&event).unwrap_or_default();
                 Some(Ok(Event::default().event(event_type).data(data)))

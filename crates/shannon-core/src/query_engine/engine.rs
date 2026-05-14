@@ -739,6 +739,10 @@ impl QueryEngine {
                         input_tokens: total_input_tokens,
                         output_tokens: total_output_tokens,
                     }));
+                    let _ = tx.send(Ok(QueryEvent::ConversationUpdate {
+                        query_id,
+                        messages: conversation.messages.clone(),
+                    }));
                     let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
 
                     // Auto-save conversation after completion
@@ -1542,6 +1546,11 @@ impl QueryEngine {
                                                     output_tokens: total_output_tokens,
                                                 }));
                                                 let _ =
+                                                    tx.send(Ok(QueryEvent::ConversationUpdate {
+                                                        query_id,
+                                                        messages: conversation.messages.clone(),
+                                                    }));
+                                                let _ =
                                                     tx.send(Ok(QueryEvent::Completed { query_id }));
 
                                                 // Auto-save conversation after completion
@@ -1580,6 +1589,10 @@ impl QueryEngine {
                                 total_cost_usd: total_cost,
                                 input_tokens: total_input_tokens,
                                 output_tokens: total_output_tokens,
+                            }));
+                            let _ = tx.send(Ok(QueryEvent::ConversationUpdate {
+                                query_id,
+                                messages: conversation.messages.clone(),
                             }));
                             let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
 
@@ -1627,6 +1640,10 @@ impl QueryEngine {
                                                 }
                                                 Ok(StreamEvent::MessageDelta { delta, .. }) => {
                                                     if delta.stop_reason.as_deref() == Some("end_turn") {
+                                                        let _ = tx.send(Ok(QueryEvent::ConversationUpdate {
+                                                            query_id,
+                                                            messages: conversation.messages.clone(),
+                                                        }));
                                                         let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
                                                     }
                                                 }
@@ -1643,6 +1660,10 @@ impl QueryEngine {
                                                 }
                                             }
                                         }
+                                        let _ = tx.send(Ok(QueryEvent::ConversationUpdate {
+                                            query_id,
+                                            messages: conversation.messages.clone(),
+                                        }));
                                         let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
                                         return;
                                     }

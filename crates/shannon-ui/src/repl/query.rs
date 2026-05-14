@@ -185,6 +185,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
 
         let mut response_text = String::new();
         let mut accumulated_thinking = String::new();
+        let mut conversation_messages: Option<Vec<shannon_core::api::Message>> = None;
         let mut tokens_in_turn = 0u64;
         let mut tool_calls: Vec<String> = Vec::new();
         let mut tool_start_times: HashMap<String, Instant> = HashMap::new();
@@ -327,6 +328,9 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                         }
                     }
                 }
+                Ok(QueryEvent::ConversationUpdate { messages, .. }) => {
+                    conversation_messages = Some(messages);
+                }
                 Ok(QueryEvent::Completed { .. }) => {
                     let mut summary_parts = Vec::new();
                     if tokens_in_turn > 0 {
@@ -374,8 +378,8 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
             }
         }
 
-        Ok::<(shannon_core::query_engine::QueryEngine, String, String, u64, usize, TurnDiff, String, usize), (Option<shannon_core::query_engine::QueryEngine>, String)>(
-            (query_engine, response_text, accumulated_thinking, tokens_in_turn, _tools_in_session, turn_diff, progress_status, steps_done)
+        Ok::<(shannon_core::query_engine::QueryEngine, String, String, Option<Vec<shannon_core::api::Message>>, u64, usize, TurnDiff, String, usize), (Option<shannon_core::query_engine::QueryEngine>, String)>(
+            (query_engine, response_text, accumulated_thinking, conversation_messages, tokens_in_turn, _tools_in_session, turn_diff, progress_status, steps_done)
         )
     });
 
@@ -746,11 +750,17 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
     });
 
     match query_result {
-        Ok((mut engine, response, thinking, tokens, tools, turn, _final_status, steps)) => {
-            engine.add_user_message(input.to_string());
-            engine.add_assistant_message(vec![shannon_core::api::ContentBlock::Text {
-                text: response.clone(),
-            }]);
+        Ok((mut engine, response, thinking, conversation_messages, tokens, tools, turn, _final_status, steps)) => {
+            // Use the proper conversation state from the query engine if available,
+            // otherwise fall back to manual message addition
+            if let Some(messages) = conversation_messages {
+                engine.restore_messages(messages);
+            } else {
+                engine.add_user_message(input.to_string());
+                engine.add_assistant_message(vec![shannon_core::api::ContentBlock::Text {
+                    text: response.clone(),
+                }]);
+            }
             repl.query_engine = Some(engine);
 
             let rendered = repl.output_renderer.render_output(&response, "assistant");

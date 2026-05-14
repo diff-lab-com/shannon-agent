@@ -74,14 +74,12 @@ mod engine_recovery_tests {
 
     /// Set up mock server to return a successful Anthropic streaming response.
     fn setup_success_stream_mock(server: &mut ServerGuard) -> mockito::Mock {
-        let body = [
-            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-4-20250514\",\"stop_reason\":null,\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}",
-            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}",
-            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello!\"}}",
-            "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}",
-            "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}",
-            "event: message_stop\ndata: {\"type\":\"message_stop\"}",
-        ].join("\n\n");
+        let body = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-4-20250514\",\"stop_reason\":null,\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n\
+             event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n\
+             event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello!\"}}\n\n\
+             event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n\
+             event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}\n\n\
+             event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
 
         server
             .mock("POST", "/v1/messages")
@@ -362,5 +360,287 @@ mod engine_recovery_tests {
         // Can still add messages and access history
         engine.add_user_message("retry after model switch".to_string());
         assert_eq!(engine.conversation_history().len(), 1);
+    }
+
+    // ── Conversation history regression tests ──
+    //
+    // These test the fix for the bug where the AI didn't remember previous
+    // turn content because:
+    // 1. The query engine's `self.conversation` was never updated from the
+    //    local `conversation` clone used during streaming.
+    // 2. The UI code added display-formatted text (with tool output,
+    //    progress, etc.) instead of clean AI response text.
+
+    /// Set up a mock that returns a specific text response via SSE streaming.
+    fn setup_stream_mock_with_text(server: &mut ServerGuard, response_text: &str) -> mockito::Mock {
+        let escaped = response_text.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+        let body = format!(
+            "event: message_start\ndata: {{\"type\":\"message_start\",\"message\":{{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-4-20250514\",\"stop_reason\":null,\"usage\":{{\"input_tokens\":10,\"output_tokens\":0}}}}}}\n\n\
+             event: content_block_start\ndata: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"text\",\"text\":\"\"}}}}\n\n\
+             event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{escaped}\"}}}}\n\n\
+             event: content_block_stop\ndata: {{\"type\":\"content_block_stop\",\"index\":0}}\n\n\
+             event: message_delta\ndata: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"end_turn\"}},\"usage\":{{\"input_tokens\":10,\"output_tokens\":5}}}}\n\n\
+             event: message_stop\ndata: {{\"type\":\"message_stop\"}}\n\n"
+        );
+
+        server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(body)
+            .create()
+    }
+
+    #[test]
+    fn test_conversation_update_event_sent_on_success() {
+        // After a successful query, a ConversationUpdate event must be sent
+        // before the Completed event. This carries the updated conversation
+        // messages so the UI can persist the proper history.
+        let mut server = Server::new();
+        let engine = create_engine(&server.url());
+
+        setup_success_stream_mock(&mut server);
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = make_query_context();
+        let events = rt.block_on(async {
+            use futures::StreamExt;
+            let stream = engine.process_query(ctx, None).await;
+            Box::pin(stream).collect::<Vec<_>>().await
+        });
+
+        // Find the ConversationUpdate and Completed events
+        let has_conversation_update = events.iter().any(|e| {
+            matches!(e, Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate { .. }))
+        });
+        assert!(has_conversation_update, "ConversationUpdate event must be sent");
+
+        // ConversationUpdate must come before Completed
+        let cu_idx = events.iter().position(|e| {
+            matches!(e, Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate { .. }))
+        }).expect("ConversationUpdate event index");
+        let completed_idx = events.iter().position(|e| {
+            matches!(e, Ok(shannon_core::query_engine::QueryEvent::Completed { .. }))
+        }).expect("Completed event index");
+        assert!(cu_idx < completed_idx,
+            "ConversationUpdate must come before Completed");
+    }
+
+    #[test]
+    fn test_conversation_update_contains_clean_messages() {
+        // The ConversationUpdate messages must contain the clean user message
+        // and assistant response text — NOT display-formatted text with tool
+        // outputs, progress markers, etc.
+        let mut server = Server::new();
+        let engine = create_engine(&server.url());
+
+        let story_text = "Alice and Bob went to the park. They met Charlie there.";
+        setup_stream_mock_with_text(&mut server, story_text);
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = QueryContext {
+            user_message: "Write a short story".to_string(),
+            ..make_query_context()
+        };
+        let events = rt.block_on(async {
+            use futures::StreamExt;
+            let stream = engine.process_query(ctx, None).await;
+            Box::pin(stream).collect::<Vec<_>>().await
+        });
+
+        // Extract ConversationUpdate messages
+        let messages = events.iter().find_map(|e| {
+            if let Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate { messages, .. }) = e {
+                Some(messages.clone())
+            } else {
+                None
+            }
+        }).expect("ConversationUpdate event must be present");
+
+        // Should have exactly 2 messages: user + assistant
+        assert_eq!(messages.len(), 2, "Expected user + assistant messages");
+
+        // First message should be the user's clean input
+        assert_eq!(messages[0].role, "user");
+        match &messages[0].content {
+            shannon_core::api::MessageContent::Text(t) => {
+                assert_eq!(t, "Write a short story",
+                    "User message should be the clean input, not display-formatted");
+            }
+            _ => panic!("Expected Text content for user message"),
+        }
+
+        // Second message should be the assistant's clean response
+        assert_eq!(messages[1].role, "assistant");
+        match &messages[1].content {
+            shannon_core::api::MessageContent::Text(t) => {
+                assert_eq!(t, story_text,
+                    "Assistant message should be clean AI text, not display-formatted");
+            }
+            _ => panic!("Expected Text content for assistant message"),
+        }
+
+        // The assistant message must NOT contain display artifacts
+        let assistant_text = match &messages[1].content {
+            shannon_core::api::MessageContent::Text(t) => t.clone(),
+            shannon_core::api::MessageContent::Blocks(blocks) => {
+                blocks.iter().filter_map(|b| match b {
+                    shannon_core::api::ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                }).collect::<Vec<_>>().join("")
+            }
+        };
+        assert!(!assistant_text.contains("[Turn"), "Should not contain turn markers");
+        assert!(!assistant_text.contains("Using:"), "Should not contain tool display");
+    }
+
+    #[test]
+    fn test_conversation_update_enables_multi_turn_memory() {
+        // Simulate the full bug scenario:
+        // Turn 1: User asks AI to write a story → AI writes about Alice and Bob
+        // Turn 2: User asks "how many characters?" → conversation history must
+        // include the story from turn 1 so the AI can answer correctly.
+        //
+        // This test verifies that the API request for turn 2 includes the
+        // conversation context from turn 1.
+        let mut server = Server::new();
+        let mut engine = create_engine(&server.url());
+
+        // ── Turn 1 ──
+        let story = "Alice met Bob at the library. They discussed quantum physics.";
+        setup_stream_mock_with_text(&mut server, story);
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx1 = QueryContext {
+            user_message: "Write a story about two people".to_string(),
+            ..make_query_context()
+        };
+        let events1 = rt.block_on(async {
+            use futures::StreamExt;
+            let stream = engine.process_query(ctx1, None).await;
+            Box::pin(stream).collect::<Vec<_>>().await
+        });
+
+        // Extract and restore conversation messages (simulates what UI does)
+        let turn1_messages = events1.iter().find_map(|e| {
+            if let Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate { messages, .. }) = e {
+                Some(messages.clone())
+            } else {
+                None
+            }
+        }).expect("Turn 1: ConversationUpdate must be present");
+
+        // Restore the proper conversation history
+        engine.restore_messages(turn1_messages);
+        assert_eq!(engine.conversation_history().len(), 2,
+            "After turn 1, engine should have user + assistant messages");
+
+        // ── Turn 2 ──
+        // Set up a mock that captures the request body to verify conversation
+        // history is included in the API call.
+        let turn2_response = "The story has 2 characters: Alice and Bob.";
+        setup_stream_mock_with_text(&mut server, turn2_response);
+
+        let ctx2 = QueryContext {
+            user_message: "How many characters are in the story?".to_string(),
+            ..make_query_context()
+        };
+        let events2 = rt.block_on(async {
+            use futures::StreamExt;
+            let stream = engine.process_query(ctx2, None).await;
+            Box::pin(stream).collect::<Vec<_>>().await
+        });
+
+        // Turn 2 should also send ConversationUpdate
+        let has_cu = events2.iter().any(|e| {
+            matches!(e, Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate { .. }))
+        });
+        assert!(has_cu, "Turn 2: ConversationUpdate event must also be sent");
+
+        // Turn 2 conversation should have 4 messages: user1, assistant1, user2, assistant2
+        let turn2_messages = events2.iter().find_map(|e| {
+            if let Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate { messages, .. }) = e {
+                Some(messages.clone())
+            } else {
+                None
+            }
+        }).expect("Turn 2: ConversationUpdate must be present");
+
+        assert_eq!(turn2_messages.len(), 4,
+            "Turn 2 should have 4 messages (2 turns × user+assistant), got {}",
+            turn2_messages.len());
+
+        // Verify the conversation ordering
+        assert_eq!(turn2_messages[0].role, "user");
+        assert_eq!(turn2_messages[1].role, "assistant");
+        assert_eq!(turn2_messages[2].role, "user");
+        assert_eq!(turn2_messages[3].role, "assistant");
+
+        // CRITICAL: Verify turn 1 content is preserved in the history
+        let user1_text = match &turn2_messages[0].content {
+            shannon_core::api::MessageContent::Text(t) => t.clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(user1_text.contains("Write a story"),
+            "Turn 1 user message must be preserved: got '{user1_text}'");
+
+        let assistant1_text = match &turn2_messages[1].content {
+            shannon_core::api::MessageContent::Text(t) => t.clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(assistant1_text.contains("Alice") && assistant1_text.contains("Bob"),
+            "Turn 1 assistant response must contain the story content: got '{assistant1_text}'");
+
+        let user2_text = match &turn2_messages[2].content {
+            shannon_core::api::MessageContent::Text(t) => t.clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(user2_text.contains("How many characters"),
+            "Turn 2 user message must be preserved: got '{user2_text}'");
+    }
+
+    #[test]
+    fn test_restore_messages_produces_correct_api_context() {
+        // Verify that after restore_messages, the engine's conversation_history
+        // returns exactly the messages that were restored (no duplicates, no loss).
+        let server = Server::new();
+        let mut engine = create_engine(&server.url());
+
+        // Simulate conversation from ConversationUpdate
+        let messages = vec![
+            shannon_core::api::Message {
+                role: "user".to_string(),
+                content: shannon_core::api::MessageContent::Text("Write a poem".to_string()),
+            },
+            shannon_core::api::Message {
+                role: "assistant".to_string(),
+                content: shannon_core::api::MessageContent::Text("Roses are red...".to_string()),
+            },
+            shannon_core::api::Message {
+                role: "user".to_string(),
+                content: shannon_core::api::MessageContent::Text("Make it longer".to_string()),
+            },
+            shannon_core::api::Message {
+                role: "assistant".to_string(),
+                content: shannon_core::api::MessageContent::Text("Roses are red, violets are blue...".to_string()),
+            },
+        ];
+
+        engine.restore_messages(messages);
+
+        let history = engine.conversation_history();
+        assert_eq!(history.len(), 4);
+        assert_eq!(history[0].role, "user");
+        assert_eq!(history[1].role, "assistant");
+        assert_eq!(history[2].role, "user");
+        assert_eq!(history[3].role, "assistant");
+
+        // Verify content preserved exactly
+        match &history[1].content {
+            shannon_core::api::MessageContent::Text(t) => {
+                assert_eq!(t, "Roses are red...");
+            }
+            _ => panic!("Expected text content"),
+        }
     }
 }

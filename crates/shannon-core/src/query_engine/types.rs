@@ -621,6 +621,12 @@ pub enum QueryEvent {
     /// Informational event (e.g. compaction metrics, context pressure warnings)
     Info { query_id: Uuid, message: String },
 
+    /// Updated conversation state (sent before Completed so UI can persist proper messages)
+    ConversationUpdate {
+        query_id: Uuid,
+        messages: Vec<crate::api::Message>,
+    },
+
     /// Rate limit info from API response headers
     RateLimit {
         query_id: Uuid,
