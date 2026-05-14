@@ -243,8 +243,9 @@ fn load_toml_config() -> ShannonTomlConfig {
     if let Some(home) = dirs::home_dir() {
         let global_path = home.join(".shannon").join("config.toml");
         if let Ok(content) = std::fs::read_to_string(&global_path) {
-            if let Ok(cfg) = toml::from_str::<ShannonTomlConfig>(&content) {
-                merged = cfg;
+            match toml::from_str::<ShannonTomlConfig>(&content) {
+                Ok(cfg) => merged = cfg,
+                Err(e) => eprintln!("Warning: failed to parse {}: {e}", global_path.display()),
             }
         }
     }
@@ -252,16 +253,19 @@ fn load_toml_config() -> ShannonTomlConfig {
     // 2. Project-local config: .shannon.toml
     let local_path = std::path::Path::new(".shannon.toml");
     if let Ok(content) = std::fs::read_to_string(local_path) {
-        if let Ok(cfg) = toml::from_str::<ShannonTomlConfig>(&content) {
-            // Merge: local overrides global
-            if cfg.model.is_some() { merged.model = cfg.model; }
-            if cfg.provider.is_some() { merged.provider = cfg.provider; }
-            if cfg.max_tokens.is_some() { merged.max_tokens = cfg.max_tokens; }
-            if cfg.temperature.is_some() { merged.temperature = cfg.temperature; }
-            if cfg.timeout.is_some() { merged.timeout = cfg.timeout; }
-            if cfg.debug.is_some() { merged.debug = cfg.debug; }
-            if cfg.api_key.is_some() { merged.api_key = cfg.api_key; }
-            if cfg.base_url.is_some() { merged.base_url = cfg.base_url; }
+        match toml::from_str::<ShannonTomlConfig>(&content) {
+            Ok(cfg) => {
+                // Merge: local overrides global
+                if cfg.model.is_some() { merged.model = cfg.model; }
+                if cfg.provider.is_some() { merged.provider = cfg.provider; }
+                if cfg.max_tokens.is_some() { merged.max_tokens = cfg.max_tokens; }
+                if cfg.temperature.is_some() { merged.temperature = cfg.temperature; }
+                if cfg.timeout.is_some() { merged.timeout = cfg.timeout; }
+                if cfg.debug.is_some() { merged.debug = cfg.debug; }
+                if cfg.api_key.is_some() { merged.api_key = cfg.api_key; }
+                if cfg.base_url.is_some() { merged.base_url = cfg.base_url; }
+            }
+            Err(e) => eprintln!("Warning: failed to parse .shannon.toml: {e}"),
         }
     }
 
@@ -579,7 +583,10 @@ fn load_resume_session(session_id_str: Option<&str>) -> Result<shannon_core::sta
 
     if let Some(id_str) = session_id_str {
         let uuid = uuid::Uuid::parse_str(id_str)
-            .map_err(|e| anyhow::anyhow!("Invalid session UUID '{id_str}': {e}"))?;
+            .map_err(|e| {
+                let display = if id_str.len() > 36 { &id_str[..36] } else { id_str };
+                anyhow::anyhow!("Invalid session UUID '{display}': {e}")
+            })?;
         state_mgr
             .load_session(&uuid)?
             .ok_or_else(|| anyhow::anyhow!("Session {uuid} not found"))
@@ -1465,7 +1472,9 @@ fn run_team_agent_mode(
 ) -> Result<()> {
     // Change working directory if specified
     if let Some(dir) = workdir {
-        std::env::set_current_dir(dir)
+        let canonical = std::path::Path::new(dir).canonicalize()
+            .map_err(|e| anyhow::anyhow!("Invalid working directory '{dir}': {e}"))?;
+        std::env::set_current_dir(&canonical)
             .map_err(|e| anyhow::anyhow!("Failed to set working directory: {e}"))?;
     }
 
@@ -2035,7 +2044,9 @@ fn main() -> Result<()> {
         }
         Some(Commands::Repl { cwd, .. }) => {
             if let Some(dir) = cwd {
-                std::env::set_current_dir(&dir)
+                let canonical = std::path::Path::new(&dir).canonicalize()
+                    .map_err(|e| anyhow::anyhow!("Invalid working directory '{dir}': {e}"))?;
+                std::env::set_current_dir(&canonical)
                     .map_err(|e| anyhow::anyhow!("Failed to set working directory: {e}"))?;
             }
             let mut repl = Repl::new().map_err(|e| anyhow::anyhow!("{e:?}"))?;

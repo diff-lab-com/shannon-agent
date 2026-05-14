@@ -1298,10 +1298,16 @@ pub fn match_glob(pattern: &str, text: &str) -> bool {
 fn match_glob_impl(pattern: &str, text: &str) -> bool {
     let p: Vec<char> = pattern.chars().collect();
     let t: Vec<char> = text.chars().collect();
-    glob_recursive(&p, 0, &t, 0)
+    glob_recursive(&p, 0, &t, 0, 0)
 }
 
-fn glob_recursive(p: &[char], pi: usize, t: &[char], ti: usize) -> bool {
+const MAX_GLOB_DEPTH: usize = 128;
+
+fn glob_recursive(p: &[char], pi: usize, t: &[char], ti: usize, depth: usize) -> bool {
+    if depth > MAX_GLOB_DEPTH {
+        return false;
+    }
+
     // Fast path: both exhausted
     if pi == p.len() && ti == t.len() {
         return true;
@@ -1322,12 +1328,12 @@ fn glob_recursive(p: &[char], pi: usize, t: &[char], ti: usize) -> bool {
         } else {
             after_stars
         };
-        return glob_star(p, next_pi, t, ti);
+        return glob_star(p, next_pi, t, ti, depth);
     }
 
     // Single * -- match zero or more characters (any character)
     if p[pi] == '*' {
-        return glob_star(p, pi + 1, t, ti);
+        return glob_star(p, pi + 1, t, ti, depth);
     }
 
     // Text exhausted but pattern remains -- no match
@@ -1337,12 +1343,12 @@ fn glob_recursive(p: &[char], pi: usize, t: &[char], ti: usize) -> bool {
 
     // ? matches exactly one character
     if p[pi] == '?' {
-        return glob_recursive(p, pi + 1, t, ti + 1);
+        return glob_recursive(p, pi + 1, t, ti + 1, depth + 1);
     }
 
     // Literal match
     if p[pi] == t[ti] {
-        return glob_recursive(p, pi + 1, t, ti + 1);
+        return glob_recursive(p, pi + 1, t, ti + 1, depth + 1);
     }
 
     false
@@ -1350,11 +1356,11 @@ fn glob_recursive(p: &[char], pi: usize, t: &[char], ti: usize) -> bool {
 
 /// Handle `*` (and `**`) wildcard: try matching the rest of the pattern
 /// against every remaining suffix of the text, starting from `ti`.
-fn glob_star(p: &[char], next_pi: usize, t: &[char], ti: usize) -> bool {
+fn glob_star(p: &[char], next_pi: usize, t: &[char], ti: usize, depth: usize) -> bool {
     // Try matching with the star consuming 0, 1, 2, ... characters
     let mut pos = ti;
     loop {
-        if glob_recursive(p, next_pi, t, pos) {
+        if glob_recursive(p, next_pi, t, pos, depth + 1) {
             return true;
         }
         if pos >= t.len() {

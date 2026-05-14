@@ -70,12 +70,13 @@ fn spawn_caffeinate() {
     {
         Ok(child) => {
             tracing::debug!("Started caffeinate (pid: {:?})", child.id());
+            // Take previous child out of the lock before blocking on kill/wait
+            let prev = CAFFEINATE_CHILD.lock().ok().and_then(|mut guard| guard.take());
+            if let Some(mut prev) = prev {
+                let _ = prev.kill();
+                let _ = prev.wait();
+            }
             if let Ok(mut guard) = CAFFEINATE_CHILD.lock() {
-                // Kill any previous caffeinate process
-                if let Some(ref mut prev) = *guard {
-                    let _ = prev.kill();
-                    let _ = prev.wait();
-                }
                 *guard = Some(child);
             }
         }

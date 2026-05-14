@@ -275,7 +275,11 @@ fn extract_impl_type(node: &tree_sitter::Node, content: &str) -> Option<String> 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "type_identifier" {
-            return Some(content[child.byte_range()].to_string());
+            let range = child.byte_range();
+            if !content.is_char_boundary(range.start) || !content.is_char_boundary(range.end) {
+                continue;
+            }
+            return Some(content[range].to_string());
         }
     }
     None
@@ -555,7 +559,10 @@ fn extract_node_name(node: &tree_sitter::Node, content: &str) -> Option<String> 
     for child in node.children(&mut cursor) {
         match child.kind() {
             "identifier" | "type_identifier" => {
-                return Some(content[child.byte_range()].to_string());
+                let range = child.byte_range();
+                if content.is_char_boundary(range.start) && content.is_char_boundary(range.end) {
+                    return Some(content[range].to_string());
+                }
             }
             _ => {
                 // Recursively search in children
@@ -575,7 +582,10 @@ fn extract_property_name(node: &tree_sitter::Node, content: &str) -> Option<Stri
 
     for child in node.children(&mut cursor) {
         if child.kind() == "property_identifier" {
-            return Some(content[child.byte_range()].to_string());
+            let range = child.byte_range();
+            if content.is_char_boundary(range.start) && content.is_char_boundary(range.end) {
+                return Some(content[range].to_string());
+            }
         }
         if let Some(name) = extract_node_name(&child, content) {
             return Some(name);

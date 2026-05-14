@@ -4,20 +4,18 @@ use super::*;
 use super::types::{
     glob_match, is_tool_allowed_by_patterns, normalize_error_content,
     truncate_tool_result, MAX_TOOL_DESCRIPTION_CHARS, MAX_TOOL_RESULT_CHARS,
-    ChunkResult, PendingRequest, ServerState, ServerStatus,
-    ToolResultStore,
+    PendingRequest, ServerState,
 };
 use super::handle::McpServerHandle;
 use super::adapter::PooledMcpToolAdapter;
 use dashmap::DashMap;
 use serde_json::Value;
-use shannon_tool_interface::{Tool, ToolOutput, ToolResult};
-use std::sync::atomic::{AtomicU64, Ordering};
+use shannon_tool_interface::{Tool, ToolOutput};
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::collections::HashMap;
 use tokio::sync::{Mutex, RwLock};
-use tokio::sync::oneshot;
 
     #[test]
     fn test_pooled_tool_adapter_name() {
@@ -639,6 +637,7 @@ use tokio::sync::oneshot;
                     "method": "notifications/tools/list_changed"
                 }),
             ))
+            .await
             .unwrap();
 
         // Give the handler time to process.
@@ -681,8 +680,8 @@ use tokio::sync::oneshot;
 
         let pending: Arc<DashMap<u64, PendingRequest>> =
             Arc::new(DashMap::new());
-        let (tx, _rx): (tokio::sync::mpsc::UnboundedSender<(String, Value)>, _) =
-            tokio::sync::mpsc::unbounded_channel();
+        let (tx, _rx): (tokio::sync::mpsc::Sender<(String, Value)>, _) =
+            tokio::sync::mpsc::channel(1024);
 
         let progress_reports = Arc::new(std::sync::Mutex::new(Vec::<(f64, Option<f64>)>::new()));
         let reports_clone = progress_reports.clone();
@@ -930,7 +929,7 @@ use tokio::sync::oneshot;
     async fn test_track_result_bytes_for() {
         let pool = McpProcessPool::new();
 
-        let (ntx, _) = tokio::sync::mpsc::unbounded_channel();
+        let (ntx, _) = tokio::sync::mpsc::channel(1024);
         let handle = Arc::new(McpServerHandle {
             name: "test-srv".to_string(),
             command: "echo".to_string(),
@@ -980,7 +979,7 @@ use tokio::sync::oneshot;
     async fn test_budget_enforcement() {
         let pool = McpProcessPool::new();
 
-        let (ntx, _) = tokio::sync::mpsc::unbounded_channel();
+        let (ntx, _) = tokio::sync::mpsc::channel(1024);
         let handle = Arc::new(McpServerHandle {
             name: "budget-srv".to_string(),
             command: "echo".to_string(),
@@ -1028,7 +1027,7 @@ use tokio::sync::oneshot;
     async fn test_set_server_budget() {
         let pool = McpProcessPool::new();
 
-        let (ntx, _) = tokio::sync::mpsc::unbounded_channel();
+        let (ntx, _) = tokio::sync::mpsc::channel(1024);
         let handle = Arc::new(McpServerHandle {
             name: "cfg-srv".to_string(),
             command: "echo".to_string(),

@@ -73,7 +73,7 @@ pub(crate) struct RemoteMcpServerHandle {
     /// Shared reference to the pool's sampling provider so all servers use the same one.
     pub(crate) sampling_provider: Arc<Mutex<Option<SamplingProvider>>>,
     /// Channel for forwarding server notifications to the pool's notification handler.
-    pub(crate) notification_tx: tokio::sync::mpsc::UnboundedSender<(String, Value)>,
+    pub(crate) notification_tx: tokio::sync::mpsc::Sender<(String, Value)>,
 }
 
 impl RemoteMcpServerHandle {
@@ -355,7 +355,7 @@ impl RemoteMcpServerHandle {
                 })?;
             } else {
                 // Server notification (method but no id) — forward to pool.
-                let _ = self.notification_tx.send((self.name.clone(), value));
+                let _ = self.notification_tx.try_send((self.name.clone(), value));
             }
         }
     }

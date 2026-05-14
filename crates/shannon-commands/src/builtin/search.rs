@@ -129,6 +129,10 @@ pub fn search_history(entries: &[String], options: &SearchOptions) -> Vec<Histor
 
     for (idx, entry) in entries.iter().enumerate() {
         let is_match = if options.regex {
+            // Reject overly complex regex patterns to prevent ReDoS
+            if options.pattern.len() > 512 {
+                false
+            } else {
             match regex::Regex::new(&options.pattern) {
                 Ok(re) => {
                     if options.case_sensitive {
@@ -145,6 +149,7 @@ pub fn search_history(entries: &[String], options: &SearchOptions) -> Vec<Histor
                         entry.to_lowercase().contains(&options.pattern.to_lowercase())
                     }
                 }
+            }
             }
         } else {
             let search_entry = if options.case_sensitive {

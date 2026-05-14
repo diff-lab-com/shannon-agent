@@ -102,9 +102,9 @@ pub struct McpProcessPool {
     /// Background health check task handle.
     health_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     /// Notification receiver — servers forward JSON-RPC notifications here.
-    notification_rx: Arc<Mutex<tokio::sync::mpsc::UnboundedReceiver<(String, Value)>>>,
+    notification_rx: Arc<Mutex<tokio::sync::mpsc::Receiver<(String, Value)>>>,
     /// Notification sender — cloned into each server handle.
-    notification_tx: tokio::sync::mpsc::UnboundedSender<(String, Value)>,
+    notification_tx: tokio::sync::mpsc::Sender<(String, Value)>,
     /// Callback invoked when a server reports `notifications/tools/list_changed`.
     ///
     /// Receives `(server_name, new_tool_adapters)` so the caller can hot-swap
@@ -148,7 +148,7 @@ pub struct McpProcessPool {
 impl McpProcessPool {
     /// Create a new process pool with default settings.
     pub fn new() -> Self {
-        let (notification_tx, notification_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (notification_tx, notification_rx) = tokio::sync::mpsc::channel(1024);
         Self {
             handles: DashMap::new(),
             remote_handles: DashMap::new(),

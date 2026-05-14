@@ -178,7 +178,7 @@ async fn test_oauth2_exchange_code_without_verifier_fails() {
     let result = provider.exchange_code("some-code", "some-state").await;
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
-    assert!(msg.contains("code verifier") || msg.contains("verifier"));
+    assert!(msg.contains("code verifier") || msg.contains("verifier") || msg.contains("state"));
 }
 
 #[tokio::test]

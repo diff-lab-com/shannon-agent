@@ -60,6 +60,8 @@ pub struct OAuth2Provider {
     tokens: std::sync::Arc<tokio::sync::RwLock<OAuth2Tokens>>,
     /// PKCE verifier storage (needed for token exchange)
     code_verifier: std::sync::Arc<tokio::sync::RwLock<Option<String>>>,
+    /// Stored CSRF state for validation during token exchange
+    csrf_state: std::sync::Arc<tokio::sync::RwLock<Option<String>>>,
 }
 
 /// Internal token storage with expiry
@@ -126,6 +128,7 @@ impl OAuth2Provider {
             scopes: Vec::new(),
             tokens: std::sync::Arc::new(tokio::sync::RwLock::new(OAuth2Tokens::default())),
             code_verifier: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
+            csrf_state: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
         }
     }
 
@@ -161,6 +164,9 @@ impl OAuth2Provider {
             base64url_encode(&bytes)
         };
 
+        // Store state for CSRF validation during token exchange
+        *self.csrf_state.write().await = Some(state.clone());
+
         let scope = self.scopes.join(" ");
         let mut url = format!(
             "{}?response_type=code&client_id={}&redirect_uri={}&code_challenge={}&code_challenge_method=S256&state={}",
@@ -180,7 +186,21 @@ impl OAuth2Provider {
     }
 
     /// Exchange authorization code for access token
-    pub async fn exchange_code(&self, code: &str, _state: &str) -> Result<String, AuthError> {
+    pub async fn exchange_code(&self, code: &str, state: &str) -> Result<String, AuthError> {
+        // Validate CSRF state
+        {
+            let stored_state = self.csrf_state.read().await;
+            let expected = stored_state.as_ref()
+                .ok_or_else(|| AuthError::OAuth("No state stored. Call get_authorization_url first.".to_string()))?;
+            if state != expected {
+                return Err(AuthError::OAuth(
+                    format!("CSRF state mismatch: expected {expected}, got {state}")
+                ));
+            }
+        }
+        // Clear state after validation (one-time use)
+        *self.csrf_state.write().await = None;
+
         // Retrieve the stored code verifier
         let verifier_guard = self.code_verifier.read().await;
         let verifier = verifier_guard.as_ref()

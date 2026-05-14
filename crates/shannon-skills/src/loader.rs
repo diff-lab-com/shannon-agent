@@ -13,6 +13,15 @@ pub fn load_skill_from_file(path: &Path) -> SkillResult<Skill> {
         return Err(SkillError::NotFound(path.display().to_string()));
     }
 
+    let metadata = std::fs::metadata(path).map_err(SkillError::Io)?;
+    const MAX_SKILL_SIZE: u64 = 1024 * 1024; // 1MB
+    if metadata.len() > MAX_SKILL_SIZE {
+        return Err(SkillError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("Skill file too large: {} bytes (max {MAX_SKILL_SIZE})", metadata.len()),
+        )));
+    }
+
     let content = std::fs::read_to_string(path)
         .map_err(SkillError::Io)?;
 
@@ -412,16 +421,21 @@ pub fn load_commands_from_directory(
     Ok(skills)
 }
 
-/// Validate that a path doesn't escape the base directory
+/// Validate that a path doesn't escape the base directory.
+/// Resolves symlinks via canonicalization to prevent symlink-based traversal.
 pub fn validate_path_within_base(path: &Path, base: &Path) -> SkillResult<()> {
     let canonical_path = path.canonicalize()
-        .unwrap_or_else(|_| path.to_path_buf());
+        .map_err(|e| SkillError::PathTraversal(format!(
+            "Cannot resolve path {path:?}: {e}"
+        )))?;
     let canonical_base = base.canonicalize()
-        .unwrap_or_else(|_| base.to_path_buf());
+        .map_err(|e| SkillError::PathTraversal(format!(
+            "Cannot resolve base {base:?}: {e}"
+        )))?;
 
     if !canonical_path.starts_with(&canonical_base) {
         return Err(SkillError::PathTraversal(format!(
-            "Path {path:?} escapes base {base:?}"
+            "Path {path:?} resolves outside base directory"
         )));
     }
 

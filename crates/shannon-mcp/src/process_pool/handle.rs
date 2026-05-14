@@ -64,7 +64,7 @@ pub(crate) struct McpServerHandle {
     /// When the last successful health check occurred.
     pub(crate) last_health_check: Arc<RwLock<Option<Instant>>>,
     /// Channel to forward server notifications to the pool.
-    pub(crate) notification_tx: tokio::sync::mpsc::UnboundedSender<(String, Value)>,
+    pub(crate) notification_tx: tokio::sync::mpsc::Sender<(String, Value)>,
     /// Provider for filesystem roots (used to respond to `roots/list` from servers).
     pub(crate) roots_provider: Arc<Mutex<Option<Arc<dyn Fn() -> Vec<crate::Root> + Send + Sync>>>>,
     /// Provider for LLM sampling (used to respond to `sampling/createMessage` from servers).
@@ -79,14 +79,78 @@ pub(crate) struct McpServerHandle {
     pub(crate) concurrency_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
+/// Split a command string into arguments, respecting shell-style quoting.
+///
+/// Handles double quotes, single quotes, and backslash escaping.
+/// Falls back to `split_whitespace` for unquoted segments.
+fn shell_split(command: &str) -> Result<Vec<String>, String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let chars = command.chars().collect::<Vec<_>>();
+    let mut i = 0;
+
+    while i < chars.len() {
+        match chars[i] {
+            ' ' | '\t' => {
+                if !current.is_empty() {
+                    parts.push(std::mem::take(&mut current));
+                }
+                i += 1;
+            }
+            '"' => {
+                i += 1;
+                while i < chars.len() && chars[i] != '"' {
+                    if chars[i] == '\\' && i + 1 < chars.len() {
+                        i += 1;
+                    }
+                    current.push(chars[i]);
+                    i += 1;
+                }
+                if i >= chars.len() {
+                    return Err("Unterminated double quote in command".to_string());
+                }
+                i += 1; // skip closing quote
+            }
+            '\'' => {
+                i += 1;
+                while i < chars.len() && chars[i] != '\'' {
+                    current.push(chars[i]);
+                    i += 1;
+                }
+                if i >= chars.len() {
+                    return Err("Unterminated single quote in command".to_string());
+                }
+                i += 1; // skip closing quote
+            }
+            '\\' => {
+                if i + 1 < chars.len() {
+                    i += 1;
+                    current.push(chars[i]);
+                }
+                i += 1;
+            }
+            _ => {
+                current.push(chars[i]);
+                i += 1;
+            }
+        }
+    }
+
+    if !current.is_empty() {
+        parts.push(current);
+    }
+
+    if parts.is_empty() {
+        return Err("Empty command after parsing".to_string());
+    }
+
+    Ok(parts)
+}
+
 impl McpServerHandle {
     /// Start the MCP server process and perform initialization handshake.
     pub(crate) async fn start(&self) -> Result<(), String> {
-        let mut parts: Vec<String> = self
-            .command
-            .split_whitespace()
-            .map(|s| s.to_string())
-            .collect();
+        let mut parts: Vec<String> = shell_split(&self.command)?;
         parts.extend(self.args.iter().cloned());
 
         if parts.is_empty() {
@@ -225,7 +289,7 @@ impl McpServerHandle {
         reader: BufReader<ChildStdout>,
         pending: &DashMap<u64, PendingRequest>,
         server_name: &str,
-        notification_tx: &tokio::sync::mpsc::UnboundedSender<(String, Value)>,
+        notification_tx: &tokio::sync::mpsc::Sender<(String, Value)>,
         stdin: Arc<Mutex<Option<ChildStdin>>>,
         roots_provider: Arc<Mutex<Option<Arc<dyn Fn() -> Vec<crate::Root> + Send + Sync>>>>,
         sampling_provider: Arc<Mutex<Option<SamplingProvider>>>,
@@ -276,8 +340,13 @@ impl McpServerHandle {
                     if let Some(ref mut writer) = *stdin_guard {
                         let mut msg = serde_json::to_string(&response).unwrap_or_default();
                         msg.push('\n');
-                        let _ = writer.write_all(msg.as_bytes()).await;
-                        let _ = writer.flush().await;
+                        if let Err(e) = writer.write_all(msg.as_bytes()).await {
+                            warn!("Failed to write response to MCP server: {e}");
+                            continue;
+                        }
+                        if let Err(e) = writer.flush().await {
+                            warn!("Failed to flush MCP server stdin: {e}");
+                        }
                     }
                 }
             }
@@ -439,7 +508,7 @@ impl McpServerHandle {
                     method = %value["method"],
                     "Received notification from MCP server"
                 );
-                let _ = notification_tx.send((server_name.to_string(), value));
+                let _ = notification_tx.try_send((server_name.to_string(), value));
             }
         }
         debug!(server = %server_name, "Stdout reader ended");

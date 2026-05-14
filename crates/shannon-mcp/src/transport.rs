@@ -187,11 +187,12 @@ impl Drop for StdioTransport {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
             // Clean up the child process to prevent resource leaks.
-            // kill_on_drop(true) is set, so the child will be killed when dropped.
-            // Best-effort synchronous kill — start_kill is non-async.
             if let Err(e) = child.start_kill() {
                 tracing::warn!("Failed to kill child process during drop: {e}");
             }
+            // Reap the zombie process to prevent resource leaks.
+            // try_wait() is non-blocking and safe to call in Drop.
+            let _ = child.try_wait();
         }
     }
 }

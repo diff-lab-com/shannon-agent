@@ -311,6 +311,10 @@ impl TokenEncryption {
     ///
     /// The key is hashed to produce a consistent-length derived key.
     pub fn new(secret: &str) -> Self {
+        if secret.is_empty() {
+            tracing::warn!("TokenEncryption: empty secret, using fallback key");
+            return Self { key: vec![0u8; 32] };
+        }
         // Derive a fixed-length key by repeating the secret
         let secret_bytes = secret.as_bytes();
         let key_len = 32;

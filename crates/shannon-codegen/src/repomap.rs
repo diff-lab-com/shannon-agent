@@ -75,12 +75,13 @@ pub fn generate_repomap_filtered(
     let mut total_symbols = 0;
     let mut total_lines = 0;
 
-    // Build walker with .gitignore respect
+    // Build walker with .gitignore respect (don't follow symlinks)
     let walker = WalkBuilder::new(root)
         .hidden(true)
         .parents(true)
         .git_ignore(true)
         .git_exclude(true)
+        .follow_links(false)
         .build();
 
     // Process files

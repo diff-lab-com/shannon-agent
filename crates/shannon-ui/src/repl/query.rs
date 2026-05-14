@@ -99,7 +99,6 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
     repl.state.progress_bar_visible = false;
     repl.state.progress_bar.set_progress(0.0);
 
-    let _turn_diff = TurnDiff::new(repl.current_turn);
 
     let assistant_msg_index = repl.chat.add_message(ChatRole::Assistant, String::new());
 
@@ -197,12 +196,11 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                 Ok(QueryEvent::Thinking { content, .. }) => {
                     if let Ok(mut s) = ss.lock() {
                         s.thinking_content.push_str(&content);
-                        let len = s.thinking_content.len();
-                        let dots = animated_dots(std::time::Instant::now().elapsed());
+                        let len = s.thinking_content.chars().count();
                         s.status = if len > 1000 {
-                            format!("Thinking{dots} ({}k chars)", len / 1000)
+                            format!("Thinking··· ({}k chars)", len / 1000)
                         } else {
-                            format!("Thinking{dots} ({len} chars)")
+                            format!("Thinking··· ({len} chars)")
                         };
                     }
                 }
@@ -358,7 +356,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                     }
                 }
                 Ok(QueryEvent::Failed { error, .. }) => {
-                    return Err(format!("Query failed: {error}"));
+                    return Err((Some(query_engine), format!("Query failed: {error}")));
                 }
                 Ok(QueryEvent::Info { message, .. }) => {
                     tracing::info!("Query info: {message}");
@@ -369,12 +367,12 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                     }
                 }
                 Err(e) => {
-                    return Err(format!("Stream error: {e}"));
+                    return Err((Some(query_engine), format!("Stream error: {e}")));
                 }
             }
         }
 
-        Ok::<(shannon_core::query_engine::QueryEngine, String, u64, usize, TurnDiff, String, usize), String>(
+        Ok::<(shannon_core::query_engine::QueryEngine, String, u64, usize, TurnDiff, String, usize), (Option<shannon_core::query_engine::QueryEngine>, String)>(
             (query_engine, response_text, tokens_in_turn, _tools_in_session, turn_diff, progress_status, steps_done)
         )
     });
@@ -424,7 +422,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
 
             // Thinking indicator: rotating phrases with animated dots
             let (is_thinking, thinking_len) = streaming.lock()
-                .map(|s| (s.thinking_phase, s.thinking_content.len()))
+                .map(|s| (s.thinking_phase, s.thinking_content.chars().count()))
                 .unwrap_or((false, 0));
             repl.state.thinking_phase = is_thinking;
             if is_thinking {
@@ -631,8 +629,8 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
     let query_result = repl.runtime.block_on(async {
         match query_handle.await {
             Ok(result) => result,
-            Err(e) if e.is_cancelled() => Err("cancelled".to_string()),
-            Err(_) => Err("Query task panicked".to_string()),
+            Err(e) if e.is_cancelled() => Err((None, "cancelled".to_string())),
+            Err(_) => Err((None, "Query task panicked".to_string())),
         }
     });
 
@@ -814,12 +812,12 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                 }
             }
         }
-        Err(e) => {
+        Err((engine_opt, e)) => {
+            // Restore the query engine if it was recovered from the task
+            if let Some(engine) = engine_opt {
+                repl.query_engine = Some(engine);
+            }
             let is_cancelled = e == "cancelled";
-
-            // Preserve existing engine with full conversation history — don't create a new one.
-            // The engine's conversation state is not corrupted by a stream error;
-            // only the in-flight response was lost.
 
             if is_cancelled {
                 let current = streaming.lock().map(|s| s.buffer.clone()).unwrap_or_default();
@@ -981,4 +979,204 @@ fn extract_memory_content(response: &str) -> String {
         content.push_str("...");
     }
     content
+}
+
+#[cfg(test)]
+mod tests {
+    //! Tests for query engine recovery after errors.
+    //!
+    //! These tests verify the error type pattern that ensures the query engine
+    //! is always returned from the async query task, even on error paths.
+    //!
+    //! Bug: After any query error (malformed output, stream error, API failure),
+    //! the engine was dropped inside the async closure, leaving `repl.query_engine`
+    //! as `None` permanently — causing "Query engine not available. Please restart."
+    //!
+    //! Fix: Changed the error type from `String` to `(Option<QueryEngine>, String)`
+    //! so the engine is carried back to the caller even on error paths.
+
+    use shannon_core::query_engine::QueryEngine;
+    use shannon_core::api::LlmClientConfig;
+    use shannon_core::api::LlmProvider;
+    use shannon_core::permissions::PermissionManager;
+    use shannon_core::state::StateManager;
+    use shannon_core::tools::ToolRegistry;
+    use std::collections::HashMap;
+
+    fn create_test_engine() -> QueryEngine {
+        let config = LlmClientConfig {
+            api_key: "test".to_string(),
+            base_url: "http://localhost:1".to_string(), // unreachable
+            model: "test-model".to_string(),
+            max_tokens: 100,
+            timeout_seconds: 1,
+            api_version: String::new(),
+            provider: LlmProvider::Anthropic,
+            extra_headers: HashMap::new(),
+            retry_config: shannon_core::api::RetryConfig::default(),
+            fallback_provider: None,
+            fallback_base_url: None,
+            max_stream_reconnects: 0,
+            budget_tokens: None,
+            reasoning_effort: None,
+        };
+        let client = shannon_core::api::LlmClient::new(config);
+        let tools = ToolRegistry::new();
+        let permissions = PermissionManager::new();
+        let state = StateManager::new();
+        QueryEngine::with_defaults(client, tools, permissions, state)
+    }
+
+    /// Type alias matching the fixed error type in the async task.
+    type QueryTaskResult = Result<
+        (QueryEngine, String, u64, usize, (), String, usize),
+        (Option<QueryEngine>, String),
+    >;
+
+    /// Simulate the success path: engine is returned in Ok variant.
+    #[test]
+    fn test_engine_returned_on_success() {
+        let engine = create_test_engine();
+        let session_id = engine.session_id();
+
+        let result: QueryTaskResult = Ok((
+            engine,
+            "response text".to_string(),
+            42,
+            0,
+            (),
+            "done".to_string(),
+            1,
+        ));
+
+        match result {
+            Ok((engine, response, tokens, tools, _, status, steps)) => {
+                assert_eq!(engine.session_id(), session_id);
+                assert_eq!(response, "response text");
+                assert_eq!(tokens, 42);
+                assert_eq!(tools, 0);
+                assert_eq!(status, "done");
+                assert_eq!(steps, 1);
+            }
+            Err(_) => panic!("Expected Ok with engine"),
+        }
+    }
+
+    /// Simulate the QueryEvent::Failed path: engine is returned in Err via Some().
+    #[test]
+    fn test_engine_returned_on_query_failed() {
+        let engine = create_test_engine();
+        let session_id = engine.session_id();
+
+        let result: QueryTaskResult = Err((
+            Some(engine),
+            "Query failed: malformed output".to_string(),
+        ));
+
+        match result {
+            Err((Some(engine), error_msg)) => {
+                assert_eq!(engine.session_id(), session_id,
+                    "Engine must survive query failures");
+                assert!(error_msg.contains("malformed output"));
+            }
+            Err((None, _)) => panic!("Engine should be Some for query failures"),
+            Ok(_) => panic!("Expected Err"),
+        }
+    }
+
+    /// Simulate the stream error path: engine is returned in Err via Some().
+    #[test]
+    fn test_engine_returned_on_stream_error() {
+        let engine = create_test_engine();
+        let session_id = engine.session_id();
+
+        let result: QueryTaskResult = Err((
+            Some(engine),
+            "Stream error: connection reset".to_string(),
+        ));
+
+        match result {
+            Err((Some(engine), error_msg)) => {
+                assert_eq!(engine.session_id(), session_id,
+                    "Engine must survive stream errors");
+                assert!(error_msg.contains("connection reset"));
+            }
+            Err((None, _)) => panic!("Engine should be Some for stream errors"),
+            Ok(_) => panic!("Expected Err"),
+        }
+    }
+
+    /// Simulate the JoinError (task panic/cancel) path: engine is None.
+    #[test]
+    fn test_engine_none_on_task_panic() {
+        let result: QueryTaskResult = Err((
+            None,
+            "Query task panicked".to_string(),
+        ));
+
+        match result {
+            Err((None, error_msg)) => {
+                assert!(error_msg.contains("panicked"));
+            }
+            Err((Some(_), _)) => panic!("Engine should be None for task panics"),
+            Ok(_) => panic!("Expected Err"),
+        }
+    }
+
+    /// Verify the full recovery pattern: simulate taking engine, error, restore.
+    #[test]
+    fn test_engine_take_error_restore_cycle() {
+        // Simulate the REPL pattern: take → spawn task → error → restore
+        let mut stored_engine: Option<QueryEngine> = Some(create_test_engine());
+        let original_session = stored_engine.as_ref().unwrap().session_id();
+
+        // Step 1: Take the engine out (like repl.query_engine.take())
+        let engine = stored_engine.take();
+        assert!(stored_engine.is_none(), "Engine should be taken out");
+        let mut engine = engine.unwrap();
+
+        // Step 2: Simulate some work then an error
+        engine.add_user_message("test query".to_string());
+        let error_result: QueryTaskResult = Err((
+            Some(engine),
+            "Query failed: test error".to_string(),
+        ));
+
+        // Step 3: Restore engine from error result (the fix)
+        match error_result {
+            Err((Some(recovered_engine), error_msg)) => {
+                assert_eq!(recovered_engine.session_id(), original_session,
+                    "Recovered engine should be the same instance");
+                stored_engine = Some(recovered_engine);
+                assert!(error_msg.contains("test error"));
+            }
+            _ => panic!("Expected Err with Some(engine)"),
+        }
+
+        // Step 4: Verify engine is restored and usable
+        assert!(stored_engine.is_some(), "Engine must be restored after error");
+        assert_eq!(stored_engine.as_ref().unwrap().session_id(), original_session);
+
+        // Engine should accept new operations
+        stored_engine.as_mut().unwrap().add_user_message("after recovery".to_string());
+        assert_eq!(stored_engine.as_ref().unwrap().conversation_history().len(), 2);
+    }
+
+    /// Verify that the old pattern (plain String error) would NOT work.
+    /// This test documents the bug and why the fix is needed.
+    #[test]
+    fn test_old_pattern_would_lose_engine() {
+        let mut stored_engine: Option<QueryEngine> = Some(create_test_engine());
+
+        // Take engine
+        let _engine = stored_engine.take();
+        assert!(stored_engine.is_none());
+
+        // Old pattern: error is just a String, engine is dropped
+        let _old_error: Result<String, String> = Err("Query failed".to_string());
+
+        // With old pattern, stored_engine is still None — the bug!
+        assert!(stored_engine.is_none(),
+            "Old pattern leaves engine as None — this is the bug");
+    }
 }

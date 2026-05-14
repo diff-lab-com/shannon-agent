@@ -550,7 +550,6 @@ impl SkillRegistry {
                     if max_chars > 10 {
                         meta.description.truncate(max_chars.saturating_sub(3));
                         meta.description.push_str("...");
-                        let _truncated_tokens = meta.estimated_tokens();
                         result.push(meta);
                     }
                 }

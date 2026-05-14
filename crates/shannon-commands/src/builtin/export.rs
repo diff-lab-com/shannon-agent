@@ -220,8 +220,11 @@ pub fn parse_export_args(args: &str) -> Result<ExportOptions, String> {
                 return Err(format!("Unknown option: {t}"));
             }
             t => {
-                // Assume it's a filename
+                // Assume it's a filename — reject path traversal
                 if options.filename.is_none() {
+                    if t.contains('/') || t.contains('\\') || t.contains("..") {
+                        return Err(format!("Invalid filename (path separators not allowed): {t}"));
+                    }
                     options.filename = Some(t.to_string());
                 }
             }
