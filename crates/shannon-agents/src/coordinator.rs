@@ -572,6 +572,7 @@ impl AgentCoordinator {
                     agent_name: agent_name.clone(),
                     permission_mode: Some("bypassPermissions".to_string()),
                     allowed_tools: config_allowed_tools,
+                    startup_timeout_secs: 60,
                 };
 
                 match pm.spawn_agent(process_config).await {

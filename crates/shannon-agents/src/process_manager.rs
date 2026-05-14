@@ -64,7 +64,13 @@ pub struct AgentProcessConfig {
     /// If set, only these tool names are accessible to this agent.
     #[serde(default)]
     pub allowed_tools: Option<Vec<String>>,
+    /// Maximum seconds to wait for the agent to send `agent_ready` before killing it.
+    /// Default: 60 seconds.
+    #[serde(default = "default_startup_timeout")]
+    pub startup_timeout_secs: u64,
 }
+
+fn default_startup_timeout() -> u64 { 60 }
 
 /// Configuration for health monitoring and restart policy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,6 +113,25 @@ impl Default for HealthCheckConfig {
 /// A pending RPC response waiter.
 struct PendingRpc {
     sender: oneshot::Sender<Result<JsonRpcMessage, String>>,
+}
+
+impl Drop for AgentHandle {
+    fn drop(&mut self) {
+        // Kill the child process to prevent zombies.
+        // tokio::process::Child does NOT kill on drop — it only closes stdin.
+        match self.child.try_wait() {
+            Ok(Some(_)) => {} // already exited, no need to kill
+            Ok(None) => {
+                // Still running — kill it
+                if let Err(e) = self.child.start_kill() {
+                    tracing::warn!(agent = %self.name, "Failed to kill child process on drop: {e}");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(agent = %self.name, "Failed to check child status on drop: {e}");
+            }
+        }
+    }
 }
 
 /// Handle to a running agent process.
@@ -238,6 +263,7 @@ impl AgentProcessManager {
         config: AgentProcessConfig,
     ) -> Result<String, AgentProcessError> {
         let name = config.agent_name.clone();
+        let startup_timeout_secs = config.startup_timeout_secs;
 
         // Validate binary path exists and is executable
         let binary_path = std::path::Path::new(&config.binary_path);
@@ -340,6 +366,27 @@ impl AgentProcessManager {
         };
 
         self.agents.write().await.insert(name.clone(), handle);
+
+        // Startup timeout guard: kill the agent if it stays in Starting state too long
+        let timeout_name = name.clone();
+        let timeout_agents = self.agents.clone();
+        let timeout_event_tx = self.event_tx.clone();
+        let startup_timeout = Duration::from_secs(startup_timeout_secs);
+        tokio::spawn(async move {
+            tokio::time::sleep(startup_timeout).await;
+            let mut agents = timeout_agents.write().await;
+            if let Some(handle) = agents.get_mut(&timeout_name) {
+                if handle.status == AgentProcessStatus::Starting {
+                    tracing::warn!(agent = %timeout_name, "Startup timeout exceeded, killing agent");
+                    let _ = handle.child.start_kill();
+                    handle.status = AgentProcessStatus::Crashed;
+                    let _ = timeout_event_tx.send(AgentEvent::ProcessExited {
+                        agent_name: timeout_name,
+                        exit_code: None,
+                    }).await;
+                }
+            }
+        });
 
         tracing::info!(agent = %name, "Spawned agent process");
         Ok(name)
@@ -975,6 +1022,7 @@ mod tests {
             agent_name: "test-agent".to_string(),
             permission_mode: None,
             allowed_tools: None,
+            startup_timeout_secs: 60,
         };
         let result = mgr.spawn_agent(config).await;
         assert!(result.is_err());

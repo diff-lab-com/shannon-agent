@@ -16,14 +16,34 @@ pub struct LlmClient {
 }
 
 impl LlmClient {
+    /// Build a reqwest client with the given timeout (seconds).
+    ///
+    /// Falls back to a default client if TLS initialization fails,
+    /// logging the error instead of panicking.
+    fn build_client(timeout_secs: u64) -> Client {
+        Client::builder()
+            .timeout(Duration::from_secs(timeout_secs))
+            .build()
+            .unwrap_or_else(|e| {
+                tracing::error!("Failed to build HTTP client with timeout ({timeout_secs}s): {e}; falling back to default");
+                Client::new()
+            })
+    }
+
     /// Create a new LLM API client
     pub fn new(config: LlmClientConfig) -> Self {
+        let client = Self::build_client(config.timeout_seconds);
+
+        Self { config, client }
+    }
+
+    /// Create a new LLM API client, returning an error if client construction fails.
+    pub fn try_new(config: LlmClientConfig) -> Result<Self, ApiError> {
         let client = Client::builder()
             .timeout(Duration::from_secs(config.timeout_seconds))
             .build()
-            .unwrap_or_else(|e| panic!("Failed to create HTTP client: {e}"));
-
-        Self { config, client }
+            .map_err(|e| ApiError::InvalidResponse(format!("Failed to create HTTP client: {e}")))?;
+        Ok(Self { config, client })
     }
 
     /// Create client from environment variables.
@@ -48,10 +68,7 @@ impl LlmClient {
 
     /// Create a client that requires no authentication (e.g., Ollama)
     pub fn new_unauthenticated(config: LlmClientConfig) -> Self {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(config.timeout_seconds))
-            .build()
-            .unwrap_or_else(|e| panic!("Failed to create HTTP client: {e}"));
+        let client = Self::build_client(config.timeout_seconds);
 
         Self { config, client }
     }
