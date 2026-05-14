@@ -392,8 +392,9 @@ impl ToolRegistry {
                 if elapsed < self.cache_ttl_secs {
                     return Ok(cached.output);
                 }
-                // Entry expired — remove it
+                // Entry expired — remove from both cache and order tracking
                 Self::recover_lock(self.result_cache.lock()).remove(&cache_key);
+                Self::recover_lock(self.cache_order.lock()).retain(|k| k != &cache_key);
             }
         }
 

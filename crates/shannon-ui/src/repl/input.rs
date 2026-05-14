@@ -918,8 +918,8 @@ pub(crate) fn complete_file_path(prefix: &str) -> Vec<String> {
             if !name.starts_with(&file_prefix) {
                 return None;
             }
-            // Reconstruct with original prefix style
-            let suffix = &name[file_prefix.len()..];
+            // Reconstruct with original prefix style (char-boundary safe)
+            let suffix = name.strip_prefix(&file_prefix).unwrap_or(&name);
             if entry.path().is_dir() {
                 Some(format!("{prefix}{suffix}/"))
             } else {

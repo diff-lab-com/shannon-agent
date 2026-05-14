@@ -331,10 +331,12 @@ impl OAuth2Provider {
     }
 
     /// Check if token is expired (public for external validation)
+    /// Applies a 60-second margin before actual expiry to avoid race conditions
     pub async fn is_expired(&self) -> bool {
+        const EXPIRY_MARGIN_SECS: i64 = 60;
         let tokens = self.tokens.read().await;
         if let Some(expires_at) = tokens.expires_at {
-            chrono::Utc::now() >= expires_at
+            chrono::Utc::now() >= (expires_at - chrono::Duration::seconds(EXPIRY_MARGIN_SECS))
         } else {
             false
         }
@@ -364,12 +366,13 @@ impl AuthProvider for OAuth2Provider {
     }
 
     async fn is_valid(&self) -> bool {
+        const EXPIRY_MARGIN_SECS: i64 = 60;
         let tokens = self.tokens.read().await;
         if tokens.access_token.is_none() {
             return false;
         }
         if let Some(expires_at) = tokens.expires_at {
-            chrono::Utc::now() < expires_at
+            chrono::Utc::now() < (expires_at - chrono::Duration::seconds(EXPIRY_MARGIN_SECS))
         } else {
             true
         }

@@ -137,8 +137,18 @@ impl super::Repl {
     /// Refresh active_agents from the SubAgentRegistry for sidebar display.
     /// Called from the main loop tick; uses the tokio runtime for async access.
     /// Detects agent completions and sends desktop notifications.
+    /// Throttled to run at most once every 3 seconds to avoid lock contention.
     pub fn refresh_agents(&mut self) {
         if let Some(ref registry) = self.agent_registry {
+            // Throttle: only refresh every 3 seconds
+            let now = std::time::Instant::now();
+            if let Some(last) = self.last_agent_refresh {
+                if now.duration_since(last).as_secs() < 3 {
+                    return;
+                }
+            }
+            self.last_agent_refresh = Some(now);
+
             let agents = self.runtime.block_on(registry.list_agents());
 
             // Detect agents that transitioned from active to completed/failed

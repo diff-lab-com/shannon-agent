@@ -608,11 +608,19 @@ pub fn discover_config(project_dir: &Path) -> Result<McpConfig, ConfigError> {
         expand_server_config(server_conf);
     }
 
-    // Validate all server configs
-    for (name, server_conf) in &merged.mcp_servers {
-        if let Err(e) = server_conf.validate() {
-            warn!(server = %name, error = %e, "Invalid server config");
-        }
+    // Validate all server configs, removing invalid ones
+    let invalid_servers: Vec<String> = merged.mcp_servers.iter()
+        .filter_map(|(name, conf)| {
+            if let Err(e) = conf.validate() {
+                warn!(server = %name, error = %e, "Removing invalid server config");
+                Some(name.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    for name in &invalid_servers {
+        merged.mcp_servers.remove(name);
     }
 
     Ok(merged)

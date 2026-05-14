@@ -229,32 +229,57 @@ pub struct ShellExecutor {
 /// Rejects commands containing characters that enable command chaining,
 /// substitution, or redirection while allowing basic commands with arguments.
 fn validate_shell_command(command: &str) -> SkillResult<()> {
-    let dangerous_patterns: &[(&str, &str)] = &[
-        (";", "command chaining"),
-        ("|", "pipe"),
-        ("&&", "command chaining"),
-        ("||", "command chaining"),
-        ("$(", "command substitution"),
-        ("`", "command substitution"),
-        (">", "output redirection"),
-        (">>", "output redirection"),
-        ("<", "input redirection"),
-        ("\n", "newline"),
-    ];
-
-    for (pattern, description) in dangerous_patterns {
-        if command.contains(pattern) {
-            return Err(SkillError::ExecutionFailed {
-                name: "shell".to_string(),
-                message: format!(
-                    "Command rejected: contains {description} ({pattern:?}). \
-                     Only single basic commands with arguments are allowed."
-                ),
-            });
-        }
+    // Reject patterns that shell_words::split can't safely tokenize
+    if command.contains('\n') {
+        return Err(SkillError::ExecutionFailed {
+            name: "shell".to_string(),
+            message: "Command rejected: contains newline. Only single basic commands are allowed.".to_string(),
+        });
+    }
+    if command.contains('$') && (command.contains('(') || command.contains('{')) {
+        return Err(SkillError::ExecutionFailed {
+            name: "shell".to_string(),
+            message: "Command rejected: contains command/variable substitution. Only basic commands are allowed.".to_string(),
+        });
+    }
+    if command.contains('`') {
+        return Err(SkillError::ExecutionFailed {
+            name: "shell".to_string(),
+            message: "Command rejected: contains command substitution. Only basic commands are allowed.".to_string(),
+        });
     }
 
-    Ok(())
+    // Split into tokens to validate operators, respecting quoting.
+    // shell_words doesn't recognize ; as a separator, so check raw string for it.
+    if command.contains(';') {
+        return Err(SkillError::ExecutionFailed {
+            name: "shell".to_string(),
+            message: "Command rejected: contains command chaining (;). Only single basic commands are allowed.".to_string(),
+        });
+    }
+
+    match shell_words::split(command) {
+        Ok(tokens) => {
+            // Check for shell operators as standalone tokens (pipe, redirect, etc.)
+            let dangerous_tokens: &[&str] = &["|", "||", "&&", ">", ">>", "<", "<<"];
+            for token in &tokens {
+                if dangerous_tokens.contains(&token.as_str()) {
+                    return Err(SkillError::ExecutionFailed {
+                        name: "shell".to_string(),
+                        message: format!(
+                            "Command rejected: contains shell operator ({token:?}). \
+                             Only single basic commands with arguments are allowed."
+                        ),
+                    });
+                }
+            }
+            Ok(())
+        }
+        Err(e) => Err(SkillError::ExecutionFailed {
+            name: "shell".to_string(),
+            message: format!("Failed to parse command: {e}"),
+        }),
+    }
 }
 
 impl Default for ShellExecutor {

@@ -128,6 +128,8 @@ pub struct Repl {
     pub(crate) team_coordinator: Option<std::sync::Arc<shannon_agents::AgentCoordinator>>,
     /// Sub-agent registry for background agent management
     pub(crate) agent_registry: Option<std::sync::Arc<shannon_agents::SubAgentRegistry>>,
+    /// Throttle timestamp for agent refresh (avoids block_on on every tick)
+    pub(crate) last_agent_refresh: Option<std::time::Instant>,
     /// MCP process pool for hot-reload support
     pub(crate) mcp_pool: std::sync::Arc<McpProcessPool>,
     /// Tool registry for MCP hot-reload tool registration
@@ -328,6 +330,7 @@ impl Repl {
             },
             team_coordinator: None,
             agent_registry: None,
+            last_agent_refresh: None,
             mcp_pool,
             tool_registry,
             mcp_progress_rx: None,
@@ -1066,6 +1069,7 @@ impl Repl {
             },
             team_coordinator: shared_coordinator,
             agent_registry: None,
+            last_agent_refresh: None,
             mcp_pool,
             tool_registry,
             mcp_progress_rx,

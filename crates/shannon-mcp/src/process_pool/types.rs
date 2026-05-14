@@ -112,6 +112,10 @@ impl ToolResultStore {
 
     /// Store a result and return its chunk ID.
     pub(crate) fn store(&self, tool_name: &str, full_content: String) -> String {
+        // Periodically evict expired entries to prevent unbounded memory growth
+        if self.results.len() > 0 && self.results.len() % 8 == 0 {
+            self.evict_expired();
+        }
         let id = format!("chunk_{}", uuid::Uuid::new_v4().as_simple());
         self.results.insert(
             id.clone(),
@@ -162,7 +166,6 @@ impl ToolResultStore {
     }
 
     /// Evict expired results.
-    #[allow(dead_code)]
     pub(crate) fn evict_expired(&self) {
         self.results.retain(|_, v| v.stored_at.elapsed() < self.max_age);
     }

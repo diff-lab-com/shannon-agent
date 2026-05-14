@@ -501,8 +501,9 @@ impl McpServerHandle {
                     }
                 }
             }
-            // Other notifications (no id) are forwarded to the pool.
-            else if value.get("method").is_some() {
+            // Server-initiated request with both method and id that wasn't handled above —
+            // try to route as a response first to avoid dropping pending request results.
+            else if value.get("method").is_some() && value.get("id").is_none() {
                 debug!(
                     server = %server_name,
                     method = %value["method"],

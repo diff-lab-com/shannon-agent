@@ -690,6 +690,11 @@ impl AgentProcessManager {
                                 if let Some(ref mode) = config.permission_mode {
                                     cmd.arg("--permission-mode").arg(mode);
                                 }
+                                if let Some(ref allowed) = config.allowed_tools {
+                                    for tool in allowed {
+                                        cmd.arg("--allowed-tools").arg(tool);
+                                    }
+                                }
                                 cmd.args(&config.args);
                                 // Apply same env filtering as spawn path
                                 for (key, value) in &config.env {
@@ -945,6 +950,10 @@ impl AgentProcessManager {
                 }
             }
         }
+
+        // Drain orphaned pending RPCs to prevent memory leak across restarts
+        let orphaned: Vec<_> = pending_rpcs.lock().unwrap().drain().collect();
+        drop(orphaned);
 
         tracing::info!(agent = %agent_name, "Agent stdout closed");
         let _ = event_tx.send(AgentEvent::ProcessExited {
