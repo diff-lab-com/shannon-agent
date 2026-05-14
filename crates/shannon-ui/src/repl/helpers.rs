@@ -228,6 +228,18 @@ impl super::Repl {
         }
     }
 
+    /// Check if settings files have changed and notify the user.
+    pub fn check_reload_settings(&mut self) {
+        if let Some(ref watcher) = self.settings_watcher {
+            if let Some(changed) = watcher.check_and_reload() {
+                self.chat.add_message(
+                    crate::widgets::ChatRole::System,
+                    format!("[Settings changed: {} — reload with /config or restart to apply]", changed.join(", ")),
+                );
+            }
+        }
+    }
+
     /// Refresh the git branch name from the working directory.
     /// Throttled to once every 10 seconds to avoid excessive subprocess calls.
     pub fn refresh_git_branch(&mut self) {

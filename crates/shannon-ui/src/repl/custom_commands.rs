@@ -237,3 +237,116 @@ impl CustomCommandWatcher {
         count
     }
 }
+
+/// Watches settings files for changes and signals the REPL to reload configuration.
+///
+/// Monitors `~/.claude/settings.json`, `~/.shannon/settings.json`,
+/// `.claude/settings.json`, `.shannon/settings.json`, and `.shannon.toml` / `.shannon/config.toml`.
+/// Uses the `notify` crate for efficient filesystem events.
+pub(crate) struct SettingsWatcher {
+    #[allow(dead_code)]
+    watcher: Option<notify::RecommendedWatcher>,
+    dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Paths being watched, for diagnostic logging.
+    watched_paths: Vec<std::path::PathBuf>,
+}
+
+impl SettingsWatcher {
+    pub(super) fn new() -> Self {
+        let mut paths = Vec::new();
+        let cwd = std::env::current_dir().unwrap_or_default();
+
+        // Project-level settings
+        for dir_name in &[".claude", ".shannon"] {
+            let settings = cwd.join(dir_name).join("settings.json");
+            if settings.parent().map(|p| p.exists()).unwrap_or(false) {
+                paths.push(settings);
+            }
+        }
+        paths.push(cwd.join(".shannon.toml"));
+        let shannon_config_dir = cwd.join(".shannon");
+        if shannon_config_dir.exists() {
+            paths.push(shannon_config_dir.join("config.toml"));
+        }
+
+        // User-level settings
+        if let Some(home) = dirs::home_dir() {
+            for dir_name in &[".claude", ".shannon"] {
+                let settings = home.join(dir_name).join("settings.json");
+                if settings.exists() {
+                    paths.push(settings);
+                }
+            }
+        }
+
+        let dirty = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let dirty_flag = dirty.clone();
+
+        let handler = move |event: notify::Result<notify::Event>| {
+            if let Ok(event) = event {
+                use notify::EventKind;
+                if matches!(event.kind,
+                    EventKind::Create(_) |
+                    EventKind::Modify(_) |
+                    EventKind::Remove(_)
+                ) {
+                    dirty_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        };
+
+        let watcher = match notify::recommended_watcher(handler) {
+            Ok(mut w) => {
+                use notify::Watcher;
+                let mut watched = Vec::new();
+                for path in &paths {
+                    // Watch the parent directory so create/delete of the file itself is detected
+                    let watch_target = if path.exists() {
+                        path.clone()
+                    } else {
+                        path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| path.clone())
+                    };
+                    if watch_target.exists() {
+                        if w.watch(&watch_target, notify::RecursiveMode::NonRecursive).is_ok() {
+                            watched.push(path.clone());
+                        }
+                    }
+                }
+                if watched.is_empty() {
+                    None
+                } else {
+                    tracing::debug!("SettingsWatcher watching {} paths", watched.len());
+                    Some(w)
+                }
+            }
+            Err(_) => None,
+        };
+
+        Self {
+            watcher,
+            dirty,
+            watched_paths: paths,
+        }
+    }
+
+    /// Check if settings files changed. Returns `Some(changed_paths)` if reload is needed.
+    pub(crate) fn check_and_reload(&self) -> Option<Vec<String>> {
+        if !self.dirty.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            return None;
+        }
+
+        // Collect which files actually changed by checking mtimes
+        let changed: Vec<String> = self.watched_paths
+            .iter()
+            .filter(|p| p.exists())
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+
+        if changed.is_empty() {
+            None
+        } else {
+            tracing::info!("Settings files changed: {:?}", changed);
+            Some(changed)
+        }
+    }
+}

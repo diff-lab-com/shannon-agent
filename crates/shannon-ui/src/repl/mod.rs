@@ -69,7 +69,7 @@ use shannon_mcp::{McpProcessPool, discover_pooled_tools, discover_pooled_remote_
 pub use state::{ReplState, LoopState, RalphState, SidebarTab, AgentDisplay, PlanState};
 
 // Re-export custom_commands types used by other modules
-pub(crate) use custom_commands::CustomCommandWatcher;
+pub(crate) use custom_commands::{CustomCommandWatcher, SettingsWatcher};
 pub(super) use custom_commands::{collect_custom_commands, dedup_custom_commands, CustomCommandEntry};
 
 /// Main REPL application struct
@@ -148,6 +148,8 @@ pub struct Repl {
     pub(crate) instruction_watcher: Option<shannon_core::project_instructions::InstructionWatcher>,
     /// Custom command file watcher for hot-reloading .claude/commands/ and .shannon/commands/
     pub(crate) command_watcher: Option<CustomCommandWatcher>,
+    /// Settings file watcher for hot-reloading settings.json / config.toml
+    pub(crate) settings_watcher: Option<custom_commands::SettingsWatcher>,
     /// Background update check result (deferred to avoid blocking startup)
     pub(crate) update_check_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<String>>>,
     /// Crash-safe JSONL session recovery log (appends each turn with fsync)
@@ -336,6 +338,7 @@ impl Repl {
             webhook_receiver: None,
             instruction_watcher: None,
             command_watcher: None,
+            settings_watcher: None,
             update_check_rx: None,
             session_recovery: shannon_core::SessionRecovery::new().unwrap_or_default(),
             plan_mode_flag: std::sync::Arc::new(std::sync::RwLock::new(false)),
@@ -1087,6 +1090,7 @@ impl Repl {
                 }
             },
             command_watcher: Some(CustomCommandWatcher::new()),
+            settings_watcher: Some(SettingsWatcher::new()),
             update_check_rx: None,
             session_recovery: shannon_core::SessionRecovery::new().unwrap_or_default(),
             plan_mode_flag: plan_mode_flag.clone(),
@@ -1277,6 +1281,9 @@ impl Repl {
 
             // Check custom command files for filesystem changes (notify-based)
             self.check_reload_commands();
+
+            // Check settings files for changes
+            self.check_reload_settings();
 
             // Check scheduled routines and inject due prompts
             let due = self.state.routine_manager.drain_due();

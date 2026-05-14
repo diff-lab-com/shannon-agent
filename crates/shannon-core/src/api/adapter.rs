@@ -57,12 +57,15 @@ fn serialize_openai_request(request: &MessageRequest) -> Value {
             "content": system
         }));
     } else if let Some(ref blocks) = request.system_blocks {
-        // Concatenate structured system blocks into a single string for OpenAI
-        let text: String = blocks.iter().map(|b| b.text.as_str()).collect::<Vec<&str>>().join("\n\n");
-        if !text.is_empty() {
+        // Use structured content array for OpenAI to preserve block boundaries
+        // for better automatic prompt caching alignment.
+        let content_parts: Vec<Value> = blocks.iter().map(|b| {
+            json!({"type": "text", "text": b.text})
+        }).collect();
+        if !content_parts.is_empty() {
             messages.push(json!({
                 "role": "system",
-                "content": text
+                "content": content_parts
             }));
         }
     }

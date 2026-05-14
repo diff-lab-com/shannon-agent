@@ -107,6 +107,9 @@ impl ConversationState {
     ///   full and replaces older messages with a short summary.
     /// - [`CompressionStrategy::TruncateOldest`]: Simply drops the oldest messages,
     ///   keeping only the most recent ones.
+    ///
+    /// Cache-aware: preserves the first message pair (user + assistant) to avoid
+    /// breaking prompt cache prefixes on providers like Anthropic.
     pub fn compress(&mut self, config: &QueryEngineConfig) {
         if self.messages.len() <= config.keep_recent_messages + 1 {
             return; // Not enough messages to compress
@@ -115,9 +118,17 @@ impl ConversationState {
         let keep_count = config.keep_recent_messages;
         let split_point = self.messages.len().saturating_sub(keep_count);
 
+        // Preserve at least the first message pair for cache prefix stability.
+        // The system prompt + first exchange forms the cache prefix on Anthropic.
+        let min_preserve = 2;
+        if split_point <= min_preserve {
+            return; // Can't compress without breaking cache prefix
+        }
+
         match config.compression_strategy {
             crate::query_engine::types::CompressionStrategy::SummarizeOld => {
-                let old_messages: Vec<Message> = self.messages.drain(..split_point).collect();
+                // Drain messages between the cache prefix and the recent tail
+                let old_messages: Vec<Message> = self.messages.drain(min_preserve..split_point).collect();
                 let summary = Self::summarize_messages(&old_messages);
 
                 // Create a summary message as a system message
@@ -128,12 +139,12 @@ impl ConversationState {
                     ),
                 };
 
-                // Insert summary at the beginning
-                self.messages.insert(0, summary_msg);
+                // Insert summary after the preserved cache prefix
+                self.messages.insert(min_preserve, summary_msg);
             }
             crate::query_engine::types::CompressionStrategy::TruncateOldest => {
-                // Simply drop the oldest messages without summary
-                self.messages.drain(..split_point);
+                // Drop the oldest messages between cache prefix and recent tail
+                self.messages.drain(min_preserve..split_point);
             }
         }
     }

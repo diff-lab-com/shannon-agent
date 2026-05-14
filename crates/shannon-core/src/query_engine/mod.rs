@@ -160,7 +160,7 @@ mod tests {
         };
 
         let mut conv = ConversationState::default();
-        for i in 0..5 {
+        for i in 0..8 {
             conv.messages.push(crate::api::Message {
                 role: "user".to_string(),
                 content: crate::api::MessageContent::Text(format!("Message {i}")),
@@ -170,17 +170,33 @@ mod tests {
         let original_count = conv.messages.len();
         conv.compress(&config);
 
-        // Should have summary + 2 recent messages = 3 messages total
-        assert_eq!(conv.messages.len(), 3);
+        // Cache-aware: [m0, m1, summary, m6, m7] = 5 messages
+        assert_eq!(conv.messages.len(), 5);
         assert!(original_count > conv.messages.len());
 
-        // First message should be a summary
+        // First two messages are preserved cache prefix
         match &conv.messages[0].content {
+            crate::api::MessageContent::Text(text) => {
+                assert_eq!(text, "Message 0");
+            }
+            _ => panic!("First message should be preserved cache prefix"),
+        }
+
+        // Summary inserted after cache prefix
+        match &conv.messages[2].content {
             crate::api::MessageContent::Text(text) => {
                 assert!(text.contains("[Previous conversation summary]"));
                 assert!(text.contains("Summary of"));
             }
-            _ => panic!("First message should be a text summary"),
+            _ => panic!("Expected summary message after cache prefix"),
+        }
+
+        // Last message is the most recent
+        match &conv.messages[4].content {
+            crate::api::MessageContent::Text(text) => {
+                assert_eq!(text, "Message 7");
+            }
+            _ => panic!("Last message should be the most recent"),
         }
     }
 
@@ -766,23 +782,35 @@ mod tests {
             ..Default::default()
         };
         let mut conv = ConversationState::default();
-        for i in 0..4 {
+        // Need enough messages that split_point > min_preserve (2)
+        for i in 0..6 {
             conv.messages.push(crate::api::Message {
                 role: "user".to_string(),
                 content: crate::api::MessageContent::Text(format!("Message {i}")),
             });
         }
         conv.compress(&config);
-        assert_eq!(conv.messages.len(), 3);
+        // drain(2..4) removes 2 messages, summary inserted at 2
+        // [m0, m1, summary, m4, m5] = 5 messages
+        assert_eq!(conv.messages.len(), 5);
+        // First 2 preserved for cache prefix
         match &conv.messages[0].content {
+            crate::api::MessageContent::Text(text) => {
+                assert_eq!(text, "Message 0");
+            }
+            _ => panic!("Expected text content"),
+        }
+        // Summary inserted after cache prefix
+        match &conv.messages[2].content {
             crate::api::MessageContent::Text(text) => {
                 assert!(text.contains("[Previous conversation summary]"));
             }
             _ => panic!("Expected text content"),
         }
-        match &conv.messages[2].content {
+        // Recent messages preserved at the tail
+        match &conv.messages[4].content {
             crate::api::MessageContent::Text(text) => {
-                assert_eq!(text, "Message 3");
+                assert_eq!(text, "Message 5");
             }
             _ => panic!("Expected text content"),
         }
@@ -964,7 +992,8 @@ mod tests {
             ..QueryEngineConfig::default()
         };
 
-        for i in 0..5 {
+        // Need enough messages that split_point > min_preserve (2)
+        for i in 0..8 {
             state.messages.push(crate::api::Message {
                 role: "user".to_string(),
                 content: crate::api::MessageContent::Blocks(vec![crate::api::ContentBlock::Text {
