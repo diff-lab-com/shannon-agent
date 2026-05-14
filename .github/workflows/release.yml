@@ -28,6 +28,9 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             artifact: shannon-code-windows-x64
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+            artifact: shannon-code-windows-arm64
 
     steps:
       - uses: actions/checkout@v4
@@ -42,6 +45,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
 
       - name: Build
         run: cargo build --release -p shannon-cli -p shannon-agent --target ${{ matrix.target }}
@@ -55,6 +59,7 @@ jobs:
           cp LICENSE dist/ 2>/dev/null || true
           cp README.md dist/ 2>/dev/null || true
           cd dist && tar czf ${{ matrix.artifact }}.tar.gz *
+          sha256sum ${{ matrix.artifact }}.tar.gz > ${{ matrix.artifact }}.tar.gz.sha256
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -66,6 +71,8 @@ jobs:
           Copy-Item LICENSE dist/ -ErrorAction SilentlyContinue
           Copy-Item README.md dist/ -ErrorAction SilentlyContinue
           Compress-Archive -Path dist/* -DestinationPath dist/${{ matrix.artifact }}.zip
+          $hash = Get-FileHash dist/${{ matrix.artifact }}.zip -Algorithm SHA256
+          $hash.Hash | Out-File -FilePath dist/${{ matrix.artifact }}.zip.sha256 -Encoding utf8
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
