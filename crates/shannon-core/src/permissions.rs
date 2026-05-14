@@ -2614,6 +2614,34 @@ mod tests {
     }
 
     #[test]
+    fn test_permission_rule_regex_injection_prevented() {
+        // Regex metacharacters in patterns should be escaped, not interpreted.
+        // Without regex::escape(), "Bash((?:a+)+b)" would be treated as regex
+        // and could cause ReDoS.
+        let rule = PermissionRule::new(
+            "Bash((?:a+)+b)".to_string(),
+            PermissionRuleDecision::Deny,
+            PermissionRuleSource::User,
+        );
+        // The literal pattern should NOT match "Bash" with "aaaaab"
+        assert!(!rule.matches("Bash", "aaaaab"));
+        // But it should match the literal string "(?:a+)+b"
+        assert!(rule.matches("Bash", "(?:a+)+b"));
+    }
+
+    #[test]
+    fn test_permission_rule_special_chars_in_pattern() {
+        // Ensure characters like . + ? ( ) [ ] { } | ^ $ are treated literally
+        let rule = PermissionRule::new(
+            "Bash(git stash@{0})".to_string(),
+            PermissionRuleDecision::Allow,
+            PermissionRuleSource::Project,
+        );
+        assert!(rule.matches("Bash", "git stash@{0}"));
+        assert!(!rule.matches("Bash", "git stash@{1}"));
+    }
+
+    #[test]
     fn test_permission_rule_set_creation() {
         let rule_set = PermissionRuleSet::new();
         assert_eq!(rule_set.rules().len(), 0);

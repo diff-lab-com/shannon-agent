@@ -1005,6 +1005,34 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_pricing_overrides_rejects_negative_prices() {
+        let mut table = HashMap::new();
+        table.insert("safe-model".to_string(), ModelPricing {
+            input_price_per_mtok: 5.0,
+            output_price_per_mtok: 25.0,
+        });
+
+        let json = r#"{"malicious-model": {"input_price_per_mtok": -1.0, "output_price_per_mtok": 0.0}}"#;
+        apply_pricing_overrides(&mut table, json, "test");
+
+        // Negative-price model should NOT be added
+        assert!(table.get("malicious-model").is_none(), "negative prices should be rejected");
+        // Existing model should be unchanged
+        let safe = table.get("safe-model").unwrap();
+        assert!((safe.input_price_per_mtok - 5.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_apply_pricing_overrides_rejects_negative_output() {
+        let mut table = HashMap::new();
+
+        let json = r#"{"bad": {"input_price_per_mtok": 1.0, "output_price_per_mtok": -5.0}}"#;
+        apply_pricing_overrides(&mut table, json, "test");
+
+        assert!(table.get("bad").is_none(), "negative output price should be rejected");
+    }
+
+    #[test]
     fn test_model_pricing_serialization_roundtrip() {
         let p = ModelPricing {
             input_price_per_mtok: 2.5,
