@@ -165,6 +165,8 @@ pub fn tool_category(tool_name: &str) -> ToolCategory {
         "write" | "edit" | "create" | "delete" | "mkdir" | "mv" | "cp" | "patch" => ToolCategory::Write,
         // Agent tools
         "agent" | "subagent" | "delegate" | "task" => ToolCategory::Agent,
+        // Skill tools (registered as skill_{id})
+        _ if tool_name.starts_with("skill_") => ToolCategory::Skill,
         _ => {
             // Heuristic: MCP tools typically contain double underscores or dots
             if tool_name.contains("__") || tool_name.contains('.') {
@@ -184,6 +186,7 @@ pub enum ToolCategory {
     Search,
     Bash,
     Agent,
+    Skill,
 }
 
 /// Maximum lines to show in a read-mode summary.
@@ -230,6 +233,7 @@ pub fn format_write_result(tool_name: &str, result: &str, is_error: bool) -> Str
         ToolCategory::Search => ("\u{229B}", colors::MAGENTA),  // ⊛ search
         ToolCategory::Bash => ("$", colors::GREEN),              // $ bash
         ToolCategory::Agent => ("\u{25C6}", colors::CYAN),      // ◆ agent
+        ToolCategory::Skill => ("\u{2726}", colors::MAGENTA),   // ✦ skill
     };
     let mut output = String::new();
     output.push_str(&format!("{color}{icon} --- {tool_name} ---{}\n", colors::RESET));
@@ -268,7 +272,7 @@ pub fn format_tool_result(tool_name: &str, result: &str, is_error: bool) -> Stri
     } else {
         match tool_category(tool_name) {
             ToolCategory::Read | ToolCategory::Search => format_read_summary(tool_name, result),
-            ToolCategory::Write | ToolCategory::Bash | ToolCategory::Agent => format_write_result(tool_name, result, false),
+            ToolCategory::Write | ToolCategory::Bash | ToolCategory::Agent | ToolCategory::Skill => format_write_result(tool_name, result, false),
         }
     }
 }
@@ -1825,5 +1829,16 @@ mod tests {
         assert_eq!(classify_diff_line("-removed"), DiffLineKind::Removed);
         assert_eq!(classify_diff_line(" context"), DiffLineKind::Context);
         assert_eq!(classify_diff_line("\\ No newline at end of file"), DiffLineKind::NoNewline);
+    }
+
+    #[test]
+    fn test_tool_category_skill() {
+        assert_eq!(tool_category("skill_commit"), ToolCategory::Skill);
+        assert_eq!(tool_category("skill_my-custom-skill"), ToolCategory::Skill);
+        assert_eq!(tool_category("skill_pdf"), ToolCategory::Skill);
+        // Non-skill tools should still match their categories
+        assert_eq!(tool_category("bash"), ToolCategory::Bash);
+        assert_eq!(tool_category("read"), ToolCategory::Read);
+        assert_eq!(tool_category("agent"), ToolCategory::Agent);
     }
 }

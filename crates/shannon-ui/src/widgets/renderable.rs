@@ -75,6 +75,7 @@ fn category_style(cat: ToolCategory, theme: &Theme) -> (&'static str, &'static s
         ToolCategory::Search => ("\u{229B}", "", theme.tool_search),
         ToolCategory::Bash => ("", "$ ", theme.tool_bash),
         ToolCategory::Agent => ("\u{25C6}", "", theme.accent),
+        ToolCategory::Skill => ("\u{2726}", "", theme.accent),
     }
 }
 

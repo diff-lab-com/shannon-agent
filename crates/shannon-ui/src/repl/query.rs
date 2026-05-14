@@ -556,6 +556,14 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                 render_ctx.focus_mode = state.focus_mode;
                 render_ctx.fullscreen_mode = state.fullscreen_mode;
                 render_ctx.auto_follow = state.auto_follow;
+                render_ctx.effort_level = state.effort_level.as_deref();
+                // Pass thinking phase and char count from streaming state
+                if let Ok(s) = streaming.lock() {
+                    render_ctx.thinking_phase = s.thinking_phase;
+                    if s.thinking_phase {
+                        render_ctx.thinking_chars = s.thinking_content.chars().count();
+                    }
+                }
                 crate::widgets::MainLayoutWidget::render_with_ctx(f, &render_ctx);
                 if state.multi_progress_visible {
                     let mp_height = 3u16.min(f.area().height.saturating_sub(10));

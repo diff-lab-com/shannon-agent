@@ -105,6 +105,9 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             search_focused_idx,
             cached_statusline: state.cached_statusline.as_deref(),
             streaming_elapsed: state.streaming_start.map(|t| t.elapsed().as_secs()),
+            effort_level: state.effort_level.as_deref(),
+            thinking_phase: state.thinking_phase,
+            thinking_chars: 0,
         };
         crate::widgets::MainLayoutWidget::render_with_ctx(f, &render_ctx);
 

@@ -115,6 +115,9 @@ pub struct RenderContext<'a> {
     // Other
     pub cached_statusline: Option<&'a str>,
     pub streaming_elapsed: Option<u64>,
+    pub effort_level: Option<&'a str>,
+    pub thinking_phase: bool,
+    pub thinking_chars: usize,
 }
 
 impl<'a> RenderContext<'a> {
@@ -130,6 +133,7 @@ impl<'a> RenderContext<'a> {
             focus_mode: false, fullscreen_mode: false, auto_follow: true,
             search_query: None, search_matches: &[], search_focused_idx: None,
             cached_statusline: None, streaming_elapsed: None,
+            effort_level: None, thinking_phase: false, thinking_chars: 0,
         }
     }
 }

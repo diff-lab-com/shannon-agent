@@ -95,9 +95,11 @@ fn test_status_bar_shows_no_model_configured() {
             f, area,
             "Ready",
             None, // No model configured
+            None, // No effort level
             None, None, None, None, None, None,
             &theme,
             None, None, None, None, None, None, None, None,
+            false, 0, // thinking
         );
     }).unwrap();
 
@@ -117,9 +119,11 @@ fn test_status_bar_shows_model_name() {
             f, area,
             "Ready",
             Some("gpt-4"),
+            None, // No effort level
             None, None, None, None, None, None,
             &theme,
             None, None, None, None, None, None, None, None,
+            false, 0, // thinking
         );
     }).unwrap();
 
@@ -127,6 +131,56 @@ fn test_status_bar_shows_model_name() {
     let text = buffer_text(&buf, Rect::new(0, 0, 80, 2));
     assert!(text.contains("gpt-4"), "should show model name when configured");
     assert!(!text.contains("No model configured"), "should NOT show 'No model configured' when model is set");
+}
+
+#[test]
+fn test_status_bar_shows_effort_level() {
+    let mut terminal = test_terminal(80, 2);
+    let theme = Theme::default_dark();
+
+    terminal.draw(|f| {
+        let area = Rect::new(0, 0, 80, 2);
+        StatusBarWidget::render_with_spinner(
+            f, area,
+            "Ready",
+            Some("claude-sonnet-4"),
+            Some("high"),
+            None, None, None, None, None, None,
+            &theme,
+            None, None, None, None, None, None, None, None,
+            false, 0,
+        );
+    }).unwrap();
+
+    let buf = terminal.backend().buffer().clone();
+    let text = buffer_text(&buf, Rect::new(0, 0, 80, 2));
+    assert!(text.contains("claude-sonnet-4"), "should show model name");
+    assert!(text.contains("high"), "should show effort level");
+}
+
+#[test]
+fn test_status_bar_shows_thinking_indicator() {
+    let mut terminal = test_terminal(80, 2);
+    let theme = Theme::default_dark();
+
+    terminal.draw(|f| {
+        let area = Rect::new(0, 0, 80, 2);
+        StatusBarWidget::render_with_spinner(
+            f, area,
+            "Thinking...",
+            Some("claude-sonnet-4"),
+            None,
+            None, None, None, None, None, None,
+            &theme,
+            None, None, None, None, None, None, None, None,
+            true, 5000, // thinking phase with 5k chars
+        );
+    }).unwrap();
+
+    let buf = terminal.backend().buffer().clone();
+    let text = buffer_text(&buf, Rect::new(0, 0, 80, 2));
+    assert!(text.contains("Thinking"), "should show thinking status");
+    assert!(text.contains("5k"), "should show thinking char count");
 }
 
 // ── Chat Widget ────────────────────────────────────────────────────

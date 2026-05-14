@@ -48,10 +48,12 @@ impl StatusBarWidget {
             ctx.status.to_string()
         };
         Self::render_with_spinner(
-            frame, area, &status, ctx.model, ctx.tokens_used,
+            frame, area, &status, ctx.model, ctx.effort_level,
+            ctx.tokens_used,
             ctx.max_tokens, ctx.cost_usd, ctx.git_branch, ctx.spinner,
             ctx.progress_bar, ctx.theme, ctx.approval_mode, ctx.token_breakdown,
             ctx.cached_tokens, ctx.diag_counts, ctx.rate_limit, files_info, tools_invoked, session_duration,
+            ctx.thinking_phase, ctx.thinking_chars,
         );
     }
 
@@ -65,6 +67,7 @@ impl StatusBarWidget {
         area: Rect,
         status: &str,
         model: Option<&str>,
+        effort_level: Option<&str>,
         tokens_used: Option<u64>,
         max_tokens: Option<u64>,
         cost_usd: Option<f64>,
@@ -80,6 +83,8 @@ impl StatusBarWidget {
         files_info: Option<(usize, usize, usize)>,
         tools_invoked: Option<usize>,
         session_duration: Option<u64>,
+        thinking_phase: bool,
+        thinking_chars: usize,
     ) {
         // Split area into 2 lines
         let line1 = Rect::new(area.x, area.y, area.width, 1);
@@ -132,11 +137,16 @@ impl StatusBarWidget {
             ));
         }
 
-        // Model (pill-style)
+        // Model (pill-style) with effort level
         if let Some(m) = model {
             left.push(Span::styled(" ", Style::default().fg(theme.border_dim)));
+            let label = if let Some(effort) = effort_level {
+                format!("[{} · {}]", truncate_model(m), effort)
+            } else {
+                format!("[{}]", truncate_model(m))
+            };
             left.push(Span::styled(
-                format!("[{}]", truncate_model(m)),
+                label,
                 Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
             ));
         } else {
@@ -144,6 +154,20 @@ impl StatusBarWidget {
             left.push(Span::styled(
                 "[No model configured]".to_string(),
                 Style::default().fg(theme.warning),
+            ));
+        }
+
+        // Thinking indicator
+        if thinking_phase && thinking_chars > 0 {
+            left.push(Span::styled(" ", Style::default().fg(theme.border_dim)));
+            let chars_label = if thinking_chars >= 1000 {
+                format!("{}k", thinking_chars / 1000)
+            } else {
+                thinking_chars.to_string()
+            };
+            left.push(Span::styled(
+                format!("\u{1F4AD}{chars_label}"),
+                Style::default().fg(theme.accent),
             ));
         }
 
