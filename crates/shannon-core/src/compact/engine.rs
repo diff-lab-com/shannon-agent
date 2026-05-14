@@ -64,7 +64,29 @@ impl CompactEngine {
         client: crate::api::LlmClient,
         handle: tokio::runtime::Handle,
     ) -> Result<Self, CompactError> {
-        Self::new(CompactConfig::default(), Box::new(LlmSummarizer::with_handle(client, handle)))
+        let config = CompactConfig::default();
+        let summarizer = match &config.compact_model {
+            Some(model) => LlmSummarizer::with_handle(client, handle)
+                .with_compact_model(model.clone()),
+            None => LlmSummarizer::with_handle(client, handle),
+        };
+        Self::new(config, Box::new(summarizer))
+    }
+
+    /// Create with an LLM summarizer on an existing runtime, using custom config.
+    ///
+    /// The config's `compact_model` field will be forwarded to the summarizer.
+    pub fn with_llm_on_runtime_and_config(
+        client: crate::api::LlmClient,
+        handle: tokio::runtime::Handle,
+        config: CompactConfig,
+    ) -> Result<Self, CompactError> {
+        let summarizer = match &config.compact_model {
+            Some(model) => LlmSummarizer::with_handle(client, handle)
+                .with_compact_model(model.clone()),
+            None => LlmSummarizer::with_handle(client, handle),
+        };
+        Self::new(config, Box::new(summarizer))
     }
 
     /// Get a reference to the config

@@ -190,6 +190,7 @@ pub struct LlmSummarizer {
     client: crate::api::LlmClient,
     fallback: RuleBasedSummarizer,
     runtime_handle: Option<tokio::runtime::Handle>,
+    compact_model: Option<String>,
 }
 
 impl LlmSummarizer {
@@ -202,6 +203,7 @@ impl LlmSummarizer {
             client,
             fallback: RuleBasedSummarizer::new(),
             runtime_handle: None,
+            compact_model: None,
         }
     }
 
@@ -214,7 +216,23 @@ impl LlmSummarizer {
             client,
             fallback: RuleBasedSummarizer::new(),
             runtime_handle: Some(handle),
+            compact_model: None,
         }
+    }
+
+    /// Set a model override for compaction (e.g. a smaller/cheaper model).
+    pub fn with_compact_model(mut self, model: String) -> Self {
+        self.compact_model = Some(model);
+        self
+    }
+
+    /// Return a client clone with the compact model override applied (if set).
+    fn compact_client(&self) -> crate::api::LlmClient {
+        let mut client = self.client.clone();
+        if let Some(ref model) = self.compact_model {
+            client.set_model(model.clone());
+        }
+        client
     }
 
     /// Execute an async LLM call using the stored handle or a fresh runtime.
@@ -291,9 +309,10 @@ impl Summarizer for LlmSummarizer {
         }
 
         let payload = self.build_summarize_messages(messages, max_tokens);
+        let client = self.compact_client();
 
         let result = self.block_on_llm(async {
-            match self.client.send_message(payload, None, None).await {
+            match client.send_message(payload, None, None).await {
                 Ok(blocks) => {
                     let text: String = blocks
                         .into_iter()
@@ -327,9 +346,10 @@ impl Summarizer for LlmSummarizer {
 
     fn micro_summarize(&self, message: &Message, max_tokens: usize) -> Result<String, CompactError> {
         let payload = self.build_micro_messages(message, max_tokens);
+        let client = self.compact_client();
 
         let result = self.block_on_llm(async {
-            match self.client.send_message(payload, None, None).await {
+            match client.send_message(payload, None, None).await {
                 Ok(blocks) => {
                     let text: String = blocks
                         .into_iter()

@@ -29,7 +29,7 @@ pub struct CompactionConfig {
 impl Default for CompactionConfig {
     fn default() -> Self {
         Self {
-            auto_compact_threshold: 0.85,
+            auto_compact_threshold: 0.75,
             enabled: true,
             strategy: CompactionStrategy::Summarize,
         }

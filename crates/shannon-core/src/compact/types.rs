@@ -42,7 +42,7 @@ pub struct CompactConfig {
     pub max_output_tokens: usize,
     /// Number of recent messages to keep in full (default: 10)
     pub keep_recent_count: usize,
-    /// Fraction of max context to trigger auto-compact (default: 0.8)
+    /// Fraction of max context to trigger auto-compact (default: 0.75)
     pub trigger_threshold: f32,
     /// Enable single-message compression for oversized results
     pub enable_micro_compact: bool,
@@ -52,6 +52,10 @@ pub struct CompactConfig {
     pub enable_session_memory_compact: bool,
     /// Maximum context window size in tokens (default: 200_000)
     pub max_context_tokens: usize,
+    /// Optional model override for compaction (e.g. use a smaller/cheaper model).
+    /// When set, the LLM summarizer will use this model instead of the main client model.
+    /// Defaults to None (use the main conversation model).
+    pub compact_model: Option<String>,
 }
 
 impl Default for CompactConfig {
@@ -59,11 +63,12 @@ impl Default for CompactConfig {
         Self {
             max_output_tokens: 2000,
             keep_recent_count: 10,
-            trigger_threshold: 0.8,
+            trigger_threshold: 0.75,
             enable_micro_compact: true,
             micro_compact_threshold: 4096,
             enable_session_memory_compact: true,
             max_context_tokens: 200_000,
+            compact_model: None,
         }
     }
 }

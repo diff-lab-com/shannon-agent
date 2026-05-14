@@ -80,7 +80,7 @@ mod tests {
         let config = CompactConfig::default();
         assert_eq!(config.max_output_tokens, 2000);
         assert_eq!(config.keep_recent_count, 10);
-        assert!((config.trigger_threshold - 0.8).abs() < 0.001);
+        assert!((config.trigger_threshold - 0.75).abs() < 0.001);
         assert!(config.enable_micro_compact);
         assert_eq!(config.micro_compact_threshold, 4096);
         assert!(config.enable_session_memory_compact);
@@ -988,7 +988,7 @@ mod tests {
     #[test]
     fn test_compaction_config_default() {
         let config = CompactionConfig::default();
-        assert!((config.auto_compact_threshold - 0.85).abs() < 0.001);
+        assert!((config.auto_compact_threshold - 0.75).abs() < 0.001);
         assert!(config.enabled);
         assert!(matches!(config.strategy, CompactionStrategy::Summarize));
     }
