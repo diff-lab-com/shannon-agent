@@ -588,9 +588,15 @@ impl QueryEngine {
         let mut system_blocks: Vec<SystemContentBlock> = Vec::new();
         let use_cache = matches!(client_provider, crate::api::LlmProvider::Anthropic | crate::api::LlmProvider::Bedrock | crate::api::LlmProvider::Custom);
 
-        // Base system prompt
+        // Base system prompt — always cache the system prompt prefix for Anthropic,
+        // as it's identical across all turns and the largest cache savings come from here.
         if let Some(ref base) = config.system_prompt {
-            system_blocks.push(SystemContentBlock::text(base.clone()));
+            let block = if use_cache {
+                SystemContentBlock::cached(base.clone())
+            } else {
+                SystemContentBlock::text(base.clone())
+            };
+            system_blocks.push(block);
         }
 
         // Memory entries

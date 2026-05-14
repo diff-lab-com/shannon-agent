@@ -212,6 +212,9 @@ pub enum AgentEvent {
 pub struct AgentProcessManager {
     /// Running agent handles, keyed by agent name.
     agents: Arc<RwLock<HashMap<String, AgentHandle>>>,
+    /// JoinHandles for spawned background tasks (timeout guards, watchers).
+    /// Aborted on drop to prevent leaked tasks.
+    task_handles: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
     /// Next RPC request ID.
     next_rpc_id: AtomicU64,
     /// Event receiver — consume events via `recv()`.
@@ -226,6 +229,12 @@ impl Drop for AgentProcessManager {
     fn drop(&mut self) {
         if let Some(handle) = self.health_monitor_handle.lock().ok().and_then(|mut g| g.take()) {
             handle.abort();
+        }
+        // Abort all tracked background tasks (timeout guards, watchers)
+        if let Ok(mut handles) = self.task_handles.lock() {
+            for handle in handles.drain(..) {
+                handle.abort();
+            }
         }
     }
 }
@@ -242,6 +251,7 @@ impl AgentProcessManager {
         let (event_tx, event_rx) = mpsc::channel(256);
         Self {
             agents: Arc::new(RwLock::new(HashMap::new())),
+            task_handles: Arc::new(std::sync::Mutex::new(Vec::new())),
             next_rpc_id: AtomicU64::new(1),
             event_rx,
             event_tx,
@@ -252,6 +262,15 @@ impl AgentProcessManager {
     /// Allocate a new RPC request ID.
     fn next_id(&self) -> i64 {
         self.next_rpc_id.fetch_add(1, Ordering::Relaxed) as i64
+    }
+
+    /// Track a spawned background task for cleanup on drop.
+    fn track_task(&self, handle: tokio::task::JoinHandle<()>) {
+        if let Ok(mut handles) = self.task_handles.lock() {
+            // Prune completed handles to avoid unbounded growth
+            handles.retain(|h| !h.is_finished());
+            handles.push(handle);
+        }
     }
 
     /// Spawn a new agent process.
@@ -335,14 +354,15 @@ impl AgentProcessManager {
         let rpc_map_for_reader = pending_rpcs.clone();
 
         // Spawn a reader task that reads lines from stdout and dispatches
-        tokio::spawn(async move {
+        let read_handle = tokio::spawn(async move {
             Self::read_loop(stdout, event_tx, agent_name_for_reader, rpc_map_for_reader).await;
         });
+        self.track_task(read_handle);
 
         // Spawn a watcher for process exit + kill signal
         let event_tx_exit = self.event_tx.clone();
         let name_exit = name.clone();
-        tokio::spawn(async move {
+        let watcher_handle = tokio::spawn(async move {
             // Wait for kill signal or just let it drop
             let _ = kill_rx.await;
             // The child will be killed when AgentHandle is dropped
@@ -351,6 +371,7 @@ impl AgentProcessManager {
                 exit_code: None,
             }).await;
         });
+        self.track_task(watcher_handle);
 
         let handle = AgentHandle {
             child,
@@ -372,7 +393,7 @@ impl AgentProcessManager {
         let timeout_agents = self.agents.clone();
         let timeout_event_tx = self.event_tx.clone();
         let startup_timeout = Duration::from_secs(startup_timeout_secs);
-        tokio::spawn(async move {
+        let timeout_handle = tokio::spawn(async move {
             tokio::time::sleep(startup_timeout).await;
             let mut agents = timeout_agents.write().await;
             if let Some(handle) = agents.get_mut(&timeout_name) {
@@ -387,6 +408,7 @@ impl AgentProcessManager {
                 }
             }
         });
+        self.track_task(timeout_handle);
 
         tracing::info!(agent = %name, "Spawned agent process");
         Ok(name)
