@@ -18,6 +18,12 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{mpsc, oneshot, RwLock};
 
+/// Environment variables blocked from being passed to agent processes.
+const BLOCKED_ENV: &[&str] = &[
+    "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH", "__KMP_REGISTERED_LIBRARIES",
+];
+
 /// Status of an agent process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentProcessStatus {
@@ -99,7 +105,6 @@ impl Default for HealthCheckConfig {
 }
 
 /// A pending RPC response waiter.
-#[allow(dead_code)]
 struct PendingRpc {
     sender: oneshot::Sender<Result<JsonRpcMessage, String>>,
 }
@@ -115,8 +120,8 @@ pub struct AgentHandle {
     name: String,
     /// Current status.
     status: AgentProcessStatus,
-    /// Pending RPC responses keyed by request ID.
-    pending_rpcs: HashMap<i64, PendingRpc>,
+    /// Pending RPC responses keyed by request ID (shared with read_loop).
+    pending_rpcs: Arc<std::sync::Mutex<HashMap<i64, PendingRpc>>>,
     /// Channel for receiving events (notifications) from the agent.
     event_tx: mpsc::Sender<AgentEvent>,
     /// Kill handle sender — drop the child on shutdown.
@@ -188,6 +193,16 @@ pub struct AgentProcessManager {
     event_rx: mpsc::Receiver<AgentEvent>,
     /// Event sender — cloned for each agent.
     event_tx: mpsc::Sender<AgentEvent>,
+    /// Health monitor task handle — aborted on drop.
+    health_monitor_handle: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+impl Drop for AgentProcessManager {
+    fn drop(&mut self) {
+        if let Some(handle) = self.health_monitor_handle.lock().ok().and_then(|mut g| g.take()) {
+            handle.abort();
+        }
+    }
 }
 
 impl Default for AgentProcessManager {
@@ -205,6 +220,7 @@ impl AgentProcessManager {
             next_rpc_id: AtomicU64::new(1),
             event_rx,
             event_tx,
+            health_monitor_handle: std::sync::Mutex::new(None),
         }
     }
 
@@ -222,6 +238,14 @@ impl AgentProcessManager {
         config: AgentProcessConfig,
     ) -> Result<String, AgentProcessError> {
         let name = config.agent_name.clone();
+
+        // Validate binary path exists and is executable
+        let binary_path = std::path::Path::new(&config.binary_path);
+        if !binary_path.exists() {
+            return Err(AgentProcessError::AgentNotFound(
+                format!("Agent binary not found: {}", binary_path.display())
+            ));
+        }
 
         // Build command — uses `shannon --team-agent` to reuse the main binary
         let mut cmd = Command::new(&config.binary_path);
@@ -244,7 +268,12 @@ impl AgentProcessManager {
             cmd.arg("--allowed-tools").arg(tools.join(","));
         }
         cmd.args(&config.args);
-        cmd.envs(&config.env);
+        // Filter dangerous env vars that could enable code injection
+        for (key, value) in &config.env {
+            if !BLOCKED_ENV.contains(&key.as_str()) {
+                cmd.env(key, value);
+            }
+        }
         cmd.stdout(std::process::Stdio::piped())
             .stdin(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
@@ -276,10 +305,12 @@ impl AgentProcessManager {
 
         let event_tx = self.event_tx.clone();
         let agent_name_for_reader = name.clone();
+        let pending_rpcs = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let rpc_map_for_reader = pending_rpcs.clone();
 
         // Spawn a reader task that reads lines from stdout and dispatches
         tokio::spawn(async move {
-            Self::read_loop(stdout, event_tx, agent_name_for_reader).await;
+            Self::read_loop(stdout, event_tx, agent_name_for_reader, rpc_map_for_reader).await;
         });
 
         // Spawn a watcher for process exit + kill signal
@@ -300,7 +331,7 @@ impl AgentProcessManager {
             stdin,
             name: name.clone(),
             status: AgentProcessStatus::Starting,
-            pending_rpcs: HashMap::new(),
+            pending_rpcs,
             event_tx: self.event_tx.clone(),
             _kill_tx: kill_tx,
             config,
@@ -329,7 +360,10 @@ impl AgentProcessManager {
             .ok_or_else(|| AgentProcessError::AgentNotFound(agent_name.to_string()))?;
 
         let (tx, rx) = oneshot::channel();
-        handle.pending_rpcs.insert(rpc_id, PendingRpc { sender: tx });
+        {
+            let mut rpcs = handle.pending_rpcs.lock().unwrap();
+            rpcs.insert(rpc_id, PendingRpc { sender: tx });
+        }
 
         let line = frame_message(&msg)
             .map_err(|e| AgentProcessError::Protocol(e.to_string()))?;
@@ -415,11 +449,17 @@ impl AgentProcessManager {
         // Wait for the process to exit
         let deadline = Instant::now() + timeout;
         loop {
-            let agents = self.agents.read().await;
-            let running = agents.contains_key(agent_name);
-            drop(agents);
+            let exited = {
+                let mut agents = self.agents.write().await;
+                match agents.get_mut(agent_name) {
+                    Some(handle) => {
+                        matches!(handle.child.try_wait(), Ok(Some(_)))
+                    }
+                    None => true,
+                }
+            };
 
-            if !running {
+            if exited {
                 tracing::info!(agent = %agent_name, "Agent exited gracefully");
                 return Ok(());
             }
@@ -497,7 +537,7 @@ impl AgentProcessManager {
         let max_restarts = health_config.max_restart_attempts;
         let grace_period = Duration::from_secs(health_config.startup_grace_period_secs);
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             // Wait for initial grace period
             tokio::time::sleep(grace_period).await;
 
@@ -582,7 +622,12 @@ impl AgentProcessManager {
                                     cmd.arg("--permission-mode").arg(mode);
                                 }
                                 cmd.args(&config.args);
-                                cmd.envs(&config.env);
+                                // Apply same env filtering as spawn path
+                                for (key, value) in &config.env {
+                                    if !BLOCKED_ENV.contains(&key.as_str()) {
+                                        cmd.env(key, value);
+                                    }
+                                }
                                 cmd.stdout(std::process::Stdio::piped())
                                     .stdin(std::process::Stdio::piped())
                                     .stderr(std::process::Stdio::piped());
@@ -598,8 +643,10 @@ impl AgentProcessManager {
                                             (Some(stdin), Some(stdout)) => {
                                                 let evt_clone = event_tx.clone();
                                                 let name_reader = name.clone();
+                                                let rpc_map = Arc::new(std::sync::Mutex::new(HashMap::new()));
+                                                let rpc_map_reader = rpc_map.clone();
                                                 tokio::spawn(async move {
-                                                    Self::read_loop(stdout, evt_clone, name_reader).await;
+                                                    Self::read_loop(stdout, evt_clone, name_reader, rpc_map_reader).await;
                                                 });
 
                                                 let evt_exit = event_tx.clone();
@@ -617,7 +664,7 @@ impl AgentProcessManager {
                                                     stdin,
                                                     name: name.clone(),
                                                     status: AgentProcessStatus::Starting,
-                                                    pending_rpcs: HashMap::new(),
+                                                    pending_rpcs: rpc_map,
                                                     event_tx: event_tx.clone(),
                                                     _kill_tx: kill_tx,
                                                     config,
@@ -678,6 +725,7 @@ impl AgentProcessManager {
                 }
             }
         });
+        self.health_monitor_handle.lock().unwrap().replace(handle);
     }
 
     /// Get the status of an agent.
@@ -717,6 +765,7 @@ impl AgentProcessManager {
         stdout: ChildStdout,
         event_tx: mpsc::Sender<AgentEvent>,
         agent_name: String,
+        pending_rpcs: Arc<std::sync::Mutex<HashMap<i64, PendingRpc>>>,
     ) {
         let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
@@ -811,10 +860,21 @@ impl AgentProcessManager {
                         );
                     }
                 }
+            } else if let Some(rpc_id) = msg.id.as_ref().and_then(|id| match id {
+                protocol::JsonRpcId::Number(n) => Some(*n),
+                _ => None,
+            }) {
+                // JSON-RPC response (has id, no method) — dispatch to pending waiter
+                if let Some(pending) = pending_rpcs.lock().unwrap().remove(&rpc_id) {
+                    let _ = pending.sender.send(Ok(msg));
+                } else {
+                    tracing::debug!(
+                        agent = %agent_name,
+                        rpc_id,
+                        "Received response for unknown RPC request"
+                    );
+                }
             }
-            // If it's a response (has id, no method), it would be handled by
-            // pending RPC lookups. For simplicity in the initial implementation,
-            // responses are dispatched via events too.
         }
 
         tracing::info!(agent = %agent_name, "Agent stdout closed");

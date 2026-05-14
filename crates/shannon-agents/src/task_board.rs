@@ -212,6 +212,10 @@ impl TaskBoard {
             return Err(AgentError::Task(TaskError::TaskBlocked(task_id)));
         }
 
+        if task.owner.is_some() {
+            return Err(AgentError::Task(TaskError::InvalidTaskState(task_id)));
+        }
+
         task.assign_to(agent.clone());
 
         let assignment = TaskAssignment {

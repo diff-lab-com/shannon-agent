@@ -73,21 +73,19 @@ impl TeamContext {
         }
 
         let coordinator_config = CoordinatorConfig::default();
-        let coordinator = Arc::new(AgentCoordinator::new(coordinator_config).await?);
-        let registry = Arc::new(SubAgentRegistry::new(coordinator.clone()));
+        let mut coordinator = Arc::new(AgentCoordinator::new(coordinator_config).await?);
 
-        // Initialize file persistence and load existing state from disk
+        // Initialize file persistence before creating registry (which clones Arc)
         if let Ok(persist) = FilePersistence::new() {
-            // We need mutable access to set persistence, so use Arc::get_mut
-            // If that fails (multiple refs), fall back to skipping persistence
-            if let Some(coord) = Arc::get_mut(&mut coordinator.clone()) {
+            if let Some(coord) = Arc::get_mut(&mut coordinator) {
                 coord.set_persistence(persist);
             }
-            // Try to load existing teams from disk (read-only call)
-            if let Ok(count) = coordinator.load_from_disk().await {
-                if count > 0 {
-                    tracing::info!(teams_loaded = count, "Loaded persisted teams from disk");
-                }
+        }
+
+        let registry = Arc::new(SubAgentRegistry::new(coordinator.clone()));
+        if let Ok(count) = coordinator.load_from_disk().await {
+            if count > 0 {
+                tracing::info!(teams_loaded = count, "Loaded persisted teams from disk");
             }
         }
 
@@ -118,17 +116,19 @@ impl TeamContext {
             ));
         }
 
-        let coordinator = Arc::new(AgentCoordinator::new(coordinator_config).await?);
-        let registry = Arc::new(SubAgentRegistry::new(coordinator.clone()));
+        let mut coordinator = Arc::new(AgentCoordinator::new(coordinator_config).await?);
 
+        // Initialize file persistence before creating registry (which clones Arc)
         if let Ok(persist) = FilePersistence::new() {
-            if let Some(coord) = Arc::get_mut(&mut coordinator.clone()) {
+            if let Some(coord) = Arc::get_mut(&mut coordinator) {
                 coord.set_persistence(persist);
             }
-            if let Ok(count) = coordinator.load_from_disk().await {
-                if count > 0 {
-                    tracing::info!(teams_loaded = count, "Loaded persisted teams from disk");
-                }
+        }
+
+        let registry = Arc::new(SubAgentRegistry::new(coordinator.clone()));
+        if let Ok(count) = coordinator.load_from_disk().await {
+            if count > 0 {
+                tracing::info!(teams_loaded = count, "Loaded persisted teams from disk");
             }
         }
 

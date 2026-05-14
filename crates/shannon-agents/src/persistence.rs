@@ -21,6 +21,26 @@ use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
+/// Reject path components that could enable directory traversal.
+fn sanitize_path_component(name: &str, label: &str) -> Result<(), AgentError> {
+    if name.is_empty() || name == "." || name == ".." || name.chars().all(|c| c == '.') {
+        return Err(AgentError::Configuration(format!(
+            "{label} must not be empty or all-dots"
+        )));
+    }
+    if name.contains('/') || name.contains('\\') {
+        return Err(AgentError::Configuration(format!(
+            "{label} must not contain path separators"
+        )));
+    }
+    if name.contains("..") {
+        return Err(AgentError::Configuration(format!(
+            "{label} must not contain '..'"
+        )));
+    }
+    Ok(())
+}
+
 // ── Persisted data structures ────────────────────────────────────────
 
 /// Persisted team configuration, written to `config.json`.
@@ -137,7 +157,7 @@ impl FilePersistence {
 
     /// Save a team's configuration to disk.
     pub fn save_team(&self, team: &TeamConfigFile) -> Result<(), AgentError> {
-        let team_dir = self.team_dir(&team.name);
+        let team_dir = self.team_dir(&team.name)?;
         std::fs::create_dir_all(&team_dir)
             .map_err(AgentError::Io)?;
 
@@ -157,7 +177,7 @@ impl FilePersistence {
 
     /// Load a team's configuration from disk.
     pub fn load_team(&self, team_name: &str) -> Result<TeamConfigFile, AgentError> {
-        let config_path = self.team_dir(team_name).join("config.json");
+        let config_path = self.team_dir(team_name)?.join("config.json");
         let json = std::fs::read_to_string(&config_path)
             .map_err(AgentError::Io)?;
         serde_json::from_str(&json)
@@ -189,7 +209,7 @@ impl FilePersistence {
 
     /// Delete a team directory from disk.
     pub fn delete_team(&self, team_name: &str) -> Result<(), AgentError> {
-        let team_dir = self.team_dir(team_name);
+        let team_dir = self.team_dir(team_name)?;
         if team_dir.exists() {
             std::fs::remove_dir_all(&team_dir)
                 .map_err(AgentError::Io)?;
@@ -201,7 +221,7 @@ impl FilePersistence {
 
     /// Save a task to disk with file locking for concurrency safety.
     pub fn save_task(&self, team_name: &str, task: &TaskFile) -> Result<(), AgentError> {
-        let tasks_dir = self.tasks_dir(team_name);
+        let tasks_dir = self.tasks_dir(team_name)?;
         std::fs::create_dir_all(&tasks_dir)
             .map_err(AgentError::Io)?;
 
@@ -237,7 +257,7 @@ impl FilePersistence {
 
     /// Load a single task from disk with shared (read) lock.
     pub fn load_task(&self, team_name: &str, task_id: &str) -> Result<TaskFile, AgentError> {
-        let tasks_dir = self.tasks_dir(team_name);
+        let tasks_dir = self.tasks_dir(team_name)?;
         let task_path = tasks_dir.join(format!("{task_id}.json"));
         let lock_path = tasks_dir.join(format!("{task_id}.lock"));
 
@@ -265,7 +285,7 @@ impl FilePersistence {
 
     /// Load all tasks for a team from disk.
     pub fn load_tasks(&self, team_name: &str) -> Result<Vec<TaskFile>, AgentError> {
-        let tasks_dir = self.tasks_dir(team_name);
+        let tasks_dir = self.tasks_dir(team_name)?;
         if !tasks_dir.exists() {
             return Ok(Vec::new());
         }
@@ -298,7 +318,7 @@ impl FilePersistence {
 
     /// Delete a task file from disk.
     pub fn delete_task(&self, team_name: &str, task_id: &str) -> Result<(), AgentError> {
-        let tasks_dir = self.tasks_dir(team_name);
+        let tasks_dir = self.tasks_dir(team_name)?;
         let task_path = tasks_dir.join(format!("{task_id}.json"));
         let lock_path = tasks_dir.join(format!("{task_id}.lock"));
 
@@ -329,7 +349,7 @@ impl FilePersistence {
 
     /// Read the current high-watermark for auto-incrementing task IDs.
     pub fn read_highwatermark(&self, team_name: &str) -> Result<u64, AgentError> {
-        let path = self.tasks_dir(team_name).join(".highwatermark");
+        let path = self.tasks_dir(team_name)?.join(".highwatermark");
         if !path.exists() {
             return Ok(0);
         }
@@ -343,7 +363,7 @@ impl FilePersistence {
 
     /// Write the next high-watermark value.
     pub fn write_highwatermark(&self, team_name: &str, value: u64) -> Result<(), AgentError> {
-        let tasks_dir = self.tasks_dir(team_name);
+        let tasks_dir = self.tasks_dir(team_name)?;
         std::fs::create_dir_all(&tasks_dir)
             .map_err(AgentError::Io)?;
 
@@ -373,7 +393,7 @@ impl FilePersistence {
     ///
     /// Uses file locking to ensure that concurrent agents get unique IDs.
     pub fn next_task_id(&self, team_name: &str) -> Result<u64, AgentError> {
-        let tasks_dir = self.tasks_dir(team_name);
+        let tasks_dir = self.tasks_dir(team_name)?;
         std::fs::create_dir_all(&tasks_dir)
             .map_err(AgentError::Io)?;
 
@@ -426,7 +446,7 @@ impl FilePersistence {
         agent_name: &str,
         message: &InboxMessage,
     ) -> Result<(), AgentError> {
-        let inbox_dir = self.team_dir(team_name).join("inboxes");
+        let inbox_dir = self.team_dir(team_name)?.join("inboxes");
         std::fs::create_dir_all(&inbox_dir)
             .map_err(AgentError::Io)?;
 
@@ -473,7 +493,7 @@ impl FilePersistence {
         team_name: &str,
         agent_name: &str,
     ) -> Result<Vec<InboxMessage>, AgentError> {
-        let inbox_dir = self.team_dir(team_name).join("inboxes");
+        let inbox_dir = self.team_dir(team_name)?.join("inboxes");
         let inbox_path = inbox_dir.join(format!("{agent_name}.jsonl"));
         let lock_path = inbox_dir.join(format!("{agent_name}.jsonl.lock"));
 
@@ -528,7 +548,7 @@ impl FilePersistence {
         team_name: &str,
         agent_name: &str,
     ) -> Result<Vec<InboxMessage>, AgentError> {
-        let inbox_dir = self.team_dir(team_name).join("inboxes");
+        let inbox_dir = self.team_dir(team_name)?.join("inboxes");
         let inbox_path = inbox_dir.join(format!("{agent_name}.jsonl"));
 
         if !inbox_path.exists() {
@@ -537,7 +557,8 @@ impl FilePersistence {
 
         let file = std::fs::File::open(&inbox_path)
             .map_err(AgentError::Io)?;
-        let reader = std::io::BufReader::new(file);
+        let _ = FileExt::lock_shared(&file);
+        let reader = std::io::BufReader::new(&file);
 
         let mut messages = Vec::new();
         for line in reader.lines() {
@@ -550,6 +571,7 @@ impl FilePersistence {
                 messages.push(msg);
             }
         }
+        let _ = FileExt::unlock(&file);
 
         Ok(messages)
     }
@@ -568,7 +590,7 @@ impl FilePersistence {
         task_id: &str,
         agent_name: &str,
     ) -> Result<TaskFile, AgentError> {
-        let tasks_dir = self.tasks_dir(team_name);
+        let tasks_dir = self.tasks_dir(team_name)?;
         let task_path = tasks_dir.join(format!("{task_id}.json"));
         let lock_path = tasks_dir.join(format!("{task_id}.lock"));
 
@@ -684,12 +706,14 @@ impl FilePersistence {
 
     // ── Path helpers ─────────────────────────────────────────────────
 
-    fn team_dir(&self, team_name: &str) -> PathBuf {
-        self.base_dir.join("teams").join(team_name)
+    fn team_dir(&self, team_name: &str) -> Result<PathBuf, AgentError> {
+        sanitize_path_component(team_name, "team_name")?;
+        Ok(self.base_dir.join("teams").join(team_name))
     }
 
-    fn tasks_dir(&self, team_name: &str) -> PathBuf {
-        self.base_dir.join("tasks").join(team_name)
+    fn tasks_dir(&self, team_name: &str) -> Result<PathBuf, AgentError> {
+        sanitize_path_component(team_name, "team_name")?;
+        Ok(self.base_dir.join("tasks").join(team_name))
     }
 }
 

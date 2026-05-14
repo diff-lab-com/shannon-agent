@@ -434,6 +434,12 @@ fn validate_name(name: &str) -> Result<(), ToolError> {
             "Worktree name must be at most 64 characters".into(),
         ));
     }
+    // Block path traversal: reject names that are "." or ".." or composed only of dots
+    if name.chars().all(|c| c == '.') {
+        return Err(ToolError::ExecutionFailed(
+            "Worktree name must not be '.' or '..'".into(),
+        ));
+    }
     if !name
         .chars()
         .all(|c| c.is_alphanumeric() || c == '.' || c == '_' || c == '-')
@@ -747,6 +753,35 @@ impl Tool for ExitWorktreeTool {
                     )));
                 }
 
+                // Delete the associated branch to prevent orphaned branches.
+                let branch_output = Command::new("git")
+                    .args(["branch", "-D"])
+                    .arg(&session.branch_name)
+                    .output();
+                match branch_output {
+                    Ok(out) if out.status.success() => {
+                        tracing::info!(
+                            branch = %session.branch_name,
+                            "Deleted worktree branch"
+                        );
+                    }
+                    Ok(out) => {
+                        // Non-fatal: worktree is already removed, just log the failure.
+                        tracing::warn!(
+                            branch = %session.branch_name,
+                            stderr = %String::from_utf8_lossy(&out.stderr).trim(),
+                            "Failed to delete worktree branch (non-fatal)"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            branch = %session.branch_name,
+                            error = %e,
+                            "Failed to run git branch -D (non-fatal)"
+                        );
+                    }
+                }
+
                 // Clear session state.
                 {
                     let mut guard = self
@@ -817,6 +852,10 @@ mod tests {
         assert!(validate_name("has spaces").is_err());
         assert!(validate_name("has/slash").is_err());
         assert!(validate_name("").is_err());
+        // Path traversal attempts
+        assert!(validate_name("..").is_err());
+        assert!(validate_name(".").is_err());
+        assert!(validate_name("...").is_err());
     }
 
     #[test]

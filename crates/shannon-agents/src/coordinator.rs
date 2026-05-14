@@ -328,17 +328,25 @@ impl AgentCoordinator {
                             })
                         }
                         AgentEvent::TaskComplete { agent_name, task_id, success, output } => {
-                            if success {
-                                Some(CoordinatorEvent::TaskCompleted {
-                                    task_id: Uuid::parse_str(&task_id).unwrap_or(Uuid::nil()),
-                                    agent: agent_name,
-                                })
-                            } else {
-                                Some(CoordinatorEvent::TaskFailed {
-                                    task_id: Uuid::parse_str(&task_id).unwrap_or(Uuid::nil()),
-                                    agent: agent_name,
-                                    reason: output,
-                                })
+                            match Uuid::parse_str(&task_id) {
+                                Ok(parsed_id) => {
+                                    if success {
+                                        Some(CoordinatorEvent::TaskCompleted {
+                                            task_id: parsed_id,
+                                            agent: agent_name,
+                                        })
+                                    } else {
+                                        Some(CoordinatorEvent::TaskFailed {
+                                            task_id: parsed_id,
+                                            agent: agent_name,
+                                            reason: output,
+                                        })
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!(agent = %agent_name, task_id = %task_id, error = %e, "Invalid task ID in TaskComplete event");
+                                    None
+                                }
                             }
                         }
                         AgentEvent::Idle { agent_name, available_tasks_count: _ } => {
@@ -1985,6 +1993,15 @@ impl AgentCoordinator {
                 if let Some(task) = claimable {
                     match task_board.assign_task(task.id, agent_name.clone()).await {
                         Ok(()) => {
+                            // Update teammate's internal state so it won't be re-claimed
+                            if let Err(e) = agent.assign_task(task.id).await {
+                                tracing::warn!(
+                                    agent = %agent_name,
+                                    task_id = %task.id,
+                                    error = %e,
+                                    "Failed to update teammate state after auto-claim"
+                                );
+                            }
                             tracing::info!(
                                 team = %team_name,
                                 agent = %agent_name,
