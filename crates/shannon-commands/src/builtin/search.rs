@@ -20,7 +20,7 @@ pub fn command() -> Command {
     Command::Prompt(Box::new(PromptCommand {
         base: CommandBase {
             name: "search".to_string(),
-            aliases: vec!["?".to_string(), "history-search".to_string(), "hist".to_string()],
+            aliases: vec!["history-search".to_string(), "hist".to_string()],
             description: "Search command history with regex patterns and filtering".to_string(),
             has_user_specified_description: false,
             availability: vec![CommandAvailability::All],
@@ -139,6 +139,9 @@ pub fn search_history(entries: &[String], options: &SearchOptions) -> Vec<Histor
                         re.is_match(entry)
                     } else {
                         re.is_match(&entry.to_lowercase())
+                            || regex::Regex::new(&format!("(?i){}", options.pattern))
+                                .map(|ci_re| ci_re.is_match(entry))
+                                .unwrap_or(false)
                     }
                 }
                 Err(_) => {

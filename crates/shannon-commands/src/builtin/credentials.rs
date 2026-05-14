@@ -149,12 +149,12 @@ pub fn format_credential_get(service: &str) -> String {
         Ok(manager) => {
             match manager.retrieve(service) {
                 Ok(cred) => {
-                    // Mask the value for display — only show first/last 4 chars
+                    // Mask the value for display — only show first/last 2 chars
                     let val = &cred.value;
-                    let masked = if val.len() <= 8 {
+                    let masked = if val.len() <= 4 {
                         "*".repeat(val.len())
                     } else {
-                        format!("{}****{}", &val[..4], &val[val.len()-4..])
+                        format!("{}****{}", &val[..2], &val[val.len()-2..])
                     };
                     format!("Credential for '{service}': {masked}")
                 }
