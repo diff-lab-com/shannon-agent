@@ -234,9 +234,18 @@ fn convert_message_for_openai(msg: &Message) -> Vec<Value> {
                 .collect();
 
             if !tool_calls.is_empty() {
-                // Assistant message with tool calls
+                // Assistant message with tool calls — include text content too
+                let text_content: String = blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 vec![json!({
                     "role": msg.role,
+                    "content": if text_content.is_empty() { Value::Null } else { json!(text_content) },
                     "tool_calls": tool_calls
                 })]
             } else {

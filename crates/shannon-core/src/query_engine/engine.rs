@@ -480,8 +480,23 @@ impl QueryEngine {
         self.conversation = ConversationState::default();
     }
 
-    /// Restore a previously saved conversation (for session resume)
+    /// Restore conversation messages from a completed query (syncs background task state back).
+    /// Logs a warning if the restored messages look incomplete (e.g., missing the assistant response).
     pub fn restore_messages(&mut self, messages: Vec<crate::api::Message>) {
+        let msg_count = messages.len();
+        let last_role = messages.last().map(|m| m.role.as_str()).unwrap_or("none");
+        tracing::debug!(
+            msg_count,
+            last_role,
+            "restore_messages: syncing conversation from background task"
+        );
+        if msg_count > 0 && last_role != "assistant" {
+            tracing::warn!(
+                msg_count,
+                last_role,
+                "restore_messages: last message is not from assistant — conversation may be incomplete"
+            );
+        }
         self.conversation.messages = messages;
     }
 
@@ -512,6 +527,12 @@ impl QueryEngine {
     /// Replace the conversation history with new messages (e.g., after compaction)
     pub fn replace_conversation(&mut self, messages: Vec<Message>) {
         let turn_count = messages.iter().filter(|m| m.role == "user").count();
+        tracing::debug!(
+            msg_count = messages.len(),
+            turn_count,
+            last_role = messages.last().map(|m| m.role.as_str()).unwrap_or("none"),
+            "replace_conversation: replacing conversation history"
+        );
         self.conversation.messages = messages;
         self.conversation.turn_count = turn_count;
     }
@@ -671,6 +692,11 @@ impl QueryEngine {
 
         // Clone existing conversation to preserve multi-turn context
         let mut conversation = self.conversation.clone();
+        tracing::debug!(
+            existing_msgs = conversation.messages.len(),
+            last_role = conversation.messages.last().map(|m| m.role.as_str()).unwrap_or("none"),
+            "Starting new query: cloning conversation for background task"
+        );
         conversation.messages.push(Message {
             role: "user".to_string(),
             content: MessageContent::Text(user_message.clone()),
@@ -1692,6 +1718,10 @@ impl QueryEngine {
                                         });
                                     }
                                 }
+                                // Sync compacted messages back to conversation
+                                // so ConversationUpdate reflects the actual state
+                                conversation.messages = messages.clone();
+
                                 let retry_result = if let Some(ref blocks) = system_blocks_opt {
                                     client.send_message_stream_structured_with_retry(messages.clone(), tools_schema.clone(), blocks.clone()).await
                                 } else {
@@ -1699,16 +1729,26 @@ impl QueryEngine {
                                 };
                                 match retry_result {
                                     Ok(mut retry_stream) => {
-                                        // Re-process the retry stream — extract text content properly
+                                        // Re-process the retry stream — extract text content and
+                                        // accumulate into conversation so the response isn't lost
+                                        let mut retry_text = String::new();
                                         while let Some(event_result) = retry_stream.next().await {
                                             match event_result {
                                                 Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
                                                     if let ContentDelta::TextDelta { text } = delta {
+                                                        retry_text.push_str(&text);
                                                         let _ = tx.send(Ok(QueryEvent::Text { query_id, content: text }));
                                                     }
                                                 }
                                                 Ok(StreamEvent::MessageDelta { delta, .. }) => {
                                                     if delta.stop_reason.as_deref() == Some("end_turn") {
+                                                        // Add the retry response to conversation before sending update
+                                                        if !retry_text.is_empty() {
+                                                            conversation.messages.push(Message {
+                                                                role: "assistant".to_string(),
+                                                                content: MessageContent::Text(retry_text.clone()),
+                                                            });
+                                                        }
                                                         let _ = tx.send(Ok(QueryEvent::ConversationUpdate {
                                                             query_id,
                                                             messages: conversation.messages.clone(),
@@ -1728,6 +1768,13 @@ impl QueryEngine {
                                                     return;
                                                 }
                                             }
+                                        }
+                                        // Stream ended without end_turn — still add the response
+                                        if !retry_text.is_empty() {
+                                            conversation.messages.push(Message {
+                                                role: "assistant".to_string(),
+                                                content: MessageContent::Text(retry_text),
+                                            });
                                         }
                                         let _ = tx.send(Ok(QueryEvent::ConversationUpdate {
                                             query_id,

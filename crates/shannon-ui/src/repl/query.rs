@@ -938,8 +938,11 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
             }
         }
         Err((engine_opt, e)) => {
-            // Restore the query engine if it was recovered from the task
-            if let Some(engine) = engine_opt {
+            // Restore the query engine if it was recovered from the task.
+            // Preserve the user message so conversation state stays consistent
+            // (the background task only added it to its clone, not the engine).
+            if let Some(mut engine) = engine_opt {
+                engine.add_user_message(input.to_string());
                 repl.query_engine = Some(engine);
             }
             let is_cancelled = e == "cancelled";

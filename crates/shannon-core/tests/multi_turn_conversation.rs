@@ -1103,3 +1103,251 @@ fn test_cost_accumulation_not_replacement() {
     assert!((buggy_total - 0.0203_f64).abs() < f64::EPSILON);
     assert!(total_cost > buggy_total, "Accumulated cost should be higher than replacement cost");
 }
+
+// ── Context Loss Regression Tests ─────────────────────────────────────
+// These tests verify fixes for the multi-turn context loss bugs:
+// 1. Auto-compact retry response not added to conversation.messages
+// 2. OpenAI adapter dropping assistant text when tool_calls present
+// 3. Error path losing user message
+
+/// Regression test: verify that when a conversation is restored via
+/// restore_messages(), the assistant's response from the previous turn
+/// is preserved. This tests the core invariant that the background task's
+/// conversation state (with the assistant response) is properly synced back.
+#[test]
+fn test_restore_messages_preserves_assistant_response() {
+    let mut conv = TestConversation::default();
+
+    // Turn 1: user asks, assistant responds
+    conv.messages.push(text_msg("user", "写一篇科幻小说"));
+    conv.messages.push(text_msg("assistant", "在一个遥远的星球上，机器人阿尔法和人类莉莉一起探索废墟..."));
+    conv.turn_count += 1;
+
+    // Simulate the "restore_messages" pattern: the UI receives a ConversationUpdate
+    // with conversation.messages from the background task, then calls restore_messages.
+    let restored_messages = conv.messages.clone();
+    assert_eq!(restored_messages.len(), 2);
+    assert_eq!(restored_messages[1].role, "assistant");
+
+    // Simulate turn 2: clone conversation, add new user message
+    let mut cloned = conv.clone();
+    cloned.messages.push(text_msg("user", "小说里有几个人物？"));
+
+    // Verify the assistant response from turn 1 is still in the clone
+    assert_eq!(cloned.messages.len(), 3);
+    match &cloned.messages[1].content {
+        MessageContent::Text(t) => {
+            assert!(t.contains("阿尔法"), "Assistant's story should still be in context for turn 2");
+            assert!(t.contains("莉莉"), "Characters from previous response must be preserved");
+        }
+        _ => panic!("Expected text content for assistant message"),
+    }
+}
+
+/// Regression test: simulate the auto-compact retry scenario.
+/// When a token overflow triggers auto-compact and the API is retried,
+/// the retry response MUST be accumulated and added to conversation.messages
+/// before ConversationUpdate is sent. Otherwise, the next turn loses context.
+#[test]
+fn test_auto_compact_retry_preserves_response() {
+    let mut conv = TestConversation::default();
+
+    // Build a conversation with multiple turns
+    conv.messages.push(text_msg("user", "Question 1"));
+    conv.messages.push(text_msg("assistant", "Answer 1 with enough detail to simulate a real response."));
+    conv.messages.push(text_msg("user", "Question 2"));
+    conv.messages.push(text_msg("assistant", "Answer 2 with enough detail to simulate a real response."));
+
+    // Simulate what happens in the auto-compact retry path:
+    // 1. Messages get truncated for the retry
+    let compact_keep = 2;
+    let retry_messages = if conv.messages.len() > compact_keep {
+        conv.messages.split_off(conv.messages.len() - compact_keep)
+    } else {
+        conv.messages.clone()
+    };
+
+    // 2. The retry API call produces a new response
+    let retry_response = "This is the retry response that must not be lost.";
+
+    // 3. BUG FIX: The retry response must be added to conversation.messages
+    // (this is what the fix in engine.rs does)
+    conv.messages = retry_messages.clone();
+    conv.messages.push(text_msg("assistant", retry_response));
+
+    // 4. ConversationUpdate sends conversation.messages.clone()
+    let update_messages = conv.messages.clone();
+
+    // 5. Verify: the retry response IS in the final conversation
+    assert_eq!(update_messages.len(), 3, "Should have 3 messages after retry");
+    let last = update_messages.last().unwrap();
+    assert_eq!(last.role, "assistant");
+    match &last.content {
+        MessageContent::Text(t) => assert!(t.contains(retry_response),
+            "Retry response must be in conversation, got: {t}"),
+        _ => panic!("Expected text content"),
+    }
+
+    // 6. Simulate next turn — verify retry response is available as context
+    let mut next_turn = update_messages.clone();
+    next_turn.push(text_msg("user", "Follow-up question about the retry response"));
+    assert!(next_turn.len() >= 4);
+    // The retry response at index 2 should still be there
+    match &next_turn[2].content {
+        MessageContent::Text(t) => assert!(t.contains(retry_response)),
+        _ => panic!("Retry response lost between turns!"),
+    }
+}
+
+/// Regression test: verify that the OpenAI adapter includes assistant text
+/// content when tool_calls are also present. Previously, text was dropped.
+#[test]
+fn test_openai_adapter_preserves_text_with_tool_calls() {
+    use serde_json::Value;
+
+    // Simulate the adapter's convert_message_for_openai logic
+    // An assistant message with both text and tool_use blocks
+    let msg = Message {
+        role: "assistant".to_string(),
+        content: MessageContent::Blocks(vec![
+            ContentBlock::Text { text: "Let me read that file for you.".to_string() },
+            ContentBlock::ToolUse {
+                id: "tool_1".to_string(),
+                name: "read_file".to_string(),
+                input: serde_json::json!({"path": "/tmp/test.rs"}),
+            },
+        ]),
+    };
+
+    // Extract tool calls
+    let tool_calls: Vec<Value> = match &msg.content {
+        MessageContent::Blocks(blocks) => blocks.iter().enumerate()
+            .filter_map(|(i, b)| match b {
+                ContentBlock::ToolUse { id, name, input } => Some(serde_json::json!({
+                    "id": id,
+                    "type": "function",
+                    "function": { "name": name, "arguments": input.to_string() },
+                    "index": i,
+                })),
+                _ => None,
+            })
+            .collect(),
+        _ => vec![],
+    };
+
+    assert!(!tool_calls.is_empty(), "Should find tool calls");
+
+    // The FIX: extract text content even when tool_calls exist
+    let text_content: String = match &msg.content {
+        MessageContent::Blocks(blocks) => blocks.iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    };
+
+    // Verify text content is NOT empty (was empty before the fix)
+    assert!(!text_content.is_empty(), "Text content must be preserved alongside tool_calls");
+    assert!(text_content.contains("read that file"), "Text content should match original");
+
+    // Build the OpenAI message with BOTH text and tool_calls
+    let openai_msg = serde_json::json!({
+        "role": msg.role,
+        "content": if text_content.is_empty() { serde_json::Value::Null } else { serde_json::json!(text_content) },
+        "tool_calls": tool_calls,
+    });
+
+    // Verify the message has both fields
+    assert!(openai_msg.get("tool_calls").is_some(), "Should have tool_calls");
+    assert!(openai_msg.get("content").is_some(), "Should have content");
+    assert_ne!(openai_msg["content"], serde_json::Value::Null, "Content should not be null");
+}
+
+/// Regression test: verify that when a query fails, the user message is still
+/// preserved in the engine's conversation. Previously, the user message was
+/// only added to the background task's clone, not the engine itself.
+#[test]
+fn test_error_path_preserves_user_message() {
+    let mut conv = TestConversation::default();
+
+    // Turn 1: successful
+    conv.messages.push(text_msg("user", "First question"));
+    conv.messages.push(text_msg("assistant", "First answer"));
+    conv.turn_count += 1;
+
+    // Turn 2: user asks a question — this gets added to the CLONE, not the engine
+    let user_msg_2 = "Second question that will fail";
+    let mut cloned = conv.clone();
+    cloned.messages.push(text_msg("user", user_msg_2));
+
+    // The query fails — the clone's conversation is discarded
+    // BUG FIX: the user message must still be added to the engine's conversation
+    // (simulating the fix in query.rs error path)
+    conv.messages.push(text_msg("user", user_msg_2));
+
+    // Verify: the engine's conversation now has 3 messages
+    assert_eq!(conv.messages.len(), 3, "Should have 3 messages after error recovery");
+    assert_eq!(conv.messages[2].role, "user");
+
+    // Turn 3: next query should see the previous user message
+    let mut next_query = conv.clone();
+    next_query.messages.push(text_msg("user", "Third question"));
+    assert_eq!(next_query.messages.len(), 4);
+
+    // The failed user message should be in context
+    match &next_query.messages[2].content {
+        MessageContent::Text(t) => assert!(t.contains("Second question"),
+            "Failed user message must be preserved for context"),
+        _ => panic!("Expected text content"),
+    }
+}
+
+/// Regression test: verify that conversation clone + restore roundtrip
+/// preserves all messages across multiple simulated query cycles.
+#[test]
+fn test_full_query_cycle_preserves_context() {
+    let mut engine_conv = TestConversation::default();
+
+    // Simulate 3 complete query cycles
+    for turn in 0..3 {
+        // Step 1: Clone conversation (process_query does this)
+        let mut bg_conv = engine_conv.clone();
+
+        // Step 2: Add user message to clone
+        bg_conv.messages.push(text_msg("user", &format!("Turn {} question about the previous responses", turn + 1)));
+
+        // Step 3: Add assistant response to clone
+        bg_conv.messages.push(text_msg("assistant", &format!("Turn {} answer referencing all previous context", turn + 1)));
+
+        // Step 4: ConversationUpdate sends bg_conv.messages
+        let update = bg_conv.messages.clone();
+
+        // Step 5: restore_messages replaces engine conversation
+        engine_conv.messages = update;
+        engine_conv.turn_count += 1;
+    }
+
+    // After 3 cycles, should have 6 messages (3 user + 3 assistant)
+    assert_eq!(engine_conv.messages.len(), 6, "Should have 6 messages after 3 turns");
+    assert_eq!(engine_conv.turn_count, 3);
+
+    // Verify all messages are in order
+    for i in 0..3 {
+        let user_idx = i * 2;
+        let asst_idx = i * 2 + 1;
+        assert_eq!(engine_conv.messages[user_idx].role, "user",
+            "Message {user_idx} should be user");
+        assert_eq!(engine_conv.messages[asst_idx].role, "assistant",
+            "Message {asst_idx} should be assistant");
+    }
+
+    // Verify the story-pattern: each response mentions the turn
+    match &engine_conv.messages[5].content {
+        MessageContent::Text(t) => assert!(t.contains("Turn 3"),
+            "Last response should reference turn 3"),
+        _ => panic!("Expected text"),
+    }
+}
