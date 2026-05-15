@@ -191,6 +191,7 @@ impl CompactEngine {
 
         let result = self.do_compact(messages);
 
+        // Reset flag after completion (even if do_compact returned Err)
         self.compacting = false;
 
         match result {
@@ -237,9 +238,18 @@ impl CompactEngine {
             )),
         };
 
-        // Replace old messages with the summary
+        // Preserve leading system messages (system prompt) before draining
+        let system_end = messages.iter().position(|m| m.role != "system").unwrap_or(0);
+        let preserved_system: Vec<Message> = messages[..system_end].to_vec();
+
+        // Drain old messages (keeps only the recent tail)
         messages.drain(..split_point);
-        messages.insert(0, summary_message);
+
+        // Rebuild: [preserved_system...] [summary] [recent_messages...]
+        let mut rebuilt = preserved_system;
+        rebuilt.push(summary_message);
+        rebuilt.append(messages);
+        *messages = rebuilt;
 
         let compacted_tokens = estimate_tokens(messages);
         let reduction_ratio = if original_tokens_from(&old_messages) > 0 {

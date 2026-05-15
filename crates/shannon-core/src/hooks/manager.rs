@@ -312,7 +312,7 @@ impl HookManager {
         let command = command.to_string();
 
         tokio::spawn(async move {
-            if let Ok(mut child) = tokio::process::Command::new("sh")
+            match tokio::process::Command::new("sh")
                 .arg("-c")
                 .arg(&command)
                 .stdin(std::process::Stdio::piped())
@@ -320,11 +320,18 @@ impl HookManager {
                 .stderr(std::process::Stdio::null())
                 .spawn()
             {
-                if let Some(mut stdin) = child.stdin.take() {
-                    use tokio::io::AsyncWriteExt;
-                    let _ = stdin.write_all(&stdin_data).await;
+                Ok(mut child) => {
+                    if let Some(mut stdin) = child.stdin.take() {
+                        use tokio::io::AsyncWriteExt;
+                        let _ = stdin.write_all(&stdin_data).await;
+                    }
+                    if let Err(e) = child.wait().await {
+                        tracing::warn!(command = %command, error = %e, "Non-blocking hook process failed");
+                    }
                 }
-                let _ = child.wait().await;
+                Err(e) => {
+                    tracing::warn!(command = %command, error = %e, "Failed to spawn non-blocking hook");
+                }
             }
         });
 

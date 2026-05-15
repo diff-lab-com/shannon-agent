@@ -164,7 +164,9 @@ impl SessionData {
             })
             .map(|t| {
                 if t.len() > max_len {
-                    format!("{}...", &t[..max_len.saturating_sub(3)])
+                    let mut end = max_len.saturating_sub(3);
+                    while !t.is_char_boundary(end) { end -= 1; }
+                    format!("{}...", &t[..end])
                 } else {
                     t
                 }

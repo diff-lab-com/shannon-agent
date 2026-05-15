@@ -33,6 +33,7 @@ mod diff;
 mod search;
 mod export;
 mod config;
+mod cost;
 mod credentials;
 mod debug;
 mod doctor;
@@ -69,6 +70,7 @@ pub fn all_commands() -> Vec<Command> {
         issue::command(),
         help::command(),
         status::command(),
+        cost::command(),
         diff::command(),
         search::command(),
         export::command(),

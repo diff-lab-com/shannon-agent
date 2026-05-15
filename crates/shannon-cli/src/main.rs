@@ -834,7 +834,11 @@ fn run_noninteractive_query(
                     tool_count += 1;
                     // Show concise tool invocation — truncate large inputs
                     let input_summary = match serde_json::to_string(&tool_input) {
-                        Ok(s) if s.len() > 200 => format!("{}…", &s[..200]),
+                        Ok(s) if s.len() > 200 => {
+                            let mut end = 200;
+                            while !s.is_char_boundary(end) { end -= 1; }
+                            format!("{}…", &s[..end])
+                        }
                         Ok(s) => s,
                         Err(_) => "(invalid json)".to_string(),
                     };
@@ -843,7 +847,9 @@ fn run_noninteractive_query(
                 Ok(QueryEvent::ToolUseResult { tool_name, result, is_error, .. }) => {
                     if is_error {
                         let err_summary = if result.len() > 300 {
-                            format!("{}…", &result[..300])
+                            let mut end = 300;
+                            while !result.is_char_boundary(end) { end -= 1; }
+                            format!("{}…", &result[..end])
                         } else {
                             result
                         };
@@ -1141,7 +1147,11 @@ fn run_headless_query(
                         }
                     }
                     let input_summary = match serde_json::to_string(&tool_input) {
-                        Ok(s) if s.len() > 500 => format!("{}...", &s[..500]),
+                        Ok(s) if s.len() > 500 => {
+                            let mut end = 500;
+                            while !s.is_char_boundary(end) { end -= 1; }
+                            format!("{}...", &s[..end])
+                        }
                         Ok(s) => s,
                         Err(_) => "(invalid json)".to_string(),
                     };
@@ -1172,7 +1182,9 @@ fn run_headless_query(
                 }
                 Ok(QueryEvent::ToolUseResult { tool_name, result, is_error, .. }) => {
                     let output_summary = if result.len() > 500 {
-                        format!("{}...", &result[..500])
+                        let mut end = 500;
+                        while !result.is_char_boundary(end) { end -= 1; }
+                        format!("{}...", &result[..end])
                     } else {
                         result.clone()
                     };

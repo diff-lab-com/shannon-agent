@@ -335,7 +335,9 @@ impl CompactPrompt {
             let role = &msg.role;
             let content_text = extract_text_content(msg);
             let preview = if content_text.len() > 500 {
-                format!("{}...", &content_text[..497])
+                let mut end = 497;
+                while !content_text.is_char_boundary(end) { end -= 1; }
+                format!("{}...", &content_text[..end])
             } else {
                 content_text
             };
@@ -355,7 +357,9 @@ impl CompactPrompt {
             message.role,
             max_tokens,
             if content.len() > 2000 {
-                format!("{}...", &content[..1997])
+                let mut end = 1997;
+                while !content.is_char_boundary(end) { end -= 1; }
+                format!("{}...", &content[..end])
             } else {
                 content
             }
