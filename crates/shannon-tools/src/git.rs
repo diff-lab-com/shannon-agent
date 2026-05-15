@@ -36,7 +36,7 @@ fn validate_git_arg(arg: &str) -> Result<&str, ToolError> {
     if arg.contains("../") || arg.contains("..\\") {
         return Err(ToolError::InvalidInput("Path traversal not allowed".to_string()));
     }
-    if arg.contains(|c: char| matches!(c, ';' | '&' | '|' | '$' | '`' | '(' | ')' | '{' | '}')) {
+    if arg.contains([';', '&', '|', '$', '`', '(', ')', '{', '}']) {
         return Err(ToolError::InvalidInput("Shell metacharacters not allowed".to_string()));
     }
     if arg.len() > 256 {

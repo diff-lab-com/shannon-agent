@@ -422,7 +422,7 @@ mod tests {
         let layout = col.layout(area, 49, 0, false);
 
         assert!(layout.visible.len() < 50, "should not render all 50 messages");
-        assert!(layout.visible.len() > 0, "should render some messages");
+        assert!(!layout.visible.is_empty(), "should render some messages");
         let last_idx = layout.visible.last().map(|(_, idx)| *idx).unwrap_or(0);
         assert_eq!(last_idx, 49, "last visible cell should be the latest message");
     }
@@ -437,7 +437,7 @@ mod tests {
         let area = Rect::new(0, 0, 80, 24);
         let layout = col.layout(area, 10, 0, false);
 
-        assert!(layout.visible.len() > 0);
+        assert!(!layout.visible.is_empty());
         let indices: Vec<usize> = layout.visible.iter().map(|(_, i)| *i).collect();
         assert!(indices.contains(&10), "focused message 10 should be visible");
     }

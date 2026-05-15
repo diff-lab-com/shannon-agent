@@ -108,8 +108,7 @@ fn generate_tool_conversation(turns: usize) -> Vec<Message> {
                 ContentBlock::ToolResult {
                     tool_use_id: format!("tool_{i}"),
                     content: Some(shannon_core::api::ToolResultContent::Single(format!(
-                        "fn main() {{\n    println!(\"Hello, world!\");\n    // Turn {} file content\n    let x = 42;\n}}",
-                        i
+                        "fn main() {{\n    println!(\"Hello, world!\");\n    // Turn {i} file content\n    let x = 42;\n}}"
                     ))),
                     is_error: Some(false),
                 },
@@ -373,7 +372,7 @@ fn e2e_ollama_compact_summary_quality() {
             .filter(|(a, b)| lower.contains(a) || lower.contains(b))
             .count();
 
-        println!("Summary quality: {}/3 topics found", topics_found);
+        println!("Summary quality: {topics_found}/3 topics found");
         println!("Summary preview: {}...", &summary[..summary.len().min(300)]);
 
         // At least some topics should be captured (not all, LLM may vary)

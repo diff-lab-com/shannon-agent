@@ -172,7 +172,7 @@ impl Stream for SseStream {
     ) -> Poll<Option<Self::Item>> {
         // Return any pending events first
         if !self.pending_events.is_empty() {
-            return Poll::Ready(Some(self.pending_events.pop_front().unwrap()));
+            return Poll::Ready(Some(self.pending_events.pop_front().expect("checked non-empty")));
         }
 
         if self.done {
@@ -188,7 +188,7 @@ impl Stream for SseStream {
                     self.drain_buffer();
 
                     if !self.pending_events.is_empty() {
-                        return Poll::Ready(Some(self.pending_events.pop_front().unwrap()));
+                        return Poll::Ready(Some(self.pending_events.pop_front().expect("checked non-empty")));
                     }
                     // No complete events yet — continue reading
                 }
@@ -204,7 +204,7 @@ impl Stream for SseStream {
                         self.pending_events.extend(events);
                         if !self.pending_events.is_empty() {
                             self.done = true;
-                            return Poll::Ready(Some(self.pending_events.pop_front().unwrap()));
+                            return Poll::Ready(Some(self.pending_events.pop_front().expect("checked non-empty")));
                         }
                     }
                     self.done = true;

@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    
     use crate::api::{ContentBlock, Message, MessageContent, ToolResultContent};
     use std::time::Duration;
 
@@ -1547,8 +1547,7 @@ mod tests {
             .collect::<String>();
         assert!(
             recent_text.contains("feature 39"),
-            "most recent turn should be present, got: {:?}",
-            recent_text
+            "most recent turn should be present, got: {recent_text:?}"
         );
     }
 
@@ -1630,35 +1629,32 @@ mod tests {
 
         // Verify no orphaned tool_result (must have preceding tool_use)
         for i in 1..messages.len() {
-            match &messages[i].content {
-                MessageContent::Blocks(blocks) => {
-                    for block in blocks {
-                        if let ContentBlock::ToolResult { tool_use_id, .. } = block {
-                            // Look back for a matching tool_use
-                            let has_matching_use = messages[..i].iter().any(|m| {
-                                match &m.content {
-                                    MessageContent::Blocks(bs) => bs.iter().any(|b| {
-                                        if let ContentBlock::ToolUse { id, .. } = b {
-                                            id == tool_use_id
-                                        } else {
-                                            false
-                                        }
-                                    }),
-                                    _ => false,
-                                }
-                            });
-                            // Tool results in recent section should have matching use
-                            // (summarized section may have orphans, which is acceptable)
-                            if i > messages.len().saturating_sub(8) {
-                                assert!(
-                                    has_matching_use,
-                                    "tool_result {tool_use_id} at index {i} has no matching tool_use"
-                                );
+            if let MessageContent::Blocks(blocks) = &messages[i].content {
+                for block in blocks {
+                    if let ContentBlock::ToolResult { tool_use_id, .. } = block {
+                        // Look back for a matching tool_use
+                        let has_matching_use = messages[..i].iter().any(|m| {
+                            match &m.content {
+                                MessageContent::Blocks(bs) => bs.iter().any(|b| {
+                                    if let ContentBlock::ToolUse { id, .. } = b {
+                                        id == tool_use_id
+                                    } else {
+                                        false
+                                    }
+                                }),
+                                _ => false,
                             }
+                        });
+                        // Tool results in recent section should have matching use
+                        // (summarized section may have orphans, which is acceptable)
+                        if i > messages.len().saturating_sub(8) {
+                            assert!(
+                                has_matching_use,
+                                "tool_result {tool_use_id} at index {i} has no matching tool_use"
+                            );
                         }
                     }
                 }
-                _ => {}
             }
         }
     }

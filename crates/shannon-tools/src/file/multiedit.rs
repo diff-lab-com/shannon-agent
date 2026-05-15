@@ -146,7 +146,7 @@ pub async fn execute(input: MultiEditInput) -> Result<ToolOutput, ToolError> {
         total_replacements,
     );
     if !diff_parts.is_empty() {
-        output_text.push_str("\n");
+        output_text.push('\n');
         output_text.push_str(&diff_parts.join("\n"));
     }
 

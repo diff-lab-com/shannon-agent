@@ -87,7 +87,7 @@ impl std::fmt::Display for Foo {
     // struct Foo + impl Foo + impl Display for Foo
     let impl_symbols: Vec<&Symbol> = symbols.iter().filter(|s| s.kind == SymbolKind::Impl).collect();
     assert!(
-        impl_symbols.len() >= 1,
+        !impl_symbols.is_empty(),
         "Expected at least 1 impl symbol, got {}",
         impl_symbols.len()
     );

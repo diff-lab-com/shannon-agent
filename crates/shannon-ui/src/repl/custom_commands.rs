@@ -306,11 +306,10 @@ impl SettingsWatcher {
                     } else {
                         path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| path.clone())
                     };
-                    if watch_target.exists() {
-                        if w.watch(&watch_target, notify::RecursiveMode::NonRecursive).is_ok() {
+                    if watch_target.exists()
+                        && w.watch(&watch_target, notify::RecursiveMode::NonRecursive).is_ok() {
                             watched.push(path.clone());
                         }
-                    }
                 }
                 if watched.is_empty() {
                     None

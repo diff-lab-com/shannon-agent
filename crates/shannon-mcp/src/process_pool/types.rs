@@ -113,7 +113,7 @@ impl ToolResultStore {
     /// Store a result and return its chunk ID.
     pub(crate) fn store(&self, tool_name: &str, full_content: String) -> String {
         // Periodically evict expired entries to prevent unbounded memory growth
-        if self.results.len() > 0 && self.results.len() % 8 == 0 {
+        if !self.results.is_empty() && self.results.len() % 8 == 0 {
             self.evict_expired();
         }
         let id = format!("chunk_{}", uuid::Uuid::new_v4().as_simple());

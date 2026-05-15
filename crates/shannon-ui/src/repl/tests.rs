@@ -1987,7 +1987,7 @@ fn test_repl_image_nonexistent_file() {
 #[test]
 fn test_repl_image_with_real_png() {
     // Skip in headless/CI environments without a TTY
-    if std::io::stdout().is_terminal() == false {
+    if !std::io::stdout().is_terminal() {
         eprintln!("Skipping: no TTY available");
         return;
     }

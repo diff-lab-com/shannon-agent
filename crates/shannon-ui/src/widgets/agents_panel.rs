@@ -74,7 +74,7 @@ pub fn render_agents_panel(
             // Team
             if let Some(team) = &a.team {
                 spans.push(Span::styled(
-                    format!("  [{}]", team),
+                    format!("  [{team}]"),
                     Style::default().fg(theme.secondary),
                 ));
             }

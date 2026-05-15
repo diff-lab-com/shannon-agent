@@ -234,13 +234,12 @@ pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
     }
 
     // Check for base64/xxd encoding bypasses
-    if lower_command.contains("base64") || lower_command.contains("xxd") || lower_command.contains("od ") {
-        if lower_command.contains("|") || lower_command.contains("$(") {
+    if (lower_command.contains("base64") || lower_command.contains("xxd") || lower_command.contains("od "))
+        && (lower_command.contains("|") || lower_command.contains("$(")) {
             risk_level = SecurityLevel::Critical;
             warnings.push("Encoded command execution detected: base64/xxd used to hide commands".to_string());
             is_destructive = true;
         }
-    }
 
     // Check for destructive patterns (including the newly added ones)
     for pattern in DESTRUCTIVE_PATTERNS {

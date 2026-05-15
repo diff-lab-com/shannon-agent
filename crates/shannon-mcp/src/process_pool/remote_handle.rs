@@ -421,7 +421,7 @@ impl RemoteMcpServerHandle {
         // Only allow simple alphanumeric commands without shell metacharacters.
         for (name, command) in &self.header_commands {
             // Reject commands containing shell metacharacters or path traversal
-            if command.contains(|c: char| matches!(c, ';' | '&' | '|' | '$' | '`' | '(' | ')' | '{' | '}' | '<' | '>' | '\\' | '\n' | '\r'))
+            if command.contains([';', '&', '|', '$', '`', '(', ')', '{', '}', '<', '>', '\\', '\n', '\r'])
                || command.contains("..")
             {
                 warn!(server = %self.name, header = %name, "Skipping header command with unsafe characters: {command}");

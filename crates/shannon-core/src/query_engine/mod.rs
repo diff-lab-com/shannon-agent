@@ -1189,7 +1189,7 @@ mod tests {
         // Verify ModelRouter returns valid model IDs for all task types
         for task in [TaskType::QuickQuery, TaskType::CodeGeneration, TaskType::ArchitectureDesign, TaskType::ComplexWorkflow] {
             let model = ModelRouter::recommend(task);
-            assert!(!model.is_empty(), "ModelRouter should return a model for {:?}", task);
+            assert!(!model.is_empty(), "ModelRouter should return a model for {task:?}");
         }
 
         // Verify fast_model config field works

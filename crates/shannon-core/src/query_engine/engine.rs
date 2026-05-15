@@ -1424,11 +1424,11 @@ impl QueryEngine {
                                                             crate::tools::ToolBatch::Serial((tool_id, tool_name, effective_input)) => {
                                                                 // Execute write tools sequentially (one at a time)
                                                                 // Create a checkpoint before file-modifying tools for undo support
-                                                                if matches!(tool_name.as_str(), "Edit" | "Write" | "Bash") {
-                                                                    if checkpoint_manager.is_enabled() {
-                                                                        if let Err(e) = checkpoint_manager.create_checkpoint(&tool_name, &format!("Before {tool_name} tool execution")) {
-                                                                            tracing::debug!("Checkpoint creation skipped: {e}");
-                                                                        }
+                                                                if matches!(tool_name.as_str(), "Edit" | "Write" | "Bash")
+                                                                    && checkpoint_manager.is_enabled()
+                                                                {
+                                                                    if let Err(e) = checkpoint_manager.create_checkpoint(&tool_name, &format!("Before {tool_name} tool execution")) {
+                                                                        tracing::debug!("Checkpoint creation skipped: {e}");
                                                                     }
                                                                 }
                                                                 // Emit progress: tool started

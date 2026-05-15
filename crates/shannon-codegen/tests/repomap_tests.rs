@@ -226,13 +226,11 @@ fn test_repomap_respects_gitignore() {
     // ignored_dir/secret.rs and code.generated.rs should be excluded
     assert!(
         !paths.iter().any(|p| p.contains("ignored_dir")),
-        "Should not include gitignored directory, got {:?}",
-        paths
+        "Should not include gitignored directory, got {paths:?}"
     );
     assert!(
         !paths.iter().any(|p| p.contains("generated")),
-        "Should not match *.generated.rs pattern, got {:?}",
-        paths
+        "Should not match *.generated.rs pattern, got {paths:?}"
     );
 }
 

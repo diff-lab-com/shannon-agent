@@ -667,7 +667,7 @@ fn test_large_conversation_with_tool_interleaving() {
 
     // 100 turns, each with a tool use cycle (user → assistant+tool → tool_result → assistant)
     for i in 0..100 {
-        state.messages.push(text_msg("user", &format!("Read file {}", i)));
+        state.messages.push(text_msg("user", &format!("Read file {i}")));
         state.messages.push(Message {
             role: "assistant".to_string(),
             content: MessageContent::Blocks(vec![

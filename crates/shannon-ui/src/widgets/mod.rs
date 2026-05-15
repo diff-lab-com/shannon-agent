@@ -959,7 +959,7 @@ mod tests {
         let segments = chat::parse_markdown_segments(input);
         // Parser uses starts_with("```") so ```` both opens and closes,
         // and the inner ``` lines also trigger open/close, producing multiple segments.
-        assert!(segments.len() >= 1, "Should produce at least one segment");
+        assert!(!segments.is_empty(), "Should produce at least one segment");
     }
 
     #[test]
@@ -1314,7 +1314,7 @@ mod tests {
         let mut chat = ChatWidget::new(100);
         chat.add_message(ChatRole::User, "Hello".to_string());
         chat.toggle_fold(0);
-        assert_eq!(chat.messages[0].folded, false);
+        assert!(!chat.messages[0].folded);
     }
 
     #[test]
