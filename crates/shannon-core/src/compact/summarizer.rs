@@ -140,7 +140,24 @@ impl Summarizer for RuleBasedSummarizer {
             messages.len()
         );
 
-        summary.push_str(&summary_parts.join("\n"));
+        // Respect max_tokens: estimate ~4 chars per token and trim summary_parts
+        let max_chars = _max_tokens.saturating_mul(4);
+        let header_budget = summary.len();
+        let footer_budget = 200; // reserve for tools/files/errors sections
+        let parts_budget = max_chars.saturating_sub(header_budget + footer_budget);
+
+        let mut parts_text = summary_parts.join("\n");
+        if parts_text.len() > parts_budget && parts_budget > 0 {
+            // Truncate to budget, finding a valid UTF-8 char boundary
+            let mut cut = parts_budget;
+            while cut > 0 && !parts_text.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            parts_text.truncate(cut);
+            parts_text.push_str("\n... (truncated)");
+        }
+
+        summary.push_str(&parts_text);
 
         if !tool_names.is_empty() {
             summary.push_str(&format!(
