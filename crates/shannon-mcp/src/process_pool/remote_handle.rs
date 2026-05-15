@@ -417,16 +417,22 @@ impl RemoteMcpServerHandle {
         for (key, value) in &self.headers {
             builder = builder.header(key.as_str(), value.as_str());
         }
-        // Resolve dynamic headers from shell commands (user-configured, validated at load).
+        // Resolve dynamic headers from shell commands (user-configured).
+        // Only allow simple alphanumeric commands without shell metacharacters.
         for (name, command) in &self.header_commands {
-            // Reject dangerous patterns
-            if command.contains("rm -rf /") || command.contains("mkfs") || command.contains("dd if=") {
-                warn!("Skipping dangerous header command for '{name}': {command}");
+            // Reject commands containing shell metacharacters or path traversal
+            if command.contains(|c: char| matches!(c, ';' | '&' | '|' | '$' | '`' | '(' | ')' | '{' | '}' | '<' | '>' | '\\' | '\n' | '\r'))
+               || command.contains("..")
+            {
+                warn!(server = %self.name, header = %name, "Skipping header command with unsafe characters: {command}");
                 continue;
             }
-            let output = tokio::process::Command::new("sh")
-                .arg("-c")
-                .arg(command.as_str())
+            let parts: Vec<&str> = command.split_whitespace().collect();
+            if parts.is_empty() {
+                continue;
+            }
+            let output = tokio::process::Command::new(parts[0])
+                .args(&parts[1..])
                 .output()
                 .await;
             match output {

@@ -973,16 +973,10 @@ impl ChatWidget {
         self.column.truncate(cutoff);
 
         // Fix committed_count if it's now beyond the message list
-        if self.committed_count > cutoff {
-            self.committed_count = cutoff;
-        }
+        self.committed_count = self.committed_count.min(self.messages.len());
 
-        // Fix scroll offset
-        if !self.messages.is_empty() {
-            self.scroll_offset = self.messages.len() - 1;
-        } else {
-            self.scroll_offset = 0;
-        }
+        // Fix scroll offset — clamp to valid range
+        self.scroll_offset = self.scroll_offset.min(self.messages.len().saturating_sub(1));
 
         removed
     }

@@ -126,6 +126,8 @@ impl Drop for AgentHandle {
                 if let Err(e) = self.child.start_kill() {
                     tracing::warn!(agent = %self.name, "Failed to kill child process on drop: {e}");
                 }
+                // Reap the zombie to free the PID slot
+                let _ = self.child.try_wait();
             }
             Err(e) => {
                 tracing::warn!(agent = %self.name, "Failed to check child status on drop: {e}");

@@ -497,17 +497,15 @@ impl QueryEngine {
 
     /// Update the model used for API calls.
     pub fn set_model(&mut self, model: String) {
-        if let Ok(mut tracker) = self.cost_tracker.write() {
-            tracker.model_name = model.clone();
-        }
+        let mut tracker = self.cost_tracker.write().unwrap_or_else(|e| e.into_inner());
+        tracker.model_name = model.clone();
         self.client.set_model(model);
     }
 
     /// Update the model AND switch provider (including base_url).
     pub fn set_model_for_provider(&mut self, model: String, provider: LlmProvider) {
-        if let Ok(mut tracker) = self.cost_tracker.write() {
-            tracker.model_name = model.clone();
-        }
+        let mut tracker = self.cost_tracker.write().unwrap_or_else(|e| e.into_inner());
+        tracker.model_name = model.clone();
         self.client.set_model_for_provider(model, provider);
     }
 
@@ -1021,7 +1019,8 @@ impl QueryEngine {
                                             total_output_tokens += output_tokens;
 
                                             // Update shared cost tracker
-                                            if let Ok(mut tracker) = cost_tracker.write() {
+                                            {
+                                                let mut tracker = cost_tracker.write().unwrap_or_else(|e| e.into_inner());
                                                 tracker.record_usage(&client_model, input_tokens, output_tokens);
 
                                                 // Budget enforcement: check if limit exceeded

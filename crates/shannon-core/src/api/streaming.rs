@@ -137,9 +137,8 @@ impl SseStream {
         if let Some(id) = line.strip_prefix("id:") {
             let id = id.trim();
             if !id.is_empty() {
-                if let Ok(mut guard) = self.last_event_id.lock() {
-                    *guard = Some(id.to_string());
-                }
+                let mut guard = self.last_event_id.lock().unwrap_or_else(|e| e.into_inner());
+                *guard = Some(id.to_string());
             }
             return vec![];
         }
@@ -358,11 +357,11 @@ impl ResumableSseStream {
     /// Initiate an asynchronous reconnection using the tracked last event ID.
     fn start_reconnect(&mut self, cx: &mut Context<'_>) {
         self.reconnects_remaining -= 1;
-        let eid = self.last_event_id.lock().ok().and_then(|g| g.clone());
+        let eid = self.last_event_id.lock().unwrap_or_else(|e| e.into_inner()).clone();
 
         // Exponential backoff: 1s, 2s, 4s, 8s, ...
         let attempts_used = self.initial_reconnects - self.reconnects_remaining;
-        let backoff_secs = 1u64 << (attempts_used - 1).min(4);
+        let backoff_secs = if attempts_used == 0 { 1 } else { 1u64 << (attempts_used - 1).min(4) };
 
         tracing::info!(
             "Stream dropped unexpectedly. Reconnecting in {backoff_secs}s ({} attempts left, last_event_id={:?})",

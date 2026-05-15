@@ -984,7 +984,7 @@ impl MessageCell {
                     // Limit total width
                     let total: usize = widths.iter().sum::<usize>() + col_count.saturating_sub(1) * 3 + 4;
                     let budget = inner_width.min(100);
-                    if total > budget && col_count > 0 {
+                    if total > budget && col_count > 0 && total > 0 {
                         let scale = budget as f64 / total as f64;
                         for w in &mut widths {
                             *w = (*w as f64 * scale).max(1.0) as usize;
