@@ -1666,7 +1666,7 @@ impl AgentCoordinator {
     /// In delegate mode, the lead agent only coordinates (creates tasks, messages
     /// teammates) and should not directly implement code changes.
     pub fn delegate_mode(&self) -> bool {
-        self.config.delegate_mode
+        self.delegate_mode_flag.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Toggle delegate mode on or off.

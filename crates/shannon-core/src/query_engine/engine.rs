@@ -1044,11 +1044,11 @@ impl QueryEngine {
                                                 if tracker.check_and_mark_budget_warning() {
                                                     let limit = tracker.budget_limit_usd.unwrap_or(0.0);
                                                     let total = tracker.total_cost();
+                                                    let pct = if limit > 0.0 { (total / limit * 100.0) as u32 } else { 0 };
                                                     let _ = tx.send(Ok(QueryEvent::Progress {
                                                         query_id,
                                                         message: format!(
-                                                            "Budget warning: ${total:.4} / ${limit:.2} ({:.0}%)",
-                                                            (total / limit) * 100.0
+                                                            "Budget warning: ${total:.4} / ${limit:.2} ({pct}%)"
                                                         ),
                                                     }));
                                                 }

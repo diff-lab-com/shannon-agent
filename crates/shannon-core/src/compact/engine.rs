@@ -225,10 +225,21 @@ impl CompactEngine {
             self.summarizer
                 .summarize(&old_messages, self.config.max_output_tokens)?;
 
-        // Verify summary quality — reject if clearly degenerate
-        if !Self::verify_summary_quality(&summary_text, &old_messages) {
-            tracing::warn!("Summary quality check failed, using fallback summary");
-        }
+        // Verify summary quality — use fallback if clearly degenerate
+        let summary_text = if !Self::verify_summary_quality(&summary_text, &old_messages) {
+            tracing::warn!("Summary quality check failed, using fallback topic list");
+            // Generate a minimal fallback summary from message roles
+            let roles: Vec<&str> = old_messages.iter().map(|m| m.role.as_str()).collect();
+            let user_count = roles.iter().filter(|r| **r == "user").count();
+            let assistant_count = roles.iter().filter(|r| **r == "assistant").count();
+            let tool_count = roles.iter().filter(|r| **r == "tool").count();
+            format!(
+                "[Compaction fallback] Removed {total} messages ({user_count} user, {assistant_count} assistant, {tool_count} tool results). Summary quality was insufficient.",
+                total = old_messages.len(),
+            )
+        } else {
+            summary_text
+        };
 
         // Create a summary system message
         let summary_message = Message {
@@ -704,8 +715,17 @@ impl CompactEngine {
             )),
         };
 
+        // Preserve leading system messages (system prompt, reinjected context)
+        let system_end = messages.iter().position(|m| m.role != "system").unwrap_or(0);
+        let preserved_system: Vec<Message> = messages[..system_end].to_vec();
+
         messages.drain(..split_point);
-        messages.insert(0, summary_message);
+
+        // Re-insert preserved system messages at the front
+        let mut result = preserved_system;
+        result.push(summary_message);
+        result.extend(messages.drain(..));
+        *messages = result;
 
         let compacted_tokens = estimate_tokens(messages);
         let reduction_ratio = if original_tokens > 0 {

@@ -185,6 +185,7 @@ impl LlmClient {
             .map_err(|e| match e.status() {
                 Some(reqwest::StatusCode::UNAUTHORIZED) => ApiError::AuthenticationFailed,
                 Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded { retry_after_secs: None },
+                Some(status) if status.is_server_error() => ApiError::HttpError(e),
                 Some(status) => ApiError::ApiError {
                     status: status.as_u16(),
                     message: format!("HTTP error: {e}"),
@@ -275,6 +276,7 @@ impl LlmClient {
             .map_err(|e| match e.status() {
                 Some(reqwest::StatusCode::UNAUTHORIZED) => ApiError::AuthenticationFailed,
                 Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded { retry_after_secs: None },
+                Some(status) if status.is_server_error() => ApiError::HttpError(e),
                 Some(status) => ApiError::ApiError {
                     status: status.as_u16(),
                     message: format!("HTTP error: {e}"),
@@ -356,6 +358,7 @@ impl LlmClient {
             .map_err(|e| match e.status() {
                 Some(reqwest::StatusCode::UNAUTHORIZED) => ApiError::AuthenticationFailed,
                 Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded { retry_after_secs: None },
+                Some(status) if status.is_server_error() => ApiError::HttpError(e),
                 Some(status) => ApiError::ApiError {
                     status: status.as_u16(),
                     message: format!("HTTP error: {e}"),
@@ -428,6 +431,7 @@ impl LlmClient {
             .map_err(|e| match e.status() {
                 Some(reqwest::StatusCode::UNAUTHORIZED) => ApiError::AuthenticationFailed,
                 Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded { retry_after_secs: None },
+                Some(status) if status.is_server_error() => ApiError::HttpError(e),
                 Some(status) => ApiError::ApiError {
                     status: status.as_u16(),
                     message: format!("HTTP error: {e}"),

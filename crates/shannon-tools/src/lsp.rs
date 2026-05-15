@@ -110,6 +110,7 @@ impl LspClient {
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
             .spawn()
             .map_err(|e| format!("Failed to launch language server '{server_command}': {e}"))?;
 
@@ -202,6 +203,12 @@ impl LspClient {
             if let Some(length_str) = header_line.strip_prefix("Content-Length: ") {
                 let length: usize = length_str.trim().parse()
                     .map_err(|e| format!("Invalid Content-Length: {e}"))?;
+
+                // Guard against unbounded allocation from malicious/buggy servers
+                const MAX_CONTENT_LENGTH: usize = 100 * 1024 * 1024; // 100 MB
+                if length > MAX_CONTENT_LENGTH {
+                    return Err(format!("LSP Content-Length too large: {length} bytes (max {MAX_CONTENT_LENGTH})"));
+                }
 
                 // Read the empty line after headers
                 let mut sep = String::new();

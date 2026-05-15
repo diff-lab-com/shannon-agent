@@ -41,7 +41,8 @@ pub async fn execute(input: WriteInput) -> Result<ToolOutput, ToolError> {
     let bytes = input.content.len();
 
     // Atomic write: write to temp file then rename to avoid partial writes on crash.
-    let temp_path = format!("{}.shannon-tmp", input.file_path);
+    // Use UUID suffix to prevent symlink race attacks on predictable temp paths.
+    let temp_path = format!("{}.shannon-tmp-{}", input.file_path, uuid::Uuid::new_v4().as_simple());
     fs::write(&temp_path, &input.content)
         .await
         .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write file: {e}")))?;

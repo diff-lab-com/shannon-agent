@@ -244,6 +244,24 @@ pub fn compute_diff_hunks(old: &str, new: &str) -> Vec<DiffHunk> {
     let m = old_lines.len();
     let n = new_lines.len();
 
+    // Guard against O(m*n) memory explosion on files with many short lines.
+    // Fall back to a simple whole-file replacement diff for large inputs.
+    const MAX_LINES_FOR_LCS: usize = 50_000;
+    if m > MAX_LINES_FOR_LCS || n > MAX_LINES_FOR_LCS {
+        if old_lines == new_lines {
+            return Vec::new();
+        }
+        let header = format!("@@ -1,{} +1,{} @@", m, n);
+        return vec![DiffHunk {
+            old_start: 1,
+            old_count: m,
+            new_start: 1,
+            new_count: n,
+            header,
+            lines: Vec::new(),
+        }];
+    }
+
     // Build LCS table
     let mut dp = vec![vec![0usize; n + 1]; m + 1];
     for i in 1..=m {
@@ -528,12 +546,22 @@ pub async fn execute(input: EditInput) -> Result<ToolOutput, ToolError> {
         });
     }
 
-    // --- Write file ---
-    fs::write(&input.file_path, &new_content)
+    // --- Write file (atomic: write to temp then rename to avoid corruption on crash) ---
+    let temp_path = format!("{}.shannon-edit-{}", input.file_path, uuid::Uuid::new_v4().as_simple());
+    fs::write(&temp_path, &new_content)
         .await
         .map_err(|e| {
             ToolError::ExecutionFailed(format!(
                 "Failed to write file '{}': {}",
+                input.file_path, e
+            ))
+        })?;
+    fs::rename(&temp_path, &input.file_path)
+        .await
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&temp_path);
+            ToolError::ExecutionFailed(format!(
+                "Failed to rename temp file for '{}': {}",
                 input.file_path, e
             ))
         })?;

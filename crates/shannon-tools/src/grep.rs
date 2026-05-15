@@ -132,6 +132,13 @@ impl GrepTool {
 
     /// Read lines from a file, returning a vector of (line_number, line_content)
     fn read_file_lines(path: &Path) -> std::io::Result<Vec<(usize, String)>> {
+        // Skip files that are too large to avoid OOM on huge log/data files
+        const MAX_FILE_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
+        if let Ok(meta) = std::fs::metadata(path) {
+            if meta.len() > MAX_FILE_SIZE {
+                return Ok(Vec::new());
+            }
+        }
         let content = std::fs::read_to_string(path)?;
         Ok(content
             .lines()

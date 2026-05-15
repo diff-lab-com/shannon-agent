@@ -30,6 +30,9 @@ pub enum SessionPersistError {
 
     #[error("Storage error: {0}")]
     StorageError(String),
+
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
 }
 
 // ============================================================================
@@ -146,6 +149,7 @@ impl SessionPersistManager {
 
     /// Save a session to disk atomically (write temp, then rename).
     pub fn save_session(&self, state: &PersistedSessionState) -> Result<(), SessionPersistError> {
+        Self::validate_session_id(&state.session_id)?;
         fs::create_dir_all(&self.storage_dir)?;
 
         let content_hash = compute_hash(state);
@@ -168,6 +172,7 @@ impl SessionPersistManager {
 
     /// Load a session from disk by its ID.
     pub fn load_session(&self, id: &str) -> Result<PersistedSessionState, SessionPersistError> {
+        Self::validate_session_id(id)?;
         let path = self.session_path(id);
         if !path.exists() {
             return Err(SessionPersistError::SessionNotFound(id.to_string()));
@@ -237,6 +242,7 @@ impl SessionPersistManager {
 
     /// Delete a session file from disk.
     pub fn delete_session(&self, id: &str) -> Result<(), SessionPersistError> {
+        Self::validate_session_id(id)?;
         let path = self.session_path(id);
         if !path.exists() {
             return Err(SessionPersistError::SessionNotFound(id.to_string()));
@@ -248,6 +254,21 @@ impl SessionPersistManager {
     /// Return the file path for a given session ID.
     pub fn session_path(&self, id: &str) -> PathBuf {
         self.storage_dir.join(format!("{id}.json"))
+    }
+
+    /// Validate a session ID to prevent path traversal attacks.
+    fn validate_session_id(id: &str) -> Result<(), SessionPersistError> {
+        if id.is_empty()
+            || id.contains('/')
+            || id.contains('\\')
+            || id.contains("..")
+            || id.contains('\0')
+        {
+            return Err(SessionPersistError::InvalidInput(format!(
+                "Invalid session ID: {id}"
+            )));
+        }
+        Ok(())
     }
 
     // ----------------------------------------------------------------
