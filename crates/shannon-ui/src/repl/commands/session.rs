@@ -734,6 +734,19 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
         (strategy, None)
     };
 
+    // Pre-compaction feedback: tell user what's about to happen
+    let compactable = analysis.compactable_message_count;
+    let strategy_name = match strategy {
+        CompactStrategy::TruncateOld => "truncate",
+        CompactStrategy::MicroCompress => "micro",
+        CompactStrategy::GroupCompress => "group",
+        CompactStrategy::SummarizeOld => "summarize",
+        _ => "auto",
+    };
+    repl.chat.add_message(ChatRole::System, format!(
+        "Compacting context ({compactable} messages, {strategy_name} strategy)..."
+    ));
+
     let (messages, compact_result) = if let Some(ref keywords) = focus_keywords {
         // For focus mode, compact only non-matching messages
         let mut to_compact: Vec<shannon_core::api::Message> = Vec::new();
@@ -824,6 +837,11 @@ fn handle_compact_with_focus(
         }
     }
     let compact_result = if !to_compact.is_empty() {
+        let count = to_compact.len();
+        repl.chat.add_message(ChatRole::System, format!(
+            "Focus compacting {count} messages (preserving matches for '{}')...",
+            keyword_strings.join("', '")
+        ));
         let mut compact_engine = compact_engine;
         let cr = compact_engine.compact(&mut to_compact);
         to_keep.append(&mut to_compact);

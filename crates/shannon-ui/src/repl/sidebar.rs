@@ -292,7 +292,9 @@ impl super::Repl {
         }
 
         if let Some(msg) = toast_msg {
-            self.state.toast = Some((msg, std::time::Instant::now()));
+            self.state.toast = Some((msg.clone(), std::time::Instant::now()));
+            // Also add a system message to chat for persistent visibility
+            self.chat.add_message(ChatRole::System, msg.trim().to_string());
         }
     }
 }
