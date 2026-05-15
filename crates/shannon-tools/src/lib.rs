@@ -58,7 +58,7 @@ pub mod schedule_wakeup;
 pub mod pty;
 
 // Re-exports for convenience
-pub use file::{ReadTool, WriteTool, EditTool, GlobTool, FileOperation};
+pub use file::{ReadTool, WriteTool, EditTool, MultiEditTool, GlobTool, FileOperation};
 pub use system::{SystemTool, ShellCommand, SleepTool, BashTool, PowerShellTool, DockerSandbox, DockerSandboxConfig, SandboxMode, PathValidationError};
 pub use git::{GitBranchTool, GitDiffTool, GitLogTool, GitStashTool, GitSafetyTool, AutoCommitTool};
 pub use github::{GhIssueListTool, GhIssueViewTool, GhPrCreateTool, GhPrListTool, GhPrViewTool};
@@ -152,6 +152,7 @@ pub fn register_default_tools(registry: &mut ToolRegistry) -> Result<std::sync::
     registry.register(Box::new(ReadTool::new()))?;
     registry.register(Box::new(WriteTool::new()))?;
     registry.register(Box::new(EditTool::new()))?;
+    registry.register(Box::new(MultiEditTool::new()))?;
     registry.register(Box::new(GlobTool::new()))?;
 
     // ── System operations ──────────────────────────────────────────────
@@ -278,6 +279,7 @@ pub fn register_default_tools_with_project_dir(
     registry.register(Box::new(ReadTool::with_sandbox(sandbox.clone())))?;
     registry.register(Box::new(WriteTool::with_sandbox(sandbox.clone())))?;
     registry.register(Box::new(EditTool::with_sandbox(sandbox.clone())))?;
+    registry.register(Box::new(MultiEditTool::with_sandbox(sandbox.clone())))?;
     registry.register(Box::new(GlobTool::with_sandbox(sandbox.clone())))?;
     registry.register(Box::new(GrepTool::with_sandbox(sandbox)))?;
 
@@ -416,6 +418,7 @@ pub fn register_default_tools_with_project_dir_ex(
     registry.register(Box::new(ReadTool::with_sandbox(sandbox.clone())))?;
     registry.register(Box::new(WriteTool::with_sandbox(sandbox.clone())))?;
     registry.register(Box::new(EditTool::with_sandbox(sandbox.clone())))?;
+    registry.register(Box::new(MultiEditTool::with_sandbox(sandbox.clone())))?;
     registry.register(Box::new(GlobTool::with_sandbox(sandbox.clone())))?;
     registry.register(Box::new(GrepTool::with_sandbox(sandbox)))?;
 

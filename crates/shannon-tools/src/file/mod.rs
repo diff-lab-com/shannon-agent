@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 pub mod read;
 pub mod write;
 pub mod edit;
+pub mod multiedit;
 pub mod glob;
 pub mod sandbox;
 pub mod history;
@@ -262,6 +263,92 @@ impl Tool for EditTool {
         input.file_path = canonical.to_string_lossy().to_string();
 
         edit::execute(input).await
+    }
+}
+
+/// Atomic multi-file edit tool
+pub struct MultiEditTool {
+    description: String,
+    sandbox: PathSandbox,
+}
+
+impl Default for MultiEditTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MultiEditTool {
+    pub fn new() -> Self {
+        Self {
+            description: "Apply multiple file edits atomically — all edits succeed or none are applied".to_string(),
+            sandbox: PathSandbox::new(),
+        }
+    }
+
+    pub fn with_sandbox(sandbox: PathSandbox) -> Self {
+        Self {
+            description: "Apply multiple file edits atomically — all edits succeed or none are applied".to_string(),
+            sandbox,
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for MultiEditTool {
+    fn name(&self) -> &str {
+        "MultiEdit"
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "edits": {
+                    "type": "array",
+                    "description": "List of edit operations to apply atomically",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "file_path": {
+                                "type": "string",
+                                "description": "Absolute path to the file"
+                            },
+                            "old_string": {
+                                "type": "string",
+                                "description": "Text to replace"
+                            },
+                            "new_string": {
+                                "type": "string",
+                                "description": "Replacement text"
+                            },
+                            "replace_all": {
+                                "type": "boolean",
+                                "description": "Replace all occurrences (default: false)"
+                            }
+                        },
+                        "required": ["file_path", "old_string", "new_string"]
+                    }
+                }
+            },
+            "required": ["edits"]
+        })
+    }
+
+    async fn execute(&self, input: serde_json::Value) -> ToolResult<ToolOutput> {
+        let mut multi_input: multiedit::MultiEditInput = serde_json::from_value(input)
+            .map_err(|e| ToolError::InvalidInput(format!("Invalid multi-edit input: {e}")))?;
+
+        for op in &mut multi_input.edits {
+            let canonical = validate_path(&self.sandbox, &op.file_path).await?;
+            op.file_path = canonical.to_string_lossy().to_string();
+        }
+
+        multiedit::execute(multi_input).await
     }
 }
 
