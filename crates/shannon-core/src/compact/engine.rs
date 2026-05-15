@@ -724,6 +724,7 @@ impl CompactEngine {
         // Re-insert preserved system messages at the front
         let mut result = preserved_system;
         result.push(summary_message);
+        #[allow(clippy::extend_with_drain)]
         result.extend(messages.drain(..));
         *messages = result;
 

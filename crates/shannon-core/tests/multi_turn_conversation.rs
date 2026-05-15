@@ -2041,3 +2041,146 @@ fn test_long_assistant_response_preserved_intact() {
 
     assert_eq!(conv.messages.len(), 3, "All 3 turns must be in conversation");
 }
+
+#[test]
+fn test_ten_plus_turn_context_preservation() {
+    // Stress test: 12 turns mixing text and tool calls, verify context doesn't degrade
+    let mut conv = TestConversation::default();
+
+    // Turn 1: user asks about a file
+    conv.messages.push(text_msg("user", "Read the file config.toml"));
+    conv.messages.push(Message {
+        role: "assistant".to_string(),
+        content: MessageContent::Blocks(vec![
+            ContentBlock::ToolUse {
+                id: "tool_1".to_string(),
+                name: "read_file".to_string(),
+                input: serde_json::json!({"path": "config.toml"}),
+            },
+        ]),
+    });
+    conv.messages.push(Message {
+        role: "user".to_string(),
+        content: MessageContent::Blocks(vec![
+            ContentBlock::ToolResult {
+                tool_use_id: "tool_1".to_string(),
+                content: Some(ToolResultContent::Single("version = \"1.0\"".to_string())),
+                is_error: Some(false),
+            },
+        ]),
+    });
+
+    // Turn 2: assistant reads and responds
+    conv.messages.push(text_msg("assistant", "The config.toml has version 1.0."));
+
+    // Turn 3: follow-up question referencing config
+    conv.messages.push(text_msg("user", "What version was in config.toml?"));
+    conv.messages.push(text_msg("assistant", "The config.toml had version 1.0 as I read earlier."));
+
+    // Turn 4: ask to write a function
+    conv.messages.push(text_msg("user", "Write a function to parse version strings"));
+    conv.messages.push(text_msg("assistant", "fn parse_version(s: &str) -> Vec<u32> { s.split('.').filter_map(|p| p.parse().ok()).collect() }"));
+
+    // Turn 5: reference the function
+    conv.messages.push(text_msg("user", "What does the function you just wrote do?"));
+    conv.messages.push(text_msg("assistant", "The parse_version function splits a version string like \"1.2.3\" by dots and parses each part into u32."));
+
+    // Turn 6: tool use — list files
+    conv.messages.push(text_msg("user", "List all Rust files in src/"));
+    conv.messages.push(Message {
+        role: "assistant".to_string(),
+        content: MessageContent::Blocks(vec![
+            ContentBlock::ToolUse {
+                id: "tool_2".to_string(),
+                name: "bash".to_string(),
+                input: serde_json::json!({"command": "find src/ -name '*.rs'"}),
+            },
+        ]),
+    });
+    conv.messages.push(Message {
+        role: "user".to_string(),
+        content: MessageContent::Blocks(vec![
+            ContentBlock::ToolResult {
+                tool_use_id: "tool_2".to_string(),
+                content: Some(ToolResultContent::Single("src/main.rs\nsrc/lib.rs\nsrc/parser.rs".to_string())),
+                is_error: Some(false),
+            },
+        ]),
+    });
+
+    // Turn 7: assistant responds with file list
+    conv.messages.push(text_msg("assistant", "Found 3 Rust files: main.rs, lib.rs, and parser.rs."));
+
+    // Turn 8: reference earlier config + files
+    conv.messages.push(text_msg("user", "In the version from config.toml, how many files matched?"));
+    conv.messages.push(text_msg("assistant", "The version 1.0 from config.toml is unrelated to the 3 Rust files I found."));
+
+    // Turn 9: compression trigger — add a large message
+    let big_response = "X".repeat(2000);
+    conv.messages.push(text_msg("user", "Generate a long response"));
+    conv.messages.push(text_msg("assistant", &big_response));
+
+    // Turn 10: verify context after large message
+    conv.messages.push(text_msg("user", "How many Rust files were there? And what was the config version?"));
+    conv.messages.push(text_msg("assistant", "There were 3 Rust files (main.rs, lib.rs, parser.rs) and the config version was 1.0."));
+
+    // Turn 11: another tool use
+    conv.messages.push(text_msg("user", "Read parser.rs"));
+    conv.messages.push(Message {
+        role: "assistant".to_string(),
+        content: MessageContent::Blocks(vec![
+            ContentBlock::ToolUse {
+                id: "tool_3".to_string(),
+                name: "read_file".to_string(),
+                input: serde_json::json!({"path": "src/parser.rs"}),
+            },
+        ]),
+    });
+    conv.messages.push(Message {
+        role: "user".to_string(),
+        content: MessageContent::Blocks(vec![
+            ContentBlock::ToolResult {
+                tool_use_id: "tool_3".to_string(),
+                content: Some(ToolResultContent::Single("pub fn parse() {}".to_string())),
+                is_error: Some(false),
+            },
+        ]),
+    });
+    conv.messages.push(text_msg("assistant", "parser.rs contains a single parse function."));
+
+    // Turn 12: final cross-reference — everything from the conversation
+    conv.messages.push(text_msg("user", "Summarize everything we've done"));
+    conv.messages.push(text_msg("assistant", "We read config.toml (version 1.0), wrote a parse_version function, listed 3 Rust files, generated a long response, and read parser.rs."));
+
+    // Verify: 12 turns of user+assistant pairs + 3 tool_use/tool_result pairs = correct count
+    // Turn structure: user, assistant(tool), user(tool_result), assistant, user, assistant, ...
+    assert_eq!(conv.messages.len(), 26, "Should have 26 messages across 12 turns with 3 tool use cycles");
+
+    // Verify proper alternation: no two consecutive same-role messages (except tool_result→assistant)
+    for i in 1..conv.messages.len() {
+        let prev_role = &conv.messages[i - 1].role;
+        let curr_role = &conv.messages[i].role;
+        // Only allowed: user→assistant, assistant→user, user(tool_result)→assistant
+        assert!(
+            prev_role != curr_role || prev_role == "user",
+            "Message {i}: consecutive same role '{curr_role}' after '{prev_role}'"
+        );
+    }
+
+    // Verify early context is preserved (config version)
+    let all_text: String = conv.messages.iter().map(|m| match &m.content {
+        MessageContent::Text(t) => t.as_str(),
+        _ => "",
+    }).collect();
+    assert!(all_text.contains("1.0"), "Config version 1.0 must be preserved across 12 turns");
+
+    // Verify tool uses are preserved as blocks, not text
+    let tool_uses: Vec<_> = conv.messages.iter().filter_map(|m| match &m.content {
+        MessageContent::Blocks(blocks) => blocks.iter().find_map(|b| match b {
+            ContentBlock::ToolUse { name, .. } => Some(name.clone()),
+            _ => None,
+        }),
+        _ => None,
+    }).collect();
+    assert_eq!(tool_uses, vec!["read_file", "bash", "read_file"], "All 3 tool uses must be preserved");
+}

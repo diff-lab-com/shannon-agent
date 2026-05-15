@@ -19,6 +19,20 @@ use super::Repl;
 
 /// Draw the main REPL frame, dispatching to the appropriate overlay.
 pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &mut Repl) -> Result<()> {
+    // Safety net: if streaming_active is stale (stuck for >5 min without a stream),
+    // force-reset to avoid permanent streaming indicator
+    if repl.state.streaming_active {
+        if let Some(start) = repl.state.streaming_start {
+            if start.elapsed().as_secs() > 300 {
+                tracing::warn!("streaming_active stuck for >5min — force resetting");
+                repl.state.streaming_active = false;
+                repl.state.thinking_phase = false;
+                repl.state.streaming_start = None;
+                repl.chat.streaming_active = false;
+            }
+        }
+    }
+
     // Flush pending scrollback lines into terminal history
     if !repl.chat.pending_scrollback.is_empty() {
         let lines = std::mem::take(&mut repl.chat.pending_scrollback);

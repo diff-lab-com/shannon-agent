@@ -582,13 +582,11 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
         KeyCode::Tab => {
             if repl.state.streaming_active {
                 let input = repl.prompt.input().trim().to_string();
-                if !input.is_empty() {
-                    if repl.state.queued_messages.len() < 50 {
-                        let count = repl.state.queued_messages.len() + 1;
-                        repl.state.queued_messages.push(input);
-                        repl.prompt.clear();
-                        repl.state.status = format!("Message queued ({count} in queue)");
-                    }
+                if !input.is_empty() && repl.state.queued_messages.len() < 50 {
+                    let count = repl.state.queued_messages.len() + 1;
+                    repl.state.queued_messages.push(input);
+                    repl.prompt.clear();
+                    repl.state.status = format!("Message queued ({count} in queue)");
                 }
             } else if !repl.state.completion_suggestions.is_empty() {
                 accept_completion(repl);

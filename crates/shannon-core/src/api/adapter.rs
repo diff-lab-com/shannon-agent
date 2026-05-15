@@ -2004,7 +2004,136 @@ mod tests {
         assert!(found, "MAX_TOKENS should be preserved as-is");
     }
 
+    // -- DeepSeek tests (OpenAI-compatible) --
+
+    #[test]
+    fn test_deepseek_text_delta_via_openai_path() {
+        let chunk_json = r#"{"choices":[{"delta":{"content":"Hello"},"index":0}]}"#;
+        let result = normalize_sse_event(chunk_json, &LlmProvider::DeepSeek, &mut fresh_state());
+        match &result[0] {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                assert_eq!(delta, &ContentDelta::TextDelta { text: "Hello".to_string() });
+            }
+            other => panic!("Expected ContentBlockDelta, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_deepseek_finish_reason_stop() {
+        let chunk_json = r#"{"choices":[{"delta":{},"finish_reason":"stop","index":0}]}"#;
+        let result = normalize_sse_event(chunk_json, &LlmProvider::DeepSeek, &mut fresh_state());
+        match &result[0] {
+            Ok(StreamEvent::MessageDelta { delta, .. }) => {
+                assert_eq!(delta.stop_reason.as_deref(), Some("end_turn"));
+            }
+            other => panic!("Expected MessageDelta, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_deepseek_tool_call_streaming() {
+        // DeepSeek tool calls follow OpenAI format
+        let start = r#"{"choices":[{"delta":{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"bash","arguments":""}}]},"index":0}]}"#;
+        let args = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"com"}}]},"index":0}]}"#;
+        let end = r#"{"choices":[{"delta":{},"finish_reason":"stop","index":0}]}"#;
+
+        let mut state = fresh_state();
+        let start_events = normalize_sse_event(start, &LlmProvider::DeepSeek, &mut state);
+        let args_events = normalize_sse_event(args, &LlmProvider::DeepSeek, &mut state);
+        let end_events = normalize_sse_event(end, &LlmProvider::DeepSeek, &mut state);
+
+        assert!(matches!(&start_events[0], Ok(StreamEvent::ContentBlockStart { .. })));
+        assert!(matches!(&args_events[0], Ok(StreamEvent::ContentBlockDelta { .. })));
+        assert!(matches!(&end_events[0], Ok(StreamEvent::MessageDelta { .. })));
+    }
+
+    // -- Groq tests (OpenAI-compatible) --
+
+    #[test]
+    fn test_groq_text_delta_via_openai_path() {
+        let chunk_json = r#"{"choices":[{"delta":{"content":"Fast"},"index":0}]}"#;
+        let result = normalize_sse_event(chunk_json, &LlmProvider::Groq, &mut fresh_state());
+        match &result[0] {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                assert_eq!(delta, &ContentDelta::TextDelta { text: "Fast".to_string() });
+            }
+            other => panic!("Expected ContentBlockDelta, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_groq_finish_reason_with_usage() {
+        // Groq includes usage in the final chunk
+        let chunk_json = r#"{"choices":[{"delta":{},"finish_reason":"stop","index":0}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}"#;
+        let result = normalize_sse_event(chunk_json, &LlmProvider::Groq, &mut fresh_state());
+
+        let has_end_turn = result.iter().any(|e| matches!(e, Ok(StreamEvent::MessageDelta { delta, .. }) if delta.stop_reason.as_deref() == Some("end_turn")));
+        assert!(has_end_turn, "Should normalize stop to end_turn");
+    }
+
     // -- Bedrock tests --
+
+    #[test]
+    fn test_gemini_dual_message_delta_stop_then_usage() {
+        // Gemini sends two MessageDelta events at completion:
+        // 1. finishReason with zero usage
+        // 2. usageMetadata with no stop_reason
+        let stop_chunk = r#"{"candidates":[{"finishReason":"STOP"}]}"#;
+        let usage_chunk = r#"{"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":20}}"#;
+
+        let mut state = fresh_state();
+        let stop_events = normalize_sse_event(stop_chunk, &LlmProvider::Gemini, &mut state);
+        let usage_events = normalize_sse_event(usage_chunk, &LlmProvider::Gemini, &mut state);
+
+        // First chunk: exactly one MessageDelta with stop_reason
+        assert_eq!(stop_events.len(), 1, "stop chunk should produce exactly 1 event");
+        match &stop_events[0] {
+            Ok(StreamEvent::MessageDelta { delta, usage }) => {
+                assert_eq!(delta.stop_reason.as_deref(), Some("end_turn"));
+                assert_eq!(usage.input_tokens, 0);
+                assert_eq!(usage.output_tokens, 0);
+            }
+            other => panic!("Expected MessageDelta with stop_reason, got {other:?}"),
+        }
+
+        // Second chunk: exactly one MessageDelta with usage, no stop_reason
+        assert_eq!(usage_events.len(), 1, "usage chunk should produce exactly 1 event");
+        match &usage_events[0] {
+            Ok(StreamEvent::MessageDelta { delta, usage }) => {
+                assert!(delta.stop_reason.is_none(), "usage chunk should have no stop_reason");
+                assert_eq!(usage.input_tokens, 10);
+                assert_eq!(usage.output_tokens, 20);
+            }
+            other => panic!("Expected MessageDelta with usage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_gemini_combined_stop_and_usage_single_chunk() {
+        // Some Gemini responses include both finishReason and usageMetadata in one chunk
+        let combined = r#"{"candidates":[{"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":15}}"#;
+        let result = normalize_sse_event(combined, &LlmProvider::Gemini, &mut fresh_state());
+
+        assert_eq!(result.len(), 2, "combined chunk should produce 2 events");
+        let stop = &result[0];
+        let usage = &result[1];
+
+        match stop {
+            Ok(StreamEvent::MessageDelta { delta, usage: u }) => {
+                assert_eq!(delta.stop_reason.as_deref(), Some("end_turn"));
+                assert_eq!(u.input_tokens, 0);
+            }
+            other => panic!("Expected stop MessageDelta first, got {other:?}"),
+        }
+        match usage {
+            Ok(StreamEvent::MessageDelta { delta, usage: u }) => {
+                assert!(delta.stop_reason.is_none());
+                assert_eq!(u.input_tokens, 5);
+                assert_eq!(u.output_tokens, 15);
+            }
+            other => panic!("Expected usage MessageDelta second, got {other:?}"),
+        }
+    }
 
     #[test]
     fn test_bedrock_serialize_is_anthropic_passthrough() {

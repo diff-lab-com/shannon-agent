@@ -60,6 +60,15 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
+/// Send a query event, logging a warning if the receiver has been dropped.
+macro_rules! send_event {
+    ($tx:expr, $event:expr) => {
+        if let Err(e) = $tx.send(Ok($event)) {
+            tracing::warn!("query event dropped (receiver closed): {e}");
+        }
+    };
+}
+
 // ── Query complexity classification ──────────────────────────────────
 
 /// Query complexity level for model routing.
@@ -771,17 +780,17 @@ impl QueryEngine {
                 if turn >= config.max_turns {
                     let total_cost =
                         CostTracker::calculate_cost(&client_model, total_input_tokens, total_output_tokens);
-                    let _ = tx.send(Ok(QueryEvent::Cost {
+                    send_event!(tx, QueryEvent::Cost {
                         query_id,
                         total_cost_usd: total_cost,
                         input_tokens: total_input_tokens,
                         output_tokens: total_output_tokens,
-                    }));
-                    let _ = tx.send(Ok(QueryEvent::ConversationUpdate {
+                    });
+                    send_event!(tx, QueryEvent::ConversationUpdate {
                         query_id,
                         messages: conversation.messages.clone(),
-                    }));
-                    let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
+                    });
+                    send_event!(tx, QueryEvent::Completed { query_id });
 
                     // Auto-save conversation after completion
                     if let Err(e) = save_conversation_to_disk(
@@ -801,10 +810,10 @@ impl QueryEngine {
 
                 // Auto-compress conversation when approaching token limits
                 if conversation.needs_compression(&config) {
-                    let _ = tx.send(Ok(QueryEvent::Progress {
+                    send_event!(tx, QueryEvent::Progress {
                         query_id,
                         message: "Compressing conversation context...".to_string(),
-                    }));
+                    });
                     conversation.compress(&config);
                     messages = conversation.messages.clone();
                 }
@@ -837,14 +846,14 @@ impl QueryEngine {
 
                     // Pre-compaction warning at 60% — gives users visibility before compression fires
                     if usage_ratio > 0.6 && usage_ratio <= config.compression_threshold {
-                        let _ = tx.send(Ok(QueryEvent::Progress {
+                        send_event!(tx, QueryEvent::Progress {
                             query_id,
                             message: format!(
                                 "Context: {:.0}% full ({}/{}) — compaction will trigger at {:.0}%",
                                 usage_ratio * 100.0, estimated_tokens, max_context,
                                 config.compression_threshold * 100.0,
                             ),
-                        }));
+                        });
                     }
 
                     if usage_ratio > config.compression_threshold {
@@ -854,10 +863,10 @@ impl QueryEngine {
                             if messages.len() > keep {
                                 messages = messages.split_off(messages.len() - keep);
                             }
-                            let _ = tx.send(Ok(QueryEvent::Progress {
+                            send_event!(tx, QueryEvent::Progress {
                                 query_id,
                                 message: "Compaction skipped (too many failures), truncating old messages".to_string(),
-                            }));
+                            });
                         } else {
                             match crate::compact::CompactEngine::with_llm_summarizer(client.clone()) {
                                 Ok(mut compact_engine) => {
@@ -885,7 +894,7 @@ impl QueryEngine {
                                                 messages.insert(0, ctx_msg);
                                             }
 
-                                            let _ = tx.send(Ok(QueryEvent::Progress {
+                                            send_event!(tx, QueryEvent::Progress {
                                                 query_id,
                                                 message: format!(
                                                     "Context compressed (3-tier): {} -> {} tokens ({:.0}% reduction, {} messages compacted)",
@@ -894,8 +903,8 @@ impl QueryEngine {
                                                     result.reduction_ratio * 100.0,
                                                     result.messages_compacted,
                                                 ),
-                                            }));
-                                            let _ = tx.send(Ok(QueryEvent::Info {
+                                            });
+                                            send_event!(tx, QueryEvent::Info {
                                                 query_id,
                                                 message: format!(
                                                     "compaction: {} -> {} tokens ({:.0}% reduction, {} removed, {} compacted, {:?})",
@@ -906,7 +915,7 @@ impl QueryEngine {
                                                     result.messages_compacted,
                                                     result.strategy,
                                                 ),
-                                            }));
+                                            });
                                         }
                                         Err(e) => {
                                             compaction_failures += 1;
@@ -974,12 +983,12 @@ impl QueryEngine {
                                                 } => {
                                                     current_tool_use =
                                                         Some((id.clone(), name.clone()));
-                                                    let _ = tx.send(Ok(QueryEvent::ToolUseRequest {
+                                                    send_event!(tx, QueryEvent::ToolUseRequest {
                                                         query_id,
                                                         tool_use_id: id.clone(),
                                                         tool_name: name.clone(),
                                                         tool_input: input.clone(),
-                                                    }));
+                                                    });
                                                 }
                                                 ContentBlock::Thinking { .. } => {
                                                     // Thinking block started — deltas will arrive via ThinkingDelta
@@ -992,19 +1001,19 @@ impl QueryEngine {
                                                 ContentDelta::TextDelta { text } => {
                                                     has_content = true;
                                                     assistant_text.push_str(&text);
-                                                    let _ = tx.send(Ok(QueryEvent::Text {
+                                                    send_event!(tx, QueryEvent::Text {
                                                         query_id,
                                                         content: text,
-                                                    }));
+                                                    });
                                                 }
                                                 ContentDelta::InputJsonDelta { partial_json } => {
                                                     accumulated_tool_input.push_str(&partial_json);
                                                 }
                                                 ContentDelta::ThinkingDelta { thinking } => {
-                                                    let _ = tx.send(Ok(QueryEvent::Thinking {
+                                                    send_event!(tx, QueryEvent::Thinking {
                                                         query_id,
                                                         content: thinking,
-                                                    }));
+                                                    });
                                                 }
                                             }
                                         }
@@ -1022,13 +1031,13 @@ impl QueryEngine {
                                                     }
                                                     Err(e) => {
                                                         tracing::warn!("Tool input JSON parse failed for '{name}': {e}");
-                                                        let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                        send_event!(tx, QueryEvent::ToolUseResult {
                                                             query_id,
                                                             tool_use_id: id.clone(),
                                                             tool_name: name.clone(),
                                                             result: format!("Failed to parse tool arguments: {e}"),
                                                             is_error: true,
-                                                        }));
+                                                        });
                                                         tool_results.push((id, format!("Malformed tool input: {e}"), true));
                                                         assistant_tool_uses.push(ContentBlock::ToolUse {
                                                             id: String::new(),
@@ -1060,12 +1069,12 @@ impl QueryEngine {
                                                 if tracker.is_budget_exceeded() {
                                                     let limit = tracker.budget_limit_usd.unwrap_or(0.0);
                                                     let total = tracker.total_cost();
-                                                    let _ = tx.send(Ok(QueryEvent::Progress {
+                                                    send_event!(tx, QueryEvent::Progress {
                                                         query_id,
                                                         message: format!(
                                                             "Budget limit reached (${limit:.2}). Stopping. (spent: ${total:.4})"
                                                         ),
-                                                    }));
+                                                    });
                                                     // Break out of the loop by setting turn to max
                                                     turn = config.max_turns;
                                                     break;
@@ -1076,26 +1085,26 @@ impl QueryEngine {
                                                     let limit = tracker.budget_limit_usd.unwrap_or(0.0);
                                                     let total = tracker.total_cost();
                                                     let pct = if limit > 0.0 { (total / limit * 100.0) as u32 } else { 0 };
-                                                    let _ = tx.send(Ok(QueryEvent::Progress {
+                                                    send_event!(tx, QueryEvent::Progress {
                                                         query_id,
                                                         message: format!(
                                                             "Budget warning: ${total:.4} / ${limit:.2} ({pct}%)"
                                                         ),
-                                                    }));
+                                                    });
                                                 }
                                             }
 
                                             let cache_creation_tokens = usage.cache_creation_input_tokens as u64;
                                             let cache_read_tokens = usage.cache_read_input_tokens as u64;
 
-                                            let _ = tx.send(Ok(QueryEvent::Usage {
+                                            send_event!(tx, QueryEvent::Usage {
                                                 query_id,
                                                 input_tokens,
                                                 output_tokens,
                                                 cost_usd,
                                                 cache_creation_tokens,
                                                 cache_read_tokens,
-                                            }));
+                                            });
 
                                             if !tool_inputs.is_empty() {
                                                 // Phase 1: Check permissions and hooks (sequential — may need user input)
@@ -1104,12 +1113,12 @@ impl QueryEngine {
                                                 for (tool_id, tool_name, tool_input) in
                                                     tool_inputs.drain(..)
                                                 {
-                                                    let _ = tx.send(Ok(QueryEvent::Progress {
+                                                    send_event!(tx, QueryEvent::Progress {
                                                         query_id,
                                                         message: format!(
                                                             "Executing tool: {tool_name}"
                                                         ),
-                                                    }));
+                                                    });
 
                                                     // Plan mode gate: block write tools when plan mode is active.
                                                     let is_plan_active = plan_mode_active
@@ -1124,13 +1133,13 @@ impl QueryEngine {
                                                                  Use exit_plan_mode to resume editing. \
                                                                  Blocked tool: {tool_name}"
                                                             );
-                                                            let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                            send_event!(tx, QueryEvent::ToolUseResult {
                                                                 query_id,
                                                                 tool_use_id: tool_id.clone(),
                                                                 tool_name,
                                                                 result: error_msg.clone(),
                                                                 is_error: true,
-                                                            }));
+                                                            });
                                                             tool_results.push((tool_id, error_msg, true));
                                                             continue;
                                                         }
@@ -1152,13 +1161,13 @@ impl QueryEngine {
                                                             let error_msg = format!(
                                                                 "Tool denied by classifier: {tool_name}"
                                                             );
-                                                            let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                            send_event!(tx, QueryEvent::ToolUseResult {
                                                                 query_id,
                                                                 tool_use_id: tool_id.clone(),
                                                                 tool_name,
                                                                 result: error_msg.clone(),
                                                                 is_error: true,
-                                                            }));
+                                                            });
                                                             tool_results.push((tool_id, error_msg, true));
                                                             continue;
                                                         }
@@ -1175,13 +1184,13 @@ impl QueryEngine {
                                                                     "Tool denied: {}",
                                                                     prompt.description
                                                                 );
-                                                                let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                send_event!(tx, QueryEvent::ToolUseResult {
                                                                     query_id,
                                                                     tool_use_id: tool_id.clone(),
                                                                     tool_name,
                                                                     result: error_msg.clone(),
                                                                     is_error: true,
-                                                                }));
+                                                                });
                                                                 tool_results.push((tool_id, error_msg, true));
                                                                 continue;
                                                             }
@@ -1239,7 +1248,7 @@ impl QueryEngine {
                                                                         let denied_msg = format!(
                                                                             "Permission denied: {prompt_desc}"
                                                                         );
-                                                                        let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                        send_event!(tx, QueryEvent::ToolUseResult {
                                                                             query_id,
                                                                             tool_use_id: tool_id
                                                                                 .clone(),
@@ -1247,7 +1256,7 @@ impl QueryEngine {
                                                                             result: denied_msg
                                                                                 .clone(),
                                                                             is_error: true,
-                                                                        }));
+                                                                        });
                                                                         tool_results
                                                                             .push((tool_id, denied_msg, true));
                                                                         continue;
@@ -1280,7 +1289,7 @@ impl QueryEngine {
                                                                         let error_msg =
                                                                             "Permission channel closed"
                                                                                 .to_string();
-                                                                        let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                        send_event!(tx, QueryEvent::ToolUseResult {
                                                                             query_id,
                                                                             tool_use_id: tool_id
                                                                                 .clone(),
@@ -1288,7 +1297,7 @@ impl QueryEngine {
                                                                             result: error_msg
                                                                                 .clone(),
                                                                             is_error: true,
-                                                                        }));
+                                                                        });
                                                                         tool_results
                                                                             .push((tool_id, error_msg, true));
                                                                         continue;
@@ -1319,13 +1328,13 @@ impl QueryEngine {
                                                     match &pre_hook_decision {
                                                         crate::hooks::HookDecision::Deny { reason } => {
                                                             let error_msg = format!("Hook denied: {reason}");
-                                                            let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                            send_event!(tx, QueryEvent::ToolUseResult {
                                                                 query_id,
                                                                 tool_use_id: tool_id.clone(),
                                                                 tool_name,
                                                                 result: error_msg.clone(),
                                                                 is_error: true,
-                                                            }));
+                                                            });
                                                             tool_results.push((tool_id, error_msg, true));
                                                             continue;
                                                         }
@@ -1346,13 +1355,13 @@ impl QueryEngine {
 
                                                 // Circuit breaker: check consecutive denials before executing tools.
                                                 if consecutive_denials >= DENIAL_HARD_LIMIT {
-                                                    let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                    send_event!(tx, QueryEvent::ToolUseResult {
                                                         query_id,
                                                         tool_use_id: "circuit-breaker".to_string(),
                                                         tool_name: "system".to_string(),
                                                         result: "Too many consecutive permission denials. Stopping.".to_string(),
                                                         is_error: true,
-                                                    }));
+                                                    });
                                                     break; // exit the agent loop
                                                 }
 
@@ -1371,13 +1380,13 @@ impl QueryEngine {
                                                                 for (tool_id, tool_name, effective_input) in tool_calls {
                                                                     let id_for_error = tool_id.clone();
                                                                     // Emit progress: tool started
-                                                                    let _ = tx.send(Ok(QueryEvent::ToolProgress {
+                                                                    send_event!(tx, QueryEvent::ToolProgress {
                                                                         query_id,
                                                                         tool_use_id: tool_id.clone(),
                                                                         tool_name: tool_name.clone(),
                                                                         progress: 0.0,
                                                                         message: format!("{tool_name} started"),
-                                                                    }));
+                                                                    });
                                                                     let tools_exec = tools.clone();
                                                                     let exec_name = tool_name.clone();
                                                                     let exec_input = effective_input.clone();
@@ -1407,36 +1416,36 @@ impl QueryEngine {
                                                                             }
 
                                                                             // Emit progress: tool completed
-                                                                            let _ = tx.send(Ok(QueryEvent::ToolProgress {
+                                                                            send_event!(tx, QueryEvent::ToolProgress {
                                                                                 query_id,
                                                                                 tool_use_id: tool_id.clone(),
                                                                                 tool_name: tool_name.clone(),
                                                                                 progress: 1.0,
                                                                                 message: format!("{tool_name} completed"),
-                                                                            }));
+                                                                            });
                                                                             match result {
                                                                                 Ok(output) => {
                                                                                     let is_err = output.is_error;
                                                                                     if is_err { batch_had_denial = true; }
-                                                                                    let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                                    send_event!(tx, QueryEvent::ToolUseResult {
                                                                                         query_id,
                                                                                         tool_use_id: tool_id.clone(),
                                                                                         tool_name: tool_name.clone(),
                                                                                         result: output.content.clone(),
                                                                                         is_error: is_err,
-                                                                                    }));
+                                                                                    });
                                                                                     tool_results.push((tool_id, output.content.clone(), is_err));
                                                                                 }
                                                                                 Err(e) => {
                                                                                     // Tool execution errors are not permission denials
                                                                                     let error_msg = format!("Tool error: {e}");
-                                                                                    let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                                    send_event!(tx, QueryEvent::ToolUseResult {
                                                                                         query_id,
                                                                                         tool_use_id: tool_id.clone(),
                                                                                         tool_name,
                                                                                         result: error_msg.clone(),
                                                                                         is_error: true,
-                                                                                    }));
+                                                                                    });
                                                                                     tool_results.push((tool_id, error_msg, true));
                                                                                 }
                                                                             }
@@ -1444,13 +1453,13 @@ impl QueryEngine {
                                                                         Err(e) => {
                                                                             // Task join errors are not permission denials
                                                                             let error_msg = format!("Task join error: {e}");
-                                                                            let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                            send_event!(tx, QueryEvent::ToolUseResult {
                                                                                 query_id,
                                                                                 tool_use_id: saved_tool_id.clone(),
                                                                                 tool_name: String::new(),
                                                                                 result: error_msg.clone(),
                                                                                 is_error: true,
-                                                                            }));
+                                                                            });
                                                                             tool_results.push((saved_tool_id, error_msg, true));
                                                                         }
                                                                     }
@@ -1470,13 +1479,13 @@ impl QueryEngine {
                                                                     }
                                                                 }
                                                                 // Emit progress: tool started
-                                                                let _ = tx.send(Ok(QueryEvent::ToolProgress {
+                                                                send_event!(tx, QueryEvent::ToolProgress {
                                                                     query_id,
                                                                     tool_use_id: tool_id.clone(),
                                                                     tool_name: tool_name.clone(),
                                                                     progress: 0.0,
                                                                     message: format!("{tool_name} started"),
-                                                                }));
+                                                                });
                                                                 let result = tools
                                                                     .execute(&tool_name, effective_input.clone())
                                                                     .await;
@@ -1497,24 +1506,24 @@ impl QueryEngine {
                                                                 }
 
                                                                 // Emit progress: tool completed
-                                                                let _ = tx.send(Ok(QueryEvent::ToolProgress {
+                                                                send_event!(tx, QueryEvent::ToolProgress {
                                                                     query_id,
                                                                     tool_use_id: tool_id.clone(),
                                                                     tool_name: tool_name.clone(),
                                                                     progress: 1.0,
                                                                     message: format!("{tool_name} completed"),
-                                                                }));
+                                                                });
                                                                 match result {
                                                                     Ok(output) => {
                                                                         let is_err = output.is_error;
                                                                         consecutive_denials = 0; // reset on success
-                                                                        let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                        send_event!(tx, QueryEvent::ToolUseResult {
                                                                             query_id,
                                                                             tool_use_id: tool_id.clone(),
                                                                             tool_name: tool_name.clone(),
                                                                             result: output.content.clone(),
                                                                             is_error: is_err,
-                                                                        }));
+                                                                        });
                                                                         tool_results.push((tool_id, output.content.clone(), is_err));
                                                                         if matches!(tool_name.as_str(), "Edit" | "Write") {
                                                                             file_edits_made = true;
@@ -1522,13 +1531,13 @@ impl QueryEngine {
                                                                     }
                                                                     Err(e) => {
                                                                         let error_msg = format!("Tool error: {e}");
-                                                                        let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                        send_event!(tx, QueryEvent::ToolUseResult {
                                                                             query_id,
                                                                             tool_use_id: tool_id.clone(),
                                                                             tool_name,
                                                                             result: error_msg.clone(),
                                                                             is_error: true,
-                                                                        }));
+                                                                        });
                                                                         tool_results.push((tool_id, error_msg, true));
                                                                     }
                                                                 }
@@ -1608,13 +1617,13 @@ impl QueryEngine {
                                                                             .find(|l| l.starts_with('['))
                                                                             .unwrap_or("committed")
                                                                             .to_string();
-                                                                        let _ = tx.send(Ok(QueryEvent::ToolUseResult {
+                                                                        send_event!(tx, QueryEvent::ToolUseResult {
                                                                             query_id,
                                                                             tool_use_id: String::new(),
                                                                             tool_name: "auto_commit".to_string(),
                                                                             result: format!("Auto-committed: {hash}"),
                                                                             is_error: false,
-                                                                        }));
+                                                                        });
                                                                     }
                                                                 }
                                                             }
@@ -1622,13 +1631,13 @@ impl QueryEngine {
                                                     }.await;
                                                 }
 
-                                                let _ = tx.send(Ok(QueryEvent::TurnCompleted {
+                                                send_event!(tx, QueryEvent::TurnCompleted {
                                                     query_id,
                                                     turn_number: turn,
                                                     tokens_used: (usage.input_tokens
                                                         + usage.output_tokens)
                                                         as u64,
-                                                }));
+                                                });
                                                 // Mark finalized so the post-loop safety net
                                                 // doesn't short-circuit the next turn's API call.
                                                 stream_finalized = true;
@@ -1651,12 +1660,12 @@ impl QueryEngine {
                                                     total_input_tokens,
                                                     total_output_tokens,
                                                 );
-                                                let _ = tx.send(Ok(QueryEvent::Cost {
+                                                send_event!(tx, QueryEvent::Cost {
                                                     query_id,
                                                     total_cost_usd: total_cost,
                                                     input_tokens: total_input_tokens,
                                                     output_tokens: total_output_tokens,
-                                                }));
+                                                });
                                                 let _ =
                                                     tx.send(Ok(QueryEvent::ConversationUpdate {
                                                         query_id,
@@ -1683,15 +1692,32 @@ impl QueryEngine {
                                     }
                                 }
                                 Err(e) => {
-                                    // Preserve conversation context even on stream errors
-                                    let _ = tx.send(Ok(QueryEvent::ConversationUpdate {
+                                    // Save partial assistant response before failing
+                                    // so the user can continue from what was generated
+                                    let partial_len = assistant_text.len();
+                                    if !assistant_text.is_empty() || !assistant_tool_uses.is_empty() {
+                                        let has_text = !assistant_text.is_empty();
+                                        let mut blocks: Vec<ContentBlock> = Vec::new();
+                                        if has_text {
+                                            blocks.push(ContentBlock::Text {
+                                                text: assistant_text,
+                                            });
+                                        }
+                                        blocks.append(&mut assistant_tool_uses);
+                                        conversation.messages.push(Message {
+                                            role: "assistant".to_string(),
+                                            content: MessageContent::Blocks(blocks),
+                                        });
+                                        tracing::warn!("Stream error after partial response — preserving {partial_len} chars");
+                                    }
+                                    send_event!(tx, QueryEvent::ConversationUpdate {
                                         query_id,
                                         messages: conversation.messages.clone(),
-                                    }));
-                                    let _ = tx.send(Ok(QueryEvent::Failed {
+                                    });
+                                    send_event!(tx, QueryEvent::Failed {
                                         query_id,
                                         error: e.to_string(),
-                                    }));
+                                    });
                                     return;
                                 }
                             }
@@ -1703,17 +1729,17 @@ impl QueryEngine {
                                 total_input_tokens,
                                 total_output_tokens,
                             );
-                            let _ = tx.send(Ok(QueryEvent::Cost {
+                            send_event!(tx, QueryEvent::Cost {
                                 query_id,
                                 total_cost_usd: total_cost,
                                 input_tokens: total_input_tokens,
                                 output_tokens: total_output_tokens,
-                            }));
-                            let _ = tx.send(Ok(QueryEvent::ConversationUpdate {
+                            });
+                            send_event!(tx, QueryEvent::ConversationUpdate {
                                 query_id,
                                 messages: conversation.messages.clone(),
-                            }));
-                            let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
+                            });
+                            send_event!(tx, QueryEvent::Completed { query_id });
 
                             // Auto-save conversation after completion
                             if let Err(e) = save_conversation_to_disk(
@@ -1737,7 +1763,7 @@ impl QueryEngine {
                             let has_tool_uses = !assistant_tool_uses.is_empty();
                             if has_text || has_tool_uses {
                                 // Check if the last message is already this assistant response
-                                let already_saved = conversation.messages.last().map_or(false, |m| {
+                                let already_saved = conversation.messages.last().is_some_and(|m| {
                                     matches!(&m.content, MessageContent::Text(t) if has_text && t == &assistant_text)
                                         || matches!(&m.content, MessageContent::Blocks(blocks)
                                             if blocks.len() == assistant_tool_uses.len() + if has_text { 1 } else { 0 })
@@ -1766,17 +1792,17 @@ impl QueryEngine {
                                 total_input_tokens,
                                 total_output_tokens,
                             );
-                            let _ = tx.send(Ok(QueryEvent::Cost {
+                            send_event!(tx, QueryEvent::Cost {
                                 query_id,
                                 total_cost_usd: total_cost,
                                 input_tokens: total_input_tokens,
                                 output_tokens: total_output_tokens,
-                            }));
-                            let _ = tx.send(Ok(QueryEvent::ConversationUpdate {
+                            });
+                            send_event!(tx, QueryEvent::ConversationUpdate {
                                 query_id,
                                 messages: conversation.messages.clone(),
-                            }));
-                            let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
+                            });
+                            send_event!(tx, QueryEvent::Completed { query_id });
 
                             if let Err(e) = save_conversation_to_disk(
                                 &state_for_save,
@@ -1825,7 +1851,7 @@ impl QueryEngine {
                                                 Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
                                                     if let ContentDelta::TextDelta { text } = delta {
                                                         retry_text.push_str(&text);
-                                                        let _ = tx.send(Ok(QueryEvent::Text { query_id, content: text }));
+                                                        send_event!(tx, QueryEvent::Text { query_id, content: text });
                                                     }
                                                 }
                                                 Ok(StreamEvent::MessageDelta { delta, .. }) => {
@@ -1837,26 +1863,33 @@ impl QueryEngine {
                                                                 content: MessageContent::Text(retry_text.clone()),
                                                             });
                                                         }
-                                                        let _ = tx.send(Ok(QueryEvent::ConversationUpdate {
+                                                        send_event!(tx, QueryEvent::ConversationUpdate {
                                                             query_id,
                                                             messages: conversation.messages.clone(),
-                                                        }));
-                                                        let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
+                                                        });
+                                                        send_event!(tx, QueryEvent::Completed { query_id });
                                                     }
                                                 }
                                                 Ok(_) => {} // Ping, MessageStart, MessageStop, etc.
                                                 Err(retry_err) => {
+                                                    // Save partial retry text before failing
+                                                    if !retry_text.is_empty() {
+                                                        conversation.messages.push(Message {
+                                                            role: "assistant".to_string(),
+                                                            content: MessageContent::Text(retry_text),
+                                                        });
+                                                    }
                                                     let suggestion = retry_err.user_suggestion()
                                                         .map(|s| format!(" {s}."))
                                                         .unwrap_or_default();
-                                                    let _ = tx.send(Ok(QueryEvent::ConversationUpdate {
+                                                    send_event!(tx, QueryEvent::ConversationUpdate {
                                                         query_id,
                                                         messages: conversation.messages.clone(),
-                                                    }));
-                                                    let _ = tx.send(Ok(QueryEvent::Failed {
+                                                    });
+                                                    send_event!(tx, QueryEvent::Failed {
                                                         query_id,
                                                         error: format!("Auto-compact retry also failed: {retry_err}.{suggestion}"),
-                                                    }));
+                                                    });
                                                     return;
                                                 }
                                             }
@@ -1868,25 +1901,25 @@ impl QueryEngine {
                                                 content: MessageContent::Text(retry_text),
                                             });
                                         }
-                                        let _ = tx.send(Ok(QueryEvent::ConversationUpdate {
+                                        send_event!(tx, QueryEvent::ConversationUpdate {
                                             query_id,
                                             messages: conversation.messages.clone(),
-                                        }));
-                                        let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
+                                        });
+                                        send_event!(tx, QueryEvent::Completed { query_id });
                                         return;
                                     }
                                     Err(retry_err) => {
                                         let suggestion = retry_err.user_suggestion()
                                             .map(|s| format!(" {s}."))
                                             .unwrap_or_default();
-                                        let _ = tx.send(Ok(QueryEvent::ConversationUpdate {
+                                        send_event!(tx, QueryEvent::ConversationUpdate {
                                             query_id,
                                             messages: conversation.messages.clone(),
-                                        }));
-                                        let _ = tx.send(Ok(QueryEvent::Failed {
+                                        });
+                                        send_event!(tx, QueryEvent::Failed {
                                             query_id,
                                             error: format!("Token overflow — auto-compact retry failed: {retry_err}.{suggestion}"),
-                                        }));
+                                        });
                                         return;
                                     }
                                 }
@@ -1895,14 +1928,14 @@ impl QueryEngine {
                         let suggestion = e.user_suggestion()
                             .map(|s| format!(" {s}."))
                             .unwrap_or_default();
-                        let _ = tx.send(Ok(QueryEvent::ConversationUpdate {
+                        send_event!(tx, QueryEvent::ConversationUpdate {
                             query_id,
                             messages: conversation.messages.clone(),
-                        }));
-                        let _ = tx.send(Ok(QueryEvent::Failed {
+                        });
+                        send_event!(tx, QueryEvent::Failed {
                             query_id,
                             error: format!("{e}.{suggestion}"),
-                        }));
+                        });
                         return;
                     }
                 }

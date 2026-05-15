@@ -251,7 +251,7 @@ pub fn compute_diff_hunks(old: &str, new: &str) -> Vec<DiffHunk> {
         if old_lines == new_lines {
             return Vec::new();
         }
-        let header = format!("@@ -1,{} +1,{} @@", m, n);
+        let header = format!("@@ -1,{m} +1,{n} @@");
         return vec![DiffHunk {
             old_start: 1,
             old_count: m,

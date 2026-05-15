@@ -747,14 +747,14 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                         // Enter during streaming queues the message (consistent with input.rs behavior)
                         crossterm::event::KeyCode::Enter if !key.modifiers.contains(crossterm::event::KeyModifiers::SHIFT) => {
                             let input = repl.prompt.input().trim().to_string();
-                            if !input.is_empty() {
-                                if repl.state.queued_messages.len() < 50 {
-                                    let count = repl.state.queued_messages.len() + 1;
-                                    repl.state.queued_messages.push(input);
-                                    repl.prompt.clear();
-                                    repl.state.status = format!("Message queued ({count} in queue)");
-                                    repl.state.toast = Some(("Queued".to_string(), std::time::Instant::now()));
-                                }
+                            if !input.is_empty()
+                                && repl.state.queued_messages.len() < 50
+                            {
+                                let count = repl.state.queued_messages.len() + 1;
+                                repl.state.queued_messages.push(input);
+                                repl.prompt.clear();
+                                repl.state.status = format!("Message queued ({count} in queue)");
+                                repl.state.toast = Some(("Queued".to_string(), std::time::Instant::now()));
                             }
                         }
                         crossterm::event::KeyCode::Enter => {
@@ -763,13 +763,13 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                         }
                         crossterm::event::KeyCode::Tab => {
                             let input = repl.prompt.input().trim().to_string();
-                            if !input.is_empty() {
-                                if repl.state.queued_messages.len() < 50 {
-                                    let count = repl.state.queued_messages.len() + 1;
-                                    repl.state.queued_messages.push(input);
-                                    repl.prompt.clear();
-                                    repl.state.status = format!("Message queued ({count} in queue)");
-                                }
+                            if !input.is_empty()
+                                && repl.state.queued_messages.len() < 50
+                            {
+                                let count = repl.state.queued_messages.len() + 1;
+                                repl.state.queued_messages.push(input);
+                                repl.prompt.clear();
+                                repl.state.status = format!("Message queued ({count} in queue)");
                             }
                         }
                         _ => {} // Ignore other keys during streaming
