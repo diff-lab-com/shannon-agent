@@ -758,12 +758,14 @@ impl QueryEngine {
                     let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
 
                     // Auto-save conversation after completion
-                    let _ = save_conversation_to_disk(
+                    if let Err(e) = save_conversation_to_disk(
                         &state_for_save,
                         session_id_for_save,
                         &conversation.messages,
                         &client_model,
-                    );
+                    ) {
+                        tracing::warn!(session = %session_id_for_save, "Failed to save conversation: {e}");
+                    }
 
                     break;
                 }
@@ -1617,12 +1619,14 @@ impl QueryEngine {
                                                     tx.send(Ok(QueryEvent::Completed { query_id }));
 
                                                 // Auto-save conversation after completion
-                                                let _ = save_conversation_to_disk(
+                                                if let Err(e) = save_conversation_to_disk(
                                                     &state_for_save,
                                                     session_id_for_save,
                                                     &conversation.messages,
                                                     &client_model,
-                                                );
+                                                ) {
+                                                    tracing::warn!(session = %session_id_for_save, "Failed to save conversation: {e}");
+                                                }
 
                                                 return;
                                             }
@@ -1660,12 +1664,14 @@ impl QueryEngine {
                             let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
 
                             // Auto-save conversation after completion
-                            let _ = save_conversation_to_disk(
+                            if let Err(e) = save_conversation_to_disk(
                                 &state_for_save,
                                 session_id_for_save,
                                 &conversation.messages,
                                 &client_model,
-                            );
+                            ) {
+                                tracing::warn!(session = %session_id_for_save, "Failed to save conversation: {e}");
+                            }
 
                             return;
                         }

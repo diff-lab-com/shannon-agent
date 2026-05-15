@@ -1128,6 +1128,7 @@ impl PermissionManager {
 
     /// Set the approval mode.
     pub fn set_approval_mode(&mut self, mode: ApprovalMode) {
+        tracing::info!(old = ?self.approval_mode, new = ?mode, "Approval mode changed");
         self.approval_mode = mode;
     }
 
@@ -1342,6 +1343,7 @@ impl PermissionManager {
         match self.approval_mode {
             // BypassPermissions / DontAsk: skip all permission checks
             ApprovalMode::BypassPermissions | ApprovalMode::DontAsk => {
+                tracing::debug!(mode = ?self.approval_mode, tool = %tool_name, "Permission check bypassed");
                 return Ok(None);
             }
             ApprovalMode::Readonly => {
