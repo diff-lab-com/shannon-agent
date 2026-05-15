@@ -177,7 +177,7 @@ impl PlanManager {
         plan.approved = true;
         plan.approved_at = Some(Utc::now());
 
-        Ok(state.current_plan.clone().unwrap())
+        state.current_plan.clone().ok_or_else(|| ToolError::ExecutionFailed("No plan to approve".into()))
     }
 
     /// Reject the current plan, moving it to history as a rejected entry.

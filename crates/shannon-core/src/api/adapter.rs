@@ -2067,4 +2067,96 @@ mod tests {
             other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
     }
+
+    // -- Error-path / edge-case tests --
+
+    #[test]
+    fn test_normalize_response_malformed_json() {
+        let providers = [&LlmProvider::OpenAI, &LlmProvider::Ollama, &LlmProvider::Gemini];
+        for provider in &providers {
+            let result = normalize_response("not json at all", provider);
+            assert!(result.is_err(), "Expected error for malformed JSON with {provider:?}");
+        }
+    }
+
+    #[test]
+    fn test_normalize_openai_response_null_content() {
+        let resp = r#"{"id":"chatcmpl-123","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":null},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":0}}"#;
+        let result = normalize_response(resp, &LlmProvider::OpenAI).unwrap();
+        assert_eq!(result.role, "assistant");
+        assert!(result.content.is_empty() || matches!(&result.content[0], ContentBlock::Text { text } if text.is_empty()));
+    }
+
+    #[test]
+    fn test_error_path_openai_response_no_usage() {
+        let resp = r#"{"id":"chatcmpl-123","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}"#;
+        let result = normalize_response(resp, &LlmProvider::OpenAI).unwrap();
+        assert_eq!(result.usage.input_tokens, 0);
+        assert_eq!(result.usage.output_tokens, 0);
+    }
+
+    #[test]
+    fn test_normalize_gemini_response_empty_candidates() {
+        let resp = r#"{"candidates":[],"usageMetadata":{"promptTokenCount":1,"totalTokenCount":1}}"#;
+        let result = normalize_response(resp, &LlmProvider::Gemini);
+        // Should handle gracefully — either error or empty response
+        match result {
+            Ok(r) => assert!(r.content.is_empty()),
+            Err(_) => {} // error is also acceptable
+        }
+    }
+
+    #[test]
+    fn test_normalize_sse_event_empty_string() {
+        let providers = [&LlmProvider::Anthropic, &LlmProvider::OpenAI, &LlmProvider::Ollama, &LlmProvider::Gemini];
+        for provider in &providers {
+            let result = normalize_sse_event("", provider, &mut fresh_state());
+            // Should not panic — empty string is invalid JSON
+            assert!(result.len() <= 1);
+        }
+    }
+
+    #[test]
+    fn test_wire_format_covers_all_providers() {
+        use crate::api::types::WireFormat;
+        let providers = [
+            LlmProvider::Anthropic, LlmProvider::Custom, LlmProvider::Bedrock,
+            LlmProvider::OpenAI, LlmProvider::Azure, LlmProvider::Mistral,
+            LlmProvider::DeepSeek, LlmProvider::Groq, LlmProvider::Together,
+            LlmProvider::OpenRouter, LlmProvider::Cohere, LlmProvider::Fireworks,
+            LlmProvider::Perplexity, LlmProvider::Xai, LlmProvider::Ai21,
+            LlmProvider::Cloudflare, LlmProvider::Replicate, LlmProvider::SiliconFlow,
+            LlmProvider::Zhipu,
+            LlmProvider::Ollama,
+            LlmProvider::Gemini,
+        ];
+        for provider in &providers {
+            let wf = provider.wire_format();
+            assert!(
+                matches!(wf, WireFormat::Anthropic | WireFormat::OpenAI | WireFormat::Ollama | WireFormat::Gemini),
+                "Provider {provider:?} returned unrecognized WireFormat {wf:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_normalize_ollama_response_null_message() {
+        let resp = r#"{"message":null,"done":true}"#;
+        let result = normalize_response(resp, &LlmProvider::Ollama);
+        // Should not panic — null message handled gracefully
+        assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn test_serialize_request_all_wire_formats() {
+        let req = make_request();
+        let providers = [
+            LlmProvider::Anthropic, LlmProvider::OpenAI, LlmProvider::Ollama, LlmProvider::Gemini,
+        ];
+        for provider in &providers {
+            let val = serialize_request(&req, provider);
+            // Every wire format must produce a valid JSON object
+            assert!(val.is_object(), "serialize_request produced non-object for {provider:?}");
+        }
+    }
 }

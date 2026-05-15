@@ -1198,7 +1198,7 @@ fn interval_to_cron(interval: &str) -> std::result::Result<String, String> {
     if s.len() < 2 {
         return Err(format!("Invalid interval '{s}'. Use format like 5m, 2h, 30s, 1d"));
     }
-    let unit = s.chars().last().unwrap();
+    let unit = s.chars().last().ok_or_else(|| format!("Invalid interval '{s}': empty string"))?;
     let num_str = &s[..s.len() - 1];
     let n: u32 = num_str.parse().map_err(|_| format!("Invalid number in '{s}'"))?;
     if n == 0 {

@@ -356,7 +356,9 @@ pub fn topological_sort(
                 .entry(dep.as_str())
                 .or_default()
                 .push(agent.name.as_str());
-            *in_degree.get_mut(agent.name.as_str()).unwrap() += 1;
+            if let Some(deg) = in_degree.get_mut(agent.name.as_str()) {
+                *deg += 1;
+            }
         }
     }
 

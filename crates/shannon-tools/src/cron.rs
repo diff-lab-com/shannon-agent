@@ -597,8 +597,8 @@ fn skip_to_next_month(current: &NaiveDateTime, months: &CronFieldValues) -> Naiv
     }
 
     NaiveDateTime::new(
-        chrono::NaiveDate::from_ymd_opt(year, month, 1).unwrap_or_else(|| chrono::NaiveDate::from_ymd_opt(year, 1, 1).unwrap()),
-        chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+        chrono::NaiveDate::from_ymd_opt(year, month, 1).unwrap_or_else(|| chrono::NaiveDate::from_ymd_opt(year, 1, 1).unwrap_or(chrono::NaiveDate::MIN)),
+        chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap_or_default(),
     )
 }
 
