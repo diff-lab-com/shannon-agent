@@ -36,9 +36,13 @@ pub fn save_preferences(prefs: &Preferences) {
         return;
     };
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            tracing::debug!("Failed to create preferences dir: {e}");
+        }
     }
     if let Ok(json) = serde_json::to_string_pretty(prefs) {
-        let _ = std::fs::write(&path, json);
+        if let Err(e) = std::fs::write(&path, json) {
+            tracing::debug!("Failed to save preferences: {e}");
+        }
     }
 }

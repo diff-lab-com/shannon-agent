@@ -373,13 +373,18 @@ impl WebSearchTool {
 
     /// Create a WebSearchTool with an explicit API key (useful for testing).
     pub fn with_api_key(key: String) -> Self {
+        let client = Client::builder()
+            .user_agent("ShannonCode/1.0")
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|e| {
+                tracing::error!("Failed to create HTTP client: {e}");
+                // Fallback: create a minimal client without custom config
+                Client::new()
+            });
         Self {
             description: "Search the web for information using a real search API".to_string(),
-            client: Client::builder()
-                .user_agent("ShannonCode/1.0")
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .unwrap_or_else(|e| panic!("Failed to create HTTP client: {e}")),
+            client,
             api_key: Some(key),
             provider: SearchProvider::Tavily,
         }
@@ -387,13 +392,17 @@ impl WebSearchTool {
 
     /// Create a WebSearchTool with no API key (useful for testing the no-key path).
     pub fn without_api_key() -> Self {
+        let client = Client::builder()
+            .user_agent("ShannonCode/1.0")
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|e| {
+                tracing::error!("Failed to create HTTP client: {e}");
+                Client::new()
+            });
         Self {
             description: "Search the web for information using a real search API".to_string(),
-            client: Client::builder()
-                .user_agent("ShannonCode/1.0")
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .unwrap_or_else(|e| panic!("Failed to create HTTP client: {e}")),
+            client,
             api_key: None,
             provider: SearchProvider::Tavily,
         }

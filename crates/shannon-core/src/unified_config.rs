@@ -162,9 +162,27 @@ fn load_config_file(path: &std::path::Path) -> ShannonConfig {
                 "provider" => config.provider = Some(value.to_string()),
                 "api_key" => config.api_key = Some(value.to_string()),
                 "base_url" => config.base_url = Some(value.to_string()),
-                "max_tokens" => config.max_tokens = value.parse().ok(),
-                "temperature" => config.temperature = value.parse().ok(),
-                "timeout" => config.timeout = value.parse().ok(),
+                "max_tokens" => {
+                    if let Ok(v) = value.parse() {
+                        config.max_tokens = Some(v);
+                    } else {
+                        tracing::warn!("Invalid max_tokens value in config: {value}");
+                    }
+                }
+                "temperature" => {
+                    if let Ok(v) = value.parse() {
+                        config.temperature = Some(v);
+                    } else {
+                        tracing::warn!("Invalid temperature value in config: {value}");
+                    }
+                }
+                "timeout" => {
+                    if let Ok(v) = value.parse() {
+                        config.timeout = Some(v);
+                    } else {
+                        tracing::warn!("Invalid timeout value in config: {value}");
+                    }
+                }
                 "debug" => config.debug = value.parse().unwrap_or(false),
                 _ => {}
             }

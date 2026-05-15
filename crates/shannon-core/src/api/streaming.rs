@@ -69,7 +69,7 @@ fn looks_like_complete_json(s: &str) -> bool {
 pub struct SseStream {
     chunks: ByteChunkStream,
     buffer: String,
-    pending_events: Vec<Result<StreamEvent, ApiError>>,
+    pending_events: std::collections::VecDeque<Result<StreamEvent, ApiError>>,
     done: bool,
     provider: LlmProvider,
     openai_state: OpenaiStreamState,
@@ -90,7 +90,7 @@ impl SseStream {
         Self {
             chunks: mapped,
             buffer: String::new(),
-            pending_events: Vec::new(),
+            pending_events: std::collections::VecDeque::new(),
             done: false,
             provider,
             openai_state: OpenaiStreamState::new(),
@@ -172,7 +172,7 @@ impl Stream for SseStream {
     ) -> Poll<Option<Self::Item>> {
         // Return any pending events first
         if !self.pending_events.is_empty() {
-            return Poll::Ready(Some(self.pending_events.remove(0)));
+            return Poll::Ready(Some(self.pending_events.pop_front().unwrap()));
         }
 
         if self.done {
@@ -188,7 +188,7 @@ impl Stream for SseStream {
                     self.drain_buffer();
 
                     if !self.pending_events.is_empty() {
-                        return Poll::Ready(Some(self.pending_events.remove(0)));
+                        return Poll::Ready(Some(self.pending_events.pop_front().unwrap()));
                     }
                     // No complete events yet — continue reading
                 }
@@ -204,7 +204,7 @@ impl Stream for SseStream {
                         self.pending_events.extend(events);
                         if !self.pending_events.is_empty() {
                             self.done = true;
-                            return Poll::Ready(Some(self.pending_events.remove(0)));
+                            return Poll::Ready(Some(self.pending_events.pop_front().unwrap()));
                         }
                     }
                     self.done = true;
@@ -911,7 +911,7 @@ mod tests {
             Self {
                 chunks: byte_stream,
                 buffer: String::new(),
-                pending_events: Vec::new(),
+                pending_events: std::collections::VecDeque::new(),
                 done: false,
                 provider: LlmProvider::Anthropic,
                 openai_state: OpenaiStreamState::new(),

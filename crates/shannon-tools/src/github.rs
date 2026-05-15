@@ -12,18 +12,25 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use shannon_core::{Tool, ToolOutput, ToolResult};
 use shannon_core::tools::ToolError;
-use std::process::Command;
+use tokio::process::Command;
+
+const GH_TIMEOUT_SECS: u64 = 30;
 
 // ---------------------------------------------------------------------------
 // Helper: run a gh command and capture output
 // ---------------------------------------------------------------------------
 
-/// Run a gh command and return stdout, stderr, exit status.
-fn run_gh(args: &[&str]) -> Result<(String, String, bool), ToolError> {
-    let output = Command::new("gh")
-        .args(args)
-        .output()
-        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to execute gh: {e}")))?;
+/// Run a gh command asynchronously and return stdout, stderr, exit status.
+async fn run_gh(args: &[&str]) -> Result<(String, String, bool), ToolError> {
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(GH_TIMEOUT_SECS),
+        Command::new("gh")
+            .args(args)
+            .output(),
+    )
+    .await
+    .map_err(|_| ToolError::ExecutionFailed("gh command timed out".to_string()))?
+    .map_err(|e| ToolError::ExecutionFailed(format!("Failed to execute gh: {e}")))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -31,8 +38,9 @@ fn run_gh(args: &[&str]) -> Result<(String, String, bool), ToolError> {
 }
 
 /// Check if gh is installed and authenticated.
-fn check_gh_available() -> Result<(), ToolError> {
+async fn check_gh_available() -> Result<(), ToolError> {
     let (_, _, success) = run_gh(&["--version"])
+        .await
         .map_err(|e| ToolError::ExecutionFailed(format!("gh CLI not found: {e}. Please install from https://cli.github.com/")))?;
 
     if !success {
@@ -43,6 +51,7 @@ fn check_gh_available() -> Result<(), ToolError> {
 
     // Check authentication
     let (_, _, success) = run_gh(&["auth", "status"])
+        .await
         .map_err(|e| ToolError::ExecutionFailed(format!("Failed to check gh auth status: {e}")))?;
 
     if !success {
@@ -55,11 +64,16 @@ fn check_gh_available() -> Result<(), ToolError> {
 }
 
 /// Check if the current directory is a git repository with a GitHub remote.
-fn check_github_repo() -> Result<(), ToolError> {
-    let output = Command::new("git")
-        .args(["remote", "-v"])
-        .output()
-        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to check git remotes: {e}")))?;
+async fn check_github_repo() -> Result<(), ToolError> {
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        Command::new("git")
+            .args(["remote", "-v"])
+            .output(),
+    )
+    .await
+    .map_err(|_| ToolError::ExecutionFailed("git remote check timed out".to_string()))?
+    .map_err(|e| ToolError::ExecutionFailed(format!("Failed to check git remotes: {e}")))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -234,12 +248,19 @@ impl Tool for GhIssueListTool {
         let input: GhIssueListInput = serde_json::from_value(input)
             .map_err(|e| ToolError::InvalidInput(format!("Invalid input: {e}")))?;
 
-        check_gh_available()?;
-        check_github_repo()?;
+        check_gh_available().await?;
+        check_github_repo().await?;
 
         let limit = input.limit.unwrap_or(30);
         let limit_str = limit.to_string();
-        let state = input.state.as_deref().unwrap_or("open").to_string();
+        let state = match input.state.as_deref() {
+            Some("open") | Some("closed") | Some("all") | None => {
+                input.state.as_deref().unwrap_or("open").to_string()
+            }
+            _ => return Err(ToolError::InvalidInput(
+                "state must be one of: open, closed, all".to_string(),
+            )),
+        };
 
         let mut args = vec![
             "issue", "list",
@@ -256,7 +277,7 @@ impl Tool for GhIssueListTool {
             args.extend(["--labels", labels]);
         }
 
-        let (stdout, stderr, success) = run_gh(&args)?;
+        let (stdout, stderr, success) = run_gh(&args).await?;
 
         if !success {
             return Ok(ToolOutput::error(format!("Failed to list issues: {stderr}")));
@@ -356,8 +377,8 @@ impl Tool for GhIssueViewTool {
         let input: GhIssueViewInput = serde_json::from_value(input)
             .map_err(|e| ToolError::InvalidInput(format!("Invalid input: {e}")))?;
 
-        check_gh_available()?;
-        check_github_repo()?;
+        check_gh_available().await?;
+        check_github_repo().await?;
 
         let include_comments = input.include_comments.unwrap_or(true);
 
@@ -367,7 +388,7 @@ impl Tool for GhIssueViewTool {
             "--json", "number,title,state,htmlUrl,user,comments,createdAt,updatedAt,body"
         ];
 
-        let (stdout, stderr, success) = run_gh(&issue_args)?;
+        let (stdout, stderr, success) = run_gh(&issue_args).await?;
 
         if !success {
             return Ok(ToolOutput::error(format!("Failed to view issue: {stderr}")));
@@ -398,7 +419,7 @@ impl Tool for GhIssueViewTool {
                 "--json", "comments", "--jq", ".comments"
             ];
 
-            let (comments_stdout, _comments_stderr, comments_success) = run_gh(&comments_args)?;
+            let (comments_stdout, _comments_stderr, comments_success) = run_gh(&comments_args).await?;
 
             if comments_success {
                 if let Ok(comments) = serde_json::from_str::<Vec<GhComment>>(&comments_stdout) {
@@ -511,8 +532,8 @@ impl Tool for GhPrCreateTool {
         let input: GhPrCreateInput = serde_json::from_value(input)
             .map_err(|e| ToolError::InvalidInput(format!("Invalid input: {e}")))?;
 
-        check_gh_available()?;
-        check_github_repo()?;
+        check_gh_available().await?;
+        check_github_repo().await?;
 
         let mut args = vec!["pr", "create", "--title", &input.title];
 
@@ -542,7 +563,7 @@ impl Tool for GhPrCreateTool {
             }
         }
 
-        let (stdout, stderr, success) = run_gh(&args)?;
+        let (stdout, stderr, success) = run_gh(&args).await?;
 
         if !success {
             return Ok(ToolOutput::error(format!("Failed to create PR: {stderr}")));
@@ -623,12 +644,19 @@ impl Tool for GhPrListTool {
         let input: GhPrListInput = serde_json::from_value(input)
             .map_err(|e| ToolError::InvalidInput(format!("Invalid input: {e}")))?;
 
-        check_gh_available()?;
-        check_github_repo()?;
+        check_gh_available().await?;
+        check_github_repo().await?;
 
         let limit = input.limit.unwrap_or(30);
         let limit_str = limit.to_string();
-        let state = input.state.as_deref().unwrap_or("open").to_string();
+        let state = match input.state.as_deref() {
+            Some("open") | Some("closed") | Some("merged") | Some("all") | None => {
+                input.state.as_deref().unwrap_or("open").to_string()
+            }
+            _ => return Err(ToolError::InvalidInput(
+                "state must be one of: open, closed, merged, all".to_string(),
+            )),
+        };
 
         let mut args = vec![
             "pr", "list",
@@ -641,7 +669,7 @@ impl Tool for GhPrListTool {
             args.extend(["--author", author]);
         }
 
-        let (stdout, stderr, success) = run_gh(&args)?;
+        let (stdout, stderr, success) = run_gh(&args).await?;
 
         if !success {
             return Ok(ToolOutput::error(format!("Failed to list PRs: {stderr}")));
@@ -746,8 +774,8 @@ impl Tool for GhPrViewTool {
         let input: GhPrViewInput = serde_json::from_value(input)
             .map_err(|e| ToolError::InvalidInput(format!("Invalid input: {e}")))?;
 
-        check_gh_available()?;
-        check_github_repo()?;
+        check_gh_available().await?;
+        check_github_repo().await?;
 
         let include_diff = input.include_diff.unwrap_or(false);
 
@@ -757,7 +785,7 @@ impl Tool for GhPrViewTool {
             "--json", "number,title,state,htmlUrl,user,head,base,createdAt,updatedAt,body,mergeable,reviewDecision,additions,deletions,changedFiles"
         ];
 
-        let (stdout, stderr, success) = run_gh(&pr_args)?;
+        let (stdout, stderr, success) = run_gh(&pr_args).await?;
 
         if !success {
             return Ok(ToolOutput::error(format!("Failed to view PR: {stderr}")));
@@ -797,7 +825,7 @@ impl Tool for GhPrViewTool {
         // Get diff if requested
         if include_diff {
             let diff_args = ["pr", "diff", &input.number.to_string()];
-            let (diff_stdout, diff_stderr, diff_success) = run_gh(&diff_args)?;
+            let (diff_stdout, diff_stderr, diff_success) = run_gh(&diff_args).await?;
 
             if diff_success {
                 content.push_str("--- Diff ---\n\n");
