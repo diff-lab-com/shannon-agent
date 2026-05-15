@@ -452,6 +452,15 @@ pub async fn execute(input: EditInput) -> Result<ToolOutput, ToolError> {
         )));
     }
 
+    // Check file size before reading to prevent memory exhaustion
+    const MAX_EDIT_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
+    if metadata.len() > MAX_EDIT_FILE_SIZE {
+        return Err(ToolError::InvalidInput(format!(
+            "File too large to edit: {} bytes (max {} bytes). Use terminal commands for large files.",
+            metadata.len(), MAX_EDIT_FILE_SIZE
+        )));
+    }
+
     // --- Read file ---
     let content = fs::read_to_string(&input.file_path)
         .await

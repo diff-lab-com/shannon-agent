@@ -133,7 +133,9 @@ pub fn execute_in_pty(
                 }
                 Ok(None) => {
                     if std::time::Instant::now() >= deadline {
-                        let _ = child.kill();
+                        if let Err(e) = child.kill() {
+                            tracing::debug!("Failed to kill timed-out PTY process: {e}");
+                        }
                         std::thread::sleep(std::time::Duration::from_millis(100));
                         let output = recover_lock(output_buf.lock());
                         let stdout = String::from_utf8_lossy(&output).to_string();
