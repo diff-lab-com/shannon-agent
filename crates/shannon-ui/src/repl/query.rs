@@ -597,6 +597,8 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                     }
                 }
                 crate::widgets::MainLayoutWidget::render_with_ctx(f, &render_ctx);
+                // Render queue indicator overlay during streaming
+                super::render::render_queue_indicator(f, state, false);
                 if state.multi_progress_visible {
                     let mp_height = 3u16.min(f.area().height.saturating_sub(10));
                     let mp_area = ratatui::layout::Rect {

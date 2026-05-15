@@ -11,11 +11,85 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    Frame,
     prelude::Widget,
 };
 use std::io;
 
 use super::Repl;
+use super::state::ReplState;
+
+/// Render the streaming queue indicator overlay above the prompt.
+/// Called from both `draw_frame` (main loop) and the streaming render loop in query.rs.
+pub fn render_queue_indicator(f: &mut Frame, state: &ReplState, toast_visible: bool) {
+    let queue_len = state.queued_messages.len();
+    if state.streaming_active && queue_len > 0 {
+        let max_show = 10usize;
+        let avail_width = (f.area().width.saturating_sub(6)) as usize;
+        let overflow_count = queue_len.saturating_sub(max_show);
+        let items: Vec<(usize, &String)> = if queue_len <= max_show {
+            state.queued_messages.iter().enumerate().collect()
+        } else {
+            state.queued_messages[queue_len - max_show..].iter().enumerate().map(|(i, s)| (i + overflow_count, s)).collect()
+        };
+        let lines_count = items.len() + if overflow_count > 0 { 1 } else { 0 };
+        let base_y_offset = if toast_visible { 4 } else { 5 };
+        let base_y = f.area().bottom().saturating_sub(base_y_offset + lines_count as u16);
+        if overflow_count > 0 {
+            let summary = format!(" … and {overflow_count} more");
+            let summary_text: String = summary.chars().take(avail_width).collect();
+            let area = ratatui::layout::Rect {
+                x: f.area().x + 2,
+                y: base_y,
+                width: avail_width as u16,
+                height: 1,
+            };
+            f.render_widget(
+                Paragraph::new(summary_text).style(ratatui::style::Style::default().fg(state.theme.muted).bg(state.theme.context_bar_bg)),
+                area,
+            );
+        }
+        for (idx, (pos, msg)) in items.iter().enumerate() {
+            let label = format!("{}. ", pos + 1);
+            let label_w = unicode_width::UnicodeWidthStr::width(label.as_str());
+            let msg_avail = avail_width.saturating_sub(label_w);
+            let preview = if msg.len() > msg_avail {
+                let mut cut = msg_avail.saturating_sub(3);
+                while cut > 0 && !msg.is_char_boundary(cut) { cut -= 1; }
+                format!("{}…", &msg[..cut])
+            } else {
+                msg.to_string()
+            };
+            let line = format!("{label}{preview}");
+            let line_text: String = line.chars().take(avail_width).collect();
+            let y = base_y + (if overflow_count > 0 { 1 } else { 0 }) + idx as u16;
+            let area = ratatui::layout::Rect {
+                x: f.area().x + 2,
+                y,
+                width: avail_width as u16,
+                height: 1,
+            };
+            f.render_widget(
+                Paragraph::new(line_text).style(ratatui::style::Style::default().fg(state.theme.accent).bg(state.theme.context_bar_bg)),
+                area,
+            );
+        }
+    } else if state.streaming_active {
+        let y_offset = if toast_visible { 4 } else { 5 };
+        let y = f.area().bottom().saturating_sub(y_offset);
+        let hint = " ↑↓ scroll · Enter = queue after response · Esc = stop ";
+        let hint_width = unicode_width::UnicodeWidthStr::width(hint) as u16;
+        let x = f.area().x + 2;
+        let w = hint_width.min(f.area().width.saturating_sub(4));
+        let hint_area = ratatui::layout::Rect { x, y, width: w, height: 1 };
+        let hint_text: String = hint.chars().take(w as usize).collect();
+        let hint_paragraph = Paragraph::new(hint_text)
+            .style(ratatui::style::Style::default()
+                .fg(state.theme.muted)
+                .bg(state.theme.context_bar_bg));
+        f.render_widget(hint_paragraph, hint_area);
+    }
+}
 
 /// Draw the main REPL frame, dispatching to the appropriate overlay.
 pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &mut Repl) -> Result<()> {
@@ -266,79 +340,8 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             }
         }
 
-        // Streaming queue indicator near the prompt — shows up to 10 recent messages
-        let queue_len = state.queued_messages.len();
-        if state.streaming_active && queue_len > 0 {
-            let max_show = 10usize;
-            let avail_width = (f.area().width.saturating_sub(6)) as usize;
-            let overflow_count = queue_len.saturating_sub(max_show);
-            // Render from bottom-up: most recent closest to the prompt
-            let items: Vec<(usize, &String)> = if queue_len <= max_show {
-                state.queued_messages.iter().enumerate().collect()
-            } else {
-                // Show only the last max_show messages
-                state.queued_messages[queue_len - max_show..].iter().enumerate().map(|(i, s)| (i + overflow_count, s)).collect()
-            };
-            let lines_count = items.len() + if overflow_count > 0 { 1 } else { 0 };
-            let base_y_offset = if toast_visible { 4 } else { 5 };
-            // Push content up to make room for queue panel
-            let base_y = f.area().bottom().saturating_sub(base_y_offset + lines_count as u16);
-            // Overflow summary line
-            if overflow_count > 0 {
-                let summary = format!(" … and {overflow_count} more");
-                let summary_text: String = summary.chars().take(avail_width).collect();
-                let area = ratatui::layout::Rect {
-                    x: f.area().x + 2,
-                    y: base_y,
-                    width: avail_width as u16,
-                    height: 1,
-                };
-                f.render_widget(
-                    Paragraph::new(summary_text).style(ratatui::style::Style::default().fg(state.theme.muted).bg(state.theme.context_bar_bg)),
-                    area,
-                );
-            }
-            for (idx, (pos, msg)) in items.iter().enumerate() {
-                let label = format!("{}. ", pos + 1);
-                let label_w = unicode_width::UnicodeWidthStr::width(label.as_str());
-                let msg_avail = avail_width.saturating_sub(label_w);
-                let preview = if msg.len() > msg_avail {
-                    let mut cut = msg_avail.saturating_sub(3);
-                    while cut > 0 && !msg.is_char_boundary(cut) { cut -= 1; }
-                    format!("{}…", &msg[..cut])
-                } else {
-                    msg.to_string()
-                };
-                let line = format!("{label}{preview}");
-                let line_text: String = line.chars().take(avail_width).collect();
-                let y = base_y + (if overflow_count > 0 { 1 } else { 0 }) + idx as u16;
-                let area = ratatui::layout::Rect {
-                    x: f.area().x + 2,
-                    y,
-                    width: avail_width as u16,
-                    height: 1,
-                };
-                f.render_widget(
-                    Paragraph::new(line_text).style(ratatui::style::Style::default().fg(state.theme.accent).bg(state.theme.context_bar_bg)),
-                    area,
-                );
-            }
-        } else if state.streaming_active {
-            // No queued messages — show hint
-            let y_offset = if toast_visible { 4 } else { 5 };
-            let y = f.area().bottom().saturating_sub(y_offset);
-            let hint = " ↑↓ scroll · Enter = queue after response · Esc = stop ";
-            let hint_width = unicode_width::UnicodeWidthStr::width(hint) as u16;
-            let x = f.area().x + 2;
-            let w = hint_width.min(f.area().width.saturating_sub(4));
-            let hint_area = ratatui::layout::Rect { x, y, width: w, height: 1 };
-            let hint_text: String = hint.chars().take(w as usize).collect();
-            let hint_paragraph = Paragraph::new(hint_text)
-                .style(ratatui::style::Style::default()
-                    .fg(state.theme.muted)
-                    .bg(state.theme.context_bar_bg));
-            f.render_widget(hint_paragraph, hint_area);
-        }
+        // Streaming queue indicator near the prompt
+        render_queue_indicator(f, state, toast_visible);
 
         // "Scroll to bottom" indicator when user scrolled up away from latest content
         if !state.auto_follow && !state.show_key_hints && chat.message_count() > 1 {
