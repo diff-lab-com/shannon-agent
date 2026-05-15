@@ -327,6 +327,10 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                     conversation_messages = Some(messages);
                 }
                 Ok(QueryEvent::Completed { .. }) => {
+                    // Signal streaming loop that the query is done
+                    if let Ok(mut s) = ss.lock() {
+                        s.done = true;
+                    }
                     let mut summary_parts = Vec::new();
                     if tokens_in_turn > 0 {
                         let turn_fmt = if tokens_in_turn >= 1000 {
@@ -357,7 +361,13 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                     }
                 }
                 Ok(QueryEvent::Failed { error, .. }) => {
-                    return Err((Some(query_engine), format!("Query failed: {error}")));
+                    // Don't return immediately — preserve conversation_messages
+                    // that may have been received via ConversationUpdate before Failed.
+                    response_text.push_str(&format!("\n\n⚠️ Query failed: {error}"));
+                    if let Ok(mut s) = ss.lock() {
+                        s.done = true;
+                        s.status = format!("Failed: {error}");
+                    }
                 }
                 Ok(QueryEvent::Info { message, .. }) => {
                     tracing::info!("Query info: {message}");
@@ -368,7 +378,12 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                     }
                 }
                 Err(e) => {
-                    return Err((Some(query_engine), format!("Stream error: {e}")));
+                    // Preserve conversation_messages even on stream errors
+                    response_text.push_str(&format!("\n\n⚠️ Stream error: {e}"));
+                    if let Ok(mut s) = ss.lock() {
+                        s.done = true;
+                        s.status = format!("Error: {e}");
+                    }
                 }
             }
         }
@@ -658,6 +673,43 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                                 repl.state.auto_follow = true;
                             }
                         }
+                        // History navigation during streaming (matching input.rs behavior)
+                        crossterm::event::KeyCode::Up => {
+                            if !repl.state.completion_suggestions.is_empty() {
+                                if repl.state.completion_suggestion_index > 0 {
+                                    repl.state.completion_suggestion_index -= 1;
+                                }
+                            } else if repl.prompt.input().contains('\n') {
+                                repl.prompt.cursor_up();
+                            } else if !repl.command_history.is_empty() {
+                                if repl.command_history.cursor() < 0 {
+                                    repl.saved_input = repl.prompt.input().to_string();
+                                }
+                                if let Some(cmd) = repl.command_history.up() {
+                                    repl.state.completion_suggestions.clear();
+                                    repl.state.completion_suggestion_index = 0;
+                                    repl.prompt.set_input(cmd.to_string());
+                                }
+                            }
+                        }
+                        crossterm::event::KeyCode::Down => {
+                            if !repl.state.completion_suggestions.is_empty() {
+                                if repl.state.completion_suggestion_index + 1 < repl.state.completion_suggestions.len() {
+                                    repl.state.completion_suggestion_index += 1;
+                                }
+                            } else if repl.prompt.input().contains('\n') {
+                                repl.prompt.cursor_down();
+                            } else if repl.command_history.cursor() >= 0 {
+                                if let Some(cmd) = repl.command_history.down() {
+                                    repl.state.completion_suggestions.clear();
+                                    repl.state.completion_suggestion_index = 0;
+                                    repl.prompt.set_input(cmd.to_string());
+                                } else {
+                                    repl.command_history.reset_cursor();
+                                    repl.prompt.set_input(repl.saved_input.clone());
+                                }
+                            }
+                        }
                         // Allow typing in the prompt during streaming
                         crossterm::event::KeyCode::Char(c) if !key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) && !key.modifiers.contains(crossterm::event::KeyModifiers::ALT) => {
                             repl.prompt.add_char(c);
@@ -767,6 +819,16 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
             if let Some(messages) = conversation_messages {
                 engine.restore_messages(messages);
             } else {
+                // Fallback: ConversationUpdate was not received. This should be
+                // rare — the engine's safety net in the post-stream handler
+                // normally ensures ConversationUpdate is always sent. When it
+                // does happen, the response text may include UI formatting
+                // markers (tool call displays, turn markers), which is imperfect
+                // but better than losing the turn entirely.
+                tracing::warn!(
+                    "ConversationUpdate not received — using fallback message addition. \
+                     Response text may include UI formatting."
+                );
                 engine.add_user_message(input.to_string());
                 engine.add_assistant_message(vec![shannon_core::api::ContentBlock::Text {
                     text: response.clone(),

@@ -499,7 +499,8 @@ mod tests {
         let last = events.last().unwrap();
         match last {
             Ok(StreamEvent::MessageDelta { delta, .. }) => {
-                assert_eq!(delta.stop_reason, Some("stop".to_string()));
+                // "stop" is normalized to "end_turn" for consistent handling across providers
+                assert_eq!(delta.stop_reason, Some("end_turn".to_string()));
             }
             other => panic!("Expected MessageDelta at end, got {other:?}"),
         }

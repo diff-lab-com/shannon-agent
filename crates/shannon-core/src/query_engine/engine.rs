@@ -809,16 +809,20 @@ impl QueryEngine {
                     messages = conversation.messages.clone();
                 }
 
-                // Add pending tool results from previous turn
+                // Add pending tool results from previous turn.
+                // Persist to conversation.messages as well so multi-turn context
+                // maintains the required assistant(tool_use) → user(tool_result) sequence.
                 for (tool_use_id, result_content, is_error) in tool_results.drain(..) {
-                    messages.push(Message {
+                    let tool_msg = Message {
                         role: "user".to_string(),
                         content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
                             tool_use_id,
                             content: Some(ToolResultContent::Single(result_content)),
                             is_error: Some(is_error),
                         }]),
-                    });
+                    };
+                    messages.push(tool_msg.clone());
+                    conversation.messages.push(tool_msg);
                 }
 
                 // Get tools schema
@@ -951,6 +955,7 @@ impl QueryEngine {
                         // Accumulate the full assistant response for conversation tracking
                         let mut assistant_text = String::new();
                         let mut assistant_tool_uses: Vec<ContentBlock> = Vec::new();
+                        let mut stream_finalized = false;
 
                         // Process streaming events
                         while let Some(event_result) = stream.next().await {
@@ -1624,6 +1629,9 @@ impl QueryEngine {
                                                         + usage.output_tokens)
                                                         as u64,
                                                 }));
+                                                // Mark finalized so the post-loop safety net
+                                                // doesn't short-circuit the next turn's API call.
+                                                stream_finalized = true;
                                             } else {
                                                 // No tool uses — save assistant text to conversation
                                                 if !assistant_text.is_empty() {
@@ -1669,6 +1677,11 @@ impl QueryEngine {
                                     }
                                 }
                                 Err(e) => {
+                                    // Preserve conversation context even on stream errors
+                                    let _ = tx.send(Ok(QueryEvent::ConversationUpdate {
+                                        query_id,
+                                        messages: conversation.messages.clone(),
+                                    }));
                                     let _ = tx.send(Ok(QueryEvent::Failed {
                                         query_id,
                                         error: e.to_string(),
@@ -1697,6 +1710,54 @@ impl QueryEngine {
                             let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
 
                             // Auto-save conversation after completion
+                            if let Err(e) = save_conversation_to_disk(
+                                &state_for_save,
+                                session_id_for_save,
+                                &conversation.messages,
+                                &client_model,
+                            ) {
+                                tracing::warn!(session = %session_id_for_save, "Failed to save conversation: {e}");
+                            }
+
+                            return;
+                        }
+
+                        // Safety net: if the stream had content but the MessageDelta
+                        // handler didn't finalize (e.g. budget exceeded, premature
+                        // stream close, or missing stop event), save the assistant
+                        // text now so the next turn retains context.
+                        if !stream_finalized && has_content && !assistant_text.is_empty() {
+                            // Check if the last message is already this assistant response
+                            let already_saved = conversation.messages.last().map_or(false, |m| {
+                                matches!(&m.content, MessageContent::Text(t) if t == &assistant_text)
+                            });
+                            if !already_saved {
+                                tracing::warn!(
+                                    msg_len = assistant_text.len(),
+                                    "Stream ended without finalization — saving assistant text as safety net"
+                                );
+                                conversation.messages.push(Message {
+                                    role: "assistant".to_string(),
+                                    content: MessageContent::Text(assistant_text),
+                                });
+                            }
+                            let total_cost = CostTracker::calculate_cost(
+                                &client_model,
+                                total_input_tokens,
+                                total_output_tokens,
+                            );
+                            let _ = tx.send(Ok(QueryEvent::Cost {
+                                query_id,
+                                total_cost_usd: total_cost,
+                                input_tokens: total_input_tokens,
+                                output_tokens: total_output_tokens,
+                            }));
+                            let _ = tx.send(Ok(QueryEvent::ConversationUpdate {
+                                query_id,
+                                messages: conversation.messages.clone(),
+                            }));
+                            let _ = tx.send(Ok(QueryEvent::Completed { query_id }));
+
                             if let Err(e) = save_conversation_to_disk(
                                 &state_for_save,
                                 session_id_for_save,
@@ -1768,6 +1829,10 @@ impl QueryEngine {
                                                     let suggestion = retry_err.user_suggestion()
                                                         .map(|s| format!(" {s}."))
                                                         .unwrap_or_default();
+                                                    let _ = tx.send(Ok(QueryEvent::ConversationUpdate {
+                                                        query_id,
+                                                        messages: conversation.messages.clone(),
+                                                    }));
                                                     let _ = tx.send(Ok(QueryEvent::Failed {
                                                         query_id,
                                                         error: format!("Auto-compact retry also failed: {retry_err}.{suggestion}"),
@@ -1794,6 +1859,10 @@ impl QueryEngine {
                                         let suggestion = retry_err.user_suggestion()
                                             .map(|s| format!(" {s}."))
                                             .unwrap_or_default();
+                                        let _ = tx.send(Ok(QueryEvent::ConversationUpdate {
+                                            query_id,
+                                            messages: conversation.messages.clone(),
+                                        }));
                                         let _ = tx.send(Ok(QueryEvent::Failed {
                                             query_id,
                                             error: format!("Token overflow — auto-compact retry failed: {retry_err}.{suggestion}"),
@@ -1806,6 +1875,10 @@ impl QueryEngine {
                         let suggestion = e.user_suggestion()
                             .map(|s| format!(" {s}."))
                             .unwrap_or_default();
+                        let _ = tx.send(Ok(QueryEvent::ConversationUpdate {
+                            query_id,
+                            messages: conversation.messages.clone(),
+                        }));
                         let _ = tx.send(Ok(QueryEvent::Failed {
                             query_id,
                             error: format!("{e}.{suggestion}"),

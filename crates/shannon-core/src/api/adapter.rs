@@ -507,7 +507,10 @@ pub fn normalize_response(
                 role: "assistant".to_string(),
                 content,
                 model: resp.model.unwrap_or_default(),
-                stop_reason: choice.finish_reason,
+                stop_reason: choice.finish_reason.map(|r| match r.as_str() {
+                    "stop" | "STOP" => "end_turn".to_string(),
+                    other => other.to_string(),
+                }),
                 usage: resp
                     .usage
                     .map(|u| super::types::Usage { input_tokens: u.prompt_tokens.unwrap_or(0), output_tokens: u.completion_tokens.unwrap_or(0), ..Default::default() })
@@ -647,12 +650,17 @@ fn normalize_openai_event(
 
     // If we have usage info, emit a MessageDelta with usage
     if let Some(usage) = chunk.usage {
+        let raw_reason = chunk
+            .choices
+            .first()
+            .and_then(|c| c.finish_reason.clone());
+        let normalized_reason = raw_reason.map(|r| match r.as_str() {
+            "stop" | "STOP" => "end_turn".to_string(),
+            other => other.to_string(),
+        });
         return vec![Ok(StreamEvent::MessageDelta {
             delta: MessageDeltaDelta {
-                stop_reason: chunk
-                    .choices
-                    .first()
-                    .and_then(|c| c.finish_reason.clone()),
+                stop_reason: normalized_reason,
                 stop_sequence: None,
             },
             usage: Usage {
@@ -669,11 +677,17 @@ fn normalize_openai_event(
     };
 
     // Finish reason → end events
+    // Normalize provider-specific stop reasons to "end_turn" so the engine
+    // always saves assistant responses regardless of provider.
     if let Some(ref reason) = choice.finish_reason {
         state.reset();
+        let normalized = match reason.as_str() {
+            "stop" | "STOP" => "end_turn".to_string(),
+            other => other.to_string(),
+        };
         return vec![Ok(StreamEvent::MessageDelta {
             delta: MessageDeltaDelta {
-                stop_reason: Some(reason.clone()),
+                stop_reason: Some(normalized),
                 stop_sequence: None,
             },
             usage: Usage {
@@ -1328,7 +1342,8 @@ mod tests {
         let result = normalize_sse_event(chunk_json, &LlmProvider::OpenAI, &mut fresh_state());
         match &result[0] {
             Ok(StreamEvent::MessageDelta { delta, .. }) => {
-                assert_eq!(delta.stop_reason, Some("stop".to_string()));
+                // "stop" is normalized to "end_turn" for consistent handling across providers
+                assert_eq!(delta.stop_reason, Some("end_turn".to_string()));
             }
             other => panic!("Expected MessageDelta, got {other:?}"),
         }
@@ -1454,7 +1469,8 @@ mod tests {
         let result = normalize_response(resp, &LlmProvider::OpenAI).unwrap();
         assert_eq!(result.role, "assistant");
         assert_eq!(result.content.len(), 1);
-        assert_eq!(result.stop_reason, Some("stop".to_string()));
+        // "stop" is normalized to "end_turn" for consistent handling across providers
+        assert_eq!(result.stop_reason, Some("end_turn".to_string()));
         assert_eq!(result.usage.input_tokens, 5);
         assert_eq!(result.usage.output_tokens, 2);
     }
@@ -1566,7 +1582,8 @@ mod tests {
         assert_eq!(result.len(), 1);
         match &result[0] {
             Ok(StreamEvent::MessageDelta { delta, .. }) => {
-                assert_eq!(delta.stop_reason, Some("stop".to_string()));
+                // "stop" is normalized to "end_turn" for consistent handling across providers
+                assert_eq!(delta.stop_reason, Some("end_turn".to_string()));
             }
             other => panic!("Expected MessageDelta, got {other:?}"),
         }

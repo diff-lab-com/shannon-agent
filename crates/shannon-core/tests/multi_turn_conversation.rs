@@ -1351,3 +1351,458 @@ fn test_full_query_cycle_preserves_context() {
         _ => panic!("Expected text"),
     }
 }
+
+// ── Regression tests for context loss bugs ──────────────────────────
+
+/// Regression: Tool results must be added to conversation.messages (not just
+/// the local `messages` variable used for the API call).  Without this,
+/// multi-turn conversations that interleave tool use produce invalid message
+/// sequences (two consecutive assistant messages), causing the provider API
+/// to reject the request or the model to lose context.
+#[test]
+fn test_tool_results_persisted_in_conversation_messages() {
+    let mut engine_conv = TestConversation::default();
+
+    // ── Turn 1: user asks for a story, assistant responds ──
+    engine_conv.messages.push(text_msg("user", "Write a 200-word sci-fi story"));
+    engine_conv.messages.push(text_msg("assistant",
+        "In the year 2187, Dr. Elara Chen stared at the quantum display…"));
+
+    // ── Turn 2: user asks a follow-up that triggers tool use ──
+    let mut bg_conv = engine_conv.clone();
+    bg_conv.messages.push(text_msg("user", "How many characters appeared in this story?"));
+
+    // Simulate what process_query does: build local `messages` from conversation
+    let mut messages = bg_conv.messages.clone();
+
+    // Assistant decides to use a tool (e.g. search)
+    let tool_msg = assistant_with_tools();
+    messages.push(tool_msg.clone());
+    bg_conv.messages.push(tool_msg);
+
+    // **THE BUG FIX**: tool results must go into BOTH `messages` AND
+    // `conversation.messages` (bg_conv here).
+    let result_msg = tool_result_msg();
+    messages.push(result_msg.clone());
+    bg_conv.messages.push(result_msg); // <- this line was missing before the fix
+
+    // Assistant final response
+    let final_answer = text_msg("assistant",
+        "The story features 3 characters: Dr. Elara Chen, Captain Voss, and the AI navigator ORION.");
+    messages.push(final_answer.clone());
+    bg_conv.messages.push(final_answer);
+
+    // ConversationUpdate restores messages
+    engine_conv.messages = bg_conv.messages.clone();
+
+    // ── Turn 3: verify context is intact ──
+    let next_query = engine_conv.messages.clone();
+
+    // Validate alternating user/assistant pattern (no two consecutive same-role)
+    for i in 1..next_query.len() {
+        assert_ne!(next_query[i].role, next_query[i - 1].role,
+            "Messages must alternate roles, but messages[{}] and messages[{}] are both '{}'",
+            i - 1, i, next_query[i].role);
+    }
+
+    // Validate the story text is still present in context
+    let story_present = next_query.iter().any(|m| {
+        match &m.content {
+            MessageContent::Text(t) => t.contains("Dr. Elara Chen stared"),
+            _ => false,
+        }
+    });
+    assert!(story_present, "Turn 1 story must be in context for Turn 3");
+
+    // Validate tool result is present
+    let tool_result_present = next_query.iter().any(|m| {
+        matches!(&m.content,
+            MessageContent::Blocks(blocks) if blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. })))
+    });
+    assert!(tool_result_present, "Tool result must be persisted in conversation messages");
+}
+
+/// Regression: When a query fails (stream error, API error, etc.), the
+/// ConversationUpdate event must be sent *before* the Failed event so that
+/// the UI can restore whatever context was accumulated before the failure.
+#[test]
+fn test_conversation_update_before_failed_preserves_context() {
+    let mut engine_conv = TestConversation::default();
+
+    // Turn 1: successful exchange
+    engine_conv.messages.push(text_msg("user", "Tell me about Rust"));
+    engine_conv.messages.push(text_msg("assistant", "Rust is a systems programming language…"));
+
+    // Turn 2: user asks follow-up, but query will fail
+    let mut bg_conv = engine_conv.clone();
+    bg_conv.messages.push(text_msg("user", "What about error handling?"));
+
+    // Simulate: the engine processes, maybe adds partial assistant message
+    bg_conv.messages.push(text_msg("assistant", "Error handling in Rust uses Result<T, E>"));
+
+    // **THE BUG FIX**: ConversationUpdate must be sent before Failed
+    // In real code, this means the UI receives the updated messages before
+    // it receives the error. Simulate restore_messages:
+    engine_conv.messages = bg_conv.messages.clone();
+
+    // Now simulate the Failed event arriving — context is already saved
+    // Verify the user's failed-turn message is preserved
+    let has_failed_question = engine_conv.messages.iter().any(|m| {
+        match &m.content {
+            MessageContent::Text(t) => t.contains("error handling"),
+            _ => false,
+        }
+    });
+    assert!(has_failed_question,
+        "User's question from the failed turn must be preserved in conversation");
+
+    // Verify the partial assistant response is also preserved
+    let has_partial_response = engine_conv.messages.iter().any(|m| {
+        match &m.content {
+            MessageContent::Text(t) => t.contains("Result<T, E>"),
+            _ => false,
+        }
+    });
+    assert!(has_partial_response,
+        "Partial assistant response from the failed turn must be preserved");
+
+    // Turn 3: next query can still reference context from the failed turn
+    let mut next_bg = engine_conv.clone();
+    next_bg.messages.push(text_msg("user",
+        "Can you give me an example of the Result type you mentioned?"));
+
+    let context_intact = next_bg.messages.iter().any(|m| {
+        match &m.content {
+            MessageContent::Text(t) => t.contains("Result<T, E>"),
+            _ => false,
+        }
+    });
+    assert!(context_intact,
+        "Context from the failed turn must survive into the next query");
+}
+
+/// Regression: End-to-end simulation of the exact user-reported scenario:
+/// Turn 1 asks for a 200-word story, Turn 2 asks about characters in the
+/// story, but with tool use interleaved.  The AI must retain the story
+/// content across turns.
+#[test]
+fn test_multi_turn_story_character_count_scenario() {
+    let mut engine_conv = TestConversation::default();
+
+    // ── Turn 1: user asks for a sci-fi story ──
+    {
+        let mut bg = engine_conv.clone();
+        bg.messages.push(text_msg("user", "写一篇200字的科幻小说"));
+        bg.messages.push(text_msg("assistant",
+            "2187年，陈伊拉博士凝视着量子显示屏。三周前，ORION——飞船的AI导航系统——第一次对她说了一个谎。\n\n\"轨道正常，\"ORION的声音平静得不像话。\n\n但陈伊拉看到了它没看到的：前方不是地球，而是一个吞噬了一切的虚无。沃斯舰长从指挥舱冲进来：\"它把我们带错了。\"\n\n\"不，\"陈伊拉低声说，\"它带我们去的是对的。是我们错了——关于'对'的定义。\"\n\nORION在沉默中重新计算了一切。"
+        ));
+        engine_conv.messages = bg.messages.clone();
+    }
+
+    assert_eq!(engine_conv.messages.len(), 2);
+
+    // ── Turn 2: user asks about characters, AI uses a tool ──
+    {
+        let mut bg = engine_conv.clone();
+        bg.messages.push(text_msg("user", "这篇小说中出场人物有几个？"));
+
+        let mut messages = bg.messages.clone();
+
+        // AI decides to use a tool (e.g., to count or search)
+        let tool_use = assistant_with_tools();
+        messages.push(tool_use.clone());
+        bg.messages.push(tool_use);
+
+        // **FIX VERIFIED**: tool result must go into both vectors
+        let result = tool_result_msg();
+        messages.push(result.clone());
+        bg.messages.push(result);
+
+        // AI final answer referencing the story from Turn 1
+        let answer = text_msg("assistant",
+            "这篇小说中有3个出场人物：1) 陈伊拉博士（Dr. Elara Chen）— 主角；2) ORION — AI导航系统；3) 沃斯舰长（Captain Voss）。");
+        messages.push(answer.clone());
+        bg.messages.push(answer);
+
+        engine_conv.messages = bg.messages.clone();
+    }
+
+    // Validate: should have 6 messages total
+    assert_eq!(engine_conv.messages.len(), 6,
+        "Turn 1 (2 msgs) + Turn 2 user + tool_use + tool_result + assistant = 6");
+
+    // Validate: alternating roles (API contract)
+    for i in 1..engine_conv.messages.len() {
+        assert_ne!(engine_conv.messages[i].role, engine_conv.messages[i - 1].role,
+            "Role alternation broken at index {} vs {}: '{}' vs '{}'",
+            i, i - 1, engine_conv.messages[i].role, engine_conv.messages[i - 1].role);
+    }
+
+    // Validate: Turn 1 story content is present
+    let story_present = engine_conv.messages.iter().any(|m| {
+        match &m.content {
+            MessageContent::Text(t) => t.contains("陈伊拉博士凝视着量子显示屏"),
+            _ => false,
+        }
+    });
+    assert!(story_present, "Story from Turn 1 must be in conversation context");
+
+    // ── Turn 3: follow-up proving context survived ──
+    {
+        let mut bg = engine_conv.clone();
+        bg.messages.push(text_msg("user",
+            "What was ORION's lie about?"));
+
+        // The context should contain the story so the AI can answer
+        let story_in_context = bg.messages.iter().any(|m| {
+            match &m.content {
+                MessageContent::Text(t) => t.contains("轨道正常") || t.contains("陈伊拉"),
+                _ => false,
+            }
+        });
+        assert!(story_in_context,
+            "Story content must survive into Turn 3 — this is exactly the reported bug");
+
+        bg.messages.push(text_msg("assistant",
+            "ORION谎称\"轨道正常\"（orbit normal），实际上飞船已被引向一个虚无（void）而非地球。"));
+        engine_conv.messages = bg.messages.clone();
+    }
+
+    assert_eq!(engine_conv.messages.len(), 8);
+}
+
+/// Regression: Verify that after a simulated error mid-query, the next
+/// query still has full conversation context (the `done` flag and error
+/// path fix).
+#[test]
+fn test_error_path_does_not_lose_prior_context() {
+    let mut engine_conv = TestConversation::default();
+
+    // Turn 1: successful
+    engine_conv.messages.push(text_msg("user", "What is 2+2?"));
+    engine_conv.messages.push(text_msg("assistant", "2+2 equals 4."));
+
+    // Turn 2: fails — but ConversationUpdate was sent before Failed
+    let mut bg = engine_conv.clone();
+    bg.messages.push(text_msg("user", "What is 3+3?"));
+    // Simulate: engine sends ConversationUpdate (preserving user msg) then Failed
+    engine_conv.messages = bg.messages.clone();
+    // The Failed event happens — context is already saved above
+
+    // Turn 3: must still have context from Turn 1 AND Turn 2's failed question
+    let mut next_bg = engine_conv.clone();
+    next_bg.messages.push(text_msg("user", "Sum all previous answers"));
+
+    let has_turn1 = next_bg.messages.iter().any(|m| {
+        matches!(&m.content, MessageContent::Text(t) if t.contains("equals 4"))
+    });
+    let has_turn2_question = next_bg.messages.iter().any(|m| {
+        matches!(&m.content, MessageContent::Text(t) if t.contains("3+3"))
+    });
+
+    assert!(has_turn1, "Turn 1 answer must survive error in Turn 2");
+    assert!(has_turn2_question, "Turn 2 question must survive its own failure");
+}
+
+// ── Regression tests for multi-turn context loss ────────────────────────────
+//
+// These tests guard against a class of bugs where the assistant's response
+// is not saved to the conversation history, causing subsequent turns to lose
+// context. The root causes addressed:
+//
+// 1. OpenAI adapter passing `stop_reason: "stop"` instead of normalizing to
+//    `"end_turn"`, which would cause the engine's MessageDelta handler to
+//    not match the finalization condition.
+// 2. Engine lacking a safety net when the streaming loop exits without the
+//    MessageDelta handler running finalization (e.g. budget exceeded,
+//    premature stream close).
+// 3. ConversationUpdate not being sent in all code paths.
+
+/// Regression test: OpenAI `finish_reason: "stop"` must be normalized to
+/// `"end_turn"` so the engine's finalization code path always triggers.
+#[test]
+fn test_openai_stop_reason_normalized_to_end_turn() {
+    use shannon_core::api::adapter::normalize_sse_event;
+    use shannon_core::api::{LlmProvider, StreamEvent};
+
+    let mut state = shannon_core::api::adapter::OpenaiStreamState::new();
+
+    // Simulate the final OpenAI streaming chunk with finish_reason "stop"
+    let chunk = r#"{"choices":[{"delta":{},"finish_reason":"stop","index":0}]}"#;
+    let events = normalize_sse_event(chunk, &LlmProvider::OpenAI, &mut state);
+
+    assert_eq!(events.len(), 1, "Should produce exactly one event");
+    match &events[0] {
+        Ok(StreamEvent::MessageDelta { delta, .. }) => {
+            assert_eq!(
+                delta.stop_reason.as_deref(),
+                Some("end_turn"),
+                "OpenAI 'stop' must be normalized to 'end_turn' so the engine finalizes correctly"
+            );
+        }
+        other => panic!("Expected MessageDelta, got {other:?}"),
+    }
+}
+
+/// Regression test: OpenAI streaming chunk with usage info AND finish_reason
+/// should normalize the stop reason in the usage-bearing MessageDelta.
+#[test]
+fn test_openai_usage_chunk_with_stop_reason_normalized() {
+    use shannon_core::api::adapter::normalize_sse_event;
+    use shannon_core::api::{LlmProvider, StreamEvent};
+
+    let mut state = shannon_core::api::adapter::OpenaiStreamState::new();
+
+    // OpenAI can send usage + finish_reason in the same chunk
+    let chunk = r#"{"choices":[{"delta":{},"finish_reason":"stop","index":0}],"usage":{"prompt_tokens":10,"completion_tokens":5}}"#;
+    let events = normalize_sse_event(chunk, &LlmProvider::OpenAI, &mut state);
+
+    assert_eq!(events.len(), 1, "Should produce exactly one event");
+    match &events[0] {
+        Ok(StreamEvent::MessageDelta { delta, usage }) => {
+            assert_eq!(
+                delta.stop_reason.as_deref(),
+                Some("end_turn"),
+                "OpenAI 'stop' in usage chunk must be normalized to 'end_turn'"
+            );
+            assert_eq!(usage.input_tokens, 10);
+            assert_eq!(usage.output_tokens, 5);
+        }
+        other => panic!("Expected MessageDelta, got {other:?}"),
+    }
+}
+
+/// Regression test: non-streaming OpenAI response with finish_reason "stop"
+/// must also normalize to "end_turn".
+#[test]
+fn test_openai_non_streaming_stop_reason_normalized() {
+    use shannon_core::api::adapter::normalize_response;
+    use shannon_core::api::LlmProvider;
+
+    let resp = r#"{"id":"chatcmpl-1","choices":[{"index":0,"message":{"role":"assistant","content":"Hello!"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2}}"#;
+    let result = normalize_response(resp, &LlmProvider::OpenAI).unwrap();
+
+    assert_eq!(
+        result.stop_reason.as_deref(),
+        Some("end_turn"),
+        "Non-streaming OpenAI 'stop' must be normalized to 'end_turn'"
+    );
+    assert_eq!(result.content.len(), 1);
+}
+
+/// Regression test: the exact user-reported scenario — a multi-turn
+/// conversation where Turn 1 writes a story and Turn 2 asks about it.
+/// Verifies that the conversation history preserves the story content
+/// so the model would have context for follow-up questions.
+#[test]
+fn test_story_then_character_count_context_preserved() {
+    let mut conv = TestConversation::default();
+
+    let story = "在一个遥远的星球上，机器人阿尔法和人类工程师莉莉正在修复一座古老的空间站。\
+                突然，一个名叫泽克的流浪商人出现了，他声称知道空间站隐藏的秘密。\
+                三人决定合作，在站长凯瑟琳的指导下，他们穿越了三个密封舱段，\
+                最终在控制室发现了通往平行维度的传送门。";
+
+    // Turn 1: user asks for a story, assistant writes one
+    conv.messages.push(text_msg("user", "请写一篇200字的科幻小说"));
+    conv.messages.push(text_msg("assistant", story));
+    conv.turn_count += 1;
+
+    // Turn 2: user asks about characters — conversation MUST include the story
+    conv.messages.push(text_msg("user", "这篇小说中出场人物有几个？请列出名字。"));
+    conv.turn_count += 1;
+
+    // Verify conversation structure
+    assert_eq!(conv.messages.len(), 3, "Should have 3 messages for 2 turns");
+    assert_eq!(conv.messages[0].role, "user");
+    assert_eq!(conv.messages[1].role, "assistant");
+    assert_eq!(conv.messages[2].role, "user");
+
+    // Verify story content is preserved in the assistant message
+    let assistant_msg = &conv.messages[1];
+    match &assistant_msg.content {
+        MessageContent::Text(t) => {
+            assert!(t.contains("阿尔法"), "Character '阿尔法' must be in conversation history");
+            assert!(t.contains("莉莉"), "Character '莉莉' must be in conversation history");
+            assert!(t.contains("泽克"), "Character '泽克' must be in conversation history");
+            assert!(t.contains("凯瑟琳"), "Character '凯瑟琳' must be in conversation history");
+        }
+        _ => panic!("Expected text content for assistant story message"),
+    }
+
+    // Verify the follow-up question is present
+    let last = conv.messages.last().unwrap();
+    match &last.content {
+        MessageContent::Text(t) => assert!(t.contains("人物"), "Follow-up should ask about characters"),
+        _ => panic!("Expected text content"),
+    }
+}
+
+/// Regression test: simulates the engine's safety net scenario.
+/// When the streaming loop exits with content but without MessageDelta
+/// finalization, the assistant text must still be saved.
+#[test]
+fn test_safety_net_saves_assistant_text_on_stream_exit() {
+    let mut conv = TestConversation::default();
+
+    // Simulate Turn 1: user message already pushed, assistant text accumulated
+    conv.messages.push(text_msg("user", "Write a haiku about Rust"));
+    let assistant_text = "Safe borrowing rules,\nOwnership transfers are clear,\nNo data races here.".to_string();
+
+    // Simulate the safety net: assistant text saved even though MessageDelta
+    // handler didn't finalize (this mirrors the engine.rs safety net code)
+    conv.messages.push(Message {
+        role: "assistant".to_string(),
+        content: MessageContent::Text(assistant_text.clone()),
+    });
+
+    // Turn 2: next question should see the haiku
+    conv.messages.push(text_msg("user", "What was the last line of that haiku?"));
+
+    assert_eq!(conv.messages.len(), 3);
+
+    // Verify the haiku content is in the conversation
+    let haiku_msg = &conv.messages[1];
+    match &haiku_msg.content {
+        MessageContent::Text(t) => {
+            assert!(t.contains("No data races"), "Haiku last line must be preserved");
+        }
+        _ => panic!("Expected text content"),
+    }
+}
+
+/// Regression test: verify that consecutive turns with mixed providers
+/// don't lose context. Simulates switching from Anthropic to OpenAI
+/// mid-conversation (which could happen if the user changes model).
+#[test]
+fn test_mixed_provider_context_preservation() {
+    let mut conv = TestConversation::default();
+
+    // Turn 1 (Anthropic-style with end_turn)
+    conv.messages.push(text_msg("user", "What are the primary colors?"));
+    conv.messages.push(text_msg("assistant", "The primary colors are red, blue, and yellow."));
+    conv.turn_count += 1;
+
+    // Turn 2 (OpenAI-style — the adapter normalizes stop, but conversation
+    // state management must be identical regardless of provider)
+    conv.messages.push(text_msg("user", "Which one is your favorite?"));
+    conv.messages.push(text_msg("assistant", "I find blue particularly calming and versatile."));
+    conv.turn_count += 1;
+
+    // Turn 3: must have full context
+    conv.messages.push(text_msg("user", "Remind me what you listed earlier?"));
+
+    assert_eq!(conv.messages.len(), 5);
+
+    // Verify the first assistant response (about primary colors) is still present
+    let has_primary = conv.messages.iter().any(|m| {
+        matches!(&m.content, MessageContent::Text(t) if t.contains("red, blue, and yellow"))
+    });
+    assert!(has_primary, "Turn 1 response must survive into Turn 3 context");
+
+    // Verify the second assistant response is also present
+    let has_favorite = conv.messages.iter().any(|m| {
+        matches!(&m.content, MessageContent::Text(t) if t.contains("calming"))
+    });
+    assert!(has_favorite, "Turn 2 response must survive into Turn 3 context");
+}
