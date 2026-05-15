@@ -458,6 +458,26 @@ pub fn load_memory_index(dir: &Path) -> Option<String> {
 /// deterministic ordering. Returns `None` if the directory doesn't exist
 /// or contains no `.md` files.
 pub fn load_rules(dir: &Path) -> Option<String> {
+    load_rules_for_path(dir, None)
+}
+
+/// Load path-scoped rules from `.claude/rules/` directory.
+///
+/// Rule files may include YAML frontmatter with a `paths:` field to limit
+/// when they are loaded. Example:
+///
+/// ```markdown
+/// ---
+/// paths:
+///   - "src/**/*.rs"
+///   - "crates/**/*.rs"
+/// ---
+/// Always use `thiserror` for error types in Rust code.
+/// ```
+///
+/// If `paths:` is absent, the rule applies unconditionally.
+/// If `active_path` is `None`, all rules are loaded (no filtering).
+pub fn load_rules_for_path(dir: &Path, active_path: Option<&Path>) -> Option<String> {
     let rules_dir = dir.join(".claude").join("rules");
     if !rules_dir.is_dir() {
         return None;
@@ -477,11 +497,26 @@ pub fn load_rules(dir: &Path) -> Option<String> {
 
     let mut parts: Vec<String> = Vec::new();
     for entry in entries {
-        if let Ok(content) = std::fs::read_to_string(entry.path()) {
-            if !content.trim().is_empty() {
-                if let Some(name) = entry.file_name().to_str() {
-                    parts.push(format!("### Rule: {name}\n\n{content}"));
+        if let Ok(raw) = std::fs::read_to_string(entry.path()) {
+            if raw.trim().is_empty() {
+                continue;
+            }
+
+            let (frontmatter, content) = parse_frontmatter(&raw);
+
+            // Filter by paths if active_path is provided
+            if let Some(file_path) = active_path {
+                if let Some(ref fm) = frontmatter {
+                    if let Some(ref patterns) = fm.paths {
+                        if !matches_any_pattern(file_path, dir, patterns) {
+                            continue;
+                        }
+                    }
                 }
+            }
+
+            if let Some(name) = entry.file_name().to_str() {
+                parts.push(format!("### Rule: {name}\n\n{content}"));
             }
         }
     }
@@ -491,6 +526,121 @@ pub fn load_rules(dir: &Path) -> Option<String> {
     } else {
         Some(format!("=== Project Rules (.claude/rules/) ===\n\n{}", parts.join("\n\n")))
     }
+}
+
+/// Parsed YAML frontmatter from a rule file.
+struct RuleFrontmatter {
+    /// Optional glob patterns that limit when this rule applies.
+    paths: Option<Vec<String>>,
+}
+
+/// Parse `---\n...\n---` frontmatter from a markdown file.
+/// Returns (frontmatter, body_content).
+fn parse_frontmatter(content: &str) -> (Option<RuleFrontmatter>, String) {
+    let trimmed = content.trim_start();
+    if !trimmed.starts_with("---") {
+        return (None, content.to_string());
+    }
+
+    // Find the closing ---
+    let after_first = &trimmed[3..];
+    let rest = after_first.trim_start_matches(['\n', '\r']);
+    if let Some(end) = rest.find("\n---") {
+        let yaml_str = &rest[..end];
+        let body = rest[end + 4..].trim_start_matches(['\n', '\r']).to_string();
+
+        // Simple YAML parsing for `paths:` field only
+        let paths = parse_yaml_paths(yaml_str);
+        (Some(RuleFrontmatter { paths }), body)
+    } else {
+        (None, content.to_string())
+    }
+}
+
+/// Parse a simple `paths:` list from YAML frontmatter.
+/// Supports:
+///   paths:
+///     - "src/**/*.rs"
+///     - '*.toml'
+fn parse_yaml_paths(yaml: &str) -> Option<Vec<String>> {
+    let mut paths: Vec<String> = Vec::new();
+    let mut in_paths = false;
+
+    for line in yaml.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') || trimmed.is_empty() {
+            continue;
+        }
+
+        if trimmed.starts_with("paths:") {
+            in_paths = true;
+            // Check for inline array: paths: ["a", "b"]
+            if let Some(rest) = trimmed.strip_prefix("paths:") {
+                let rest = rest.trim();
+                if rest.starts_with('[') && rest.ends_with(']') {
+                    let inner = &rest[1..rest.len() - 1];
+                    for item in inner.split(',') {
+                        let p = item.trim().trim_matches('"').trim_matches('\'');
+                        if !p.is_empty() {
+                            paths.push(p.to_string());
+                        }
+                    }
+                    if !paths.is_empty() {
+                        return Some(paths);
+                    }
+                }
+            }
+            continue;
+        }
+
+        if in_paths {
+            // Check if we've moved to a new top-level key
+            if !line.starts_with(' ') && !line.starts_with('\t') && !trimmed.starts_with('-') {
+                break;
+            }
+            if let Some(value) = trimmed.strip_prefix("- ") {
+                let p = value.trim().trim_matches('"').trim_matches('\'');
+                if !p.is_empty() {
+                    paths.push(p.to_string());
+                }
+            }
+        }
+    }
+
+    if paths.is_empty() { None } else { Some(paths) }
+}
+
+/// Check if a file path matches any of the given glob patterns.
+fn matches_any_pattern(file_path: &Path, project_dir: &Path, patterns: &[String]) -> bool {
+    let mut builder = globset::GlobSetBuilder::new();
+
+    for pattern in patterns {
+        let abs_pattern = if pattern.starts_with('/') {
+            pattern.clone()
+        } else {
+            format!("{}/{}", project_dir.display(), pattern)
+        };
+
+        if let Ok(glob) = globset::GlobBuilder::new(&abs_pattern)
+            .literal_separator(false)
+            .build()
+        {
+            builder.add(glob);
+        }
+    }
+
+    let globset = match builder.build() {
+        Ok(gs) => gs,
+        Err(_) => return false,
+    };
+
+    let abs_path = if file_path.is_absolute() {
+        file_path.to_path_buf()
+    } else {
+        project_dir.join(file_path)
+    };
+
+    globset.is_match(&abs_path)
 }
 
 /// Resolve `@import` directives in content.
@@ -829,5 +979,106 @@ Another instruction"#;
         assert!(source.config.content.contains("Test content"));
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    // ── Path-scoped rules tests ──────────────────────────────────
+
+    #[test]
+    fn test_parse_frontmatter_no_frontmatter() {
+        let (fm, body) = parse_frontmatter("Hello world\nMore text");
+        assert!(fm.is_none());
+        assert!(body.contains("Hello world"));
+    }
+
+    #[test]
+    fn test_parse_frontmatter_with_paths() {
+        let content = "---\npaths:\n  - \"src/**/*.rs\"\n  - '*.toml'\n---\nRule content here.";
+        let (fm, body) = parse_frontmatter(content);
+        assert!(fm.is_some());
+        let fm = fm.unwrap();
+        assert!(fm.paths.is_some());
+        let paths = fm.paths.unwrap();
+        assert_eq!(paths.len(), 2);
+        assert_eq!(paths[0], "src/**/*.rs");
+        assert_eq!(paths[1], "*.toml");
+        assert!(body.contains("Rule content here."));
+    }
+
+    #[test]
+    fn test_parse_frontmatter_without_paths() {
+        let content = "---\npriority: 5\n---\nSome rule.";
+        let (fm, _body) = parse_frontmatter(content);
+        assert!(fm.is_some());
+        assert!(fm.unwrap().paths.is_none());
+    }
+
+    #[test]
+    fn test_parse_yaml_paths_inline_array() {
+        let yaml = "paths: [\"*.rs\", \"*.toml\"]";
+        let paths = parse_yaml_paths(yaml);
+        assert!(paths.is_some());
+        let paths = paths.unwrap();
+        assert_eq!(paths.len(), 2);
+        assert_eq!(paths[0], "*.rs");
+        assert_eq!(paths[1], "*.toml");
+    }
+
+    #[test]
+    fn test_parse_yaml_paths_list() {
+        let yaml = "paths:\n  - \"src/**/*.rs\"\n  - \"crates/**/*.rs\"";
+        let paths = parse_yaml_paths(yaml);
+        assert!(paths.is_some());
+        let p = paths.unwrap();
+        assert_eq!(p.len(), 2);
+    }
+
+    #[test]
+    fn test_matches_any_pattern() {
+        let dir = Path::new("/project");
+        assert!(matches_any_pattern(Path::new("/project/src/main.rs"), dir, &["src/**/*.rs".to_string()]));
+        assert!(!matches_any_pattern(Path::new("/project/docs/guide.md"), dir, &["src/**/*.rs".to_string()]));
+        assert!(matches_any_pattern(Path::new("/project/Cargo.toml"), dir, &["*.toml".to_string()]));
+    }
+
+    #[test]
+    fn test_load_rules_for_path_filtering() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rules_dir = tmp.path().join(".claude").join("rules");
+        fs::create_dir_all(&rules_dir).unwrap();
+
+        // Rule that only applies to Rust files
+        fs::write(
+            rules_dir.join("rust-rules.md"),
+            "---\npaths:\n  - \"**/*.rs\"\n---\nUse thiserror for errors.",
+        ).unwrap();
+
+        // Rule that applies to all
+        fs::write(
+            rules_dir.join("general.md"),
+            "Always write tests.",
+        ).unwrap();
+
+        // No filtering - should get both
+        let all = load_rules_for_path(tmp.path(), None);
+        assert!(all.is_some());
+        let all = all.unwrap();
+        assert!(all.contains("rust-rules"));
+        assert!(all.contains("general"));
+
+        // Filtering to a .rs file - should get both
+        let for_rs = load_rules_for_path(tmp.path(), Some(Path::new("src/main.rs")));
+        assert!(for_rs.is_some());
+        let for_rs = for_rs.unwrap();
+        assert!(for_rs.contains("rust-rules"));
+        assert!(for_rs.contains("general"));
+
+        // Filtering to a .py file - should only get general
+        let for_py = load_rules_for_path(tmp.path(), Some(Path::new("src/app.py")));
+        assert!(for_py.is_some());
+        let for_py = for_py.unwrap();
+        assert!(!for_py.contains("rust-rules"));
+        assert!(for_py.contains("general"));
+
+        let _ = fs::remove_dir_all(tmp.path());
     }
 }

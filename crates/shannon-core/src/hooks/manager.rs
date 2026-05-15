@@ -239,6 +239,7 @@ impl HookManager {
             return Err(HookError::InvalidMatcher("Hook command is empty".to_string()));
         }
         // Warn about potentially dangerous patterns in hook commands
+        crate::sandbox::audit_shell_command(command);
         for pattern in &["rm -rf /", "mkfs", "dd if=", "> /dev/sd", "chmod 777"] {
             if command.contains(pattern) {
                 return Err(HookError::InvalidMatcher(

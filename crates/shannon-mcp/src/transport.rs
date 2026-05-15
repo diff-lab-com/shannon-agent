@@ -192,7 +192,9 @@ impl Drop for StdioTransport {
             }
             // Reap the zombie process to prevent resource leaks.
             // try_wait() is non-blocking and safe to call in Drop.
-            let _ = child.try_wait();
+            if let Err(e) = child.try_wait() {
+                tracing::debug!(error = %e, "Failed to reap zombie process during drop");
+            }
         }
     }
 }

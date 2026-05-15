@@ -124,6 +124,11 @@ pub(crate) fn handle_diag(repl: &mut Repl, args: &str) -> Result<()> {
 
     repl.chat.add_message(ChatRole::System, format!("Running {label}..."));
 
+    // Advisory safety audit: log warnings for suspicious patterns in the
+    // diagnostic command.  These commands are hardcoded above, but the audit
+    // ensures coverage if the logic is ever extended to accept user input.
+    shannon_core::sandbox::audit_shell_command(cmd);
+
     let output = std::process::Command::new("sh")
         .arg("-c")
         .arg(cmd)

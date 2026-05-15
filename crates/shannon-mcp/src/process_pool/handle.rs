@@ -390,8 +390,12 @@ impl McpServerHandle {
                 if let Some(ref mut writer) = *stdin_guard {
                     let mut msg = serde_json::to_string(&response_value).unwrap_or_default();
                     msg.push('\n');
-                    let _ = writer.write_all(msg.as_bytes()).await;
-                    let _ = writer.flush().await;
+                    if let Err(e) = writer.write_all(msg.as_bytes()).await {
+                        warn!("Failed to write sampling response to MCP server: {e}");
+                    }
+                    if let Err(e) = writer.flush().await {
+                        warn!("Failed to flush MCP server stdin: {e}");
+                    }
                 }
             }
             // Handle elicitation/create server→client request.
@@ -434,14 +438,20 @@ impl McpServerHandle {
                 if let Some(ref mut writer) = *stdin_guard {
                     let mut msg = serde_json::to_string(&response_value).unwrap_or_default();
                     msg.push('\n');
-                    let _ = writer.write_all(msg.as_bytes()).await;
-                    let _ = writer.flush().await;
+                    if let Err(e) = writer.write_all(msg.as_bytes()).await {
+                        warn!("Failed to write elicitation response to MCP server: {e}");
+                    }
+                    if let Err(e) = writer.flush().await {
+                        warn!("Failed to flush MCP server stdin: {e}");
+                    }
                 }
             }
             // Extract the id to route responses to pending requests.
             else if let Some(id) = value.get("id").and_then(|v| v.as_u64()) {
                 if let Some((_, pending_req)) = pending.remove(&id) {
-                    let _ = pending_req.tx.send(value);
+                    if let Err(e) = pending_req.tx.send(value) {
+                        debug!(server = %server_name, error = %e, "Failed to deliver response to pending request (caller may have timed out)");
+                    }
                 }
             }
             // Progress notifications are routed to the matching pending request.
@@ -490,7 +500,9 @@ impl McpServerHandle {
                                 "id": request_id,
                                 "error": { "code": -32800, "message": format!("Request cancelled: {reason}") }
                             });
-                            let _ = pending_req.tx.send(error_response);
+                            if let Err(e) = pending_req.tx.send(error_response) {
+                                debug!(server = %server_name, error = %e, request_id, "Failed to deliver cancellation response (caller may have timed out)");
+                            }
                             info!(
                                 server = %server_name,
                                 request_id,
@@ -509,7 +521,9 @@ impl McpServerHandle {
                     method = %value["method"],
                     "Received notification from MCP server"
                 );
-                let _ = notification_tx.try_send((server_name.to_string(), value));
+                if let Err(e) = notification_tx.try_send((server_name.to_string(), value)) {
+                    debug!(server = %server_name, error = %e, "Failed to forward notification from MCP server");
+                }
             }
         }
         debug!(server = %server_name, "Stdout reader ended");
@@ -841,8 +855,12 @@ impl McpServerHandle {
                         debug!(server = %self.name, "MCP server exited gracefully");
                     }
                     _ => {
-                        let _ = child.kill().await;
-                        let _ = child.wait().await;
+                        if let Err(e) = child.kill().await {
+                            debug!(server = %self.name, error = %e, "Failed to kill MCP server process");
+                        }
+                        if let Err(e) = child.wait().await {
+                            debug!(server = %self.name, error = %e, "Failed to reap MCP server process");
+                        }
                         warn!(server = %self.name, "Force-killed MCP server process (zombie reaped)");
                     }
                 }

@@ -61,6 +61,54 @@ pub enum SandboxError {
 }
 
 // ============================================================================
+// Shell Command Safety Audit
+// ============================================================================
+
+/// Patterns that indicate a potentially destructive or dangerous command.
+///
+/// This list is intentionally conservative: it targets commands that could
+/// cause irreversible data loss or system damage.  Matches are logged as
+/// `tracing::warn` but **never block execution** — callers that need to
+/// enforce a policy should layer their own gating on top.
+const SHELL_AUDIT_PATTERNS: &[(&str, &str)] = &[
+    ("rm -rf /",            "recursive delete of root filesystem"),
+    ("rm -rf /*",           "recursive delete of all top-level files"),
+    ("mkfs.",               "filesystem format command"),
+    ("dd if=",              "raw disk copy (potential disk destruction)"),
+    (":(){ :|:& };:",       "fork bomb"),
+    ("> /dev/sd",           "direct write to block device"),
+    ("chmod -R 777 /",      "open permissions on root filesystem"),
+    ("chmod -r 777 /",      "open permissions on root filesystem (lowercase flag)"),
+];
+
+/// Log a warning if the command contains potentially dangerous patterns.
+///
+/// This is **advisory only** — it does not block execution.  Every crate that
+/// passes user/AI-generated strings to a shell (`sh -c`, `bash -c`, PTY, etc.)
+/// should call this before invocation so that operators can monitor for
+/// suspicious activity via the tracing subscriber.
+///
+/// # Example
+///
+/// ```ignore
+/// use shannon_core::sandbox::audit_shell_command;
+///
+/// audit_shell_command(&user_command);
+/// // proceed with execution …
+/// ```
+pub fn audit_shell_command(command: &str) {
+    for &(pattern, description) in SHELL_AUDIT_PATTERNS {
+        if command.contains(pattern) {
+            tracing::warn!(
+                pattern = pattern,
+                description = description,
+                "Potentially dangerous shell command pattern detected"
+            );
+        }
+    }
+}
+
+// ============================================================================
 // Configuration
 // ============================================================================
 

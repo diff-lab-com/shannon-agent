@@ -127,7 +127,9 @@ impl Drop for AgentHandle {
                     tracing::warn!(agent = %self.name, "Failed to kill child process on drop: {e}");
                 }
                 // Reap the zombie to free the PID slot
-                let _ = self.child.try_wait();
+                if let Err(e) = self.child.try_wait() {
+                    tracing::debug!(agent = %self.name, error = %e, "Failed to reap zombie process on drop");
+                }
             }
             Err(e) => {
                 tracing::warn!(agent = %self.name, "Failed to check child status on drop: {e}");
@@ -401,12 +403,16 @@ impl AgentProcessManager {
             if let Some(handle) = agents.get_mut(&timeout_name) {
                 if handle.status == AgentProcessStatus::Starting {
                     tracing::warn!(agent = %timeout_name, "Startup timeout exceeded, killing agent");
-                    let _ = handle.child.start_kill();
+                    if let Err(e) = handle.child.start_kill() {
+                        tracing::debug!(agent = %timeout_name, error = %e, "Failed to kill agent process during startup timeout");
+                    }
                     handle.status = AgentProcessStatus::Crashed;
-                    let _ = timeout_event_tx.send(AgentEvent::ProcessExited {
-                        agent_name: timeout_name,
+                    if let Err(e) = timeout_event_tx.send(AgentEvent::ProcessExited {
+                        agent_name: timeout_name.clone(),
                         exit_code: None,
-                    }).await;
+                    }).await {
+                        tracing::debug!(agent = %timeout_name, error = %e, "Failed to send startup timeout event");
+                    }
                 }
             }
         });
@@ -499,7 +505,9 @@ impl AgentProcessManager {
     pub async fn kill_agent(&self, agent_name: &str) -> Result<(), AgentProcessError> {
         let mut agents = self.agents.write().await;
         if let Some(mut handle) = agents.remove(agent_name) {
-            let _ = handle.child.kill().await;
+            if let Err(e) = handle.child.kill().await {
+                tracing::debug!(agent = %agent_name, error = %e, "Failed to kill agent process");
+            }
             tracing::info!(agent = %agent_name, "Killed agent process");
             Ok(())
         } else {
@@ -969,7 +977,9 @@ impl AgentProcessManager {
         let mut agents = self.agents.write().await;
         for (name, mut handle) in agents.drain() {
             tracing::info!(agent = %name, "Shutting down agent process");
-            let _ = handle.child.kill().await;
+            if let Err(e) = handle.child.kill().await {
+                tracing::debug!(agent = %name, error = %e, "Failed to kill agent process during shutdown_all");
+            }
         }
     }
 
