@@ -250,7 +250,9 @@ impl FilePersistence {
         })();
 
         // Release lock (unlock on drop)
-        let _ = FileExt::unlock(&lock_file);
+        if let Err(e) = FileExt::unlock(&lock_file) {
+            tracing::warn!("Failed to unlock file: {e}");
+        }
 
         result
     }
@@ -279,7 +281,9 @@ impl FilePersistence {
             .and_then(|json| serde_json::from_str::<TaskFile>(&json)
                 .map_err(AgentError::Serialization));
 
-        let _ = FileExt::unlock(&lock_file);
+        if let Err(e) = FileExt::unlock(&lock_file) {
+            tracing::warn!("Failed to unlock file: {e}");
+        }
         result
     }
 
@@ -338,7 +342,9 @@ impl FilePersistence {
 
             let result = std::fs::remove_file(&task_path)
                 .map_err(AgentError::Io);
-            let _ = FileExt::unlock(&lock_file);
+            if let Err(e) = FileExt::unlock(&lock_file) {
+            tracing::warn!("Failed to unlock file: {e}");
+        }
             let _ = std::fs::remove_file(&lock_path);
             result?;
         }
@@ -385,7 +391,9 @@ impl FilePersistence {
 
         let result = std::fs::write(&path, value.to_string())
             .map_err(AgentError::Io);
-        let _ = FileExt::unlock(&lock_file);
+        if let Err(e) = FileExt::unlock(&lock_file) {
+            tracing::warn!("Failed to unlock file: {e}");
+        }
         result
     }
 
@@ -429,7 +437,9 @@ impl FilePersistence {
         let write_result = std::fs::write(&hw_path, next.to_string())
             .map_err(AgentError::Io);
 
-        let _ = FileExt::unlock(&lock_file);
+        if let Err(e) = FileExt::unlock(&lock_file) {
+            tracing::warn!("Failed to unlock file: {e}");
+        }
         write_result?;
         Ok(next)
     }
@@ -480,7 +490,9 @@ impl FilePersistence {
             Ok(())
         })();
 
-        let _ = FileExt::unlock(&lock_file);
+        if let Err(e) = FileExt::unlock(&lock_file) {
+            tracing::warn!("Failed to unlock file: {e}");
+        }
         result
     }
 
@@ -538,7 +550,9 @@ impl FilePersistence {
             Ok(messages)
         })();
 
-        let _ = FileExt::unlock(&lock_file);
+        if let Err(e) = FileExt::unlock(&lock_file) {
+            tracing::warn!("Failed to unlock file: {e}");
+        }
         result
     }
 
@@ -571,7 +585,9 @@ impl FilePersistence {
                 messages.push(msg);
             }
         }
-        let _ = FileExt::unlock(&file);
+        if let Err(e) = FileExt::unlock(&file) {
+            tracing::warn!("Failed to unlock file: {e}");
+        }
 
         Ok(messages)
     }
@@ -653,7 +669,9 @@ impl FilePersistence {
             Ok(task)
         })();
 
-        let _ = FileExt::unlock(&lock_file);
+        if let Err(e) = FileExt::unlock(&lock_file) {
+            tracing::warn!("Failed to unlock file: {e}");
+        }
         result
     }
 

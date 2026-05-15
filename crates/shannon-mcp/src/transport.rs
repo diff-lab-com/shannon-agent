@@ -583,11 +583,14 @@ impl Transport for HttpTransport {
         self.pending_response = None;
         // Send DELETE to terminate session if we have a session ID.
         if self.session_id.is_some() {
-            let _ = self
+            if let Err(e) = self
                 .client
                 .delete(&self.endpoint)
                 .send()
-                .await;
+                .await
+            {
+                tracing::debug!("Failed to clean up MCP HTTP session: {e}");
+            }
             self.session_id = None;
         }
         Ok(())

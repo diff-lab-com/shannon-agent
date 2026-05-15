@@ -506,7 +506,9 @@ async fn handle_ws_socket(mut socket: WebSocket, state: AppState) {
         model: None,
     };
     if let Ok(json) = serde_json::to_string(&greeting) {
-        let _ = socket.send(WsMsg::Text(json)).await;
+        if let Err(e) = socket.send(WsMsg::Text(json)).await {
+            tracing::debug!("WebSocket send failed: {e}");
+        }
     }
 
     loop {
@@ -524,7 +526,9 @@ async fn handle_ws_socket(mut socket: WebSocket, state: AppState) {
                     message: format!("Invalid message: {e}"),
                 };
                 if let Ok(json) = serde_json::to_string(&err) {
-                    let _ = socket.send(WsMsg::Text(json)).await;
+                    if let Err(e) = socket.send(WsMsg::Text(json)).await {
+            tracing::debug!("WebSocket send failed: {e}");
+        }
                 }
                 continue;
             }
@@ -625,7 +629,9 @@ async fn handle_ws_socket(mut socket: WebSocket, state: AppState) {
                     model: s.model.clone(),
                 };
                 if let Ok(json) = serde_json::to_string(&info) {
-                    let _ = socket.send(WsMsg::Text(json)).await;
+                    if let Err(e) = socket.send(WsMsg::Text(json)).await {
+            tracing::debug!("WebSocket send failed: {e}");
+        }
                 }
             }
             WsClientMessage::Info => {
@@ -635,7 +641,9 @@ async fn handle_ws_socket(mut socket: WebSocket, state: AppState) {
                     model: s.model.clone(),
                 };
                 if let Ok(json) = serde_json::to_string(&info) {
-                    let _ = socket.send(WsMsg::Text(json)).await;
+                    if let Err(e) = socket.send(WsMsg::Text(json)).await {
+            tracing::debug!("WebSocket send failed: {e}");
+        }
                 }
             }
             WsClientMessage::Cancel => {
@@ -644,7 +652,9 @@ async fn handle_ws_socket(mut socket: WebSocket, state: AppState) {
                     message: "Cancel not yet supported".to_string(),
                 };
                 if let Ok(json) = serde_json::to_string(&err) {
-                    let _ = socket.send(WsMsg::Text(json)).await;
+                    if let Err(e) = socket.send(WsMsg::Text(json)).await {
+            tracing::debug!("WebSocket send failed: {e}");
+        }
                 }
             }
         }

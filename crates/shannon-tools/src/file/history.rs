@@ -623,7 +623,9 @@ impl FileHistoryManager {
         for (file_path, snapshot_id) in &files_to_delete {
             let snapshot_path =
                 self.file_dir(file_path).join(format!("{snapshot_id}.json"));
-            let _ = std::fs::remove_file(snapshot_path);
+            if let Err(e) = std::fs::remove_file(&snapshot_path) {
+                tracing::debug!("Failed to remove old snapshot: {e}");
+            }
         }
 
         if removed > 0 {

@@ -200,7 +200,7 @@ impl LlmClient {
                     .get("retry-after")
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.parse::<u64>().ok());
-                let _ = response.text().await;
+                let _ = response.text().await; // consume body for connection reuse
                 return Err(ApiError::RateLimitExceeded { retry_after_secs: retry_after });
             }
             let error_text = response.text().await.unwrap_or_default();
@@ -290,7 +290,7 @@ impl LlmClient {
                     .get("retry-after")
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.parse::<u64>().ok());
-                let _ = response.text().await;
+                let _ = response.text().await; // consume body for connection reuse
                 return Err(ApiError::RateLimitExceeded { retry_after_secs: retry_after });
             }
             let error_text = response.text().await.unwrap_or_default();
@@ -371,7 +371,7 @@ impl LlmClient {
                     .get("retry-after")
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.parse::<u64>().ok());
-                let _ = response.text().await;
+                let _ = response.text().await; // consume body for connection reuse
                 return Err(ApiError::RateLimitExceeded { retry_after_secs: retry_after });
             }
             let error_text = response.text().await.unwrap_or_default();
@@ -443,7 +443,7 @@ impl LlmClient {
                     .get("retry-after")
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.parse::<u64>().ok());
-                let _ = response.text().await;
+                let _ = response.text().await; // consume body for connection reuse
                 return Err(ApiError::RateLimitExceeded { retry_after_secs: retry_after });
             }
             let error_text = response.text().await.unwrap_or_default();

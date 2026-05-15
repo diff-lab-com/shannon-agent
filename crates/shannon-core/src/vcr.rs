@@ -257,7 +257,9 @@ impl Vcr {
         if self.index.remove(id).is_some() {
             let file_path = self.recording_path(id);
             if file_path.exists() {
-                let _ = fs::remove_file(file_path);
+                if let Err(e) = fs::remove_file(&file_path) {
+                    tracing::debug!("Failed to delete VCR recording {}: {e}", file_path.display());
+                }
             }
             true
         } else {
