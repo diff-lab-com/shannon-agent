@@ -10,6 +10,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+use std::net::IpAddr;
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -69,6 +70,83 @@ pub struct WebFetchOutput {
     pub next_start_index: Option<usize>,
 }
 
+/// Validate a URL before fetching to prevent SSRF attacks.
+///
+/// Blocks:
+/// - Non-HTTP(S) schemes (`file://`, `ftp://`, etc.)
+/// - Private/internal IP addresses (10.x, 172.16-31.x, 192.168.x, 127.x)
+/// - Link-local addresses (169.254.x.x)
+/// - Loopback addresses
+/// - Cloud metadata endpoints (169.254.169.254)
+/// - Hostname-only URLs without a TLD that resolve to loopback
+fn validate_fetch_url(url_str: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let parsed = reqwest::Url::parse(url_str)
+        .map_err(|e| format!("Invalid URL: {e}"))?;
+
+    // Only allow http and https schemes
+    match parsed.scheme() {
+        "http" | "https" => {}
+        other => return Err(format!("Blocked: URL scheme '{other}' is not allowed (only http/https)").into()),
+    }
+
+    // Check host
+    let host = parsed.host_str()
+        .ok_or_else(|| "Blocked: URL has no host".to_string())?;
+
+    // Block empty host (e.g., "http:///path")
+    if host.is_empty() {
+        return Err("Blocked: URL has no host".into());
+    }
+
+    // Block known cloud metadata endpoint
+    if host == "169.254.169.254" || host == "metadata.google.internal" {
+        return Err("Blocked: cloud metadata endpoint".into());
+    }
+
+    // Try to parse as IP address and check for private/reserved ranges
+    // Also handle IPv6 bracket notation from URL host
+    let ip_check_str = host.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ip) = ip_check_str.parse::<IpAddr>() {
+        match ip {
+            IpAddr::V4(v4) => {
+                if v4.is_loopback() {
+                    return Err("Blocked: loopback address".into());
+                }
+                if v4.is_private() {
+                    return Err("Blocked: private IP address".into());
+                }
+                if v4.is_link_local() {
+                    return Err("Blocked: link-local address".into());
+                }
+                // is_unspecified catches 0.0.0.0
+                if v4.is_unspecified() {
+                    return Err("Blocked: unspecified address (0.0.0.0)".into());
+                }
+                // Check for broadcast (255.255.255.255)
+                if v4.is_broadcast() {
+                    return Err("Blocked: broadcast address".into());
+                }
+            }
+            IpAddr::V6(v6) => {
+                if v6.is_loopback() {
+                    return Err("Blocked: IPv6 loopback address".into());
+                }
+                if v6.is_unspecified() {
+                    return Err("Blocked: IPv6 unspecified address".into());
+                }
+            }
+        }
+    }
+
+    // Block obvious localhost-like hostnames
+    let host_lower = host.to_lowercase();
+    if host_lower == "localhost" || host_lower.ends_with(".localhost") || host_lower == "localtest.me" {
+        return Err(format!("Blocked: localhost-like hostname '{host}'").into());
+    }
+
+    Ok(())
+}
+
 /// WebFetch tool implementation
 pub struct WebFetchTool {
     description: String,
@@ -103,6 +181,7 @@ impl WebFetchTool {
         start_index: usize,
         raw: bool,
     ) -> Result<WebFetchOutput, Box<dyn std::error::Error + Send + Sync>> {
+        validate_fetch_url(url)?;
         let response = self.client.get(url).send().await?;
 
         if !response.status().is_success() {
@@ -723,6 +802,108 @@ fn collapse_whitespace(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- URL validation (SSRF prevention) tests --------------------------
+
+    #[test]
+    fn test_validate_allows_https() {
+        assert!(validate_fetch_url("https://example.com/page").is_ok());
+    }
+
+    #[test]
+    fn test_validate_allows_http() {
+        assert!(validate_fetch_url("http://example.com/page").is_ok());
+    }
+
+    #[test]
+    fn test_validate_blocks_file_scheme() {
+        let err = validate_fetch_url("file:///etc/passwd").unwrap_err();
+        assert!(err.to_string().contains("not allowed"));
+    }
+
+    #[test]
+    fn test_validate_blocks_ftp_scheme() {
+        let err = validate_fetch_url("ftp://example.com/file").unwrap_err();
+        assert!(err.to_string().contains("not allowed"));
+    }
+
+    #[test]
+    fn test_validate_blocks_javascript_scheme() {
+        let err = validate_fetch_url("javascript:alert(1)").unwrap_err();
+        assert!(err.to_string().contains("not allowed"));
+    }
+
+    #[test]
+    fn test_validate_blocks_localhost() {
+        let err = validate_fetch_url("http://localhost:8080/admin").unwrap_err();
+        assert!(err.to_string().contains("localhost"));
+    }
+
+    #[test]
+    fn test_validate_blocks_127_0_0_1() {
+        let err = validate_fetch_url("http://127.0.0.1:8080/").unwrap_err();
+        assert!(err.to_string().contains("loopback"));
+    }
+
+    #[test]
+    fn test_validate_blocks_10_private() {
+        let err = validate_fetch_url("http://10.0.0.1/").unwrap_err();
+        assert!(err.to_string().contains("private"));
+    }
+
+    #[test]
+    fn test_validate_blocks_172_16_private() {
+        let err = validate_fetch_url("http://172.16.0.1/").unwrap_err();
+        assert!(err.to_string().contains("private"));
+    }
+
+    #[test]
+    fn test_validate_blocks_192_168_private() {
+        let err = validate_fetch_url("http://192.168.1.1/").unwrap_err();
+        assert!(err.to_string().contains("private"));
+    }
+
+    #[test]
+    fn test_validate_blocks_cloud_metadata() {
+        let err = validate_fetch_url("http://169.254.169.254/latest/meta-data/").unwrap_err();
+        assert!(err.to_string().contains("metadata"));
+    }
+
+    #[test]
+    fn test_validate_blocks_zero_ip() {
+        let err = validate_fetch_url("http://0.0.0.0/").unwrap_err();
+        assert!(err.to_string().contains("unspecified"));
+    }
+
+    #[test]
+    fn test_validate_blocks_link_local() {
+        let err = validate_fetch_url("http://169.254.1.1/").unwrap_err();
+        assert!(err.to_string().contains("link-local"));
+    }
+
+    #[test]
+    fn test_validate_blocks_ipv6_loopback() {
+        let err = validate_fetch_url("http://[::1]:8080/").unwrap_err();
+        assert!(err.to_string().contains("loopback"));
+    }
+
+    #[test]
+    fn test_validate_allows_public_ip() {
+        assert!(validate_fetch_url("http://93.184.216.34/").is_ok());
+    }
+
+    #[test]
+    fn test_validate_blocks_no_host() {
+        // Empty string is not a valid URL
+        let err = validate_fetch_url("").unwrap_err();
+        assert!(err.to_string().contains("Invalid") || err.to_string().contains("no host"));
+    }
+
+    #[test]
+    fn test_validate_blocks_invalid_url() {
+        let err = validate_fetch_url("not a url at all").unwrap_err();
+        assert!(err.to_string().contains("Invalid"));
+    }
 
     // ---- HTML stripping tests ---------------------------------------------
 
