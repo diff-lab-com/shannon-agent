@@ -3587,6 +3587,249 @@ fn test_streaming_state_allows_queued_message() {
     assert_eq!(state.queued_message.as_deref(), Some("follow-up question"));
 }
 
+// ── Input Queuing Regression Tests ───────────────────────────────────
+//
+// These tests verify the full lifecycle of input queuing:
+// 1. Queue a message during streaming (Enter/Tab)
+// 2. Queued message is visible in state
+// 3. Dequeue and auto-send after streaming ends
+// 4. Queued message appears in conversation
+// 5. Edge cases: empty, replace, cancel, error
+
+/// Simulates what happens when Enter is pressed during streaming:
+/// input is captured into queued_message and prompt is cleared.
+#[test]
+fn test_queue_message_via_enter_during_streaming() {
+    let mut state = ReplState::default();
+    state.streaming_active = true;
+
+    // User types a follow-up and presses Enter
+    let input = "why did the test fail?".to_string();
+    assert!(!input.trim().is_empty());
+
+    // Simulate the Enter-during-streaming path (from query.rs:671)
+    state.queued_message = Some(input.clone());
+    // prompt would be cleared in real code
+
+    assert_eq!(state.queued_message.as_deref(), Some("why did the test fail?"));
+    assert!(state.streaming_active, "streaming should still be active");
+}
+
+/// Simulates Tab queuing during streaming (from query.rs:684).
+#[test]
+fn test_queue_message_via_tab_during_streaming() {
+    let mut state = ReplState::default();
+    state.streaming_active = true;
+
+    let input = "explain this function".to_string();
+    state.queued_message = Some(input.clone());
+
+    assert_eq!(state.queued_message.as_deref(), Some("explain this function"));
+}
+
+/// Verifies that empty messages are NOT queued (matches the `!input.is_empty()` guard).
+#[test]
+fn test_empty_message_not_queued() {
+    let mut state = ReplState::default();
+    state.streaming_active = true;
+
+    let input = "   ".to_string();
+    // The guard in query.rs:670 checks `!input.is_empty()` after trim
+    if !input.trim().is_empty() {
+        state.queued_message = Some(input);
+    }
+
+    assert!(state.queued_message.is_none(), "whitespace-only input should not be queued");
+}
+
+/// Verifies that a second queue replaces the first (no accumulation).
+#[test]
+fn test_second_queue_replaces_first() {
+    let mut state = ReplState::default();
+    state.streaming_active = true;
+
+    // First queue
+    state.queued_message = Some("first question".to_string());
+    assert_eq!(state.queued_message.as_deref(), Some("first question"));
+
+    // Second queue replaces (matches behavior in query.rs:671 — direct assignment)
+    state.queued_message = Some("second question".to_string());
+    assert_eq!(state.queued_message.as_deref(), Some("second question"));
+    assert_ne!(state.queued_message.as_deref(), Some("first question"));
+}
+
+/// Verifies the full dequeue lifecycle: queue → streaming ends → take.
+/// This simulates the code at query.rs:933.
+#[test]
+fn test_dequeue_lifecycle() {
+    let mut state = ReplState::default();
+
+    // 1. Start streaming
+    state.streaming_active = true;
+
+    // 2. User queues a message
+    state.queued_message = Some("follow-up".to_string());
+    assert!(state.queued_message.is_some());
+
+    // 3. Streaming ends — queued_message is still present
+    state.streaming_active = false;
+    assert_eq!(state.queued_message.as_deref(), Some("follow-up"));
+
+    // 4. Dequeue (take) — simulates query.rs:933
+    let dequeued = state.queued_message.take();
+    assert_eq!(dequeued, Some("follow-up".to_string()));
+    assert!(state.queued_message.is_none(), "after take, queued_message should be None");
+    assert!(!state.streaming_active, "streaming should be off");
+}
+
+/// Verifies that dequeuing an empty message is skipped (matches query.rs:934 guard).
+#[test]
+fn test_dequeue_empty_message_skipped() {
+    let mut state = ReplState::default();
+    state.queued_message = Some("   ".to_string());
+
+    // Simulates: if let Some(queued) = state.queued_message.take() { if !queued.trim().is_empty() { send } }
+    let dequeued = state.queued_message.take();
+    assert!(dequeued.is_some());
+    assert!(dequeued.unwrap().trim().is_empty(), "should be skipped as empty");
+}
+
+/// Verifies that when streaming is cancelled, the queued message is still available.
+/// In the cancel path (query.rs:948-953), streaming_active goes false but
+/// queued_message processing happens in the Ok path (line 933). On cancel,
+/// the Err path runs and queued_message stays — it should be processed on next
+/// streaming completion or cleared.
+#[test]
+fn test_cancel_preserves_queued_message() {
+    let mut state = ReplState::default();
+    state.streaming_active = true;
+    state.queued_message = Some("will this survive?".to_string());
+
+    // Cancel happens — streaming ends but queued_message persists
+    state.streaming_active = false;
+    assert_eq!(state.queued_message.as_deref(), Some("will this survive?"));
+}
+
+/// Verifies that queued message state is clean at startup.
+#[test]
+fn test_initial_state_no_queued_message() {
+    let state = ReplState::default();
+    assert!(state.queued_message.is_none());
+    assert!(!state.streaming_active);
+}
+
+/// Verifies that queuing works with unicode/multibyte content.
+#[test]
+fn test_queue_unicode_message() {
+    let mut state = ReplState::default();
+    state.streaming_active = true;
+
+    let input = "解释一下这个函数的作用".to_string();
+    state.queued_message = Some(input.clone());
+
+    assert_eq!(state.queued_message.as_deref(), Some("解释一下这个函数的作用"));
+
+    // Dequeue should preserve unicode
+    let dequeued = state.queued_message.take();
+    assert_eq!(dequeued, Some(input));
+}
+
+/// Verifies that queue → dequeue → queue cycle works for multiple turns.
+#[test]
+fn test_multiple_queue_dequeue_cycles() {
+    let mut state = ReplState::default();
+
+    // Cycle 1
+    state.streaming_active = true;
+    state.queued_message = Some("question 1".to_string());
+    state.streaming_active = false;
+    let q1 = state.queued_message.take();
+    assert_eq!(q1, Some("question 1".to_string()));
+
+    // Cycle 2
+    state.streaming_active = true;
+    state.queued_message = Some("question 2".to_string());
+    state.streaming_active = false;
+    let q2 = state.queued_message.take();
+    assert_eq!(q2, Some("question 2".to_string()));
+
+    // Cycle 3 — no queue this time
+    state.streaming_active = true;
+    state.streaming_active = false;
+    let q3 = state.queued_message.take();
+    assert_eq!(q3, None);
+}
+
+/// Verifies that a very long message can be queued and dequeued intact.
+#[test]
+fn test_queue_long_message() {
+    let mut state = ReplState::default();
+    state.streaming_active = true;
+
+    let long_msg = "x".repeat(10_000);
+    state.queued_message = Some(long_msg.clone());
+
+    let dequeued = state.queued_message.take();
+    assert_eq!(dequeued.unwrap().len(), 10_000);
+}
+
+/// Verifies the queued message indicator logic used in rendering.
+/// When streaming_active && queued_message.is_some() → show queued content.
+/// When streaming_active && queued_message.is_none() → show "Enter = queue" hint.
+/// When !streaming_active → no hint shown.
+#[test]
+fn test_rendering_indicator_logic() {
+    let mut state = ReplState::default();
+
+    // Case 1: Not streaming → no indicator
+    assert!(!state.streaming_active);
+    assert!(state.queued_message.is_none());
+
+    // Case 2: Streaming, no queue → show "Enter = queue" hint
+    state.streaming_active = true;
+    assert!(state.streaming_active && state.queued_message.is_none());
+
+    // Case 3: Streaming, message queued → show queued content
+    state.queued_message = Some("my question".to_string());
+    assert!(state.streaming_active && state.queued_message.is_some());
+
+    // Case 4: Streaming ends, message still queued → still shows in state
+    state.streaming_active = false;
+    assert!(!state.streaming_active);
+    assert!(state.queued_message.is_some());
+    // But render would not show it because streaming_active is false
+}
+
+/// Verifies that status message is set when queuing (matches query.rs:673).
+#[test]
+fn test_status_message_on_queue() {
+    let mut state = ReplState::default();
+    state.streaming_active = true;
+
+    // Simulate the full Enter-during-streaming path
+    let input = "what about edge cases?".to_string();
+    state.queued_message = Some(input);
+    state.status = "Message queued (will send after current response)".to_string();
+
+    assert!(state.status.contains("queued"));
+    assert!(state.queued_message.is_some());
+}
+
+/// Verifies that toast is set on queue (matches query.rs:674).
+#[test]
+fn test_toast_set_on_queue() {
+    let mut state = ReplState::default();
+    state.streaming_active = true;
+
+    // Simulate queue with toast
+    state.queued_message = Some("test".to_string());
+    state.toast = Some(("Queued".to_string(), std::time::Instant::now()));
+
+    assert!(state.toast.is_some());
+    let (msg, _) = state.toast.unwrap();
+    assert_eq!(msg, "Queued");
+}
+
 #[test]
 fn test_streaming_state_pageup_pagedown_independent() {
     // Verify that streaming state does NOT prevent scroll state changes

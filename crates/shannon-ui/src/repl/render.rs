@@ -252,22 +252,48 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             }
         }
 
-        // Streaming queue hint — show "Enter=queue" near the prompt when streaming
+        // Streaming queue indicator near the prompt
         // Offset down by 1 when toast is visible to avoid overlap
-        if state.streaming_active && state.queued_message.is_none() {
-            let hint = " ↑↓ scroll · Enter = queue after response · Esc = stop ";
-            let hint_width = unicode_width::UnicodeWidthStr::width(hint) as u16;
-            let x = f.area().x + 2;
-            let y_offset = if toast_visible { 4 } else { 5 };
-            let y = f.area().bottom().saturating_sub(y_offset);
-            let w = hint_width.min(f.area().width.saturating_sub(4));
-            let hint_area = ratatui::layout::Rect { x, y, width: w, height: 1 };
-            let hint_text: String = hint.chars().take(w as usize).collect();
-            let hint_paragraph = Paragraph::new(hint_text)
-                .style(ratatui::style::Style::default()
-                    .fg(state.theme.muted)
-                    .bg(state.theme.context_bar_bg));
-            f.render_widget(hint_paragraph, hint_area);
+        let y_offset = if toast_visible { 4 } else { 5 };
+        let y = f.area().bottom().saturating_sub(y_offset);
+        if state.streaming_active {
+            if let Some(queued) = &state.queued_message {
+                // Show the queued message content so the user can see what will be sent
+                let max_preview = (f.area().width.saturating_sub(6)) as usize;
+                let preview = if queued.len() > max_preview {
+                    let mut cut = max_preview.saturating_sub(12);
+                    while cut > 0 && !queued.is_char_boundary(cut) { cut -= 1; }
+                    format!(" ⏳ Queued: {}…", &queued[..cut])
+                } else {
+                    format!(" ⏳ Queued: {queued}")
+                };
+                let w = unicode_width::UnicodeWidthStr::width(preview.as_str()) as u16;
+                let avail = f.area().width.saturating_sub(4);
+                let hint_area = ratatui::layout::Rect {
+                    x: f.area().x + 2,
+                    y,
+                    width: w.min(avail),
+                    height: 1,
+                };
+                let hint_text: String = preview.chars().take(avail as usize).collect();
+                let hint_paragraph = Paragraph::new(hint_text)
+                    .style(ratatui::style::Style::default()
+                        .fg(state.theme.accent)
+                        .bg(state.theme.context_bar_bg));
+                f.render_widget(hint_paragraph, hint_area);
+            } else {
+                let hint = " ↑↓ scroll · Enter = queue after response · Esc = stop ";
+                let hint_width = unicode_width::UnicodeWidthStr::width(hint) as u16;
+                let x = f.area().x + 2;
+                let w = hint_width.min(f.area().width.saturating_sub(4));
+                let hint_area = ratatui::layout::Rect { x, y, width: w, height: 1 };
+                let hint_text: String = hint.chars().take(w as usize).collect();
+                let hint_paragraph = Paragraph::new(hint_text)
+                    .style(ratatui::style::Style::default()
+                        .fg(state.theme.muted)
+                        .bg(state.theme.context_bar_bg));
+                f.render_widget(hint_paragraph, hint_area);
+            }
         }
 
         // "Scroll to bottom" indicator when user scrolled up away from latest content
@@ -342,7 +368,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         // Offset up when toast or streaming hint is also visible to avoid overlap
         if !state.attachment_bar.is_empty() {
             let bar_height = 1u16;
-            let y_offset = if toast_visible || (state.streaming_active && state.queued_message.is_none()) {
+            let y_offset = if toast_visible || state.streaming_active {
                 6
             } else {
                 5
