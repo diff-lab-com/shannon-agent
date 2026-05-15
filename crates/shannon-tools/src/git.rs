@@ -33,6 +33,15 @@ fn validate_git_arg(arg: &str) -> Result<&str, ToolError> {
             "Argument must not contain null bytes".to_string(),
         ));
     }
+    if arg.contains("../") || arg.contains("..\\") {
+        return Err(ToolError::InvalidInput("Path traversal not allowed".to_string()));
+    }
+    if arg.contains(|c: char| matches!(c, ';' | '&' | '|' | '$' | '`' | '(' | ')' | '{' | '}')) {
+        return Err(ToolError::InvalidInput("Shell metacharacters not allowed".to_string()));
+    }
+    if arg.len() > 256 {
+        return Err(ToolError::InvalidInput("Argument too long (max 256 chars)".to_string()));
+    }
     Ok(arg)
 }
 

@@ -1671,7 +1671,10 @@ fn run_team_agent_mode(
         let ready_params = serde_json::to_value(shannon_agents::AgentReadyParams {
             agent_name: name.to_string(),
             capabilities: vec!["general".to_string()],
-        }).unwrap();
+        }).unwrap_or_else(|e| {
+            tracing::error!("JSON serialization error: {e}");
+            serde_json::Value::Null
+        });
         agent_notify("agent_ready", ready_params).await;
 
         // ── JSON-RPC main loop ──
@@ -1712,7 +1715,10 @@ fn run_team_agent_mode(
                                     shannon_agents::TaskProgressParams {
                                         task_id: task_params.task_id.clone(),
                                         chunk: format!("Starting: {}", task_params.subject),
-                                    }).unwrap();
+                                    }).unwrap_or_else(|e| {
+                                        tracing::error!("JSON serialization error: {e}");
+                                        serde_json::Value::Null
+                                    });
                                 agent_notify("task_progress", progress).await;
 
                                 // Build query from task
@@ -1749,7 +1755,10 @@ fn run_team_agent_mode(
                                                 shannon_agents::TaskProgressParams {
                                                     task_id: task_params.task_id.clone(),
                                                     chunk: content,
-                                                }).unwrap();
+                                                }).unwrap_or_else(|e| {
+                                                    tracing::error!("JSON serialization error: {e}");
+                                                    serde_json::Value::Null
+                                                });
                                             agent_notify("task_progress", chunk).await;
                                         }
                                         Ok(QueryEvent::ToolUseRequest { tool_name, .. }) => {
@@ -1774,7 +1783,10 @@ fn run_team_agent_mode(
                                         task_id: task_params.task_id.clone(),
                                         success,
                                         output,
-                                    }).unwrap();
+                                    }).unwrap_or_else(|e| {
+                                        tracing::error!("JSON serialization error: {e}");
+                                        serde_json::Value::Null
+                                    });
                                 agent_notify("task_complete", complete).await;
 
                                 // Report idle
@@ -1782,7 +1794,10 @@ fn run_team_agent_mode(
                                     shannon_agents::AgentIdleParams {
                                         agent_name: name.to_string(),
                                         available_tasks_count: 0,
-                                    }).unwrap();
+                                    }).unwrap_or_else(|e| {
+                                        tracing::error!("JSON serialization error: {e}");
+                                        serde_json::Value::Null
+                                    });
                                 agent_notify("agent_idle", idle).await;
                             }
                             Err(e) => {

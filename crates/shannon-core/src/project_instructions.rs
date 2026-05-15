@@ -1,9 +1,17 @@
-//! Auto-loading project instructions from CLAUDE.md / AGENTS.md files.
+//! Auto-loading project instructions from CLAUDE.md / AGENTS.md and cross-tool files.
 
 use std::path::{Path, PathBuf};
 
 /// Default filenames to search for, in priority order.
-const INSTRUCTION_FILES: &[&str] = &["CLAUDE.md", "AGENTS.md", "GEMINI.md"];
+/// Includes cross-tool compatibility with Cursor, Windsurf, and Crush.
+const INSTRUCTION_FILES: &[&str] = &[
+    "CLAUDE.md",
+    "AGENTS.md",
+    "GEMINI.md",
+    ".cursorrules",
+    ".windsurfrules",
+    "CRUSH.md",
+];
 
 /// Default maximum recursion depth for @import resolution.
 const DEFAULT_MAX_IMPORT_DEPTH: usize = 5;

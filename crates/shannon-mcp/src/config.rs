@@ -60,6 +60,15 @@ impl HeaderSource {
     /// Validate a command-based header for dangerous patterns.
     /// Returns a warning message if suspicious patterns are found, None otherwise.
     pub fn validate_command(command: &str) -> Option<&'static str> {
+        // Block shell chaining/metacharacters that could chain commands
+        let dangerous_chars = [';', '&', '|', '`', '$', '(', ')', '{', '}', '<', '>', '\n', '\r'];
+        if command.contains(|c: char| dangerous_chars.contains(&c)) {
+            return Some("shell metacharacters in command");
+        }
+        // Block path traversal
+        if command.contains("..") {
+            return Some("path traversal in command");
+        }
         let lower = command.to_lowercase();
         let dangerous = [
             ("rm -rf", "destructive file removal"),

@@ -105,7 +105,9 @@ impl TaskBoard {
 
         tasks.insert(task.id, task);
 
-        let _ = self.event_sender.send(TaskBoardEvent::TaskAdded { task_id });
+        if let Err(e) = self.event_sender.send(TaskBoardEvent::TaskAdded { task_id }) {
+            tracing::debug!("Failed to send TaskAdded event: {e}");
+        }
 
         tracing::debug!(task_id = %task_id, subject = %subject, "Task added to board");
 
@@ -226,10 +228,12 @@ impl TaskBoard {
 
         self.assignments.write().await.insert(task_id, assignment);
 
-        let _ = self.event_sender.send(TaskBoardEvent::TaskAssigned {
+        if let Err(e) = self.event_sender.send(TaskBoardEvent::TaskAssigned {
             task_id,
             agent: agent_name.clone(),
-        });
+        }) {
+            tracing::debug!("Failed to send TaskAssigned event: {e}");
+        }
 
         tracing::debug!(task_id = %task_id, agent = %agent_name, "Task assigned");
 
@@ -248,10 +252,12 @@ impl TaskBoard {
         task.status = status.clone();
         task.updated_at = chrono::Utc::now();
 
-        let _ = self.event_sender.send(TaskBoardEvent::TaskStatusChanged {
+        if let Err(e) = self.event_sender.send(TaskBoardEvent::TaskStatusChanged {
             task_id,
             status,
-        });
+        }) {
+            tracing::debug!("Failed to send TaskStatusChanged event: {e}");
+        }
 
         tracing::debug!(task_id = %task_id, status = %status_display, "Task status updated");
 
@@ -267,10 +273,12 @@ impl TaskBoard {
         self.update_task_status(task_id, TaskStatus::Completed).await?;
 
         if let Some(agent) = agent {
-            let _ = self.event_sender.send(TaskBoardEvent::TaskCompleted {
+            if let Err(e) = self.event_sender.send(TaskBoardEvent::TaskCompleted {
                 task_id,
                 agent,
-            });
+            }) {
+                tracing::debug!("Failed to send TaskCompleted event: {e}");
+            }
         }
 
         Ok(())
@@ -285,10 +293,12 @@ impl TaskBoard {
 
         task.mark_failed(reason.clone());
 
-        let _ = self.event_sender.send(TaskBoardEvent::TaskFailed {
+        if let Err(e) = self.event_sender.send(TaskBoardEvent::TaskFailed {
             task_id,
             reason,
-        });
+        }) {
+            tracing::debug!("Failed to send TaskFailed event: {e}");
+        }
 
         Ok(())
     }
@@ -328,10 +338,12 @@ impl TaskBoard {
             dep_task.blocks.push(task_id);
         }
 
-        let _ = self.event_sender.send(TaskBoardEvent::DependencyAdded {
+        if let Err(e) = self.event_sender.send(TaskBoardEvent::DependencyAdded {
             task_id,
             depends_on,
-        });
+        }) {
+            tracing::debug!("Failed to send DependencyAdded event: {e}");
+        }
 
         tracing::debug!(
             task_id = %task_id,
@@ -475,7 +487,9 @@ impl TaskBoard {
             reverse_deps.remove(&task_id);
         }
 
-        let _ = self.event_sender.send(TaskBoardEvent::TaskRemoved { task_id });
+        if let Err(e) = self.event_sender.send(TaskBoardEvent::TaskRemoved { task_id }) {
+            tracing::debug!("Failed to send TaskRemoved event: {e}");
+        }
 
         tracing::debug!(task_id = %task_id, "Task removed from board");
 

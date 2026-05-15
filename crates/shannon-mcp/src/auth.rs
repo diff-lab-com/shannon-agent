@@ -220,7 +220,10 @@ impl OAuth2Provider {
             params.insert("client_secret", secret);
         }
 
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .map_err(|e| AuthError::OAuth(format!("Failed to create HTTP client: {e}")))?;
         let response = client
             .post(&self.token_url)
             .form(&params)
@@ -286,7 +289,10 @@ impl OAuth2Provider {
             params.insert("client_secret", secret);
         }
 
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .map_err(|e| AuthError::OAuth(format!("Failed to create HTTP client: {e}")))?;
         let response = client
             .post(&self.token_url)
             .form(&params)

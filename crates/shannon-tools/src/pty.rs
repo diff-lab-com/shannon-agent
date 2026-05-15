@@ -10,6 +10,26 @@ use shannon_core::sandbox::audit_shell_command;
 use shannon_types::recover_lock;
 use std::io::Read;
 
+/// Check if a command matches obviously destructive patterns that should
+/// never be executed, even with user confirmation.
+fn is_destructive_command(cmd: &str) -> bool {
+    let lower = cmd.to_ascii_lowercase();
+    let destructive = [
+        "rm -rf /",
+        "rm -rf /*",
+        "rm -rf ~",
+        "rm -rf *",
+        "mkfs.",
+        "dd if=",
+        ":(){ :|:& };:",
+        "> /dev/sd",
+        "chmod -R 777 /",
+        "chown -R",
+        "shred /",
+    ];
+    destructive.iter().any(|p| lower.contains(p))
+}
+
 /// Result of a PTY command execution.
 #[derive(Debug, Clone)]
 pub struct PtyOutput {
@@ -27,6 +47,10 @@ pub fn execute_in_pty(
     env: Option<&std::collections::HashMap<String, String>>,
     timeout_ms: Option<u64>,
 ) -> Result<PtyOutput, String> {
+    if is_destructive_command(command) {
+        return Err("Command blocked: potentially destructive operation detected".to_string());
+    }
+
     audit_shell_command(command);
 
     let pty_system = native_pty_system();

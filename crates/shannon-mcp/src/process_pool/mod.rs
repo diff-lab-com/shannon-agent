@@ -389,7 +389,13 @@ impl McpProcessPool {
         let handle = Arc::new(RemoteMcpServerHandle {
             name: name.to_string(),
             url: url.to_string(),
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|e| {
+                    tracing::error!("Failed to create HTTP client: {e}");
+                    reqwest::Client::new()
+                }),
             headers: resolved_headers,
             auth_provider,
             header_commands,
@@ -480,7 +486,13 @@ impl McpProcessPool {
         let handle = Arc::new(RemoteMcpServerHandle {
             name: name.to_string(),
             url: url.to_string(),
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|e| {
+                    tracing::error!("Failed to create HTTP client: {e}");
+                    reqwest::Client::new()
+                }),
             headers: resolved_headers,
             auth_provider,
             header_commands: HashMap::new(),

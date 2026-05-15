@@ -87,6 +87,7 @@ impl WebFetchTool {
             description: "Fetches a URL from the internet and optionally extracts its contents".to_string(),
             client: Client::builder()
                 .user_agent("ShannonCode/1.0")
+                .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .unwrap_or_else(|e| {
                     tracing::error!("Failed to create HTTP client: {e}");
@@ -359,6 +360,7 @@ impl WebSearchTool {
             description: "Search the web for information using a real search API".to_string(),
             client: Client::builder()
                 .user_agent("ShannonCode/1.0")
+                .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .unwrap_or_else(|e| {
                     tracing::error!("Failed to create HTTP client: {e}");
@@ -375,6 +377,7 @@ impl WebSearchTool {
             description: "Search the web for information using a real search API".to_string(),
             client: Client::builder()
                 .user_agent("ShannonCode/1.0")
+                .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .unwrap_or_else(|e| panic!("Failed to create HTTP client: {e}")),
             api_key: Some(key),
@@ -388,6 +391,7 @@ impl WebSearchTool {
             description: "Search the web for information using a real search API".to_string(),
             client: Client::builder()
                 .user_agent("ShannonCode/1.0")
+                .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .unwrap_or_else(|e| panic!("Failed to create HTTP client: {e}")),
             api_key: None,
