@@ -1466,11 +1466,23 @@ fn handle_fuzzy_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
 
             if let Some(value) = selected {
                 if is_file_pick {
-                    // Insert selected file path into prompt
-                    let current = repl.prompt.input().to_string();
-                    // Remove the trailing @ that triggered the picker
-                    let trimmed = current.trim_end_matches('@');
-                    repl.prompt.set_input(format!("{trimmed}@{value} "));
+                    // Extract file content and inject it
+                    let processed = super::at_reference::extract_file_content(&value);
+                    if processed.is_error {
+                        // Fallback: just insert the path
+                        let current = repl.prompt.input().to_string();
+                        let trimmed = current.trim_end_matches('@');
+                        repl.prompt.set_input(format!("{trimmed}@{value} "));
+                        repl.chat.add_message(
+                            ChatRole::System,
+                            processed.status_message.unwrap_or_default(),
+                        );
+                    } else {
+                        repl.prompt.set_input(processed.injected_text);
+                        if let Some(msg) = processed.status_message {
+                            repl.chat.add_message(ChatRole::System, msg);
+                        }
+                    }
                 } else if is_session_pick {
                     // Resume selected session
                     super::commands::handle_command(repl, &format!("/resume {value}"))?;
@@ -1569,11 +1581,19 @@ fn handle_file_selector_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                         }
                     }
                     super::at_reference::AtReferenceKind::File => {
-                        repl.prompt.set_input(path);
-                        repl.chat.add_message(
-                            ChatRole::System,
-                            "File selected — press Enter to send as query, or edit the path.".to_string(),
-                        );
+                        let processed = super::at_reference::extract_file_content(&path);
+                        if processed.is_error {
+                            repl.prompt.set_input(path);
+                            repl.chat.add_message(
+                                ChatRole::System,
+                                processed.status_message.unwrap_or_default(),
+                            );
+                        } else {
+                            repl.prompt.set_input(processed.injected_text);
+                            if let Some(msg) = processed.status_message {
+                                repl.chat.add_message(ChatRole::System, msg);
+                            }
+                        }
                     }
                 }
             }

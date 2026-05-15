@@ -4,12 +4,15 @@
 //! - **PDF files**: text is extracted via `pdftotext` and injected as a code block.
 //! - **URLs** (`@https://...` / `@http://...`): content is fetched and converted to text.
 //! - **Directories**: a tree listing is generated with configurable depth.
-//! - **Regular files**: path is inserted as before (no extra processing).
+//! - **Regular files**: content is read and injected as a code block with language detection.
 
 use std::path::Path;
 
 /// Default maximum depth for directory tree listings.
 const DEFAULT_TREE_DEPTH: usize = 3;
+
+/// Maximum file content to inject (50 KiB, same as PDF limit).
+const FILE_CONTENT_LIMIT: usize = 50 * 1024;
 
 /// Directories that are always skipped when generating a tree listing.
 const IGNORED_DIRS: &[&str] = &[
@@ -45,7 +48,7 @@ const IGNORED_DIRS: &[&str] = &[
 /// The kind of @ reference that was selected.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AtReferenceKind {
-    /// A regular file — insert the path as-is.
+    /// A regular file — extract content and inject it as a code block.
     File,
     /// A PDF file — extract text and inject it.
     Pdf,
@@ -537,6 +540,101 @@ fn format_file_size(bytes: u64) -> String {
     }
 }
 
+// ── File content extraction ────────────────────────────────────────────
+
+/// Extract the content of a regular file and format it for injection.
+///
+/// Reads the file, detects language from its extension, truncates if
+/// larger than `FILE_CONTENT_LIMIT`, and returns a fenced code block.
+pub fn extract_file_content(file_path: &str) -> AtReferenceResult {
+    let path = Path::new(file_path);
+
+    if !path.exists() {
+        return AtReferenceResult::error(format!("File not found: {file_path}"));
+    }
+
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            // Binary or non-UTF-8 file — just insert the path
+            return AtReferenceResult::with_status(
+                format!("@{file_path}"),
+                format!(
+                    "Could not read file as text: {e}. Path inserted instead."
+                ),
+            );
+        }
+    };
+
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| file_path.to_string());
+
+    let lang = detect_language(path);
+    let content_len = content.len();
+
+    if content_len > FILE_CONTENT_LIMIT {
+        let mut end = FILE_CONTENT_LIMIT;
+        while !content.is_char_boundary(end) {
+            end -= 1;
+        }
+        let truncated = &content[..end];
+        AtReferenceResult::with_status(
+            format!(
+                "**File: {file_name}**\n```{lang}\n{truncated}\n```\n*[Truncated — showing first {FILE_CONTENT_LIMIT} of {content_len} bytes]*"
+            ),
+            format!("Attached \"{file_name}\" (truncated, {content_len} bytes)"),
+        )
+    } else {
+        AtReferenceResult::with_status(
+            format!("**File: {file_name}**\n```{lang}\n{content}\n```"),
+            format!("Attached \"{file_name}\" ({content_len} bytes)"),
+        )
+    }
+}
+
+/// Detect the language identifier for a fenced code block from the file extension.
+fn detect_language(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "rs" => "rust",
+        "py" => "python",
+        "js" => "javascript",
+        "ts" => "typescript",
+        "tsx" => "tsx",
+        "jsx" => "jsx",
+        "go" => "go",
+        "java" => "java",
+        "rb" => "ruby",
+        "toml" => "toml",
+        "yaml" | "yml" => "yaml",
+        "json" => "json",
+        "md" => "markdown",
+        "html" | "htm" => "html",
+        "css" => "css",
+        "scss" => "scss",
+        "sh" | "bash" => "bash",
+        "zsh" => "zsh",
+        "sql" => "sql",
+        "c" | "h" => "c",
+        "cpp" | "cc" | "cxx" | "hpp" => "cpp",
+        "kt" => "kotlin",
+        "swift" => "swift",
+        "lua" => "lua",
+        "r" => "r",
+        "xml" => "xml",
+        "proto" => "protobuf",
+        "dockerfile" => "dockerfile",
+        _ => "",
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -727,5 +825,48 @@ mod tests {
         assert!(IGNORED_DIRS.contains(&"__pycache__"));
         assert!(IGNORED_DIRS.contains(&"venv"));
         assert!(IGNORED_DIRS.contains(&".venv"));
+    }
+
+    // ── File content extraction tests ──────────────────────────────
+
+    #[test]
+    fn test_extract_file_nonexistent() {
+        let result = extract_file_content("/nonexistent/file.rs");
+        assert!(result.is_error);
+        assert!(result.status_message.unwrap().contains("not found"));
+    }
+
+    #[test]
+    fn test_extract_file_actual() {
+        // Use Cargo.toml which always exists in the project
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        let path = format!("{manifest_dir}/Cargo.toml");
+        let result = extract_file_content(&path);
+        assert!(!result.is_error, "Expected success, got error: {:?}", result.status_message);
+        assert!(result.injected_text.contains("```toml"));
+        assert!(result.status_message.is_some());
+    }
+
+    // ── detect_language tests ──────────────────────────────────────
+
+    #[test]
+    fn test_detect_language_rust() {
+        assert_eq!(detect_language(Path::new("main.rs")), "rust");
+    }
+
+    #[test]
+    fn test_detect_language_python() {
+        assert_eq!(detect_language(Path::new("app.py")), "python");
+    }
+
+    #[test]
+    fn test_detect_language_unknown() {
+        assert_eq!(detect_language(Path::new("Makefile")), "");
+    }
+
+    #[test]
+    fn test_detect_language_case_insensitive() {
+        assert_eq!(detect_language(Path::new("app.PY")), "python");
+        assert_eq!(detect_language(Path::new("lib.RS")), "rust");
     }
 }
