@@ -118,6 +118,24 @@ pub async fn execute(input: GlobInput) -> Result<ToolOutput, ToolError> {
     let base_path = input.path.as_deref().unwrap_or(".");
     let base = PathBuf::from(base_path);
 
+    // Prevent path traversal (e.g. "../../etc") by checking components
+    for component in base.components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            // Allow if path resolves within cwd after canonicalization
+            if let Ok(canonical) = std::fs::canonicalize(&base) {
+                let cwd = std::env::current_dir().unwrap_or_default();
+                if !canonical.starts_with(&cwd) {
+                    return Ok(ToolOutput {
+                        content: format!("Path traversal blocked: '{base_path}' resolves outside project"),
+                        is_error: true,
+                        metadata: HashMap::new(),
+                    });
+                }
+            }
+            break;
+        }
+    }
+
     // If the base directory does not exist, return early with empty results.
     if !base.exists() {
         return Ok(ToolOutput {

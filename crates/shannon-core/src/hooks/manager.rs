@@ -353,9 +353,54 @@ impl HookManager {
             HookError::InvalidMatcher("HTTP hook requires a 'url' field".to_string())
         })?;
 
+        // Validate URL to prevent SSRF (same checks as WebFetch tool)
+        {
+            let parsed = reqwest::Url::parse(url)
+                .map_err(|e| HookError::InvalidMatcher(format!("Invalid hook URL: {e}")))?;
+            if parsed.scheme() != "http" && parsed.scheme() != "https" {
+                return Err(HookError::InvalidMatcher(
+                    format!("Blocked: hook URL scheme '{}' not allowed (only http/https)", parsed.scheme()),
+                ));
+            }
+            if let Some(host) = parsed.host_str() {
+                let host_lower = host.to_lowercase();
+                if host_lower == "localhost" || host_lower.ends_with(".localhost") {
+                    return Err(HookError::InvalidMatcher("Blocked: hook URL points to localhost".into()));
+                }
+                let ip_str = host.trim_start_matches('[').trim_end_matches(']');
+                if let Ok(ip) = ip_str.parse::<std::net::IpAddr>() {
+                    match ip {
+                        std::net::IpAddr::V4(v4) => {
+                            if v4.is_loopback() || v4.is_private() || v4.is_link_local()
+                                || v4.is_unspecified() || v4.is_broadcast()
+                            {
+                                return Err(HookError::InvalidMatcher(
+                                    format!("Blocked: hook URL points to non-public IP {ip}"),
+                                ));
+                            }
+                        }
+                        std::net::IpAddr::V6(v6) => {
+                            if v6.is_loopback() || v6.is_unspecified() {
+                                return Err(HookError::InvalidMatcher(
+                                    format!("Blocked: hook URL points to non-public IP {ip}"),
+                                ));
+                            }
+                        }
+                    }
+                }
+                if host == "169.254.169.254" || host == "metadata.google.internal" {
+                    return Err(HookError::InvalidMatcher("Blocked: cloud metadata endpoint".into()));
+                }
+            }
+        }
+
         let timeout = hook_def.timeout_duration();
+        let client = reqwest::Client::builder()
+            .timeout(timeout)
+            .build()
+            .map_err(|e| HookError::InvalidMatcher(format!("Failed to build HTTP client: {e}")))?;
         let result = tokio::time::timeout(timeout, async {
-            let mut builder = reqwest::Client::new().post(url);
+            let mut builder = client.post(url);
             for (key, value) in &hook_def.headers {
                 builder = builder.header(key.as_str(), value.as_str());
             }

@@ -79,11 +79,10 @@ pub fn command() -> Command {
 pub fn run_diff_analysis(args: &str) -> String {
     let options = DiffOptions::from_args(args);
 
-    // Build and run git diff
-    let diff_cmd = build_diff_command(&options);
-    let diff_output = match std::process::Command::new("sh")
-        .arg("-c")
-        .arg(&diff_cmd)
+    // Build and run git diff (using direct command, not sh -c, to avoid injection)
+    let diff_args = build_diff_args(&options);
+    let diff_output = match std::process::Command::new("git")
+        .args(&diff_args)
         .output()
     {
         Ok(output) => String::from_utf8_lossy(&output.stdout).to_string(),
@@ -91,10 +90,10 @@ pub fn run_diff_analysis(args: &str) -> String {
     };
 
     // Run git diff --stat for statistics
-    let stat_cmd = format!("{diff_cmd} --stat");
-    let stat_output = match std::process::Command::new("sh")
-        .arg("-c")
-        .arg(&stat_cmd)
+    let mut stat_args = diff_args.clone();
+    stat_args.push("--stat".to_string());
+    let stat_output = match std::process::Command::new("git")
+        .args(&stat_args)
         .output()
     {
         Ok(output) => String::from_utf8_lossy(&output.stdout).to_string(),
@@ -307,6 +306,45 @@ impl DiffOptions {
         self.stats = true;
         self
     }
+}
+
+/// Build git diff args vector from options (avoids sh -c injection)
+pub fn build_diff_args(options: &DiffOptions) -> Vec<String> {
+    let mut args = vec!["diff".to_string()];
+
+    match options.scope {
+        DiffScope::Staged => args.push("--staged".to_string()),
+        DiffScope::Working => args.push("HEAD".to_string()),
+        DiffScope::Commits => {
+            if let Some(range) = &options.revision_range {
+                args.push(range.clone());
+            }
+        }
+        _ => {}
+    }
+
+    if let Some(lines) = options.context_lines {
+        args.push(format!("-U{lines}"));
+    }
+
+    if options.word_diff {
+        args.push("--word-diff".to_string());
+    }
+
+    if options.ignore_whitespace {
+        args.push("--ignore-all-space".to_string());
+    }
+
+    if options.stats {
+        args.push("--stat".to_string());
+    }
+
+    if let Some(path) = &options.path_filter {
+        args.push("--".to_string());
+        args.push(path.clone());
+    }
+
+    args
 }
 
 /// Build git diff command from options

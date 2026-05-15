@@ -290,10 +290,12 @@ impl Tool for McpToolAdapter {
 
         let program = &parts[0];
 
-        // Validate program name — reject shell metacharacters
-        if program.contains("..") || program.starts_with('/') && program.contains("etc/passwd") {
+        // Validate program name — reject paths and shell metacharacters
+        if program.contains('/') || program.contains("..") || program.contains('\\')
+            || program.contains([';', '&', '|', '$', '`', '(', ')', '{', '}', '<', '>', '\n', '\r'])
+        {
             return Err(ToolError::ExecutionFailed(format!(
-                "MCP server '{}' has invalid program path: {program}",
+                "MCP server '{}' has invalid program path: {program} (must be a simple binary name)",
                 self.server_name
             )));
         }
