@@ -18,6 +18,23 @@ use std::collections::HashMap;
 /// - **Google**: Gemini (different JSON schema)
 /// - **AWS**: Bedrock (SigV4 auth, different endpoint structure)
 /// - **Local**: Ollama
+///
+/// Wire protocol format used by a provider.
+///
+/// Each [`LlmProvider`] maps to exactly one wire format. This allows dispatch
+/// logic to match on a small enum instead of repeating long provider lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WireFormat {
+    /// Anthropic native format (also Custom, Bedrock)
+    Anthropic,
+    /// OpenAI-compatible chat completions (16+ providers)
+    OpenAI,
+    /// Ollama native `/api/chat` format
+    Ollama,
+    /// Google Gemini `generateContent` format
+    Gemini,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LlmProvider {
     /// Anthropic API (api.anthropic.com)
@@ -185,24 +202,33 @@ impl LlmProvider {
     ///
     /// These providers share the same request/response JSON schema and can
     /// reuse the OpenAI serialization/normalization logic.
+    /// Return the wire protocol format for this provider.
+    pub fn wire_format(&self) -> WireFormat {
+        match self {
+            Self::Anthropic | Self::Custom | Self::Bedrock => WireFormat::Anthropic,
+            Self::OpenAI
+            | Self::Azure
+            | Self::Mistral
+            | Self::DeepSeek
+            | Self::Groq
+            | Self::Together
+            | Self::OpenRouter
+            | Self::Cohere
+            | Self::Fireworks
+            | Self::Perplexity
+            | Self::Xai
+            | Self::Ai21
+            | Self::Cloudflare
+            | Self::Replicate
+            | Self::SiliconFlow
+            | Self::Zhipu => WireFormat::OpenAI,
+            Self::Ollama => WireFormat::Ollama,
+            Self::Gemini => WireFormat::Gemini,
+        }
+    }
+
     pub fn is_openai_compatible(&self) -> bool {
-        matches!(
-            self,
-            LlmProvider::OpenAI
-                | LlmProvider::Azure
-                | LlmProvider::Mistral
-                | LlmProvider::DeepSeek
-                | LlmProvider::Groq
-                | LlmProvider::Together
-                | LlmProvider::OpenRouter
-                | LlmProvider::Cohere
-                | LlmProvider::Fireworks
-                | LlmProvider::Perplexity
-                | LlmProvider::Xai
-                | LlmProvider::Ai21
-                | LlmProvider::SiliconFlow
-                | LlmProvider::Zhipu
-        )
+        self.wire_format() == WireFormat::OpenAI
     }
 
     /// Whether this provider requires authentication

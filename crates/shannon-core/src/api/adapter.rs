@@ -9,37 +9,22 @@ use serde_json::{json, Value};
 use super::error::ApiError;
 use super::types::{
     ContentBlock, ContentDelta, LlmProvider, Message, MessageDeltaDelta, MessageRequest,
-    StreamEvent, Usage,
+    StreamEvent, Usage, WireFormat,
 };
 
 // ── Request Serialization ──────────────────────────────────────────────────
 
 /// Convert a unified `MessageRequest` into a provider-specific JSON body.
 pub fn serialize_request(request: &MessageRequest, provider: &LlmProvider) -> Value {
-    match provider {
-        LlmProvider::Anthropic | LlmProvider::Custom => serde_json::to_value(request)
+    match provider.wire_format() {
+        WireFormat::Anthropic => serde_json::to_value(request)
             .unwrap_or_else(|e| {
                 tracing::error!("Failed to serialize Anthropic request: {e}");
                 serde_json::json!({})
             }),
-        LlmProvider::OpenAI
-        | LlmProvider::Azure
-        | LlmProvider::Mistral
-        | LlmProvider::DeepSeek
-        | LlmProvider::Groq
-        | LlmProvider::Together
-        | LlmProvider::OpenRouter
-        | LlmProvider::Cohere
-        | LlmProvider::Fireworks
-        | LlmProvider::Perplexity
-        | LlmProvider::Xai
-        | LlmProvider::Ai21
-        | LlmProvider::SiliconFlow
-        | LlmProvider::Zhipu => serialize_openai_request(request),
-        LlmProvider::Ollama => serialize_ollama_request(request),
-        LlmProvider::Gemini => serialize_gemini_request(request),
-        LlmProvider::Bedrock => serialize_bedrock_request(request),
-        LlmProvider::Cloudflare | LlmProvider::Replicate => serialize_openai_request(request),
+        WireFormat::OpenAI => serialize_openai_request(request),
+        WireFormat::Ollama => serialize_ollama_request(request),
+        WireFormat::Gemini => serialize_gemini_request(request),
     }
 }
 
@@ -346,9 +331,8 @@ pub fn normalize_sse_event(
     provider: &LlmProvider,
     openai_state: &mut OpenaiStreamState,
 ) -> Vec<Result<StreamEvent, ApiError>> {
-    match provider {
-        LlmProvider::Anthropic | LlmProvider::Custom => {
-            // Anthropic SSE events are already in our StreamEvent format
+    match provider.wire_format() {
+        WireFormat::Anthropic => {
             match serde_json::from_str::<StreamEvent>(json_str) {
                 Ok(event) => vec![Ok(event)],
                 Err(e) => vec![Err(ApiError::InvalidResponse(format!(
@@ -356,25 +340,9 @@ pub fn normalize_sse_event(
                 )))],
             }
         }
-        LlmProvider::OpenAI
-        | LlmProvider::Azure
-        | LlmProvider::Mistral
-        | LlmProvider::DeepSeek
-        | LlmProvider::Groq
-        | LlmProvider::Together
-        | LlmProvider::OpenRouter
-        | LlmProvider::Cohere
-        | LlmProvider::Fireworks
-        | LlmProvider::Perplexity
-        | LlmProvider::Xai
-        | LlmProvider::Ai21
-        | LlmProvider::SiliconFlow
-        | LlmProvider::Zhipu
-        | LlmProvider::Cloudflare
-        | LlmProvider::Replicate => normalize_openai_event(json_str, openai_state),
-        LlmProvider::Ollama => normalize_ollama_event(json_str),
-        LlmProvider::Gemini => normalize_gemini_event(json_str, openai_state),
-        LlmProvider::Bedrock => normalize_bedrock_event(json_str, openai_state),
+        WireFormat::OpenAI => normalize_openai_event(json_str, openai_state),
+        WireFormat::Ollama => normalize_ollama_event(json_str),
+        WireFormat::Gemini => normalize_gemini_event(json_str, openai_state),
     }
 }
 
@@ -446,30 +414,15 @@ pub fn normalize_response(
     json_str: &str,
     provider: &LlmProvider,
 ) -> Result<super::types::MessageResponse, ApiError> {
-    match provider {
-        LlmProvider::Anthropic | LlmProvider::Custom => {
+    match provider.wire_format() {
+        WireFormat::Anthropic => {
             serde_json::from_str(json_str).map_err(|e| {
                 ApiError::InvalidResponse(format!(
                     "Failed to parse Anthropic response: {e}"
                 ))
             })
         }
-        LlmProvider::OpenAI
-        | LlmProvider::Azure
-        | LlmProvider::Mistral
-        | LlmProvider::DeepSeek
-        | LlmProvider::Groq
-        | LlmProvider::Together
-        | LlmProvider::OpenRouter
-        | LlmProvider::Cohere
-        | LlmProvider::Fireworks
-        | LlmProvider::Perplexity
-        | LlmProvider::Xai
-        | LlmProvider::Ai21
-        | LlmProvider::SiliconFlow
-        | LlmProvider::Zhipu
-        | LlmProvider::Cloudflare
-        | LlmProvider::Replicate => {
+        WireFormat::OpenAI => {
             let resp: OpenAiMessageResponse = serde_json::from_str(json_str).map_err(|e| {
                 ApiError::InvalidResponse(format!("Failed to parse OpenAI-compatible response: {e}"))
             })?;
@@ -517,7 +470,7 @@ pub fn normalize_response(
                     .unwrap_or(super::types::Usage { input_tokens: 0, output_tokens: 0, ..Default::default() }),
             })
         }
-        LlmProvider::Ollama => {
+        WireFormat::Ollama => {
             let resp: OllamaMessageResponse = serde_json::from_str(json_str).map_err(|e| {
                 ApiError::InvalidResponse(format!("Failed to parse Ollama response: {e}"))
             })?;
@@ -557,8 +510,7 @@ pub fn normalize_response(
                 usage: super::types::Usage { input_tokens: resp.prompt_eval_count.unwrap_or(0), output_tokens: resp.eval_count.unwrap_or(0), ..Default::default() },
             })
         }
-        LlmProvider::Gemini => normalize_gemini_response(json_str),
-        LlmProvider::Bedrock => normalize_bedrock_response(json_str),
+        WireFormat::Gemini => normalize_gemini_response(json_str),
     }
 }
 
@@ -936,15 +888,6 @@ fn serialize_gemini_request(request: &MessageRequest) -> Value {
 /// but supports a simplified OpenAI-like format for other models.
 /// We serialize to the Anthropic format since that's what Shannon already
 /// produces, and Bedrock's invoke endpoint accepts it for Claude models.
-fn serialize_bedrock_request(request: &MessageRequest) -> Value {
-    // Use Anthropic passthrough format — Bedrock's invoke endpoint for
-    // Claude models accepts the native Anthropic request body.
-    serde_json::to_value(request).unwrap_or_else(|e| {
-        tracing::error!("Failed to serialize Bedrock request: {e}");
-        serde_json::json!({})
-    })
-}
-
 // ── Gemini Response Parsing ─────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -1128,36 +1071,6 @@ fn normalize_gemini_event(
 // ── Bedrock Response Parsing ─────────────────────────────────────────────────
 
 /// Normalize a Bedrock non-streaming response.
-///
-/// For Claude models on Bedrock, the response format matches Anthropic's
-/// `MessageResponse` schema, so we parse it directly.
-fn normalize_bedrock_response(
-    json_str: &str,
-) -> Result<super::types::MessageResponse, ApiError> {
-    // Bedrock Claude responses use Anthropic format
-    serde_json::from_str(json_str).map_err(|e| {
-        ApiError::InvalidResponse(format!(
-            "Failed to parse Bedrock response: {e}"
-        ))
-    })
-}
-
-/// Normalize a Bedrock SSE event.
-///
-/// Bedrock streaming for Claude models emits Anthropic-format SSE events,
-/// so we parse them the same way.
-fn normalize_bedrock_event(
-    json_str: &str,
-    _state: &mut OpenaiStreamState,
-) -> Vec<Result<StreamEvent, ApiError>> {
-    match serde_json::from_str::<StreamEvent>(json_str) {
-        Ok(event) => vec![Ok(event)],
-        Err(e) => vec![Err(ApiError::InvalidResponse(format!(
-            "Failed to parse Bedrock SSE event: {e} (data: {json_str})"
-        )))],
-    }
-}
-
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

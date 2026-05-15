@@ -69,6 +69,22 @@ macro_rules! send_event {
     };
 }
 
+// ── Streaming state machine ────────────────────────────────────────
+
+/// Phase of the streaming response lifecycle within a single turn.
+///
+/// Replaces the previous flag-based control (`stream_finalized: bool`)
+/// with an explicit state that makes transitions self-documenting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamingPhase {
+    /// Actively receiving content blocks from the SSE stream.
+    Receiving,
+    /// `MessageDelta` processed with tool calls — response saved to
+    /// conversation, will break from stream loop and continue the
+    /// outer turn loop to dispatch tool results.
+    Finalized,
+}
+
 // ── Query complexity classification ──────────────────────────────────
 
 /// Query complexity level for model routing.
@@ -964,7 +980,7 @@ impl QueryEngine {
                         // Accumulate the full assistant response for conversation tracking
                         let mut assistant_text = String::new();
                         let mut assistant_tool_uses: Vec<ContentBlock> = Vec::new();
-                        let mut stream_finalized = false;
+                        let mut phase = StreamingPhase::Receiving;
 
                         // Process streaming events
                         while let Some(event_result) = stream.next().await {
@@ -1640,7 +1656,7 @@ impl QueryEngine {
                                                 });
                                                 // Mark finalized so the post-loop safety net
                                                 // doesn't short-circuit the next turn's API call.
-                                                stream_finalized = true;
+                                                phase = StreamingPhase::Finalized;
                                                 // Break from the streaming while-let loop so
                                                 // tool results are processed on the next turn
                                                 // iteration instead of consuming more events
@@ -1758,7 +1774,7 @@ impl QueryEngine {
                         // handler didn't finalize (e.g. budget exceeded, premature
                         // stream close, or missing stop event), save the assistant
                         // response now so the next turn retains context.
-                        if !stream_finalized && has_content {
+                        if phase == StreamingPhase::Receiving && has_content {
                             let has_text = !assistant_text.is_empty();
                             let has_tool_uses = !assistant_tool_uses.is_empty();
                             if has_text || has_tool_uses {
