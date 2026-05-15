@@ -295,7 +295,9 @@ impl MemoryExtractor {
         let max_turns = config.max_turns;
 
         // Ensure the memory directory exists.
-        let _ = fs::create_dir_all(&memory_dir);
+        if let Err(e) = fs::create_dir_all(&memory_dir) {
+            tracing::warn!("Failed to create memory directory {:?}: {e}", memory_dir);
+        }
 
         Self {
             memory_dir,

@@ -298,9 +298,21 @@ pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
         }
     }
 
+    // Check if read-only (must come before pipe check so is_read_only is set)
+    for pattern in READ_ONLY_PATTERNS {
+        if lower_command.starts_with(pattern) || lower_command.contains(&format!(" {pattern}")) {
+            is_read_only = true;
+            // Read-only commands are safe unless already marked risky
+            if risk_level == SecurityLevel::Safe {
+                risk_level = SecurityLevel::Low;
+            }
+            break;
+        }
+    }
+
     // Check for pipe-based command chaining that could bypass filters
-    if command.contains('|') && !is_read_only {
-        // Check what's being piped to
+    if command.contains('|') {
+        // Always check what's being piped to, even for read-only commands
         let parts: Vec<&str> = command.split('|').collect();
         if parts.len() > 1 {
             for part in &parts[1..] {
@@ -322,21 +334,9 @@ pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
             }
         }
 
-        // Regular pipes are still medium risk
-        if risk_level < SecurityLevel::Medium {
+        // Non-read-only pipes are medium risk
+        if !is_read_only && risk_level < SecurityLevel::Medium {
             risk_level = SecurityLevel::Medium;
-        }
-    }
-
-    // Check if read-only
-    for pattern in READ_ONLY_PATTERNS {
-        if lower_command.starts_with(pattern) || lower_command.contains(&format!(" {pattern}")) {
-            is_read_only = true;
-            // Read-only commands are safe unless already marked risky
-            if risk_level == SecurityLevel::Safe {
-                risk_level = SecurityLevel::Low;
-            }
-            break;
         }
     }
 

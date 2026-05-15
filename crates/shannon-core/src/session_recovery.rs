@@ -250,7 +250,9 @@ impl SessionRecovery {
         // fsync for durability. Best-effort on systems that don't support it.
         #[cfg(unix)]
         {
-            let _ = file.sync_all();
+            if let Err(e) = file.sync_all() {
+                tracing::debug!("fsync failed for session log: {e}");
+            }
         }
 
         // Update metadata (message count and updated_at).
@@ -295,7 +297,9 @@ impl SessionRecovery {
         file.flush()?;
         #[cfg(unix)]
         {
-            let _ = file.sync_all();
+            if let Err(e) = file.sync_all() {
+                tracing::debug!("fsync failed for batch session log: {e}");
+            }
         }
 
         // Update metadata once.

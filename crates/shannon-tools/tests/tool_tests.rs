@@ -195,7 +195,7 @@ fn test_security_confirmation_required_patterns() {
 fn test_security_path_traversal_detection() {
     let analysis = analyze_command_security("cat ../../../etc/passwd");
     assert!(analysis.contains_path_traversal);
-    assert_eq!(analysis.risk_level, SecurityLevel::Medium);
+    assert_eq!(analysis.risk_level, SecurityLevel::Critical);
     assert!(!analysis.warnings.is_empty());
     
     let analysis = analyze_command_security("ls ../../tmp");
