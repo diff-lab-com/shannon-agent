@@ -26,6 +26,7 @@
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -299,10 +300,11 @@ impl OAuthToken {
 
 /// Simple XOR-based encryption/decryption for token storage.
 ///
-/// This provides basic obfuscation for tokens at rest. For production
-/// use, replace with AES-256-GCM via the `ring` crate.
+/// The key is derived using SHA-256 to produce a fixed-length derived key
+/// from the secret. This provides basic obfuscation for tokens at rest.
+/// For production use, replace with AES-256-GCM via the `ring` crate.
 pub struct TokenEncryption {
-    /// Repeating XOR key derived from the secret.
+    /// SHA-256 derived key for XOR encryption.
     key: Vec<u8>,
 }
 
@@ -316,14 +318,9 @@ impl TokenEncryption {
             let key: Vec<u8> = (0..32).map(|_| rand::random::<u8>()).collect();
             return Self { key };
         }
-        // Derive a fixed-length key by repeating the secret
-        let secret_bytes = secret.as_bytes();
-        let key_len = 32;
-        let mut key = Vec::with_capacity(key_len);
-        for i in 0..key_len {
-            key.push(secret_bytes[i % secret_bytes.len()]);
-        }
-        Self { key }
+        // Derive a fixed-length key using SHA-256
+        let derived_key = Sha256::digest(secret.as_bytes()).to_vec();
+        Self { key: derived_key }
     }
 
     /// Encrypt a plaintext string, returning hex-encoded ciphertext.

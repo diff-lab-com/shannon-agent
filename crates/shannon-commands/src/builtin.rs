@@ -43,6 +43,7 @@ mod lsp;
 #[allow(dead_code)]
 mod plugin;
 mod repl;
+mod image;
 mod repomap;
 mod outline;
 
@@ -81,6 +82,7 @@ pub fn all_commands() -> Vec<Command> {
         mcp::command(),
         lsp::command(),
         plugin::command(),
+        image::command(),
         repomap::command(),
         outline::command(),
     ];
@@ -145,6 +147,7 @@ pub mod diff_utils {
         DiffStats, FileStats, parse_diff_stat,
         ChangeCategory, CategorizedChange,
         DiffAnalysis, DiffAnalyzer,
+        run_diff_analysis,
     };
 }
 
@@ -181,7 +184,7 @@ pub mod config_utils {
 pub mod review_utils {
     pub use super::review_pr::{
         get_review_prompt, ReviewCategory, ReviewIssue, IssueSeverity,
-        ReviewResult, Assessment,
+        ReviewResult, Assessment, run_pr_analysis,
     };
 }
 
@@ -193,6 +196,11 @@ pub mod doctor_utils {
         check_config_files, check_rust_toolchain,
         format_doctor_report,
     };
+}
+
+/// Re-export image utilities for REPL integration
+pub mod image_utils {
+    pub use super::image::detect_media_type;
 }
 
 /// Re-export MCP command utilities for REPL integration

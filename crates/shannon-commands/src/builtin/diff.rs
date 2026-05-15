@@ -72,6 +72,89 @@ pub fn command() -> Command {
     }))
 }
 
+/// Run native git diff analysis and return structured results.
+///
+/// Executes `git diff` and `git diff --stat` locally, parses with
+/// `DiffAnalyzer` and `parse_diff_stat`, and returns a formatted summary.
+pub fn run_diff_analysis(args: &str) -> String {
+    let options = DiffOptions::from_args(args);
+
+    // Build and run git diff
+    let diff_cmd = build_diff_command(&options);
+    let diff_output = match std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&diff_cmd)
+        .output()
+    {
+        Ok(output) => String::from_utf8_lossy(&output.stdout).to_string(),
+        Err(e) => return format!("Failed to run git diff: {e}"),
+    };
+
+    // Run git diff --stat for statistics
+    let stat_cmd = format!("{diff_cmd} --stat");
+    let stat_output = match std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&stat_cmd)
+        .output()
+    {
+        Ok(output) => String::from_utf8_lossy(&output.stdout).to_string(),
+        Err(_) => String::new(),
+    };
+
+    if diff_output.trim().is_empty() {
+        return "No changes detected.".to_string();
+    }
+
+    // Parse statistics
+    let stats = parse_diff_stat(&stat_output);
+
+    // Run diff analyzer
+    let analyzer = DiffAnalyzer::new();
+    let analysis = analyzer.analyze(&diff_output);
+
+    // Format output
+    let mut result = String::new();
+
+    if let Some(ref s) = stats {
+        result.push_str(&format!(
+            "## Diff Summary\n\n- **Files changed**: {}\n- **Insertions**: {}\n- **Deletions**: {}\n\n",
+            s.files_changed, s.insertions, s.deletions,
+        ));
+
+        if !s.file_stats.is_empty() {
+            result.push_str("### Changed Files\n\n");
+            for f in &s.file_stats {
+                result.push_str(&format!("- `{}` (+{} / -{})\n", f.path, f.insertions, f.deletions));
+            }
+            result.push('\n');
+        }
+    }
+
+    // Category breakdown
+    if analysis.total() > 0 {
+        result.push_str(&format!("### Category Breakdown\n\n{}\n\n", analysis.summary()));
+
+        if analysis.has_test_changes() {
+            result.push_str("**Test changes detected** — review test coverage.\n\n");
+        }
+    }
+
+    // Include a truncated version of the raw diff for context
+    let max_diff = 8000;
+    if diff_output.len() > max_diff {
+        let mut cut = max_diff;
+        while cut > 0 && !diff_output.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let truncated = &diff_output[..cut];
+        result.push_str(&format!("### Raw Diff (truncated)\n\n```\n{truncated}\n```\n"));
+    } else {
+        result.push_str(&format!("### Raw Diff\n\n```\n{diff_output}\n```\n"));
+    }
+
+    result
+}
+
 /// Diff scope
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[derive(Default)]

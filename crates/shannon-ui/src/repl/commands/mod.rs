@@ -382,6 +382,22 @@ fn handle_other_command(repl: &mut Repl, cmd_name: &str, args: &str) -> Result<(
                     prompt = prompt.replace("$DIR", &std::env::current_dir().unwrap_or_default().display().to_string());
                     prompt = prompt.replace("$DATE", &chrono::Local::now().format("%Y-%m-%d").to_string());
                     prompt = prompt.replace("$TIME", &chrono::Local::now().format("%H:%M:%S").to_string());
+
+                    // Run native pre-analysis for supported commands
+                    let native_context = match cmd_name {
+                        "diff" | "git-diff" => {
+                            Some(shannon_commands::diff_utils::run_diff_analysis(args_val))
+                        }
+                        "review-pr" | "pr-review" => {
+                            Some(shannon_commands::review_utils::run_pr_analysis(args_val))
+                        }
+                        _ => None,
+                    };
+
+                    if let Some(ref analysis) = native_context {
+                        prompt = format!("{analysis}\n\n---\n\nBased on the above native analysis, provide additional insights:\n\n{prompt}");
+                    }
+
                     repl.chat.add_message(ChatRole::System, format!("Running /{cmd_name}..."));
                     super::query::handle_query(repl, &prompt, None)?;
                 } else {

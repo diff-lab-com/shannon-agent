@@ -69,6 +69,11 @@ pub mod diff_utils {
     pub use crate::builtin::diff_utils::*;
 }
 
+/// Re-export image utilities for REPL integration
+pub mod image_utils {
+    pub use crate::builtin::image_utils::*;
+}
+
 /// Re-export search utilities for REPL integration
 pub mod search_utils {
     pub use crate::builtin::search_utils::*;

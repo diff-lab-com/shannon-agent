@@ -211,8 +211,8 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                         }
                         s.thinking_phase = false;
                         response_text.push_str(&content);
-                        // Note: s.buffer intentionally not updated on every delta — it's only
-                        // read at cancellation (line ~822). Updated on tool events instead.
+                        // Update buffer on every delta so partial content is preserved on abort.
+                        s.buffer = response_text.clone();
                         s.delta.push_str(&content);
                     }
                 }
@@ -423,9 +423,9 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
             }
 
             // Thinking indicator: rotating phrases with animated dots
-            let (is_thinking, thinking_len) = streaming.lock()
-                .map(|s| (s.thinking_phase, s.thinking_content.chars().count()))
-                .unwrap_or((false, 0));
+            let (is_thinking, thinking_len, thinking_text) = streaming.lock()
+                .map(|s| (s.thinking_phase, s.thinking_content.chars().count(), s.thinking_content.clone()))
+                .unwrap_or((false, 0, String::new()));
             repl.state.thinking_phase = is_thinking;
             if is_thinking {
                 let elapsed = stream_start.elapsed();
@@ -439,6 +439,16 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                 } else {
                     format!("{phrase}{dots}")
                 };
+
+                // Show thinking content in the chat message area during thinking phase
+                if !thinking_text.is_empty() {
+                    let display = format_thinking_for_streaming(&thinking_text);
+                    let rendered = repl.output_renderer.render_streaming(&display);
+                    repl.chat.update_streaming_message(assistant_msg_index, rendered, true);
+                    if repl.state.auto_follow {
+                        repl.chat.scroll_to_latest();
+                    }
+                }
             } else if repl.state.streaming_token_rate > 0.0 {
                 repl.state.status = format!("{current_status} · {:.0} tok/s", repl.state.streaming_token_rate);
             } else {
@@ -948,8 +958,21 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
             let is_cancelled = e == "cancelled";
 
             if is_cancelled {
-                let current = streaming.lock().map(|s| s.buffer.clone()).unwrap_or_default();
-                repl.chat.update_message(assistant_msg_index, current);
+                let (current, thinking) = streaming.lock()
+                    .map(|s| (s.buffer.clone(), s.thinking_content.clone()))
+                    .unwrap_or_default();
+                // Render partial content through the output renderer for proper formatting
+                let partial_display = if current.is_empty() {
+                    "\u{26A0} Cancelled by user (no text received yet)".to_string()
+                } else {
+                    format!("{current}\n\n\u{26A0} Cancelled by user (partial response)")
+                };
+                let rendered = repl.output_renderer.render_output(&partial_display, "assistant");
+                repl.chat.update_message(assistant_msg_index, rendered);
+                // Preserve any thinking content that was accumulated before cancellation
+                if !thinking.is_empty() {
+                    repl.chat.set_thinking_content(assistant_msg_index, thinking);
+                }
                 repl.state.status = t!("status.ready").to_string();
             } else {
                 repl.chat.update_message(assistant_msg_index, format!("❌ Error: {e}"));
@@ -1110,6 +1133,37 @@ fn extract_memory_content(response: &str) -> String {
         content.push_str("...");
     }
     content
+}
+
+/// Format thinking content for display in the streaming message area.
+///
+/// Shows a collapsible-style header with character count, then the last
+/// few lines of thinking content. Kept brief to avoid flooding the chat
+/// area during extended thinking.
+fn format_thinking_for_streaming(content: &str) -> String {
+    let char_count = content.chars().count();
+    let header = if char_count >= 1000 {
+        format!("▼ Thinking ({}k chars)", char_count / 1000)
+    } else {
+        format!("▼ Thinking ({char_count} chars)")
+    };
+
+    // Show the tail of thinking content (last ~300 chars) so the user
+    // sees what the model is currently reasoning about.
+    let tail = if char_count > 300 {
+        let mut start = content.char_indices().nth(char_count - 300).map(|(i, _)| i).unwrap_or(0);
+        // Align to a line boundary for clean display
+        if start > 0 {
+            if let Some(pos) = content[start..].find('\n') {
+                start += pos + 1;
+            }
+        }
+        format!("...\n{}", &content[start..])
+    } else {
+        content.to_string()
+    };
+
+    format!("{header}\n{tail}")
 }
 
 #[cfg(test)]

@@ -98,6 +98,75 @@ pub fn command() -> Command {
     }))
 }
 
+/// Run native PR analysis by fetching PR metadata and diff via `gh` CLI.
+/// Returns formatted context for AI to interpret.
+pub fn run_pr_analysis(args: &str) -> String {
+    let pr_arg = args.trim();
+
+    if pr_arg.is_empty() {
+        // No PR specified — list open PRs
+        match run_gh(&["pr", "list", "--limit", "20"]) {
+            Ok(output) => format!("## Open Pull Requests\n\n{output}"),
+            Err(e) => format!("Failed to list PRs: {e}"),
+        }
+    } else {
+        // Fetch PR details and diff
+        let view_output = run_gh(&[
+            "pr", "view", pr_arg,
+            "--json", "title,body,author,state,additions,deletions,changedFiles,headRefName,baseRefName",
+        ]);
+        let diff_output = run_gh(&["pr", "diff", pr_arg]);
+
+        let mut result = String::new();
+
+        match view_output {
+            Ok(json) => {
+                result.push_str(&format!("## PR Metadata ({pr_arg})\n\n```json\n{json}\n```\n\n"));
+            }
+            Err(e) => {
+                result.push_str(&format!("Failed to fetch PR view: {e}\n\n"));
+            }
+        }
+
+        match diff_output {
+            Ok(diff) => {
+                let truncated = truncate_to_char_boundary(&diff, 12000);
+                result.push_str(&format!("## PR Diff ({pr_arg})\n\n```diff\n{truncated}\n```"));
+            }
+            Err(e) => {
+                result.push_str(&format!("Failed to fetch PR diff: {e}"));
+            }
+        }
+
+        result
+    }
+}
+
+fn run_gh(args: &[&str]) -> Result<String, String> {
+    std::process::Command::new("gh")
+        .args(args)
+        .output()
+        .map_err(|e| format!("gh CLI not available: {e}"))
+        .and_then(|o| {
+            if o.status.success() {
+                Ok(String::from_utf8_lossy(&o.stdout).into_owned())
+            } else {
+                Err(String::from_utf8_lossy(&o.stderr).into_owned())
+            }
+        })
+}
+
+fn truncate_to_char_boundary(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut cut = max;
+    while cut > 0 && !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    &s[..cut]
+}
+
 /// Get the review prompt with PR number
 pub fn get_review_prompt(pr_number: Option<&str>) -> String {
     let pr_info = if let Some(number) = pr_number {
