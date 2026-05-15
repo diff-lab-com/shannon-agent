@@ -1355,7 +1355,7 @@ pub(super) fn parse_inline_formatting(text: &str, base_color: ratatui::style::Co
                 }
             }
             // Not a valid link — treat [ as plain text
-            let ch = text[pos..].chars().next().unwrap();
+            let ch = text[pos..].chars().next().unwrap_or('[');
             spans.push(Span::styled(
                 ch.to_string(),
                 Style::default().fg(base_color),
@@ -1428,7 +1428,7 @@ pub(super) fn parse_inline_formatting(text: &str, base_color: ratatui::style::Co
             ));
         } else if pos < text.len() {
             // Unmatched *, `, or ~, treat as plain (use char-safe extraction)
-            let ch = text[pos..].chars().next().unwrap();
+            let ch = text[pos..].chars().next().unwrap_or('*');
             spans.push(Span::styled(
                 ch.to_string(),
                 Style::default().fg(base_color),

@@ -230,8 +230,16 @@ async fn handle_connection(
     let mut buf = [0u8; 8192];
     let mut request_data = Vec::new();
 
+    // Set a read timeout so connections can't hang indefinitely.
+    let _ = stream.set_nodelay(true);
+
     // Read until we have the full headers (ended by \r\n\r\n) or hit a limit.
+    let read_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
+        if tokio::time::Instant::now() > read_deadline {
+            write_response(&mut stream, 408, "Request Timeout", "").await;
+            return;
+        }
         match stream.read(&mut buf).await {
             Ok(0) => return, // Connection closed.
             Ok(n) => {
@@ -368,6 +376,14 @@ fn handle_trigger(
             }
         }
         TriggerAction::RunTool { tool, input } => {
+            // Validate tool name: alphanumeric + underscore/dash only
+            if !tool.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+                return TriggerResponse {
+                    status: 400,
+                    status_text: "Bad Request",
+                    body: json!({"error": "Invalid tool name: must be alphanumeric"}).to_string(),
+                };
+            }
             tool_handler(tool.clone(), input.clone());
             TriggerResponse {
                 status: 200,
@@ -386,6 +402,14 @@ fn handle_trigger(
             payload,
             method,
         } => {
+            // Validate webhook URL is http(s)
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                return TriggerResponse {
+                    status: 400,
+                    status_text: "Bad Request",
+                    body: json!({"error": "Webhook URL must use http or https scheme"}).to_string(),
+                };
+            }
             // Webhooks are acknowledged but delivery is fire-and-forget
             // in this minimal implementation. The payload is logged.
             let method = method.unwrap_or_else(|| "POST".to_string());

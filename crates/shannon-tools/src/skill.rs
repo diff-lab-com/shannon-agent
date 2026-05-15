@@ -97,7 +97,7 @@ fn get_skill_registry() -> SkillRegistry {
 
     // Register built-in skills
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = registry.write().unwrap_or_else(|e| e.into_inner());
         reg.insert("commit".to_string(), SkillCommand {
             name: "commit".to_string(),
             description: "Create a git commit with staged changes".to_string(),
@@ -148,7 +148,7 @@ impl SkillTool {
 
     /// Find a skill by name
     fn find_skill(&self, name: &str) -> Option<SkillCommand> {
-        let registry = self.registry.read().unwrap();
+        let registry = self.registry.read().unwrap_or_else(|e| e.into_inner());
         // Normalize name (remove leading slash)
         let normalized_name = name.strip_prefix('/').unwrap_or(name);
         registry.get(normalized_name).cloned()

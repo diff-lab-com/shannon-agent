@@ -191,7 +191,7 @@ impl LspClient {
         let content_length: usize = header_line
             .trim()
             .strip_prefix("Content-Length:")
-            .expect("already verified prefix above")
+            .ok_or_else(|| LspClientError::ProtocolError("Missing Content-Length prefix".into()))?
             .trim()
             .parse()
             .map_err(|e| LspClientError::ProtocolError(format!("Invalid content length: {e}")))?;
@@ -427,7 +427,8 @@ impl LspClient {
 
 impl Drop for LspClient {
     fn drop(&mut self) {
-        // Best effort cleanup - we can't do async in Drop
-        // The server process will be killed when the Child is dropped
+        // Kill the child process to prevent leaked file descriptors.
+        // We can't do async shutdown in Drop, so we send SIGKILL directly.
+        let _ = self.process.start_kill();
     }
 }
