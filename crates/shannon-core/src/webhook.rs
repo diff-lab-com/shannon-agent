@@ -385,8 +385,26 @@ async fn github_handler(
 
 async fn generic_handler(
     State(state): State<WebhookState>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<GenericWebhookPayload>,
-) -> impl IntoResponse {
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    // Validate shared secret via header if configured.
+    if let Some(ref secret) = state.secret {
+        let provided = headers
+            .get("X-Webhook-Secret")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let expected = secret.as_bytes();
+        let got = provided.as_bytes();
+        // Constant-time comparison to prevent timing attacks.
+        let valid = expected.len() == got.len()
+            && expected.iter().zip(got.iter()).all(|(a, b)| a == b);
+        if !valid {
+            warn!("Generic webhook authentication failed");
+            return Err((StatusCode::UNAUTHORIZED, "Invalid secret".to_string()));
+        }
+    }
+
     let event = WebhookEvent {
         id: uuid::Uuid::new_v4().to_string(),
         source: payload
@@ -403,10 +421,10 @@ async fn generic_handler(
 
     if state.tx.send(event).is_err() {
         warn!("Webhook event channel closed, dropping event");
-        return StatusCode::SERVICE_UNAVAILABLE;
+        return Ok(StatusCode::SERVICE_UNAVAILABLE);
     }
 
-    StatusCode::OK
+    Ok(StatusCode::OK)
 }
 
 async fn health_handler() -> StatusCode {

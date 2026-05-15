@@ -1885,7 +1885,7 @@ mod conversation_export_tests {
         assert_eq!(loaded_data.metadata.title, Some("Round-trip test".to_string()));
         assert_eq!(loaded_data.metadata.model, "test-model");
         assert_eq!(loaded_data.messages.len(), 3);
-        assert_eq!(loaded_data.metadata.turn_count, 2); // 2 user messages
+        assert_eq!(loaded_data.metadata.turn_count, 3); // preserved: max(stored, visible)
 
         // Verify message content preserved
         assert_eq!(loaded_data.messages[0].role, "user");

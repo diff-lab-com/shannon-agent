@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -438,7 +439,7 @@ impl AgentProcessManager {
 
         let (tx, rx) = oneshot::channel();
         {
-            let mut rpcs = handle.pending_rpcs.lock().unwrap();
+            let mut rpcs = handle.pending_rpcs.lock().unwrap_or_else(|e| e.into_inner());
             rpcs.insert(rpc_id, PendingRpc { sender: tx });
         }
 
@@ -809,7 +810,7 @@ impl AgentProcessManager {
                 }
             }
         });
-        self.health_monitor_handle.lock().unwrap().replace(handle);
+        self.health_monitor_handle.lock().unwrap_or_else(|e| e.into_inner()).replace(handle);
     }
 
     /// Get the status of an agent.
@@ -949,7 +950,7 @@ impl AgentProcessManager {
                 _ => None,
             }) {
                 // JSON-RPC response (has id, no method) — dispatch to pending waiter
-                if let Some(pending) = pending_rpcs.lock().unwrap().remove(&rpc_id) {
+                if let Some(pending) = pending_rpcs.lock().unwrap_or_else(|e| e.into_inner()).remove(&rpc_id) {
                     let _ = pending.sender.send(Ok(msg));
                 } else {
                     tracing::debug!(
@@ -962,7 +963,7 @@ impl AgentProcessManager {
         }
 
         // Drain orphaned pending RPCs to prevent memory leak across restarts
-        let orphaned: Vec<_> = pending_rpcs.lock().unwrap().drain().collect();
+        let orphaned: Vec<_> = pending_rpcs.lock().unwrap_or_else(|e| e.into_inner()).drain().collect();
         drop(orphaned);
 
         tracing::info!(agent = %agent_name, "Agent stdout closed");

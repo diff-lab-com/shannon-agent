@@ -10,6 +10,7 @@
 //! JSON-RPC over stdin/stdout, with automatic server lifecycle management.
 
 use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::file::sandbox::{PathSandbox, SandboxConfig};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -19,6 +20,18 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
+
+/// Validate a file path against the sandbox security rules.
+fn validate_path(path: &Path) -> Result<PathBuf, ToolError> {
+    let sandbox = PathSandbox::with_config(SandboxConfig {
+        allowed_roots: vec![],
+        denied_patterns: SandboxConfig::default_denied_patterns(),
+        strict_mode: false,
+    });
+    sandbox.validate_sync(path).map_err(|e| {
+        ToolError::InvalidInput(format!("Path validation failed for {}: {e}", path.display()))
+    })
+}
 
 // ---------------------------------------------------------------------------
 // LSP Types
@@ -891,15 +904,7 @@ impl GoToDefinitionTool {
     }
 
     async fn execute_inner(&self, input: GoToDefinitionInput) -> Result<GoToDefinitionOutput, ToolError> {
-        let file_path = PathBuf::from(&input.file_path);
-
-        // Validate file exists
-        if !file_path.exists() {
-            return Err(ToolError::InvalidInput(format!(
-                "File not found: {}",
-                input.file_path
-            )));
-        }
+        let file_path = validate_path(Path::new(&input.file_path))?;
 
         let language_id = detect_language_id(&file_path);
         let (server_cmd, server_args) = detect_server_command(language_id).ok_or_else(|| {
@@ -1034,14 +1039,7 @@ impl FindReferencesTool {
     }
 
     async fn execute_inner(&self, input: FindReferencesInput) -> Result<FindReferencesOutput, ToolError> {
-        let file_path = PathBuf::from(&input.file_path);
-
-        if !file_path.exists() {
-            return Err(ToolError::InvalidInput(format!(
-                "File not found: {}",
-                input.file_path
-            )));
-        }
+        let file_path = validate_path(Path::new(&input.file_path))?;
 
         let language_id = detect_language_id(&file_path);
         let (server_cmd, server_args) = detect_server_command(language_id).ok_or_else(|| {
@@ -1184,14 +1182,7 @@ impl HoverTool {
     }
 
     async fn execute_inner(&self, input: HoverInput) -> Result<HoverOutput, ToolError> {
-        let file_path = PathBuf::from(&input.file_path);
-
-        if !file_path.exists() {
-            return Err(ToolError::InvalidInput(format!(
-                "File not found: {}",
-                input.file_path
-            )));
-        }
+        let file_path = validate_path(Path::new(&input.file_path))?;
 
         let language_id = detect_language_id(&file_path);
         let (server_cmd, server_args) = detect_server_command(language_id).ok_or_else(|| {
@@ -1324,14 +1315,7 @@ impl DocumentSymbolTool {
     }
 
     async fn execute_inner(&self, input: DocumentSymbolInput) -> Result<DocumentSymbolOutput, ToolError> {
-        let file_path = PathBuf::from(&input.file_path);
-
-        if !file_path.exists() {
-            return Err(ToolError::InvalidInput(format!(
-                "File not found: {}",
-                input.file_path
-            )));
-        }
+        let file_path = validate_path(Path::new(&input.file_path))?;
 
         let language_id = detect_language_id(&file_path);
         let (server_cmd, server_args) = detect_server_command(language_id).ok_or_else(|| {
@@ -1500,10 +1484,7 @@ impl WorkspaceSymbolTool {
 
         // Determine language server based on optional file_path or workspace root
         let (language_id, root_path) = if let Some(ref fp) = input.file_path {
-            let path = PathBuf::from(fp);
-            if !path.exists() {
-                return Err(ToolError::InvalidInput(format!("File not found: {fp}")));
-            }
+            let path = validate_path(Path::new(fp))?;
             (detect_language_id(&path), find_workspace_root(&path))
         } else {
             // Try to detect from current directory
@@ -1715,10 +1696,7 @@ impl RenameSymbolTool {
     }
 
     async fn execute_inner(&self, input: RenameSymbolInput) -> Result<RenameSymbolOutput, ToolError> {
-        let file_path = PathBuf::from(&input.file_path);
-        if !file_path.exists() {
-            return Err(ToolError::InvalidInput(format!("File not found: {}", input.file_path)));
-        }
+        let file_path = validate_path(Path::new(&input.file_path))?;
 
         if input.new_name.trim().is_empty() {
             return Err(ToolError::InvalidInput("new_name must not be empty".to_string()));
@@ -1926,10 +1904,7 @@ impl CodeActionsTool {
     }
 
     async fn execute_inner(&self, input: CodeActionsInput) -> Result<CodeActionsOutput, ToolError> {
-        let file_path = PathBuf::from(&input.file_path);
-        if !file_path.exists() {
-            return Err(ToolError::InvalidInput(format!("File not found: {}", input.file_path)));
-        }
+        let file_path = validate_path(Path::new(&input.file_path))?;
 
         let language_id = detect_language_id(&file_path);
         let (server_cmd, server_args) = detect_server_command(language_id).ok_or_else(|| {
@@ -2755,7 +2730,7 @@ mod tests {
         let result = tool.execute_inner(input).await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("File not found"));
+        assert!(err.contains("Path validation failed"));
     }
 
     #[tokio::test]
