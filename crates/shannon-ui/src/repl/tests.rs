@@ -2980,7 +2980,7 @@ fn test_load_permission_rules_missing_file() {
     // Should not panic
     super::load_permission_rules(&mut pm);
 
-    std::env::set_current_dir(orig_cwd).unwrap();
+    let _ = std::env::set_current_dir(&orig_cwd);
 }
 
 #[test]

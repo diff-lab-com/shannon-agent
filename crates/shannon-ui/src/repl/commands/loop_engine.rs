@@ -1517,3 +1517,463 @@ fn resolve_job_id(cron_tool: &shannon_tools::CronTool, id_prefix: &str) -> std::
         )),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---------------------------------------------------------------
+    // interval_to_cron
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn interval_to_cron_minutes_small() {
+        assert_eq!(interval_to_cron("5m").unwrap(), "*/5 * * * *");
+    }
+
+    #[test]
+    fn interval_to_cron_minutes_boundary_59() {
+        assert_eq!(interval_to_cron("59m").unwrap(), "*/59 * * * *");
+    }
+
+    #[test]
+    fn interval_to_cron_minutes_large_over_59() {
+        // 120 minutes -> 2 hours
+        assert_eq!(interval_to_cron("120m").unwrap(), "0 */2 * * *");
+    }
+
+    #[test]
+    fn interval_to_cron_hours_small() {
+        assert_eq!(interval_to_cron("2h").unwrap(), "0 */2 * * *");
+    }
+
+    #[test]
+    fn interval_to_cron_hours_boundary_23() {
+        assert_eq!(interval_to_cron("23h").unwrap(), "0 */23 * * *");
+    }
+
+    #[test]
+    fn interval_to_cron_hours_large_over_23() {
+        // 48 hours -> 2 days
+        assert_eq!(interval_to_cron("48h").unwrap(), "0 0 */2 * *");
+    }
+
+    #[test]
+    fn interval_to_cron_days() {
+        assert_eq!(interval_to_cron("1d").unwrap(), "0 0 */1 * *");
+        assert_eq!(interval_to_cron("3d").unwrap(), "0 0 */3 * *");
+    }
+
+    #[test]
+    fn interval_to_cron_seconds_rounds_up_to_minute() {
+        // 30 seconds -> ceil(30/60) = 1 minute
+        assert_eq!(interval_to_cron("30s").unwrap(), "*/1 * * * *");
+    }
+
+    #[test]
+    fn interval_to_cron_seconds_small_rounds_up() {
+        // 1 second -> ceil(1/60) = 1 minute
+        assert_eq!(interval_to_cron("1s").unwrap(), "*/1 * * * *");
+    }
+
+    #[test]
+    fn interval_to_cron_seconds_large() {
+        // 90 seconds -> ceil(90/60) = 2 minutes
+        assert_eq!(interval_to_cron("90s").unwrap(), "*/2 * * * *");
+    }
+
+    #[test]
+    fn interval_to_cron_rejects_zero() {
+        assert!(interval_to_cron("0m").is_err());
+        assert!(interval_to_cron("0h").is_err());
+        assert!(interval_to_cron("0d").is_err());
+    }
+
+    #[test]
+    fn interval_to_cron_rejects_invalid_unit() {
+        assert!(interval_to_cron("5x").is_err());
+        assert!(interval_to_cron("10w").is_err());
+    }
+
+    #[test]
+    fn interval_to_cron_rejects_too_short() {
+        assert!(interval_to_cron("m").is_err());
+        assert!(interval_to_cron("").is_err());
+    }
+
+    #[test]
+    fn interval_to_cron_rejects_non_numeric() {
+        assert!(interval_to_cron("abcm").is_err());
+        assert!(interval_to_cron("-5m").is_err());
+    }
+
+    #[test]
+    fn interval_to_cron_strips_whitespace() {
+        assert_eq!(interval_to_cron("  5m  ").unwrap(), "*/5 * * * *");
+    }
+
+    #[test]
+    fn interval_to_cron_large_values() {
+        assert_eq!(interval_to_cron("1000d").unwrap(), "0 0 */1000 * *");
+        assert_eq!(interval_to_cron("10000h").unwrap(), "0 0 */416 * *");
+    }
+
+    // ---------------------------------------------------------------
+    // looks_like_interval
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn looks_like_interval_valid() {
+        assert!(looks_like_interval("5m"));
+        assert!(looks_like_interval("30s"));
+        assert!(looks_like_interval("2h"));
+        assert!(looks_like_interval("1d"));
+        assert!(looks_like_interval("  5m  ")); // trims whitespace
+    }
+
+    #[test]
+    fn looks_like_interval_invalid() {
+        assert!(!looks_like_interval(""));
+        assert!(!looks_like_interval("m"));
+        assert!(!looks_like_interval("5"));     // no unit
+        assert!(!looks_like_interval("abc"));
+        assert!(!looks_like_interval("5x"));    // invalid unit
+        assert!(!looks_like_interval("-5m"));   // negative sign
+        assert!(!looks_like_interval("m5"));    // unit before number
+    }
+
+    #[test]
+    fn looks_like_interval_multi_digit() {
+        assert!(looks_like_interval("120m"));
+        assert!(looks_like_interval("365d"));
+    }
+
+    // ---------------------------------------------------------------
+    // parse_trailing_every
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn parse_trailing_every_compact_form() {
+        let (prompt, interval) = parse_trailing_every("check deploy every 20m");
+        assert_eq!(prompt, "check deploy");
+        assert_eq!(interval, Some("20m".to_string()));
+    }
+
+    #[test]
+    fn parse_trailing_every_minutes_word() {
+        let (prompt, interval) = parse_trailing_every("run tests every 5 minutes");
+        assert_eq!(prompt, "run tests");
+        assert_eq!(interval, Some("5m".to_string()));
+    }
+
+    #[test]
+    fn parse_trailing_every_hours_word() {
+        let (prompt, interval) = parse_trailing_every("build every 2 hours");
+        assert_eq!(prompt, "build");
+        assert_eq!(interval, Some("2h".to_string()));
+    }
+
+    #[test]
+    fn parse_trailing_every_seconds_word() {
+        let (prompt, interval) = parse_trailing_every("poll every 30 seconds");
+        assert_eq!(prompt, "poll");
+        assert_eq!(interval, Some("30s".to_string()));
+    }
+
+    #[test]
+    fn parse_trailing_every_days_word() {
+        let (prompt, interval) = parse_trailing_every("report every 1 day");
+        assert_eq!(prompt, "report");
+        assert_eq!(interval, Some("1d".to_string()));
+    }
+
+    #[test]
+    fn parse_trailing_every_singular_unit_words() {
+        let (_prompt, interval) = parse_trailing_every("check every 1 minute");
+        assert_eq!(interval, Some("1m".to_string()));
+
+        let (_prompt, interval) = parse_trailing_every("check every 1 second");
+        assert_eq!(interval, Some("1s".to_string()));
+
+        let (_prompt, interval) = parse_trailing_every("check every 1 hour");
+        assert_eq!(interval, Some("1h".to_string()));
+    }
+
+    #[test]
+    fn parse_trailing_every_abbreviation_words() {
+        let (_p, i) = parse_trailing_every("check every 5 mins");
+        assert_eq!(i, Some("5m".to_string()));
+
+        let (_p, i) = parse_trailing_every("check every 5 min");
+        assert_eq!(i, Some("5m".to_string()));
+
+        let (_p, i) = parse_trailing_every("check every 2 hrs");
+        assert_eq!(i, Some("2h".to_string()));
+
+        let (_p, i) = parse_trailing_every("check every 2 hr");
+        assert_eq!(i, Some("2h".to_string()));
+
+        let (_p, i) = parse_trailing_every("check every 30 secs");
+        assert_eq!(i, Some("30s".to_string()));
+
+        let (_p, i) = parse_trailing_every("check every 30 sec");
+        assert_eq!(i, Some("30s".to_string()));
+    }
+
+    #[test]
+    fn parse_trailing_every_not_time_expression() {
+        // "every PR" is not a time expression
+        let (prompt, interval) = parse_trailing_every("check every PR");
+        assert_eq!(prompt, "check every PR");
+        assert!(interval.is_none());
+    }
+
+    #[test]
+    fn parse_trailing_every_no_every_clause() {
+        let (prompt, interval) = parse_trailing_every("just a simple task");
+        assert_eq!(prompt, "just a simple task");
+        assert!(interval.is_none());
+    }
+
+    #[test]
+    fn parse_trailing_every_uses_last_occurrence() {
+        // When "every" appears twice, use the last one
+        let (prompt, interval) = parse_trailing_every("check every user every 10m");
+        assert_eq!(prompt, "check every user");
+        assert_eq!(interval, Some("10m".to_string()));
+    }
+
+    #[test]
+    fn parse_trailing_every_zero_number_word_form() {
+        // "every 0 minutes" — 0 is parsed but n > 0 guard fails, so no match
+        let (prompt, interval) = parse_trailing_every("task every 0 minutes");
+        assert_eq!(prompt, "task every 0 minutes");
+        assert!(interval.is_none());
+    }
+
+    #[test]
+    fn parse_trailing_every_compact_zero() {
+        // "every 0m" — looks_like_interval returns true but interval_to_cron would error
+        // parse_trailing_every only parses the syntax; it doesn't validate the interval
+        let (prompt, interval) = parse_trailing_every("task every 0m");
+        assert_eq!(prompt, "task");
+        assert_eq!(interval, Some("0m".to_string()));
+    }
+
+    #[test]
+    fn parse_trailing_every_too_many_words_after_every() {
+        // "every 5 minutes please" has 3 words after "every" — not matched by word form
+        let (prompt, interval) = parse_trailing_every("task every 5 minutes please");
+        // The compact form check fails ("5 minutes please" is not an interval),
+        // and the word form requires exactly 2 words after "every".
+        assert_eq!(prompt, "task every 5 minutes please");
+        assert!(interval.is_none());
+    }
+
+    // ---------------------------------------------------------------
+    // default_keybindings
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn default_keybindings_not_empty() {
+        let kbs = default_keybindings();
+        assert!(!kbs.is_empty());
+        // Should have at least a few well-known entries
+        assert!(kbs.iter().any(|(k, _)| *k == "Enter"));
+        assert!(kbs.iter().any(|(k, _)| *k == "Ctrl+C"));
+        assert!(kbs.iter().any(|(k, _)| *k == "Tab"));
+    }
+
+    #[test]
+    fn default_keybindings_entries_are_non_empty() {
+        for (key, action) in default_keybindings() {
+            assert!(!key.is_empty(), "key must not be empty");
+            assert!(!action.is_empty(), "action for key '{key}' must not be empty");
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Loop / Ralph argument parsing (extracted logic)
+    //
+    // These test the parsing logic embedded in handle_loop/handle_ralph
+    // by reproducing the parse --max N extraction inline, since the
+    // actual handlers require a Repl (TUI state).
+    // ---------------------------------------------------------------
+
+    /// Reproduce the --max N parsing logic from handle_loop.
+    fn parse_loop_max(input: &str) -> (usize, &str) {
+        let input = input.trim();
+        if input.starts_with("--max ") {
+            let rest = input.strip_prefix("--max ").unwrap_or("");
+            let parts: Vec<&str> = rest.splitn(2, ' ').collect();
+            let n: usize = parts.first().unwrap_or(&"0").parse().unwrap_or(0);
+            let t = parts.get(1).copied().unwrap_or("").trim();
+            (n, t)
+        } else {
+            (0, input)
+        }
+    }
+
+    #[test]
+    fn loop_parse_max_with_task() {
+        let (max, task) = parse_loop_max("--max 5 fix the bug");
+        assert_eq!(max, 5);
+        assert_eq!(task, "fix the bug");
+    }
+
+    #[test]
+    fn loop_parse_max_no_task() {
+        let (max, task) = parse_loop_max("--max 3");
+        assert_eq!(max, 3);
+        assert_eq!(task, "");
+    }
+
+    #[test]
+    fn loop_parse_no_max() {
+        let (max, task) = parse_loop_max("just a task");
+        assert_eq!(max, 0);
+        assert_eq!(task, "just a task");
+    }
+
+    #[test]
+    fn loop_parse_max_invalid_number_defaults_to_zero() {
+        let (max, task) = parse_loop_max("--max abc do something");
+        assert_eq!(max, 0);
+        assert_eq!(task, "do something");
+    }
+
+    #[test]
+    fn loop_parse_max_large_number() {
+        let (max, task) = parse_loop_max("--max 999999 long task description");
+        assert_eq!(max, 999999);
+        assert_eq!(task, "long task description");
+    }
+
+    #[test]
+    fn loop_parse_max_extra_spaces() {
+        // "--max " prefix matches exactly one space, so "--max  10  task"
+        // leaves " 10  task" after strip_prefix. First split gives "" and "10  task",
+        // so the number parse fails and defaults to 0.
+        let (max, task) = parse_loop_max("--max  10  task");
+        assert_eq!(max, 0);
+        assert_eq!(task, "10  task");
+    }
+
+    // ---------------------------------------------------------------
+    // Ralph flag parsing (--max and --done)
+    // ---------------------------------------------------------------
+
+    /// Reproduce the ralph flag parsing logic.
+    fn parse_ralph_flags(input: &str) -> (usize, Vec<String>, String) {
+        let input = input.trim();
+        let mut max_iter: usize = 10;
+        let mut keywords: Vec<String> = vec![
+            "DONE".into(), "FIXED".into(), "COMPLETE".into(),
+            "RESOLVED".into(), "ALL TESTS PASS".into(),
+        ];
+        let mut remaining = input;
+
+        if let Some(rest) = remaining.strip_prefix("--max ") {
+            let parts: Vec<&str> = rest.splitn(2, ' ').collect();
+            max_iter = parts.first().unwrap_or(&"10").parse().unwrap_or(10);
+            remaining = parts.get(1).copied().unwrap_or("").trim();
+        }
+
+        while let Some(rest) = remaining.strip_prefix("--done ") {
+            let parts: Vec<&str> = rest.splitn(2, ' ').collect();
+            if let Some(kw) = parts.first() {
+                keywords = vec![kw.to_uppercase()];
+            }
+            remaining = parts.get(1).copied().unwrap_or("").trim();
+        }
+
+        (max_iter, keywords, remaining.trim().to_string())
+    }
+
+    #[test]
+    fn ralph_parse_defaults() {
+        let (max, kw, task) = parse_ralph_flags("fix the tests");
+        assert_eq!(max, 10);
+        assert_eq!(task, "fix the tests");
+        assert_eq!(kw, vec!["DONE", "FIXED", "COMPLETE", "RESOLVED", "ALL TESTS PASS"]);
+    }
+
+    #[test]
+    fn ralph_parse_custom_max() {
+        let (max, kw, task) = parse_ralph_flags("--max 5 fix the bug");
+        assert_eq!(max, 5);
+        assert_eq!(task, "fix the bug");
+        // keywords stay default
+        assert!(kw.contains(&"DONE".to_string()));
+    }
+
+    #[test]
+    fn ralph_parse_custom_done_keyword() {
+        let (max, kw, task) = parse_ralph_flags("--done FINISHED implement feature");
+        assert_eq!(max, 10); // default
+        assert_eq!(kw, vec!["FINISHED"]);
+        assert_eq!(task, "implement feature");
+    }
+
+    #[test]
+    fn ralph_parse_custom_done_is_uppercased() {
+        let (max, kw, task) = parse_ralph_flags("--done ShipIt deploy code");
+        assert_eq!(kw, vec!["SHIPIT"]);
+        assert_eq!(task, "deploy code");
+        let _ = (max, task);
+    }
+
+    #[test]
+    fn ralph_parse_max_and_done() {
+        let (max, kw, task) = parse_ralph_flags("--max 3 --done COMPLETE refactor module");
+        assert_eq!(max, 3);
+        assert_eq!(kw, vec!["COMPLETE"]);
+        assert_eq!(task, "refactor module");
+    }
+
+    #[test]
+    fn ralph_parse_invalid_max_defaults_to_10() {
+        let (max, _kw, task) = parse_ralph_flags("--max xyz do work");
+        assert_eq!(max, 10);
+        assert_eq!(task, "do work");
+    }
+
+    #[test]
+    fn ralph_parse_empty_task() {
+        let (_max, _kw, task) = parse_ralph_flags("--max 5");
+        assert!(task.is_empty());
+    }
+
+    // ---------------------------------------------------------------
+    // Routine argument parsing
+    // ---------------------------------------------------------------
+
+    /// Reproduce the interval parsing from handle_routine.
+    fn parse_routine_interval(s: &str) -> std::result::Result<u64, ()> {
+        let val: u64 = s.parse().map_err(|_| ())?;
+        if val > 0 { Ok(val) } else { Err(()) }
+    }
+
+    #[test]
+    fn routine_interval_valid() {
+        assert_eq!(parse_routine_interval("300").unwrap(), 300);
+        assert_eq!(parse_routine_interval("1").unwrap(), 1);
+        assert_eq!(parse_routine_interval("86400").unwrap(), 86400);
+    }
+
+    #[test]
+    fn routine_interval_rejects_zero() {
+        assert!(parse_routine_interval("0").is_err());
+    }
+
+    #[test]
+    fn routine_interval_rejects_negative() {
+        assert!(parse_routine_interval("-5").is_err());
+    }
+
+    #[test]
+    fn routine_interval_rejects_non_numeric() {
+        assert!(parse_routine_interval("abc").is_err());
+        assert!(parse_routine_interval("5m").is_err());
+    }
+}
