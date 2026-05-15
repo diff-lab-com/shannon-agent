@@ -137,7 +137,10 @@ impl McpToolAdapter {
             }
         });
 
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .unwrap_or_default();
         let mut builder = client
             .post(url)
             .header("Content-Type", "application/json")
@@ -609,7 +612,10 @@ pub async fn discover_tools_http(
     headers: &HashMap<String, String>,
     timeout_secs: Option<u64>,
 ) -> Result<DiscoveryResult, String> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_secs.unwrap_or(30)))
+        .build()
+        .unwrap_or_default();
 
     let init_request = serde_json::json!({
         "jsonrpc": "2.0",
