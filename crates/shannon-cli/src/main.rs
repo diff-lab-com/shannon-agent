@@ -784,7 +784,9 @@ fn run_noninteractive_query(
                 .map(|h| h.join(".shannon").join("memories"))
                 .unwrap_or_else(|| std::path::PathBuf::from(".shannon/memories"));
             let mut mem_store = shannon_core::MemoryStore::new(memory_path);
-            let _ = mem_store.load();
+            if let Err(e) = mem_store.load() {
+                tracing::debug!("Failed to load memory store: {e}");
+            }
             base_engine.with_memory(mem_store)
         };
 
@@ -1070,7 +1072,9 @@ fn run_headless_query(
                 .map(|h| h.join(".shannon").join("memories"))
                 .unwrap_or_else(|| std::path::PathBuf::from(".shannon/memories"));
             let mut mem_store = shannon_core::MemoryStore::new(memory_path);
-            let _ = mem_store.load();
+            if let Err(e) = mem_store.load() {
+                tracing::debug!("Failed to load memory store: {e}");
+            }
             engine = engine.with_memory(mem_store);
         }
 
@@ -1653,7 +1657,9 @@ fn run_team_agent_mode(
                 .map(|h| h.join(".shannon").join("memories"))
                 .unwrap_or_else(|| std::path::PathBuf::from(".shannon/memories"));
             let mut mem_store = shannon_core::MemoryStore::new(memory_path);
-            let _ = mem_store.load();
+            if let Err(e) = mem_store.load() {
+                tracing::debug!("Failed to load memory store: {e}");
+            }
             base_engine.with_memory(mem_store)
         };
 
@@ -1870,7 +1876,7 @@ fn main() -> Result<()> {
             .with_writer(std::io::stderr)
             .with_env_filter(
                 tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("shannon_cli=info".parse().unwrap())
+                    .add_directive("shannon_cli=info".parse().expect("valid log directive"))
             )
             .init();
         return run_team_agent_mode(
@@ -2049,7 +2055,7 @@ fn main() -> Result<()> {
             .with_writer(std::io::stderr)
             .with_env_filter(
                 tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("info".parse().unwrap())
+                    .add_directive("info".parse().expect("valid log directive"))
             )
             .init();
     }

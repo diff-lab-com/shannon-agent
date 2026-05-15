@@ -946,7 +946,9 @@ impl GoToDefinitionTool {
             .await;
 
         // Always attempt shutdown
-        let _ = client.shutdown().await;
+        if let Err(e) = client.shutdown().await {
+            tracing::debug!("LSP client shutdown failed: {e}");
+        }
 
         let locations = result.map_err(ToolError::ExecutionFailed)?;
 
@@ -1084,7 +1086,9 @@ impl FindReferencesTool {
             )
             .await;
 
-        let _ = client.shutdown().await;
+        if let Err(e) = client.shutdown().await {
+            tracing::debug!("LSP client shutdown failed: {e}");
+        }
 
         let locations = result.map_err(ToolError::ExecutionFailed)?;
 
@@ -1221,7 +1225,9 @@ impl HoverTool {
             .hover(&file_path, input.line, input.character, language_id)
             .await;
 
-        let _ = client.shutdown().await;
+        if let Err(e) = client.shutdown().await {
+            tracing::debug!("LSP client shutdown failed: {e}");
+        }
 
         let hover_result = result.map_err(ToolError::ExecutionFailed)?;
 
@@ -1354,7 +1360,9 @@ impl DocumentSymbolTool {
             .document_symbols(&file_path, language_id)
             .await;
 
-        let _ = client.shutdown().await;
+        if let Err(e) = client.shutdown().await {
+            tracing::debug!("LSP client shutdown failed: {e}");
+        }
 
         let symbols = result.map_err(ToolError::ExecutionFailed)?;
 
@@ -1525,7 +1533,9 @@ impl WorkspaceSymbolTool {
         });
 
         let response = client.send_request("workspace/symbol", &params).await;
-        let _ = client.shutdown().await;
+        if let Err(e) = client.shutdown().await {
+            tracing::debug!("LSP client shutdown failed: {e}");
+        }
 
         let response = response.map_err(ToolError::ExecutionFailed)?;
 
@@ -1738,7 +1748,9 @@ impl RenameSymbolTool {
         });
 
         let response = client.send_request("textDocument/rename", &params).await;
-        let _ = client.shutdown().await;
+        if let Err(e) = client.shutdown().await {
+            tracing::debug!("LSP client shutdown failed: {e}");
+        }
 
         let response = response.map_err(ToolError::ExecutionFailed)?;
 
@@ -1952,7 +1964,9 @@ impl CodeActionsTool {
         });
 
         let response = client.send_request("textDocument/codeAction", &params).await;
-        let _ = client.shutdown().await;
+        if let Err(e) = client.shutdown().await {
+            tracing::debug!("LSP client shutdown failed: {e}");
+        }
 
         let response = response.map_err(ToolError::ExecutionFailed)?;
 
