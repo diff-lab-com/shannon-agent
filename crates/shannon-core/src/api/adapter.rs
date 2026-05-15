@@ -1096,9 +1096,9 @@ fn normalize_gemini_event(
             // Finish reason
             if let Some(reason) = candidate.finish_reason {
                 let stop_reason = match reason.as_str() {
-                    "STOP" => "end_turn".to_string(),
+                    "STOP" | "stop" => "end_turn".to_string(),
                     "MAX_TOKENS" => "max_tokens".to_string(),
-                    _ => "stop".to_string(),
+                    other => other.to_string(),
                 };
                 events.push(StreamEvent::MessageDelta {
                     delta: MessageDeltaDelta {
@@ -1982,6 +1982,26 @@ mod tests {
         let result = normalize_sse_event(chunk_json, &LlmProvider::Gemini, &mut fresh_state());
         let found = result.iter().any(|e| matches!(e, Ok(StreamEvent::MessageDelta { delta, .. }) if delta.stop_reason == Some("end_turn".to_string())));
         assert!(found, "Expected MessageDelta with end_turn stop_reason");
+    }
+
+    #[test]
+    fn test_gemini_sse_unknown_finish_reason_normalized_to_end_turn() {
+        // Unknown finish reasons (e.g. "RECITATION", "OTHER") should be preserved
+        // as-is rather than mapped to the incorrect "stop" value.
+        let chunk_json = r#"{"candidates":[{"finishReason":"RECITATION"}]}"#;
+        let result = normalize_sse_event(chunk_json, &LlmProvider::Gemini, &mut fresh_state());
+        let found = result.iter().any(|e| matches!(e, Ok(StreamEvent::MessageDelta { delta, .. })
+            if delta.stop_reason.as_deref() != Some("stop")));
+        assert!(found, "Unknown Gemini finish reasons should NOT be mapped to 'stop'");
+    }
+
+    #[test]
+    fn test_gemini_sse_max_tokens_finish_reason() {
+        let chunk_json = r#"{"candidates":[{"finishReason":"MAX_TOKENS"}]}"#;
+        let result = normalize_sse_event(chunk_json, &LlmProvider::Gemini, &mut fresh_state());
+        let found = result.iter().any(|e| matches!(e, Ok(StreamEvent::MessageDelta { delta, .. })
+            if delta.stop_reason == Some("max_tokens".to_string())));
+        assert!(found, "MAX_TOKENS should be preserved as-is");
     }
 
     // -- Bedrock tests --

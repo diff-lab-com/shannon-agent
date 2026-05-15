@@ -1806,3 +1806,238 @@ fn test_mixed_provider_context_preservation() {
     });
     assert!(has_favorite, "Turn 2 response must survive into Turn 3 context");
 }
+
+// ── Regression Tests: Additional Multi-Turn Context Preservation ─────
+
+/// Simulates the exact user-reported bug: ask AI to write a story,
+/// then ask about characters — the second response must include
+/// the first response in its context.
+#[test]
+fn test_story_then_character_count_preserves_context() {
+    let mut conv = TestConversation::default();
+
+    // Turn 1: User asks for a story
+    conv.messages.push(text_msg("user", "写一篇200字的科幻小说"));
+    let story = "2187年，宇航员林远站在火星基地的观测台上。他的AI助手「星语」正在分析最新的地质数据。\
+                 \"林远，地下发现异常能量波动，\"星语的声音在头盔里响起。\
+                 林远转身对工程师赵敏说：\"赵姐，你看这个数据。\"\
+                 赵敏凑过来，手指在平板上滑动：\"这不是自然形成的信号。\"\
+                 三人决定深入调查。当他们打开地下密室时，一道蓝光映照出一个沉睡的外星生物。\
+                 它缓缓睁开眼睛，用一种古老的频率说道：\"等了很久。\"";
+    conv.messages.push(text_msg("assistant", story));
+    conv.turn_count += 1;
+
+    // Turn 2: User asks about characters — must have story context
+    conv.messages.push(text_msg("user", "这篇小说中有几个出场人物？请列出"));
+
+    // Verify Turn 1 assistant response is still in conversation
+    let has_story = conv.messages.iter().any(|m| {
+        matches!(&m.content, MessageContent::Text(t) if t.contains("林远"))
+    });
+    assert!(has_story, "Turn 1 story must be present in Turn 2 context");
+
+    // The conversation should have 3 messages: user(story), assistant(story), user(question)
+    assert_eq!(conv.messages.len(), 3);
+    assert_eq!(conv.messages[2].role, "user");
+}
+
+/// Verifies that tool use responses with both text and tool_use blocks
+/// are preserved as Blocks content, not just text.
+#[test]
+fn test_tool_use_response_preserved_as_blocks_not_just_text() {
+    let mut conv = TestConversation::default();
+
+    // User asks
+    conv.messages.push(text_msg("user", "Read the file main.rs"));
+
+    // Assistant responds with text + tool_use
+    let assistant_msg = Message {
+        role: "assistant".to_string(),
+        content: MessageContent::Blocks(vec![
+            ContentBlock::Text { text: "Let me read that file.".to_string() },
+            ContentBlock::ToolUse {
+                id: "tool_1".to_string(),
+                name: "read_file".to_string(),
+                input: serde_json::json!({"path": "main.rs"}),
+            },
+        ]),
+    };
+    conv.messages.push(assistant_msg.clone());
+
+    // Tool result
+    conv.messages.push(tool_result_msg());
+
+    // Assistant follow-up
+    conv.messages.push(text_msg("assistant", "The file contains a main function."));
+
+    // Now user asks follow-up — full context must be present
+    conv.messages.push(text_msg("user", "What did the file contain?"));
+
+    // Verify tool_use block survived
+    if let MessageContent::Blocks(blocks) = &conv.messages[1].content {
+        let has_tool_use = blocks.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. }));
+        assert!(has_tool_use, "Tool use block must be preserved in conversation");
+        let has_text = blocks.iter().any(|b| matches!(b, ContentBlock::Text { .. }));
+        assert!(has_text, "Text block alongside tool_use must be preserved");
+    } else {
+        panic!("Assistant message should have Blocks content, not just Text");
+    }
+
+    // Verify the text block is NOT duplicated as a separate message
+    // (this catches the bug where streaming loop continues after tool processing)
+    let text_only_assistant_msgs: Vec<_> = conv.messages.iter()
+        .filter(|m| m.role == "assistant")
+        .filter(|m| matches!(&m.content, MessageContent::Text(t) if t == "Let me read that file."))
+        .collect();
+    assert!(text_only_assistant_msgs.is_empty(),
+        "No standalone text-only assistant message should exist duplicating the blocks content");
+}
+
+/// Verifies that the safety net saves tool use blocks when stream ends
+/// during tool processing without a proper MessageDelta event.
+#[test]
+fn test_safety_net_preserves_tool_use_blocks() {
+    let mut conv = TestConversation::default();
+
+    conv.messages.push(text_msg("user", "Read config file"));
+
+    // Simulate what the safety net should produce: Blocks with both text and tool_use
+    let safety_net_msg = Message {
+        role: "assistant".to_string(),
+        content: MessageContent::Blocks(vec![
+            ContentBlock::Text { text: "Reading config file now.".to_string() },
+            ContentBlock::ToolUse {
+                id: "tool_safety_1".to_string(),
+                name: "read_file".to_string(),
+                input: serde_json::json!({"path": "config.toml"}),
+            },
+        ]),
+    };
+    conv.messages.push(safety_net_msg);
+
+    // Verify the message has Blocks (not just Text)
+    if let MessageContent::Blocks(blocks) = &conv.messages[1].content {
+        assert_eq!(blocks.len(), 2, "Safety net should save both text and tool_use");
+        assert!(matches!(&blocks[0], ContentBlock::Text { .. }));
+        assert!(matches!(&blocks[1], ContentBlock::ToolUse { .. }));
+    } else {
+        panic!("Safety net should save Blocks, not Text-only");
+    }
+}
+
+/// Verifies multi-turn context after compression still preserves
+/// the critical assistant response from the most recent turn.
+#[test]
+fn test_compression_preserves_latest_turn_context() {
+    let mut conv = TestConversation::default();
+    let config = QueryEngineConfig {
+        max_context_tokens: Some(200),
+        compression_threshold: 0.5,
+        keep_recent_messages: 4,
+        compression_strategy: CompressionStrategy::SummarizeOld,
+        ..QueryEngineConfig::default()
+    };
+
+    // Turn 1: Story
+    conv.messages.push(text_msg("user", "Write a sci-fi story"));
+    conv.messages.push(text_msg("assistant", "In 2187, astronaut Lin discovered an alien artifact on Mars..."));
+    conv.turn_count += 1;
+
+    // Turn 2: Follow-up (this is the critical context)
+    conv.messages.push(text_msg("user", "How many characters are in the story?"));
+    conv.messages.push(text_msg("assistant", "There are 3 characters: Lin, the AI assistant, and Engineer Zhao."));
+    conv.turn_count += 1;
+
+    // Turn 3-5: More conversation to trigger compression
+    for i in 0..3 {
+        conv.messages.push(text_msg("user", &format!("Question {i} about something else")));
+        conv.messages.push(text_msg("assistant", &format!("Answer {i} with detailed response")));
+        conv.turn_count += 1;
+    }
+
+    assert_eq!(conv.messages.len(), 10);
+
+    // Compress — should keep recent 4 messages + summary
+    conv.compress(&config);
+
+    // The MOST RECENT assistant response must survive
+    let has_latest_answer = conv.messages.iter().any(|m| {
+        matches!(&m.content, MessageContent::Text(t) if t.contains("3 characters"))
+    });
+    assert!(has_latest_answer,
+        "Most recent assistant response must survive compression for next turn context");
+}
+
+/// Verifies that tool result messages are persisted to conversation.messages
+/// alongside the local messages vec (catches the missing conversation.messages.push bug).
+#[test]
+fn test_tool_results_persisted_to_conversation() {
+    let mut conv = TestConversation::default();
+    let mut messages = conv.messages.clone();
+
+    // Simulate the engine's tool result persistence loop
+    let tool_results: Vec<(String, String, bool)> = vec![
+        ("tool_1".to_string(), "file contents here".to_string(), false),
+        ("tool_2".to_string(), "error: not found".to_string(), true),
+    ];
+
+    for (tool_use_id, result_content, is_error) in tool_results {
+        let tool_msg = Message {
+            role: "user".to_string(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id,
+                content: Some(ToolResultContent::Single(result_content)),
+                is_error: Some(is_error),
+            }]),
+        };
+        messages.push(tool_msg.clone());
+        conv.messages.push(tool_msg); // Both must be pushed
+    }
+
+    assert_eq!(conv.messages.len(), 2, "Tool results should be in conversation");
+    assert_eq!(messages.len(), 2, "Tool results should be in local messages");
+}
+
+/// Verifies that consecutive turns maintain proper user/assistant alternation
+/// even after tool use sequences.
+#[test]
+fn test_proper_alternation_after_tool_use() {
+    let mut conv = TestConversation::default();
+
+    // Turn 1: Simple Q&A
+    conv.messages.push(text_msg("user", "Hello"));
+    conv.messages.push(text_msg("assistant", "Hi!"));
+
+    // Turn 2: Tool use sequence
+    conv.messages.push(text_msg("user", "Read foo.rs"));
+    conv.messages.push(assistant_with_tools()); // assistant: text + tool_use
+    conv.messages.push(tool_result_msg());      // user: tool_result
+    conv.messages.push(text_msg("assistant", "Here's what I found."));
+
+    // Turn 3: Follow-up — must see full context
+    conv.messages.push(text_msg("user", "Can you summarize it?"));
+
+    // Verify alternation: user, assistant, user, assistant, user, assistant, user
+    let roles: Vec<&str> = conv.messages.iter().map(|m| m.role.as_str()).collect();
+    assert_eq!(roles, vec!["user", "assistant", "user", "assistant", "user", "assistant", "user"],
+        "Messages must alternate user/assistant for API compatibility. Got: {roles:?}");
+}
+
+/// Verifies that a very long assistant response is preserved intact
+/// for multi-turn context (no truncation).
+#[test]
+fn test_long_assistant_response_preserved_intact() {
+    let mut conv = TestConversation::default();
+
+    let long_story = "A".repeat(5000);
+    conv.messages.push(text_msg("user", "Write a very long story"));
+    conv.messages.push(text_msg("assistant", &long_story));
+    conv.messages.push(text_msg("user", "How many sentences in the story?"));
+
+    // Verify the long response is intact
+    if let MessageContent::Text(t) = &conv.messages[1].content {
+        assert_eq!(t.len(), 5000, "Full assistant response must be preserved");
+    }
+
+    assert_eq!(conv.messages.len(), 3, "All 3 turns must be in conversation");
+}

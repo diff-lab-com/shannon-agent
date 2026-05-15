@@ -1632,6 +1632,12 @@ impl QueryEngine {
                                                 // Mark finalized so the post-loop safety net
                                                 // doesn't short-circuit the next turn's API call.
                                                 stream_finalized = true;
+                                                // Break from the streaming while-let loop so
+                                                // tool results are processed on the next turn
+                                                // iteration instead of consuming more events
+                                                // (which could trigger the else branch and
+                                                // save a duplicate assistant message).
+                                                break;
                                             } else {
                                                 // No tool uses — save assistant text to conversation
                                                 if !assistant_text.is_empty() {
@@ -1725,21 +1731,35 @@ impl QueryEngine {
                         // Safety net: if the stream had content but the MessageDelta
                         // handler didn't finalize (e.g. budget exceeded, premature
                         // stream close, or missing stop event), save the assistant
-                        // text now so the next turn retains context.
-                        if !stream_finalized && has_content && !assistant_text.is_empty() {
-                            // Check if the last message is already this assistant response
-                            let already_saved = conversation.messages.last().map_or(false, |m| {
-                                matches!(&m.content, MessageContent::Text(t) if t == &assistant_text)
-                            });
-                            if !already_saved {
-                                tracing::warn!(
-                                    msg_len = assistant_text.len(),
-                                    "Stream ended without finalization — saving assistant text as safety net"
-                                );
-                                conversation.messages.push(Message {
-                                    role: "assistant".to_string(),
-                                    content: MessageContent::Text(assistant_text),
+                        // response now so the next turn retains context.
+                        if !stream_finalized && has_content {
+                            let has_text = !assistant_text.is_empty();
+                            let has_tool_uses = !assistant_tool_uses.is_empty();
+                            if has_text || has_tool_uses {
+                                // Check if the last message is already this assistant response
+                                let already_saved = conversation.messages.last().map_or(false, |m| {
+                                    matches!(&m.content, MessageContent::Text(t) if has_text && t == &assistant_text)
+                                        || matches!(&m.content, MessageContent::Blocks(blocks)
+                                            if blocks.len() == assistant_tool_uses.len() + if has_text { 1 } else { 0 })
                                 });
+                                if !already_saved {
+                                    tracing::warn!(
+                                        text_len = assistant_text.len(),
+                                        tool_uses = assistant_tool_uses.len(),
+                                        "Stream ended without finalization — saving assistant response as safety net"
+                                    );
+                                    let mut blocks: Vec<ContentBlock> = Vec::new();
+                                    if has_text {
+                                        blocks.push(ContentBlock::Text {
+                                            text: assistant_text,
+                                        });
+                                    }
+                                    blocks.append(&mut assistant_tool_uses);
+                                    conversation.messages.push(Message {
+                                        role: "assistant".to_string(),
+                                        content: MessageContent::Blocks(blocks),
+                                    });
+                                }
                             }
                             let total_cost = CostTracker::calculate_cost(
                                 &client_model,
