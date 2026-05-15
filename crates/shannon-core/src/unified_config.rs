@@ -116,12 +116,26 @@ impl ConfigBuilder {
     /// Priority (highest to lowest):
     /// CLI overrides > env vars > local TOML > global TOML
     pub fn build(&self) -> ShannonConfig {
-        
-        self
+        let mut config = self
             .global_toml
             .merge(&self.local_toml)
             .merge(&self.env_vars)
-            .merge(&self.cli_overrides)
+            .merge(&self.cli_overrides);
+
+        // Clamp temperature to valid range for all LLM providers.
+        if let Some(t) = config.temperature {
+            config.temperature = Some(t.clamp(0.0, 2.0));
+        }
+        // Ensure max_tokens is within reasonable bounds.
+        if let Some(mt) = config.max_tokens {
+            if mt == 0 {
+                config.max_tokens = None;
+            } else {
+                config.max_tokens = Some(mt.min(128_000));
+            }
+        }
+
+        config
     }
 }
 

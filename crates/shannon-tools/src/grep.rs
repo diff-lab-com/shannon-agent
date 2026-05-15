@@ -14,6 +14,10 @@ use std::path::{Path, PathBuf};
 
 /// Maximum number of results returned by default
 const DEFAULT_MAX_RESULTS: usize = 1000;
+/// Maximum allowed results to prevent resource exhaustion
+const MAX_ALLOWED_RESULTS: usize = 10000;
+/// Maximum context lines per side
+const MAX_CONTEXT_LINES: usize = 100;
 
 /// Number of bytes to check for binary detection
 const BINARY_CHECK_BYTES: usize = 8192;
@@ -374,9 +378,9 @@ impl Tool for GrepTool {
         }
 
         let show_line_numbers = grep_input.line_number.unwrap_or(true);
-        let context_before = grep_input.context_before.unwrap_or(0);
-        let context_after = grep_input.context_after.unwrap_or(0);
-        let max_results = grep_input.max_results.unwrap_or(DEFAULT_MAX_RESULTS);
+        let context_before = grep_input.context_before.unwrap_or(0).min(MAX_CONTEXT_LINES);
+        let context_after = grep_input.context_after.unwrap_or(0).min(MAX_CONTEXT_LINES);
+        let max_results = grep_input.max_results.unwrap_or(DEFAULT_MAX_RESULTS).min(MAX_ALLOWED_RESULTS);
         let output_mode = grep_input.output_mode.unwrap_or_default();
 
         // Collect results (this runs in an async context but file I/O is synchronous)

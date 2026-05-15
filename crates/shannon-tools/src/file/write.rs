@@ -29,6 +29,15 @@ pub struct WriteOutput {
 pub async fn execute(input: WriteInput) -> Result<ToolOutput, ToolError> {
     use tokio::fs;
 
+    const MAX_WRITE_SIZE: usize = 10 * 1024 * 1024; // 10 MB
+    if input.content.len() > MAX_WRITE_SIZE {
+        return Err(ToolError::InvalidInput(format!(
+            "Content too large: {} bytes (max {} bytes)",
+            input.content.len(),
+            MAX_WRITE_SIZE
+        )));
+    }
+
     let bytes = input.content.len();
 
     // Atomic write: write to temp file then rename to avoid partial writes on crash.
