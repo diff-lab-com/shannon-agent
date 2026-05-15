@@ -18,6 +18,9 @@ fn char_display_width(c: char) -> usize {
     unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)
 }
 
+/// Maximum input size (1 MB) to prevent OOM from large pastes.
+const MAX_INPUT_SIZE: usize = 1024 * 1024;
+
 /// Input prompt widget (multi-line enabled)
 pub struct PromptWidget {
     /// Inner input buffer with full multi-line support
@@ -59,6 +62,9 @@ impl PromptWidget {
 
     /// Add a character with auto-pairing for brackets and quotes.
     pub fn add_char_smart(&mut self, c: char) {
+        if self.buffer.text().len() >= MAX_INPUT_SIZE {
+            return;
+        }
         match c {
             '(' => { self.buffer.insert_char('('); self.buffer.insert_char(')'); self.buffer.move_left(); }
             '[' => { self.buffer.insert_char('['); self.buffer.insert_char(']'); self.buffer.move_left(); }
@@ -84,7 +90,9 @@ impl PromptWidget {
 
     /// Add a character to the input
     pub fn add_char(&mut self, c: char) {
-        self.buffer.insert_char(c);
+        if self.buffer.text().len() < MAX_INPUT_SIZE {
+            self.buffer.insert_char(c);
+        }
     }
 
     /// Remove the character before the cursor
@@ -137,9 +145,17 @@ impl PromptWidget {
         self.buffer.clear();
     }
 
-    /// Set the input text
+    /// Set the input text, truncating if it exceeds the size limit.
     pub fn set_input(&mut self, input: String) {
-        self.buffer.set_text(&input);
+        if input.len() <= MAX_INPUT_SIZE {
+            self.buffer.set_text(&input);
+        } else {
+            let mut end = MAX_INPUT_SIZE;
+            while !input.is_char_boundary(end) && end > 0 {
+                end -= 1;
+            }
+            self.buffer.set_text(&input[..end]);
+        }
     }
 
     /// Insert a newline (for multi-line editing)
@@ -177,9 +193,21 @@ impl PromptWidget {
         self.buffer.current_word()
     }
 
-    /// Insert text at the cursor position
+    /// Insert text at the cursor position, respecting the size limit.
     pub fn insert_text(&mut self, text: &str) {
-        self.buffer.insert_text(text);
+        let remaining = MAX_INPUT_SIZE.saturating_sub(self.buffer.text().len());
+        if remaining == 0 {
+            return;
+        }
+        if text.len() <= remaining {
+            self.buffer.insert_text(text);
+        } else {
+            let mut end = remaining;
+            while !text.is_char_boundary(end) && end > 0 {
+                end -= 1;
+            }
+            self.buffer.insert_text(&text[..end]);
+        }
     }
 
     /// Get current cursor position (column)

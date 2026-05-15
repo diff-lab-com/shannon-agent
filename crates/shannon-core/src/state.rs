@@ -375,7 +375,10 @@ impl StateManager {
 
         let mut metadata = metadata.clone();
         metadata.updated_at = chrono::Utc::now();
-        metadata.turn_count = messages.iter().filter(|m| m.role == "user").count();
+        // Preserve the highest turn count: compaction removes user messages
+        // from the array, but the logical turn count should never decrease.
+        let visible_count = messages.iter().filter(|m| m.role == "user").count();
+        metadata.turn_count = metadata.turn_count.max(visible_count);
 
         let session_data = SessionData {
             session_id: *session_id,
