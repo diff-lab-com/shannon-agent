@@ -124,7 +124,7 @@ impl AiLimitsTracker {
             self.reset_window(limit_type);
         }
         if let Some(record) = self.get_record_mut(limit_type) {
-            record.current += amount;
+            record.current = record.current.saturating_add(amount);
         }
     }
 

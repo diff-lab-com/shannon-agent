@@ -577,7 +577,7 @@ fn parse_yaml_paths(yaml: &str) -> Option<Vec<String>> {
             // Check for inline array: paths: ["a", "b"]
             if let Some(rest) = trimmed.strip_prefix("paths:") {
                 let rest = rest.trim();
-                if rest.starts_with('[') && rest.ends_with(']') {
+                if rest.starts_with('[') && rest.ends_with(']') && rest.len() >= 2 {
                     let inner = &rest[1..rest.len() - 1];
                     for item in inner.split(',') {
                         let p = item.trim().trim_matches('"').trim_matches('\'');
