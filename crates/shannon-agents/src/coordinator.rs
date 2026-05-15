@@ -399,7 +399,9 @@ impl AgentCoordinator {
                         }
                     };
                     if let Some(event) = coord_event {
-                        let _ = event_sender_for_pm.send(event);
+                        if let Err(e) = event_sender_for_pm.send(event) {
+                            tracing::debug!("Failed to send coordinator event: {e}");
+                        }
                     }
                 }
             });
@@ -2589,11 +2591,13 @@ impl AgentCoordinator {
 
         let handle = tokio::spawn(async move {
             // Emit started event
-            let _ = event_sender.send(CoordinatorEvent::AgentOutput {
+            if let Err(e) = event_sender.send(CoordinatorEvent::AgentOutput {
                 team: team_name_owned.clone(),
                 agent: agent_name_owned.clone(),
                 chunk: "[started]".to_string(),
-            });
+            }) {
+                tracing::debug!("Failed to send agent started event: {e}");
+            }
 
             let result = if let Some(secs) = timeout_secs {
                 match tokio::time::timeout(
@@ -2627,12 +2631,14 @@ impl AgentCoordinator {
                         MessageContent::Text(t) => t.clone(),
                         other => format!("{other:?}"),
                     };
-                    let _ = event_sender.send(CoordinatorEvent::AgentCompleted {
+                    if let Err(e) = event_sender.send(CoordinatorEvent::AgentCompleted {
                         team: team_name_owned.clone(),
                         agent: agent_name_owned.clone(),
                         success: true,
                         output,
-                    });
+                    }) {
+                        tracing::debug!("Failed to send agent completed event: {e}");
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -2640,12 +2646,14 @@ impl AgentCoordinator {
                         error = %e,
                         "Background task failed"
                     );
-                    let _ = event_sender.send(CoordinatorEvent::AgentCompleted {
+                    if let Err(e) = event_sender.send(CoordinatorEvent::AgentCompleted {
                         team: team_name_owned.clone(),
                         agent: agent_name_owned.clone(),
                         success: false,
                         output: e.to_string(),
-                    });
+                    }) {
+                        tracing::debug!("Failed to send agent failed event: {e}");
+                    }
                 }
             }
 

@@ -595,7 +595,9 @@ impl MemoryExtractor {
     fn set_cursor(&self, cursor: &str) {
         // We use a simple approach: store in a well-known file.
         let cursor_path = self.memory_dir.join(".last_extraction_cursor");
-        let _ = fs::write(&cursor_path, cursor);
+        if let Err(e) = fs::write(&cursor_path, cursor) {
+            tracing::warn!("Failed to save memory extraction cursor: {e}");
+        }
     }
 
     /// Pattern-based extraction from messages (used instead of LLM for testing

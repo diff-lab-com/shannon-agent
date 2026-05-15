@@ -260,7 +260,9 @@ impl HookManager {
             // Write event data to stdin
             if let Some(mut stdin) = child.stdin.take() {
                 use tokio::io::AsyncWriteExt;
-                let _ = stdin.write_all(stdin_data).await;
+                if let Err(e) = stdin.write_all(stdin_data).await {
+                    tracing::debug!("Failed to write to hook stdin: {e}");
+                }
                 // Drop stdin to close the pipe
                 drop(stdin);
             }
@@ -324,7 +326,9 @@ impl HookManager {
                 Ok(mut child) => {
                     if let Some(mut stdin) = child.stdin.take() {
                         use tokio::io::AsyncWriteExt;
-                        let _ = stdin.write_all(&stdin_data).await;
+                        if let Err(e) = stdin.write_all(&stdin_data).await {
+                            tracing::debug!("Failed to write to hook stdin: {e}");
+                        }
                     }
                     if let Err(e) = child.wait().await {
                         tracing::warn!(command = %command, error = %e, "Non-blocking hook process failed");
@@ -454,7 +458,9 @@ impl HookManager {
 
             if let Some(mut stdin) = child.stdin.take() {
                 use tokio::io::AsyncWriteExt;
-                let _ = stdin.write_all(event_json).await;
+                if let Err(e) = stdin.write_all(event_json).await {
+                    tracing::debug!("Failed to write to hook stdin: {e}");
+                }
                 drop(stdin);
             }
 
