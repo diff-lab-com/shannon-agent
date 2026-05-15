@@ -324,7 +324,9 @@ impl ReplHistory {
     /// Save history to a JSONL file. Appends entries that don't already exist at the end of the file.
     pub fn save_to_file(&self, path: &std::path::Path) {
         if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                tracing::debug!("Failed to create history dir: {e}");
+            }
         }
         // Write all entries as JSONL (one JSON string per line)
         let mut lines = Vec::with_capacity(self.entries.len());
@@ -334,7 +336,9 @@ impl ReplHistory {
             }
         }
         let content = lines.join("\n");
-        let _ = std::fs::write(path, content);
+        if let Err(e) = std::fs::write(path, content) {
+            tracing::debug!("Failed to save history: {e}");
+        }
     }
 
     /// Load history from a JSONL file, taking the last `limit` entries.

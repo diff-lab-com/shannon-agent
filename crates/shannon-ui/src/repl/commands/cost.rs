@@ -299,11 +299,15 @@ pub(crate) fn handle_plan(repl: &mut Repl, args: &str) -> Result<()> {
             // Save plan to disk
             let plan_dir = std::path::Path::new(&repl.state.working_directory)
                 .join(".claude").join("plans");
-            let _ = std::fs::create_dir_all(&plan_dir);
+            if let Err(e) = std::fs::create_dir_all(&plan_dir) {
+                tracing::debug!("Failed to create plan dir: {e}");
+            }
             let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
             let plan_file = plan_dir.join(format!("plan_{timestamp}.md"));
             let content = format!("# Plan: {}\n\n{}", repl.state.plan.description, repl.state.plan.content);
-            let _ = std::fs::write(&plan_file, content);
+            if let Err(e) = std::fs::write(&plan_file, content) {
+                tracing::debug!("Failed to save plan file: {e}");
+            }
             repl.chat.add_message(ChatRole::System,
                 format!("Plan approved and saved. You can now proceed with implementation.\nSaved to: {}",
                     plan_file.display()));

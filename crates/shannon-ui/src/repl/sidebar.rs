@@ -242,17 +242,21 @@ impl super::Repl {
             // Emergency: full summarization + micro-compact
             let client = engine.client().clone();
             if let Ok(mut compact_engine) = CompactEngine::with_llm_summarizer(client) {
-                let _ = compact_engine.micro_compact(&mut messages);
+                if let Err(e) = compact_engine.micro_compact(&mut messages) {
+                    tracing::debug!("Emergency micro_compact failed: {e}");
+                }
                 if let Ok(_result) = compact_engine.compact(&mut messages) {
-                    let _ = compact_engine.post_compact_cleanup(&mut messages);
+                    compact_engine.post_compact_cleanup(&mut messages);
                     engine.replace_conversation(messages);
                     let after = engine.conversation_history().len();
                     toast_msg = Some(format!("  Emergency compact: {before}→{after} messages  "));
                 } else {
                     // Fallback: micro-compact only
                     if let Ok(fb) = CompactEngine::with_defaults() {
-                        let _ = fb.micro_compact(&mut messages);
-                        let _ = fb.post_compact_cleanup(&mut messages);
+                        if let Err(e) = fb.micro_compact(&mut messages) {
+                            tracing::debug!("Fallback micro_compact failed: {e}");
+                        }
+                        fb.post_compact_cleanup(&mut messages);
                         engine.replace_conversation(messages);
                         let after = engine.conversation_history().len();
                         toast_msg = Some(format!("  Auto-compacted: {before}→{after} messages  "));
@@ -261,8 +265,10 @@ impl super::Repl {
             } else {
                 // Fallback: micro-compact only
                 if let Ok(fb) = CompactEngine::with_defaults() {
-                    let _ = fb.micro_compact(&mut messages);
-                    let _ = fb.post_compact_cleanup(&mut messages);
+                    if let Err(e) = fb.micro_compact(&mut messages) {
+                        tracing::debug!("Fallback micro_compact failed: {e}");
+                    }
+                    fb.post_compact_cleanup(&mut messages);
                     engine.replace_conversation(messages);
                     let after = engine.conversation_history().len();
                     toast_msg = Some(format!("  Auto-compacted: {before}→{after} messages  "));
@@ -275,7 +281,7 @@ impl super::Repl {
                 .or_else(|_| CompactEngine::with_defaults());
             if let Ok(compact_engine) = compact_engine {
                 if let Ok(_result) = compact_engine.micro_compact(&mut messages) {
-                    let _ = compact_engine.post_compact_cleanup(&mut messages);
+                    compact_engine.post_compact_cleanup(&mut messages);
                     engine.replace_conversation(messages);
                     let after = engine.conversation_history().len();
                     toast_msg = Some(format!("  Auto-compacted: {before}→{after} messages  "));

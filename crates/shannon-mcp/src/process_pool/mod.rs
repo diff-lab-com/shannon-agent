@@ -1650,9 +1650,15 @@ impl McpProcessPool {
     }
 
     /// Store a tool result in the cache.
+    ///
+    /// Evicts expired entries when the cache exceeds 256 entries to prevent
+    /// unbounded memory growth.
     pub(crate) async fn put_cached(&self, key: &str, value: String) {
         let mut cache = self.tool_cache.write().await;
         cache.insert(key.to_string(), (value, Instant::now()));
+        if cache.len() > 256 {
+            cache.retain(|_, (_, ts)| ts.elapsed() < self.cache_ttl);
+        }
     }
 
     /// Start a background task that listens for server notifications
