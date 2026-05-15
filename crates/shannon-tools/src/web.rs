@@ -169,7 +169,10 @@ impl WebFetchTool {
                 .build()
                 .unwrap_or_else(|e| {
                     tracing::error!("Failed to create HTTP client: {e}");
-                    Client::new()
+                    Client::builder()
+                        .timeout(std::time::Duration::from_secs(30))
+                        .build()
+                        .unwrap_or_else(|_| Client::new())
                 }),
         }
     }
@@ -443,7 +446,10 @@ impl WebSearchTool {
                 .build()
                 .unwrap_or_else(|e| {
                     tracing::error!("Failed to create HTTP client: {e}");
-                    Client::new()
+                    Client::builder()
+                        .timeout(std::time::Duration::from_secs(30))
+                        .build()
+                        .unwrap_or_else(|_| Client::new())
                 }),
             api_key,
             provider,
@@ -458,8 +464,11 @@ impl WebSearchTool {
             .build()
             .unwrap_or_else(|e| {
                 tracing::error!("Failed to create HTTP client: {e}");
-                // Fallback: create a minimal client without custom config
-                Client::new()
+                // Fallback: create a minimal client with timeout
+                Client::builder()
+                    .timeout(std::time::Duration::from_secs(30))
+                    .build()
+                    .unwrap_or_else(|_| Client::new())
             });
         Self {
             description: "Search the web for information using a real search API".to_string(),
@@ -477,7 +486,10 @@ impl WebSearchTool {
             .build()
             .unwrap_or_else(|e| {
                 tracing::error!("Failed to create HTTP client: {e}");
-                Client::new()
+                Client::builder()
+                    .timeout(std::time::Duration::from_secs(30))
+                    .build()
+                    .unwrap_or_else(|_| Client::new())
             });
         Self {
             description: "Search the web for information using a real search API".to_string(),

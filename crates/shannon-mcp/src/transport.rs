@@ -239,7 +239,10 @@ impl SseTransport {
             tracing::warn!("SSE transport URL validation: {e}");
         }
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
             endpoint,
             stream: None,
             buffer: String::new(),
@@ -500,7 +503,10 @@ impl HttpTransport {
             tracing::warn!("HTTP transport URL validation: {e}");
         }
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
             endpoint,
             pending_response: None,
             session_id: None,

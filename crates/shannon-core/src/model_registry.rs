@@ -424,6 +424,10 @@ impl ModelTier {
     }
 
     fn select<'a>(self, candidates: &[&'a ModelInfo]) -> &'a ModelInfo {
+        if candidates.is_empty() {
+            tracing::warn!("ModelTier::select called with no candidates; falling back to first catalog entry");
+            return &MODEL_CATALOG[0];
+        }
         match self {
             // Opus: pick most expensive (most capable)
             Self::Opus => candidates
@@ -433,7 +437,7 @@ impl ModelTier {
                         .partial_cmp(&(b.cost_per_m_input + b.cost_per_m_output))
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
-                .expect("at least one candidate for Opus selection"),
+                .map_or(&MODEL_CATALOG[0], |v| *v),
             // Sonnet: pick mid-range cost
             Self::Sonnet => {
                 let mut sorted: Vec<&ModelInfo> = candidates.to_vec();
@@ -453,7 +457,7 @@ impl ModelTier {
                         .partial_cmp(&(b.cost_per_m_input + b.cost_per_m_output))
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
-                .expect("at least one candidate for Haiku selection"),
+                .map_or(&MODEL_CATALOG[0], |v| *v),
         }
     }
 }

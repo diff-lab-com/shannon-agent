@@ -337,14 +337,33 @@ async fn github_handler(
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     // Validate signature if secret is configured.
     if let Some(ref secret) = state.secret {
-        if let Some(sig) = headers.get("X-Hub-Signature-256") {
-            let sig = sig.to_str().unwrap_or("");
-            if !verify_hmac(&payload, secret, sig) {
-                warn!("GitHub webhook signature verification failed");
+        let sig = headers.get("X-Hub-Signature-256");
+        match sig {
+            None => {
+                warn!("GitHub webhook missing signature header");
                 return Err((
                     StatusCode::UNAUTHORIZED,
-                    "Invalid signature".to_string(),
+                    "Missing signature".to_string(),
                 ));
+            }
+            Some(sig) => {
+                let sig = match sig.to_str() {
+                    Ok(s) => s,
+                    Err(_) => {
+                        warn!("GitHub webhook signature header contains invalid UTF-8");
+                        return Err((
+                            StatusCode::BAD_REQUEST,
+                            "Invalid signature header".to_string(),
+                        ));
+                    }
+                };
+                if !verify_hmac(&payload, secret, sig) {
+                    warn!("GitHub webhook signature verification failed");
+                    return Err((
+                        StatusCode::UNAUTHORIZED,
+                        "Invalid signature".to_string(),
+                    ));
+                }
             }
         }
     }

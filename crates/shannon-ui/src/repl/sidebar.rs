@@ -212,17 +212,14 @@ impl super::Repl {
     pub(crate) fn do_auto_compact(&mut self) {
         use shannon_core::compact::CompactEngine;
 
-        if self.query_engine.is_none() {
+        let Some(engine) = self.query_engine.as_mut() else {
             return;
-        }
+        };
 
-        // Snapshot state values before borrowing engine
         let context_window = self.state.model.as_deref()
             .map(shannon_core::model_registry::context_window_for)
             .unwrap_or(200_000) as u64;
         let tokens_used = self.state.tokens_used;
-
-        let engine = self.query_engine.as_mut().unwrap();
         let history = engine.conversation_history();
         if history.len() < 4 {
             return;

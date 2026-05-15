@@ -88,7 +88,7 @@ fn style_to_ansi(style: Style) -> String {
         return "\x1b[0m".into();
     }
 
-    write!(buf, "{}m", codes.join(";")).unwrap();
+    let _ = write!(buf, "{}m", codes.join(";"));
     buf
 }
 

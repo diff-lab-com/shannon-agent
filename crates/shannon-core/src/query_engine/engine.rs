@@ -1310,7 +1310,8 @@ impl QueryEngine {
                                                         }
                                                     };
 
-                                                    let effective_input = match &pre_hook_decision {
+                                                    let mut effective_input = tool_input.clone();
+                                                    match &pre_hook_decision {
                                                         crate::hooks::HookDecision::Deny { reason } => {
                                                             let error_msg = format!("Hook denied: {reason}");
                                                             let _ = tx.send(Ok(QueryEvent::ToolUseResult {
@@ -1324,10 +1325,16 @@ impl QueryEngine {
                                                             continue;
                                                         }
                                                         crate::hooks::HookDecision::Modify { modified_input, .. } => {
-                                                            modified_input.clone().unwrap_or(tool_input.clone())
+                                                            if let Some(new_input) = modified_input {
+                                                                tracing::debug!(
+                                                                    "PreToolUse hook modified input for tool '{}'",
+                                                                    tool_name
+                                                                );
+                                                                effective_input = new_input.clone();
+                                                            }
                                                         }
-                                                        crate::hooks::HookDecision::Allow => tool_input.clone(),
-                                                    };
+                                                        crate::hooks::HookDecision::Allow => {}
+                                                    }
 
                                                     approved_tools.push((tool_id, tool_name, effective_input));
                                                 }
