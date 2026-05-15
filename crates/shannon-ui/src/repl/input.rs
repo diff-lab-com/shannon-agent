@@ -320,10 +320,16 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
             } else if repl.state.streaming_active {
                 let input = repl.prompt.input().trim().to_string();
                 if !input.is_empty() {
-                    repl.state.queued_message = Some(input);
-                    repl.prompt.clear();
-                    repl.state.status = "Message queued (will send after current response)".to_string();
-                    repl.state.toast = Some(("Queued".to_string(), std::time::Instant::now()));
+                    if repl.state.queued_messages.len() < 50 {
+                        let count = repl.state.queued_messages.len() + 1;
+                        repl.state.queued_messages.push(input);
+                        repl.prompt.clear();
+                        repl.state.status = format!("Message queued ({count} in queue)");
+                        repl.state.toast = Some(("Queued".to_string(), std::time::Instant::now()));
+                    } else {
+                        repl.state.toast =
+                            Some(("Queue full (50 max)".to_string(), std::time::Instant::now()));
+                    }
                 }
             } else {
                 super::commands::submit_input(repl, terminal)?;
@@ -575,11 +581,14 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
         }
         KeyCode::Tab => {
             if repl.state.streaming_active {
-                let input = repl.prompt.input();
-                if !input.trim().is_empty() {
-                    repl.state.queued_message = Some(input);
-                    repl.prompt.clear();
-                    repl.state.status = "Message queued (will send after current response)".to_string();
+                let input = repl.prompt.input().trim().to_string();
+                if !input.is_empty() {
+                    if repl.state.queued_messages.len() < 50 {
+                        let count = repl.state.queued_messages.len() + 1;
+                        repl.state.queued_messages.push(input);
+                        repl.prompt.clear();
+                        repl.state.status = format!("Message queued ({count} in queue)");
+                    }
                 }
             } else if !repl.state.completion_suggestions.is_empty() {
                 accept_completion(repl);

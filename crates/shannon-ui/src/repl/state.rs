@@ -153,8 +153,9 @@ pub struct ReplState {
     pub thinking_phase: bool,
     /// Whether streaming is currently active
     pub streaming_active: bool,
-    /// Queued message to auto-submit after current streaming completes.
-    pub queued_message: Option<String>,
+    /// Queued messages to auto-submit sequentially after current streaming completes.
+    /// Messages are processed in FIFO order: first queued, first sent.
+    pub queued_messages: Vec<String>,
     /// When the current streaming operation started
     pub streaming_start: Option<std::time::Instant>,
     /// When this session started (for duration display)
@@ -460,7 +461,7 @@ impl Default for ReplState {
             toast: None,
             thinking_phase: false,
             streaming_active: false,
-            queued_message: None,
+            queued_messages: Vec::new(),
             streaming_start: None,
             session_start: Some(std::time::Instant::now()),
             vim_mode: "INSERT".to_string(),

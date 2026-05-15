@@ -621,6 +621,24 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                         && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL));
 
                     if is_cancel {
+                        // ESC with queued messages: pop last back to prompt for editing.
+                        // Only cancel streaming when queue is empty.
+                        if key.code == crossterm::event::KeyCode::Esc
+                            && !repl.state.queued_messages.is_empty()
+                        {
+                            if let Some(popped) = repl.state.queued_messages.pop() {
+                                repl.prompt.set_input(popped);
+                                let count = repl.state.queued_messages.len();
+                                repl.state.status = if count > 0 {
+                                    format!("Removed — {count} message(s) still queued")
+                                } else {
+                                    "Removed last queued message — edit and re-queue".to_string()
+                                };
+                                repl.state.toast =
+                                    Some(("Removed — edit and re-queue".to_string(), std::time::Instant::now()));
+                            }
+                            continue;
+                        }
                         query_handle.abort();
                         if let Ok(mut s) = streaming.lock() {
                             s.buffer.push_str("\n\n⚠️ Cancelled by user.");
@@ -730,10 +748,13 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                         crossterm::event::KeyCode::Enter if !key.modifiers.contains(crossterm::event::KeyModifiers::SHIFT) => {
                             let input = repl.prompt.input().trim().to_string();
                             if !input.is_empty() {
-                                repl.state.queued_message = Some(input);
-                                repl.prompt.clear();
-                                repl.state.status = "Message queued (will send after current response)".to_string();
-                                repl.state.toast = Some(("Queued".to_string(), std::time::Instant::now()));
+                                if repl.state.queued_messages.len() < 50 {
+                                    let count = repl.state.queued_messages.len() + 1;
+                                    repl.state.queued_messages.push(input);
+                                    repl.prompt.clear();
+                                    repl.state.status = format!("Message queued ({count} in queue)");
+                                    repl.state.toast = Some(("Queued".to_string(), std::time::Instant::now()));
+                                }
                             }
                         }
                         crossterm::event::KeyCode::Enter => {
@@ -741,11 +762,14 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                             repl.prompt.insert_newline();
                         }
                         crossterm::event::KeyCode::Tab => {
-                            let input = repl.prompt.input();
-                            if !input.trim().is_empty() {
-                                repl.state.queued_message = Some(input);
-                                repl.prompt.clear();
-                                repl.state.status = "Message queued (will send after current response)".to_string();
+                            let input = repl.prompt.input().trim().to_string();
+                            if !input.is_empty() {
+                                if repl.state.queued_messages.len() < 50 {
+                                    let count = repl.state.queued_messages.len() + 1;
+                                    repl.state.queued_messages.push(input);
+                                    repl.prompt.clear();
+                                    repl.state.status = format!("Message queued ({count} in queue)");
+                                }
                             }
                         }
                         _ => {} // Ignore other keys during streaming
@@ -1001,8 +1025,11 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                 super::commands::check_ralph_iteration(repl);
             }
 
-            // Submit queued follow-up message if any
-            if let Some(queued) = repl.state.queued_message.take() {
+            // Submit first queued follow-up message if any.
+            // submit_input_with_text -> handle_query -> streaming -> completion
+            // will check queued_messages again, processing them sequentially.
+            if !repl.state.queued_messages.is_empty() {
+                let queued = repl.state.queued_messages.remove(0);
                 if !queued.trim().is_empty() {
                     repl.state.toast = Some(("Sending queued message…".to_string(), std::time::Instant::now()));
                     super::commands::submit_input_with_text(repl, &queued);
@@ -1010,6 +1037,8 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
             }
         }
         Err((engine_opt, e)) => {
+            // Clear queued messages on error/cancel — user chose to stop.
+            repl.state.queued_messages.clear();
             // Restore the query engine if it was recovered from the task.
             // Preserve the user message so conversation state stays consistent
             // (the background task only added it to its clone, not the engine).

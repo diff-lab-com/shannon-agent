@@ -3573,18 +3573,19 @@ fn test_repl_plan_off() {
 // ── Streaming Input Tests ────────────────────────────────────────────
 
 #[test]
-fn test_streaming_state_allows_queued_message() {
+fn test_streaming_state_allows_queued_messages() {
     let mut state = ReplState::default();
     assert!(!state.streaming_active);
-    assert!(state.queued_message.is_none());
+    assert!(state.queued_messages.is_empty());
 
     // Simulate streaming active state
     state.streaming_active = true;
     assert!(state.streaming_active);
 
     // A queued message should be accepted
-    state.queued_message = Some("follow-up question".to_string());
-    assert_eq!(state.queued_message.as_deref(), Some("follow-up question"));
+    state.queued_messages.push("follow-up question".to_string());
+    assert_eq!(state.queued_messages.len(), 1);
+    assert_eq!(state.queued_messages[0], "follow-up question");
 }
 
 // ── Input Queuing Regression Tests ───────────────────────────────────
@@ -3597,7 +3598,7 @@ fn test_streaming_state_allows_queued_message() {
 // 5. Edge cases: empty, replace, cancel, error
 
 /// Simulates what happens when Enter is pressed during streaming:
-/// input is captured into queued_message and prompt is cleared.
+/// input is pushed into queued_messages and prompt is cleared.
 #[test]
 fn test_queue_message_via_enter_during_streaming() {
     let mut state = ReplState::default();
@@ -3607,24 +3608,24 @@ fn test_queue_message_via_enter_during_streaming() {
     let input = "why did the test fail?".to_string();
     assert!(!input.trim().is_empty());
 
-    // Simulate the Enter-during-streaming path (from query.rs:671)
-    state.queued_message = Some(input.clone());
+    // Simulate the Enter-during-streaming path (from query.rs)
+    state.queued_messages.push(input.clone());
     // prompt would be cleared in real code
 
-    assert_eq!(state.queued_message.as_deref(), Some("why did the test fail?"));
+    assert_eq!(state.queued_messages[0], "why did the test fail?");
     assert!(state.streaming_active, "streaming should still be active");
 }
 
-/// Simulates Tab queuing during streaming (from query.rs:684).
+/// Simulates Tab queuing during streaming (from query.rs).
 #[test]
 fn test_queue_message_via_tab_during_streaming() {
     let mut state = ReplState::default();
     state.streaming_active = true;
 
     let input = "explain this function".to_string();
-    state.queued_message = Some(input.clone());
+    state.queued_messages.push(input);
 
-    assert_eq!(state.queued_message.as_deref(), Some("explain this function"));
+    assert_eq!(state.queued_messages[0], "explain this function");
 }
 
 /// Verifies that empty messages are NOT queued (matches the `!input.is_empty()` guard).
@@ -3634,32 +3635,34 @@ fn test_empty_message_not_queued() {
     state.streaming_active = true;
 
     let input = "   ".to_string();
-    // The guard in query.rs:670 checks `!input.is_empty()` after trim
+    // The guard checks `!input.is_empty()` after trim
     if !input.trim().is_empty() {
-        state.queued_message = Some(input);
+        state.queued_messages.push(input);
     }
 
-    assert!(state.queued_message.is_none(), "whitespace-only input should not be queued");
+    assert!(state.queued_messages.is_empty(), "whitespace-only input should not be queued");
 }
 
-/// Verifies that a second queue replaces the first (no accumulation).
+/// Verifies that a second queue appends to the first (multi-message queue).
 #[test]
-fn test_second_queue_replaces_first() {
+fn test_second_queue_appends_to_first() {
     let mut state = ReplState::default();
     state.streaming_active = true;
 
     // First queue
-    state.queued_message = Some("first question".to_string());
-    assert_eq!(state.queued_message.as_deref(), Some("first question"));
+    state.queued_messages.push("first question".to_string());
+    assert_eq!(state.queued_messages.len(), 1);
+    assert_eq!(state.queued_messages[0], "first question");
 
-    // Second queue replaces (matches behavior in query.rs:671 — direct assignment)
-    state.queued_message = Some("second question".to_string());
-    assert_eq!(state.queued_message.as_deref(), Some("second question"));
-    assert_ne!(state.queued_message.as_deref(), Some("first question"));
+    // Second queue appends (multi-message queue behavior)
+    state.queued_messages.push("second question".to_string());
+    assert_eq!(state.queued_messages.len(), 2);
+    assert_eq!(state.queued_messages[0], "first question");
+    assert_eq!(state.queued_messages[1], "second question");
 }
 
-/// Verifies the full dequeue lifecycle: queue → streaming ends → take.
-/// This simulates the code at query.rs:933.
+/// Verifies the full dequeue lifecycle: queue → streaming ends → remove(0).
+/// This simulates the code at query.rs.
 #[test]
 fn test_dequeue_lifecycle() {
     let mut state = ReplState::default();
@@ -3668,53 +3671,50 @@ fn test_dequeue_lifecycle() {
     state.streaming_active = true;
 
     // 2. User queues a message
-    state.queued_message = Some("follow-up".to_string());
-    assert!(state.queued_message.is_some());
+    state.queued_messages.push("follow-up".to_string());
+    assert!(!state.queued_messages.is_empty());
 
-    // 3. Streaming ends — queued_message is still present
+    // 3. Streaming ends — queued_messages still present
     state.streaming_active = false;
-    assert_eq!(state.queued_message.as_deref(), Some("follow-up"));
+    assert_eq!(state.queued_messages[0], "follow-up");
 
-    // 4. Dequeue (take) — simulates query.rs:933
-    let dequeued = state.queued_message.take();
-    assert_eq!(dequeued, Some("follow-up".to_string()));
-    assert!(state.queued_message.is_none(), "after take, queued_message should be None");
+    // 4. Dequeue (remove(0)) — simulates query.rs
+    let dequeued = state.queued_messages.remove(0);
+    assert_eq!(dequeued, "follow-up".to_string());
+    assert!(state.queued_messages.is_empty(), "after remove, queue should be empty");
     assert!(!state.streaming_active, "streaming should be off");
 }
 
-/// Verifies that dequeuing an empty message is skipped (matches query.rs:934 guard).
+/// Verifies that dequeuing an empty message is skipped.
 #[test]
 fn test_dequeue_empty_message_skipped() {
     let mut state = ReplState::default();
-    state.queued_message = Some("   ".to_string());
+    state.queued_messages.push("   ".to_string());
 
-    // Simulates: if let Some(queued) = state.queued_message.take() { if !queued.trim().is_empty() { send } }
-    let dequeued = state.queued_message.take();
-    assert!(dequeued.is_some());
-    assert!(dequeued.unwrap().trim().is_empty(), "should be skipped as empty");
+    // Simulates: dequeue then check if trimmed content is empty before sending
+    let dequeued = state.queued_messages.remove(0);
+    assert!(dequeued.trim().is_empty(), "should be skipped as empty");
 }
 
-/// Verifies that when streaming is cancelled, the queued message is still available.
-/// In the cancel path (query.rs:948-953), streaming_active goes false but
-/// queued_message processing happens in the Ok path (line 933). On cancel,
-/// the Err path runs and queued_message stays — it should be processed on next
-/// streaming completion or cleared.
+/// Verifies that cancel clears the entire queue.
 #[test]
-fn test_cancel_preserves_queued_message() {
+fn test_cancel_clears_queued_messages() {
     let mut state = ReplState::default();
     state.streaming_active = true;
-    state.queued_message = Some("will this survive?".to_string());
+    state.queued_messages.push("will this survive?".to_string());
+    state.queued_messages.push("second question".to_string());
 
-    // Cancel happens — streaming ends but queued_message persists
+    // Cancel happens — streaming ends and queue is cleared
     state.streaming_active = false;
-    assert_eq!(state.queued_message.as_deref(), Some("will this survive?"));
+    state.queued_messages.clear();
+    assert!(state.queued_messages.is_empty());
 }
 
-/// Verifies that queued message state is clean at startup.
+/// Verifies that queued messages state is clean at startup.
 #[test]
-fn test_initial_state_no_queued_message() {
+fn test_initial_state_no_queued_messages() {
     let state = ReplState::default();
-    assert!(state.queued_message.is_none());
+    assert!(state.queued_messages.is_empty());
     assert!(!state.streaming_active);
 }
 
@@ -3725,13 +3725,13 @@ fn test_queue_unicode_message() {
     state.streaming_active = true;
 
     let input = "解释一下这个函数的作用".to_string();
-    state.queued_message = Some(input.clone());
+    state.queued_messages.push(input.clone());
 
-    assert_eq!(state.queued_message.as_deref(), Some("解释一下这个函数的作用"));
+    assert_eq!(state.queued_messages[0], "解释一下这个函数的作用");
 
     // Dequeue should preserve unicode
-    let dequeued = state.queued_message.take();
-    assert_eq!(dequeued, Some(input));
+    let dequeued = state.queued_messages.remove(0);
+    assert_eq!(dequeued, input);
 }
 
 /// Verifies that queue → dequeue → queue cycle works for multiple turns.
@@ -3741,23 +3741,22 @@ fn test_multiple_queue_dequeue_cycles() {
 
     // Cycle 1
     state.streaming_active = true;
-    state.queued_message = Some("question 1".to_string());
+    state.queued_messages.push("question 1".to_string());
     state.streaming_active = false;
-    let q1 = state.queued_message.take();
-    assert_eq!(q1, Some("question 1".to_string()));
+    let q1 = state.queued_messages.remove(0);
+    assert_eq!(q1, "question 1".to_string());
 
     // Cycle 2
     state.streaming_active = true;
-    state.queued_message = Some("question 2".to_string());
+    state.queued_messages.push("question 2".to_string());
     state.streaming_active = false;
-    let q2 = state.queued_message.take();
-    assert_eq!(q2, Some("question 2".to_string()));
+    let q2 = state.queued_messages.remove(0);
+    assert_eq!(q2, "question 2".to_string());
 
     // Cycle 3 — no queue this time
     state.streaming_active = true;
     state.streaming_active = false;
-    let q3 = state.queued_message.take();
-    assert_eq!(q3, None);
+    assert!(state.queued_messages.is_empty());
 }
 
 /// Verifies that a very long message can be queued and dequeued intact.
@@ -3767,15 +3766,15 @@ fn test_queue_long_message() {
     state.streaming_active = true;
 
     let long_msg = "x".repeat(10_000);
-    state.queued_message = Some(long_msg.clone());
+    state.queued_messages.push(long_msg);
 
-    let dequeued = state.queued_message.take();
-    assert_eq!(dequeued.unwrap().len(), 10_000);
+    let dequeued = state.queued_messages.remove(0);
+    assert_eq!(dequeued.len(), 10_000);
 }
 
-/// Verifies the queued message indicator logic used in rendering.
-/// When streaming_active && queued_message.is_some() → show queued content.
-/// When streaming_active && queued_message.is_none() → show "Enter = queue" hint.
+/// Verifies the queued messages indicator logic used in rendering.
+/// When streaming_active && queue non-empty → show queued content.
+/// When streaming_active && queue empty → show "Enter = queue" hint.
 /// When !streaming_active → no hint shown.
 #[test]
 fn test_rendering_indicator_logic() {
@@ -3783,24 +3782,24 @@ fn test_rendering_indicator_logic() {
 
     // Case 1: Not streaming → no indicator
     assert!(!state.streaming_active);
-    assert!(state.queued_message.is_none());
+    assert!(state.queued_messages.is_empty());
 
     // Case 2: Streaming, no queue → show "Enter = queue" hint
     state.streaming_active = true;
-    assert!(state.streaming_active && state.queued_message.is_none());
+    assert!(state.streaming_active && state.queued_messages.is_empty());
 
-    // Case 3: Streaming, message queued → show queued content
-    state.queued_message = Some("my question".to_string());
-    assert!(state.streaming_active && state.queued_message.is_some());
+    // Case 3: Streaming, messages queued → show queued content
+    state.queued_messages.push("my question".to_string());
+    assert!(state.streaming_active && !state.queued_messages.is_empty());
 
-    // Case 4: Streaming ends, message still queued → still shows in state
+    // Case 4: Streaming ends, messages still queued → still in state
     state.streaming_active = false;
     assert!(!state.streaming_active);
-    assert!(state.queued_message.is_some());
+    assert!(!state.queued_messages.is_empty());
     // But render would not show it because streaming_active is false
 }
 
-/// Verifies that status message is set when queuing (matches query.rs:673).
+/// Verifies that status message is set when queuing.
 #[test]
 fn test_status_message_on_queue() {
     let mut state = ReplState::default();
@@ -3808,21 +3807,21 @@ fn test_status_message_on_queue() {
 
     // Simulate the full Enter-during-streaming path
     let input = "what about edge cases?".to_string();
-    state.queued_message = Some(input);
-    state.status = "Message queued (will send after current response)".to_string();
+    state.queued_messages.push(input);
+    state.status = "Message queued (1 in queue)".to_string();
 
     assert!(state.status.contains("queued"));
-    assert!(state.queued_message.is_some());
+    assert!(!state.queued_messages.is_empty());
 }
 
-/// Verifies that toast is set on queue (matches query.rs:674).
+/// Verifies that toast is set on queue.
 #[test]
 fn test_toast_set_on_queue() {
     let mut state = ReplState::default();
     state.streaming_active = true;
 
     // Simulate queue with toast
-    state.queued_message = Some("test".to_string());
+    state.queued_messages.push("test".to_string());
     state.toast = Some(("Queued".to_string(), std::time::Instant::now()));
 
     assert!(state.toast.is_some());
@@ -3849,15 +3848,164 @@ fn test_streaming_state_pageup_pagedown_independent() {
 }
 
 #[test]
-fn test_queued_message_cleared_after_streaming() {
+fn test_queued_messages_after_streaming() {
     let mut state = ReplState::default();
     state.streaming_active = true;
-    state.queued_message = Some("queued".to_string());
+    state.queued_messages.push("queued".to_string());
 
     // Simulate streaming end
     state.streaming_active = false;
-    // queued_message should still be present for processing
-    assert_eq!(state.queued_message.as_deref(), Some("queued"));
+    // queued_messages should still be present for processing
+    assert_eq!(state.queued_messages[0], "queued");
+}
+
+// ── Multi-Message Queue Tests ────────────────────────────────────────
+
+/// Verifies FIFO ordering: first queued message is dequeued first.
+#[test]
+fn test_multi_message_fifo_ordering() {
+    let mut state = ReplState::default();
+    state.streaming_active = true;
+
+    state.queued_messages.push("first".to_string());
+    state.queued_messages.push("second".to_string());
+    state.queued_messages.push("third".to_string());
+
+    assert_eq!(state.queued_messages.len(), 3);
+
+    // Dequeue in FIFO order
+    let q1 = state.queued_messages.remove(0);
+    assert_eq!(q1, "first");
+    let q2 = state.queued_messages.remove(0);
+    assert_eq!(q2, "second");
+    let q3 = state.queued_messages.remove(0);
+    assert_eq!(q3, "third");
+    assert!(state.queued_messages.is_empty());
+}
+
+/// Verifies sequential dequeue empties the entire queue.
+#[test]
+fn test_sequential_dequeue_empties_queue() {
+    let mut state = ReplState::default();
+    for i in 0..5 {
+        state.queued_messages.push(format!("msg {i}"));
+    }
+    assert_eq!(state.queued_messages.len(), 5);
+
+    while !state.queued_messages.is_empty() {
+        let _ = state.queued_messages.remove(0);
+    }
+    assert!(state.queued_messages.is_empty());
+}
+
+/// Verifies max queue size cap of 50.
+#[test]
+fn test_max_queue_size_enforced() {
+    let mut state = ReplState::default();
+    for i in 0..50 {
+        state.queued_messages.push(format!("msg {i}"));
+    }
+    assert_eq!(state.queued_messages.len(), 50);
+
+    // Simulating the guard: if len < 50, push; else reject
+    if state.queued_messages.len() < 50 {
+        state.queued_messages.push("overflow".to_string());
+    }
+    // Should still be 50 — the push was rejected
+    assert_eq!(state.queued_messages.len(), 50);
+    assert_eq!(state.queued_messages.last().unwrap(), "msg 49");
+}
+
+/// Verifies ESC pops last message from queue.
+#[test]
+fn test_esc_pops_last_message() {
+    let mut state = ReplState::default();
+    state.streaming_active = true;
+    state.queued_messages.push("first".to_string());
+    state.queued_messages.push("second".to_string());
+    state.queued_messages.push("third".to_string());
+
+    // ESC pops last
+    let popped = state.queued_messages.pop();
+    assert_eq!(popped, Some("third".to_string()));
+    assert_eq!(state.queued_messages.len(), 2);
+    assert_eq!(state.queued_messages[0], "first");
+    assert_eq!(state.queued_messages[1], "second");
+
+    // Streaming should still be active (ESC didn't cancel)
+    assert!(state.streaming_active);
+}
+
+/// Verifies ESC with empty queue doesn't crash.
+#[test]
+fn test_esc_with_empty_queue_no_crash() {
+    let mut state = ReplState::default();
+    state.streaming_active = true;
+    assert!(state.queued_messages.is_empty());
+
+    // pop on empty Vec returns None — no panic
+    let popped = state.queued_messages.pop();
+    assert_eq!(popped, None);
+    assert!(state.queued_messages.is_empty());
+}
+
+/// Verifies cancel/error clears the entire queue.
+#[test]
+fn test_cancel_clears_entire_queue() {
+    let mut state = ReplState::default();
+    state.streaming_active = true;
+    state.queued_messages.push("a".to_string());
+    state.queued_messages.push("b".to_string());
+    state.queued_messages.push("c".to_string());
+
+    // Cancel path clears queue
+    state.queued_messages.clear();
+    assert!(state.queued_messages.is_empty());
+}
+
+/// Verifies render shows queue count for single message.
+#[test]
+fn test_render_indicator_single_message() {
+    let mut state = ReplState::default();
+    state.streaming_active = true;
+    state.queued_messages.push("my question".to_string());
+
+    assert!(!state.queued_messages.is_empty());
+    assert_eq!(state.queued_messages.len(), 1);
+    assert_eq!(state.queued_messages[0], "my question");
+}
+
+/// Verifies render shows overflow summary for many messages.
+#[test]
+fn test_render_indicator_many_messages_overflow() {
+    let mut state = ReplState::default();
+    state.streaming_active = true;
+
+    // Add 15 messages
+    for i in 0..15 {
+        state.queued_messages.push(format!("message {i}"));
+    }
+
+    // Render shows up to 10 recent + overflow count
+    let total = state.queued_messages.len();
+    assert_eq!(total, 15);
+    let overflow = total.saturating_sub(10);
+    assert_eq!(overflow, 5, "5 messages beyond display limit");
+}
+
+/// Verifies empty/whitespace messages are not appended.
+#[test]
+fn test_empty_messages_not_appended() {
+    let mut state = ReplState::default();
+    state.streaming_active = true;
+
+    let empty_inputs = ["", "   ", "\t", "\n"];
+    for input in &empty_inputs {
+        if !input.trim().is_empty() {
+            state.queued_messages.push(input.to_string());
+        }
+    }
+    assert!(state.queued_messages.is_empty(), "empty/whitespace messages should not be queued");
 }
 
 // ── Model Config Tests ────────────────────────────────────────────────
