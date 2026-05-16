@@ -555,6 +555,12 @@ struct OpenAiFunctionDelta {
 struct OpenAiUsage {
     prompt_tokens: Option<u32>,
     completion_tokens: Option<u32>,
+    prompt_tokens_details: Option<OpenAiPromptTokensDetails>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiPromptTokensDetails {
+    cached_tokens: Option<u32>,
 }
 
 /// Per-stream state for OpenAI response normalization.
@@ -618,6 +624,11 @@ fn normalize_openai_event(
             usage: Usage {
                 input_tokens: usage.prompt_tokens.unwrap_or(0),
                 output_tokens: usage.completion_tokens.unwrap_or(0),
+                cache_read_input_tokens: usage
+                    .prompt_tokens_details
+                    .as_ref()
+                    .and_then(|d| d.cached_tokens)
+                    .unwrap_or(0),
                 ..Default::default()
             },
         })];

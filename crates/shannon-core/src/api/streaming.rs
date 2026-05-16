@@ -507,6 +507,23 @@ mod tests {
     }
 
     #[test]
+    fn test_openai_usage_chunk_with_cached_tokens() {
+        let lines = vec![
+            r#"data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150,"prompt_tokens_details":{"cached_tokens":80}}}"#,
+        ];
+        let events = parse_sse_lines(&lines, LlmProvider::OpenAI);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Ok(StreamEvent::MessageDelta { usage, .. }) => {
+                assert_eq!(usage.input_tokens, 100);
+                assert_eq!(usage.output_tokens, 50);
+                assert_eq!(usage.cache_read_input_tokens, 80);
+            }
+            other => panic!("Expected MessageDelta with usage, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_openai_usage_chunk() {
         let lines = vec![
             r#"data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30}}"#,

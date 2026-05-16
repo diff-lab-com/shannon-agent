@@ -679,3 +679,29 @@ fn parse_color_string(s: &str) -> Option<ratatui::style::Color> {
         }
     }
 }
+
+pub(crate) fn handle_lang(repl: &mut Repl, args: &str) -> Result<()> {
+    let supported = ["en", "zh", "hi", "es", "fr", "ar", "bn", "pt", "ru", "ja"];
+    let input = args.trim();
+
+    if input.is_empty() {
+        let current = shannon_core::i18n::current_locale();
+        repl.chat.add_message(ChatRole::System, format!(
+            "Current language: {current}\n\nUsage: /lang <code>\nSupported: {}",
+            supported.join(", ")
+        ));
+        return Ok(());
+    }
+
+    let lang = input.to_lowercase();
+    if supported.contains(&lang.as_str()) {
+        shannon_core::i18n::set_locale(&lang);
+        repl.chat.add_message(ChatRole::System, format!("Language set to: {lang}"));
+    } else {
+        repl.chat.add_message(ChatRole::System, format!(
+            "Unsupported language: {lang}\nSupported: {}",
+            supported.join(", ")
+        ));
+    }
+    Ok(())
+}

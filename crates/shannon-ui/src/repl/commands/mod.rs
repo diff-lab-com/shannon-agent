@@ -244,7 +244,7 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
         repl.shared_executor.registry().await.contains(cmd_name).await
     });
     // Commands handled in the match block but not in the global registry
-    let repl_only_commands = ["help", "clear", "quit", "exit", "model", "models", "init", "config", "sessions", "resume", "history", "worktree", "credentials", "creds", "cred", "status", "st", "git-status", "export", "save", "import", "load", "diff", "search", "?", "hist", "history-search", "find", "grep", "conv-search", "browse", "files", "select-tools", "tools", "debug", "dbg", "dev", "doctor", "check", "diagnostics", "terminal-setup", "compact", "cost", "billing", "usage", "suggest", "permissions", "perms", "perm", "plan", "team", "agents", "agent", "route", "mcp", "branch", "fork", "web-search", "websearch", "search-web", "review", "stage", "stats", "perf", "loop", "ralph", "sandbox", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "rewind", "notify", "webhook", "routine", "schedule", "cron", "create-pr", "patch", "copy", "clip", "paste", "add", "add-dir", "adddir", "watch", "bind", "project", "theme", "session", "rename", "recap", "effort", "focus", "accessibility", "a11y", "color", "diag", "commands", "statusline"];
+    let repl_only_commands = ["help", "clear", "quit", "exit", "model", "models", "init", "config", "sessions", "resume", "history", "worktree", "credentials", "creds", "cred", "status", "st", "git-status", "export", "save", "import", "load", "diff", "search", "?", "hist", "history-search", "find", "grep", "conv-search", "browse", "files", "select-tools", "tools", "debug", "dbg", "dev", "doctor", "check", "diagnostics", "terminal-setup", "compact", "cost", "billing", "usage", "suggest", "permissions", "perms", "perm", "plan", "team", "agents", "agent", "route", "mcp", "branch", "fork", "web-search", "websearch", "search-web", "review", "stage", "stats", "perf", "loop", "ralph", "sandbox", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "rewind", "notify", "webhook", "routine", "schedule", "cron", "create-pr", "patch", "copy", "clip", "paste", "add", "add-dir", "adddir", "watch", "bind", "project", "theme", "session", "rename", "recap", "effort", "focus", "accessibility", "a11y", "color", "diag", "commands", "statusline", "lang", "language"];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
     if command_exists || is_repl_command {
@@ -326,6 +326,7 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "diag" => debug::handle_diag(repl, args)?,
             "commands" => hooks::handle_commands(repl, args)?,
             "statusline" => config::handle_statusline(repl, args)?,
+            "lang" | "language" => config::handle_lang(repl, args)?,
             _ => handle_other_command(repl, cmd_name, args)?,
         }
         Ok(())
