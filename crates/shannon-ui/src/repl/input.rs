@@ -1046,6 +1046,7 @@ pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String>
         "diag" => &["--full", "--json"],
         "commands" => &["list", "reload"],
         "statusline" => &["on", "off", "config"],
+        "lang" | "language" => &["en", "zh", "hi", "es", "fr", "ar", "bn", "pt", "ru", "ja"],
         "terminal-setup" => &[],
         "help" => &[],
         "init" => &[],
@@ -2269,7 +2270,7 @@ mod tests {
             "status", "find", "browse", "cost", "agents", "mcp", "hooks",
             "remember", "recall", "memory", "image", "mode", "undo", "rewind",
             "notify", "create-pr", "copy", "add", "watch", "session", "effort",
-            "focus", "accessibility", "color", "diag", "commands", "statusline",
+            "focus", "accessibility", "color", "diag", "commands", "statusline", "lang",
         ];
 
         for cmd in &core_commands {

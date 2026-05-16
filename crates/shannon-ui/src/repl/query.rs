@@ -104,7 +104,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
         Some(e) => e,
         None => {
             repl.chat.add_message(ChatRole::System, "Error: Query engine not available. Please restart the session.".to_string());
-            repl.state.status = "Ready".to_string();
+            repl.state.status = t!("status.ready").to_string();
             return Ok(());
         }
     };

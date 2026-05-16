@@ -696,7 +696,16 @@ pub(crate) fn handle_lang(repl: &mut Repl, args: &str) -> Result<()> {
     let lang = input.to_lowercase();
     if supported.contains(&lang.as_str()) {
         shannon_core::i18n::set_locale(&lang);
-        repl.chat.add_message(ChatRole::System, format!("Language set to: {lang}"));
+        // Refresh status bar to reflect the new language immediately
+        repl.state.status = t!("status.ready").to_string();
+        let lang_names = [
+            ("en", "English"), ("zh", "中文"), ("hi", "हिन्दी"),
+            ("es", "Español"), ("fr", "Français"), ("ar", "العربية"),
+            ("bn", "বাংলা"), ("pt", "Português"), ("ru", "Русский"),
+            ("ja", "日本語"),
+        ];
+        let native_name = lang_names.iter().find(|(c, _)| *c == lang).map(|(_, n)| *n).unwrap_or(&lang);
+        repl.chat.add_message(ChatRole::System, format!("Language: {native_name} ({lang})"));
     } else {
         repl.chat.add_message(ChatRole::System, format!(
             "Unsupported language: {lang}\nSupported: {}",
