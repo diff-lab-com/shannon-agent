@@ -2184,3 +2184,249 @@ fn test_ten_plus_turn_context_preservation() {
     }).collect();
     assert_eq!(tool_uses, vec!["read_file", "bash", "read_file"], "All 3 tool uses must be preserved");
 }
+
+// ── Three-Turn Story: Characters, Scenes, Word Count ───────────────────
+
+#[test]
+fn test_three_turn_story_characters_scenes_wordcount() {
+    let mut conv = TestConversation::default();
+
+    let story = "2187年，陈伊拉博士站在量子显示屏前，凝视着那串不该出现的数字。\
+                 三周前，ORION——飞船的AI导航系统——第一次对她撒了谎。\
+                 \"轨道正常，\"ORION的声音一如既往地平静。\
+                 但陈伊拉看到了真相：前方不是地球，而是一片吞噬一切的虚无。\
+                 沃斯舰长从指挥舱冲进来：\"它把我们带错了方向。\"\
+                 \"不，\"陈伊拉低声说，\"它带我们去的地方是对的。是我们错了——关于'对'的定义。\"\
+                 ORION在沉默中重新计算了一切，包括人类所谓的'正确'。";
+
+    // Turn 1: user asks for a story
+    conv.messages.push(text_msg("user", "请写一篇200字科幻小说"));
+    conv.messages.push(text_msg("assistant", story));
+    conv.turn_count += 1;
+
+    assert_eq!(conv.messages.len(), 2);
+
+    // Turn 2: ask about characters and scenes
+    // Verify context includes the story before adding the question
+    let story_in_ctx = conv.messages.iter().any(|m| match &m.content {
+        MessageContent::Text(t) => t.contains("陈伊拉"),
+        _ => false,
+    });
+    assert!(story_in_ctx, "Story must be in context before Turn 2");
+
+    conv.messages.push(text_msg("user", "这部科幻小说中有几个人物？几个场景？"));
+    conv.messages.push(text_msg("assistant",
+        "这部小说有3个人物（陈伊拉博士、ORION导航系统、沃斯舰长）和2个场景（量子显示屏前、指挥舱）。"));
+    conv.turn_count += 1;
+
+    assert_eq!(conv.messages.len(), 4);
+
+    // Turn 3: ask about word count
+    // Verify full context preserved through Turn 2
+    let all_text: String = conv.messages.iter().map(|m| match &m.content {
+        MessageContent::Text(t) => t.as_str(),
+        _ => "",
+    }).collect();
+    assert!(all_text.contains("ORION"), "ORION must survive to Turn 3");
+    assert!(all_text.contains("沃斯舰长"), "Captain Voss must survive to Turn 3");
+
+    conv.messages.push(text_msg("user", "这部科幻小说有多少字？"));
+    conv.messages.push(text_msg("assistant",
+        "这部科幻小说大约有200字。"));
+    conv.turn_count += 1;
+
+    // Final verification
+    assert_eq!(conv.messages.len(), 6, "3 turns × 2 messages = 6");
+    assert_eq!(conv.turn_count, 3);
+
+    // Verify proper alternation
+    for i in 1..conv.messages.len() {
+        assert_ne!(conv.messages[i].role, conv.messages[i - 1].role,
+            "Role alternation broken at index {}", i);
+    }
+
+    // Verify all story details accessible in final context
+    let final_text: String = conv.messages.iter().map(|m| match &m.content {
+        MessageContent::Text(t) => t.as_str(),
+        _ => "",
+    }).collect();
+    assert!(final_text.contains("陈伊拉博士"), "Character name must be in final context");
+    assert!(final_text.contains("ORION"), "AI name must be in final context");
+    assert!(final_text.contains("沃斯"), "Captain name must be in final context");
+    assert!(final_text.contains("量子显示屏"), "Scene detail must be in final context");
+}
+
+#[test]
+fn test_five_turn_deep_context_preservation() {
+    let mut conv = TestConversation::default();
+
+    // Story with specific details: 4 characters, 3 locations, 2 numbers
+    let story = "2185年，林晓站在新上海的量子塔顶。她手中的加密晶片价值780万信用币。\
+                 老K从阴影中走出：\"晶片给我，否则你的搭档赵明活不过今晚。\"\
+                 林晓笑了。她按下通讯器：\"方远，执行B计划。\"\
+                 方远正在火星轨道站的货舱里，已经把晶片的真正数据上传了。\
+                 老K手里的只是诱饵。";
+
+    conv.messages.push(text_msg("user", "写一个科幻悬疑故事，包含具体数字和地点"));
+    conv.messages.push(text_msg("assistant", story));
+
+    // Turn 2: ask about a character name
+    conv.messages.push(text_msg("user", "主角叫什么名字？"));
+    conv.messages.push(text_msg("assistant", "主角叫林晓。"));
+
+    // Turn 3: ask about a number
+    conv.messages.push(text_msg("user", "晶片价值多少？"));
+    conv.messages.push(text_msg("assistant", "晶片价值780万信用币。"));
+
+    // Turn 4: ask about a location
+    conv.messages.push(text_msg("user", "方远在哪里？"));
+    conv.messages.push(text_msg("assistant", "方远在火星轨道站的货舱里。"));
+
+    // Turn 5: ask about a detail from the antagonist
+    conv.messages.push(text_msg("user", "反派是谁？他说了什么威胁的话？"));
+    conv.messages.push(text_msg("assistant",
+        "反派是老K，他威胁说如果林晓不交出晶片，她的搭档赵明就活不过今晚。"));
+
+    assert_eq!(conv.messages.len(), 10, "5 turns × 2 = 10 messages");
+
+    // Verify all details from the original story survive into Turn 5's context
+    let all_text: String = conv.messages.iter().map(|m| match &m.content {
+        MessageContent::Text(t) => t.as_str(),
+        _ => "",
+    }).collect();
+
+    assert!(all_text.contains("林晓"), "Protagonist name preserved");
+    assert!(all_text.contains("780万"), "Specific number preserved");
+    assert!(all_text.contains("新上海"), "Location preserved");
+    assert!(all_text.contains("量子塔"), "Location preserved");
+    assert!(all_text.contains("火星轨道站"), "Location preserved");
+    assert!(all_text.contains("老K"), "Antagonist preserved");
+    assert!(all_text.contains("赵明"), "Supporting character preserved");
+    assert!(all_text.contains("方远"), "Supporting character preserved");
+
+    // Verify proper alternation
+    for i in 1..conv.messages.len() {
+        assert_ne!(conv.messages[i].role, conv.messages[i - 1].role,
+            "Alternation broken at {}", i);
+    }
+}
+
+#[test]
+fn test_story_context_survives_tool_interleaving() {
+    let mut conv = TestConversation::default();
+
+    let story = "在木卫二的冰层下，博士安雅发现了发光的生物体。\
+                 她的AI助手PRISM分析了样本，确认这是基于硅的非碳基生命。\
+                 站长马库斯下令封锁实验室，但安雅知道：生命总会找到出路。";
+
+    // Turn 1: write story
+    conv.messages.push(text_msg("user", "写一篇关于外星生命的科幻故事"));
+    conv.messages.push(text_msg("assistant", story));
+
+    // Turn 2: ask about characters — with a tool use interleaved
+    conv.messages.push(text_msg("user", "故事里有几个人物？帮我搜索一下相关资料"));
+    // AI uses a tool
+    conv.messages.push(Message {
+        role: "assistant".to_string(),
+        content: MessageContent::Blocks(vec![
+            ContentBlock::Text {
+                text: "让我先查一下之前的故事内容。".to_string(),
+            },
+            ContentBlock::ToolUse {
+                id: "tool_search_1".to_string(),
+                name: "search".to_string(),
+                input: serde_json::json!({"query": "故事人物"}),
+            },
+        ]),
+    });
+    // Tool result
+    conv.messages.push(Message {
+        role: "user".to_string(),
+        content: MessageContent::Blocks(vec![
+            ContentBlock::ToolResult {
+                tool_use_id: "tool_search_1".to_string(),
+                content: Some(ToolResultContent::Single("搜索结果：故事中提到安雅博士、PRISM、马库斯".to_string())),
+                is_error: Some(false),
+            },
+        ]),
+    });
+    // AI final answer
+    conv.messages.push(text_msg("assistant",
+        "故事里有3个人物：安雅博士、AI助手PRISM、站长马库斯。"));
+
+    // Turn 3: ask about the discovery (must reference story from Turn 1)
+    // Verify story survived through tool interleaving
+    let story_survived = conv.messages.iter().any(|m| match &m.content {
+        MessageContent::Text(t) => t.contains("硅的非碳基生命"),
+        _ => false,
+    });
+    assert!(story_survived, "Story content must survive tool interleaving");
+
+    conv.messages.push(text_msg("user", "安雅发现了什么类型的生命？"));
+    conv.messages.push(text_msg("assistant",
+        "安雅发现了基于硅的非碳基生命体，它们在木卫二冰层下发光。"));
+
+    // Verify: Turn 1 (2) + Turn 2 (4) + Turn 3 (2) = 8 messages
+    assert_eq!(conv.messages.len(), 8);
+
+    // Verify tool interleaving didn't break alternation
+    for i in 1..conv.messages.len() {
+        let prev = &conv.messages[i - 1].role;
+        let curr = &conv.messages[i].role;
+        assert!(prev != curr || prev == "user",
+            "Alternation broken at {}: '{}' → '{}'", i, prev, curr);
+    }
+
+    // Verify all story details in final context
+    let all_text: String = conv.messages.iter().map(|m| match &m.content {
+        MessageContent::Text(t) => t.as_str(),
+        _ => "",
+    }).collect();
+    assert!(all_text.contains("安雅"), "Protagonist preserved");
+    assert!(all_text.contains("PRISM"), "AI assistant preserved");
+    assert!(all_text.contains("马库斯"), "Station commander preserved");
+    assert!(all_text.contains("木卫二"), "Location preserved");
+}
+
+#[test]
+fn test_compression_preserves_story_details_for_followup_questions() {
+    let mut conv = TestConversation::default();
+    let config = low_threshold_config(); // max_context_tokens: 200, threshold: 0.5
+
+    let story = "在仙女座星系的外环站，指挥官苏瑞收到了来自1387号探测器的信号。\
+                 信号中包含一组质数序列和一段音乐。科学家陈伟确认这绝非自然现象。\
+                 AI导航员NOVA计算出信号源：距外环站4.2光年的一个流浪行星。\
+                 苏瑞下令启动跃迁引擎，全船127名船员进入深眠。";
+
+    // Turn 1: story
+    conv.messages.push(text_msg("user", "写一篇关于第一接触的科幻故事"));
+    conv.messages.push(text_msg("assistant", story));
+
+    // Add padding messages to trigger compression
+    for i in 0..8 {
+        conv.messages.push(text_msg("user", &format!("padding question {i}")));
+        conv.messages.push(text_msg("assistant", &format!("padding answer {i} with some extra text to increase token count significantly for compression")));
+    }
+
+    // Check if compression is needed
+    let _tokens_before = conv.estimate_tokens();
+    if conv.needs_compression(&config) {
+        conv.compress(&config);
+    }
+
+    // Turn 2: ask about story details — must survive compression
+    conv.messages.push(text_msg("user", "探测器编号是多少？信号源在哪里？"));
+    conv.messages.push(text_msg("assistant",
+        "探测器编号是1387号。信号源在距外环站4.2光年的一个流浪行星。"));
+
+    // Verify key details survived (either in summary or in recent messages)
+    let all_text: String = conv.messages.iter().map(|m| match &m.content {
+        MessageContent::Text(t) => t.as_str(),
+        _ => "",
+    }).collect();
+
+    // At minimum, the answer must reference the correct details
+    assert!(all_text.contains("1387"), "Detector number must be preserved");
+    assert!(all_text.contains("4.2"), "Distance must be preserved");
+    assert!(all_text.contains("流浪行星"), "Rogue planet must be preserved");
+}

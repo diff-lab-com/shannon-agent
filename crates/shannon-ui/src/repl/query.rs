@@ -88,7 +88,7 @@ impl Default for StreamingState {
 /// Type alias for the TUI terminal used by the REPL.
 pub(crate) type Term = Terminal<CrosstermBackend<io::Stdout>>;
 
-pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term>) -> Result<()> {
+pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Term>) -> Result<()> {
     repl.state.status = t!("status.processing").to_string();
     repl.state.active_tool = None;
     repl.state.query_steps_done = 0;
@@ -561,7 +561,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
             let state = &repl.state;
             let sidebar_info = repl.sidebar_info();
 
-            if let Some(ref mut term) = terminal {
+            if let Some(term) = terminal.as_deref_mut() {
             term.draw(|f| {
                 let spinner = &state.spinner;
                 let pb = if state.progress_bar_visible { Some(&state.progress_bar) } else { None };
@@ -691,6 +691,27 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
                             repl.chat.scroll_down_by(step);
                             if repl.chat.is_at_bottom() {
                                 repl.state.auto_follow = true;
+                            }
+                        }
+                        // UP with queued messages: pop last back to prompt for editing.
+                        // This arm must come before the plain UP handler so the more
+                        // specific match fires first.
+                        crossterm::event::KeyCode::Up
+                            if !key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+                                && !repl.state.queued_messages.is_empty() =>
+                        {
+                            if let Some(popped) = repl.state.queued_messages.pop() {
+                                repl.prompt.set_input(popped);
+                                let count = repl.state.queued_messages.len();
+                                repl.state.status = if count > 0 {
+                                    format!("Popped — {count} message(s) still queued")
+                                } else {
+                                    "Popped last queued message — edit and re-queue".to_string()
+                                };
+                                repl.state.toast = Some((
+                                    "Popped — edit and re-queue".to_string(),
+                                    std::time::Instant::now(),
+                                ));
                             }
                         }
                         // History navigation during streaming (matching input.rs behavior)
@@ -1026,17 +1047,8 @@ pub fn handle_query(repl: &mut Repl, input: &str, mut terminal: Option<&mut Term
             if !loop_continued {
                 super::commands::check_ralph_iteration(repl);
             }
-
-            // Submit first queued follow-up message if any.
-            // submit_input_with_text -> handle_query -> streaming -> completion
-            // will check queued_messages again, processing them sequentially.
-            if !repl.state.queued_messages.is_empty() {
-                let queued = repl.state.queued_messages.remove(0);
-                if !queued.trim().is_empty() {
-                    repl.state.toast = Some(("Sending queued message…".to_string(), std::time::Instant::now()));
-                    super::commands::submit_input_with_text(repl, &queued);
-                }
-            }
+            // NOTE: queued message processing is handled by submit_input's
+            // drain loop — NOT here — to avoid recursive handle_query calls.
         }
         Err((engine_opt, e)) => {
             // Clear queued messages on error/cancel — user chose to stop.

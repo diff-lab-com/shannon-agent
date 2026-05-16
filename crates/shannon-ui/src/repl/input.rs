@@ -502,6 +502,19 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
             Ok(())
         }
         KeyCode::Up => {
+            // Pop queued messages first — highest priority
+            if !repl.state.queued_messages.is_empty() {
+                if let Some(popped) = repl.state.queued_messages.pop() {
+                    repl.prompt.set_input(popped);
+                    let count = repl.state.queued_messages.len();
+                    repl.state.status = if count > 0 {
+                        format!("Popped — {count} still queued")
+                    } else {
+                        "Popped last queued message".to_string()
+                    };
+                }
+                return Ok(());
+            }
             if !repl.state.completion_suggestions.is_empty() {
                 if repl.state.completion_suggestion_index > 0 {
                     repl.state.completion_suggestion_index -= 1;

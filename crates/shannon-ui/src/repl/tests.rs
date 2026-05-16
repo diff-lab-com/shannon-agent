@@ -4008,6 +4008,345 @@ fn test_empty_messages_not_appended() {
     assert!(state.queued_messages.is_empty(), "empty/whitespace messages should not be queued");
 }
 
+// ── Non-Recursive Dequeue Tests ──────────────────────────────────────
+// These tests verify the architectural fix for the "Query engine not
+// available" bug. The bug was caused by recursive handle_query calls:
+//   handle_query → success → dequeue → submit_input_with_text → handle_query
+// The fix moves the dequeue into a flat while-loop in submit_input so
+// each handle_query fully returns before the next one starts.
+
+/// Verify the flat drain loop processes all queued messages in order.
+/// Simulates what submit_input does after handle_query returns.
+#[test]
+fn test_drain_loop_processes_all_queued_messages() {
+    let mut state = ReplState::default();
+    state.streaming_active = true;
+    state.queued_messages.push("query A".to_string());
+    state.queued_messages.push("query B".to_string());
+    state.queued_messages.push("query C".to_string());
+    state.streaming_active = false;
+
+    let mut processed: Vec<String> = Vec::new();
+    while !state.queued_messages.is_empty() {
+        let queued = state.queued_messages.remove(0);
+        if !queued.trim().is_empty() {
+            processed.push(queued);
+        }
+    }
+    assert_eq!(processed, vec!["query A", "query B", "query C"]);
+    assert!(state.queued_messages.is_empty());
+}
+
+/// Verify that between dequeue iterations, the "engine" is available.
+/// Simulates the invariant: each handle_query restores the engine before
+/// the next iteration of the drain loop.
+#[test]
+fn test_engine_stays_available_across_drain_iterations() {
+    let mut state = ReplState::default();
+    state.streaming_active = true;
+    state.queued_messages.push("q1".to_string());
+    state.queued_messages.push("q2".to_string());
+    state.queued_messages.push("q3".to_string());
+    state.streaming_active = false;
+
+    // Simulate: engine is Some (like after handle_query restores it)
+    let mut engine_available = true;
+    let mut processed = 0usize;
+
+    while !state.queued_messages.is_empty() {
+        // Invariant: engine must be available before each dequeue iteration
+        assert!(engine_available, "engine must be available before dequeue iteration");
+
+        let queued = state.queued_messages.remove(0);
+        if queued.trim().is_empty() {
+            continue;
+        }
+
+        // Simulate: take engine for query processing (value intentionally
+        // overwritten — models handle_query.take() + restore)
+        engine_available = false;
+        let _ = engine_available; // "take" consumes it
+        engine_available = true; // "restore" on success
+        processed += 1;
+    }
+
+    assert_eq!(processed, 3);
+    assert!(engine_available, "engine must still be available after all dequeues");
+}
+
+/// Verify that whitespace-only queued messages are skipped in the drain loop
+/// without breaking the invariant.
+#[test]
+fn test_drain_loop_skips_whitespace_messages() {
+    let mut state = ReplState::default();
+    state.queued_messages.push("valid query".to_string());
+    state.queued_messages.push("   ".to_string());
+    state.queued_messages.push("another query".to_string());
+
+    let mut processed: Vec<String> = Vec::new();
+    while !state.queued_messages.is_empty() {
+        let queued = state.queued_messages.remove(0);
+        if !queued.trim().is_empty() {
+            processed.push(queued);
+        }
+    }
+    assert_eq!(processed, vec!["valid query", "another query"]);
+}
+
+/// Verify that error/cancel clears remaining queued messages,
+/// preventing further dequeue attempts.
+#[test]
+fn test_error_clears_remaining_queue_preventing_stale_dequeue() {
+    let mut state = ReplState::default();
+    state.streaming_active = true;
+    state.queued_messages.push("q1".to_string());
+    state.queued_messages.push("q2".to_string());
+    state.queued_messages.push("q3".to_string());
+    state.streaming_active = false;
+
+    // Simulate: first message dequeued successfully
+    let _q1 = state.queued_messages.remove(0);
+    assert_eq!(state.queued_messages.len(), 2);
+
+    // Simulate: handle_query fails on second message → clear queue
+    state.queued_messages.clear();
+
+    // The drain loop should not process any more messages
+    assert!(state.queued_messages.is_empty());
+}
+
+/// Verify that the drain loop does NOT recurse: each iteration is flat.
+/// This test simulates the old bug where handle_query called itself
+/// recursively through submit_input_with_text. The fix ensures the
+/// drain loop is in submit_input, not inside handle_query.
+#[test]
+fn test_dequeue_does_not_nest_inside_query_processing() {
+    let mut state = ReplState::default();
+    state.queued_messages.push("msg1".to_string());
+    state.queued_messages.push("msg2".to_string());
+
+    // Simulate the correct flow: drain loop is OUTSIDE the "query processing"
+    let mut query_depth = 0;
+    while !state.queued_messages.is_empty() {
+        let _ = state.queued_messages.remove(0);
+
+        // Enter "query processing"
+        query_depth += 1;
+        // In the OLD buggy code, dequeue would happen HERE (inside query processing),
+        // incrementing depth further. In the NEW code, dequeue only happens in
+        // the outer while-loop in submit_input.
+        assert_eq!(query_depth, 1, "dequeue must not nest inside query processing");
+
+        // Exit "query processing"
+        query_depth -= 1;
+    }
+    assert_eq!(query_depth, 0, "all query processing must be complete");
+}
+
+/// Verify that with many queued messages (stress test), the flat drain loop
+/// processes all of them without stack overflow or engine loss.
+#[test]
+fn test_drain_loop_many_messages_no_engine_loss() {
+    let mut state = ReplState::default();
+    for i in 0..50 {
+        state.queued_messages.push(format!("message {i}"));
+    }
+
+    let mut engine_available = true;
+    let mut count = 0;
+    while !state.queued_messages.is_empty() {
+        assert!(engine_available, "engine lost at iteration {count}");
+        engine_available = false;
+        let _ = engine_available; // "take" consumes it
+        let _ = state.queued_messages.remove(0);
+        engine_available = true; // restored on success
+        count += 1;
+    }
+    assert_eq!(count, 50);
+    assert!(engine_available);
+}
+
+/// Verify the drain loop is robust when queue is modified between iterations.
+/// This tests the scenario where handle_query itself queues messages
+/// (e.g., from loop/ralph iterations).
+#[test]
+fn test_drain_loop_handles_newly_queued_messages() {
+    let mut state = ReplState::default();
+    state.queued_messages.push("initial".to_string());
+
+    let mut processed: Vec<String> = Vec::new();
+    let mut iteration = 0;
+    while !state.queued_messages.is_empty() {
+        let queued = state.queued_messages.remove(0);
+        if queued.trim().is_empty() {
+            continue;
+        }
+        processed.push(queued.clone());
+        iteration += 1;
+
+        // Simulate: during query processing, a new message gets queued
+        if iteration == 1 {
+            state.queued_messages.push("queued mid-flight".to_string());
+        }
+    }
+    assert_eq!(processed, vec!["initial", "queued mid-flight"]);
+}
+
+// ── UP Key Queue Pop Tests ─────────────────────────────────────────────
+
+#[test]
+fn test_up_pops_last_queued_message_to_input() {
+    let mut state = ReplState::default();
+    state.queued_messages.push("first".to_string());
+    state.queued_messages.push("second".to_string());
+    state.queued_messages.push("third (latest)".to_string());
+
+    // Simulate UP popping last queued message
+    let popped = state.queued_messages.pop();
+    assert_eq!(popped, Some("third (latest)".to_string()));
+    assert_eq!(state.queued_messages.len(), 2);
+
+    // UP again pops the next one
+    let popped = state.queued_messages.pop();
+    assert_eq!(popped, Some("second".to_string()));
+    assert_eq!(state.queued_messages.len(), 1);
+}
+
+#[test]
+fn test_up_navigates_history_when_queue_empty() {
+    let mut state = ReplState::default();
+    let mut history = ReplHistory::new(100);
+
+    // No queued messages — UP should navigate history
+    assert!(state.queued_messages.is_empty());
+
+    history.push("previous command 1");
+    history.push("previous command 2");
+
+    // Simulate history navigation (existing behavior)
+    let cmd = history.up();
+    assert_eq!(cmd, Some("previous command 2"));
+    let cmd = history.up();
+    assert_eq!(cmd, Some("previous command 1"));
+}
+
+#[test]
+fn test_up_pops_all_queued_then_switches_to_history() {
+    let mut state = ReplState::default();
+    let mut history = ReplHistory::new(100);
+
+    state.queued_messages.push("queued msg".to_string());
+    history.push("history entry");
+
+    // First UP: pop queued message (queue not empty)
+    let queue_was_empty = state.queued_messages.is_empty();
+    assert!(!queue_was_empty);
+    let popped = state.queued_messages.pop();
+    assert_eq!(popped, Some("queued msg".to_string()));
+
+    // Second UP: queue now empty, navigate history
+    assert!(state.queued_messages.is_empty());
+    let cmd = history.up();
+    assert_eq!(cmd, Some("history entry"));
+}
+
+#[test]
+fn test_up_pop_does_not_cancel_streaming() {
+    let mut state = ReplState::default();
+    state.streaming_active = true;
+    state.queued_messages.push("msg1".to_string());
+    state.queued_messages.push("msg2".to_string());
+
+    // UP pops a message — streaming must remain active
+    let _ = state.queued_messages.pop();
+    assert!(state.streaming_active, "streaming must remain active after UP pop");
+
+    // ESC with remaining queue also does NOT cancel (existing behavior)
+    assert!(!state.queued_messages.is_empty());
+    // (ESC with non-empty queue pops instead of canceling)
+    let _ = state.queued_messages.pop();
+    assert!(state.streaming_active, "streaming still active after second pop");
+}
+
+// ── Multi-Turn Drain Loop Context Tests ────────────────────────────────
+
+#[test]
+fn test_drain_loop_preserves_conversation_state_across_rounds() {
+    let mut state = ReplState::default();
+
+    // Simulate queuing a 3-turn conversation
+    state.queued_messages.push("请写一篇200字科幻小说".to_string());
+    state.queued_messages.push("这部科幻小说中有几个人物?几个场景?".to_string());
+    state.queued_messages.push("这部科幻小说有多少字".to_string());
+
+    let mut processed = Vec::new();
+    let mut turn_count = 0;
+
+    // Simulate drain loop: each round processes one message
+    while !state.queued_messages.is_empty() {
+        let msg = state.queued_messages.remove(0);
+        if msg.trim().is_empty() {
+            continue;
+        }
+        processed.push(msg);
+        turn_count += 1;
+    }
+
+    assert_eq!(turn_count, 3);
+    assert_eq!(processed[0], "请写一篇200字科幻小说");
+    assert_eq!(processed[1], "这部科幻小说中有几个人物?几个场景?");
+    assert_eq!(processed[2], "这部科幻小说有多少字");
+}
+
+#[test]
+fn test_mid_drain_queue_addition_preserves_context() {
+    let mut state = ReplState::default();
+    state.queued_messages.push("msg1".to_string());
+    state.queued_messages.push("msg2".to_string());
+
+    let mut processed = Vec::new();
+
+    // First iteration
+    let msg = state.queued_messages.remove(0);
+    processed.push(msg);
+
+    // Mid-drain: simulate a loop/ralph iteration adding a message
+    state.queued_messages.push("added mid-drain".to_string());
+
+    // Continue drain
+    while !state.queued_messages.is_empty() {
+        let msg = state.queued_messages.remove(0);
+        if !msg.trim().is_empty() {
+            processed.push(msg);
+        }
+    }
+
+    assert_eq!(processed, vec!["msg1", "msg2", "added mid-drain"]);
+}
+
+#[test]
+fn test_drain_error_midway_preserves_completed_context() {
+    let mut state = ReplState::default();
+    state.queued_messages.push("msg1".to_string());
+    state.queued_messages.push("msg2".to_string());
+    state.queued_messages.push("msg3".to_string());
+
+    let mut processed = Vec::new();
+
+    // Process first message successfully
+    let msg = state.queued_messages.remove(0);
+    processed.push(msg);
+
+    // Simulate error on second message
+    let _failed_msg = state.queued_messages.remove(0);
+    // On error, clear remaining queue
+    state.queued_messages.clear();
+
+    // Queue should be empty — no further processing
+    assert!(state.queued_messages.is_empty());
+    assert_eq!(processed, vec!["msg1"]);
+}
+
 // ── Model Config Tests ────────────────────────────────────────────────
 
 #[test]

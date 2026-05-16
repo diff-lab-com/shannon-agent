@@ -87,7 +87,7 @@ fn expand_pasted_texts(
 }
 
 /// Submit the current input
-pub fn submit_input(repl: &mut Repl, terminal: Option<&mut super::query::Term>) -> Result<()> {
+pub fn submit_input(repl: &mut Repl, mut terminal: Option<&mut super::query::Term>) -> Result<()> {
     let raw_input = repl.prompt.input().to_string();
 
     if raw_input.trim().is_empty() {
@@ -151,7 +151,19 @@ pub fn submit_input(repl: &mut Repl, terminal: Option<&mut super::query::Term>) 
         repl.commands_run += 1;
         handle_command(repl, &expanded)?;
     } else {
-        super::query::handle_query(repl, &expanded, terminal)?;
+        super::query::handle_query(repl, &expanded, &mut terminal)?;
+    }
+
+    // Drain queued follow-up messages in a flat loop.
+    // This avoids recursive handle_query calls that could leave the
+    // query engine unavailable.
+    while !repl.state.queued_messages.is_empty() {
+        let queued = repl.state.queued_messages.remove(0);
+        if queued.trim().is_empty() {
+            continue;
+        }
+        repl.state.toast = Some(("Sending queued message…".to_string(), std::time::Instant::now()));
+        submit_input_with_text(repl, &queued, &mut terminal);
     }
 
     Ok(())
@@ -159,7 +171,7 @@ pub fn submit_input(repl: &mut Repl, terminal: Option<&mut super::query::Term>) 
 
 /// Submit pre-formed text as if the user typed and entered it.
 /// Used for queued follow-up messages.
-pub fn submit_input_with_text(repl: &mut Repl, text: &str) {
+pub fn submit_input_with_text(repl: &mut Repl, text: &str, terminal: &mut Option<&mut super::query::Term>) {
     let expanded = expand_pasted_texts(text, &mut repl.state.pasted_texts);
     repl.chat.add_message(ChatRole::User, text.to_string());
     repl.state.turn_count += 1;
@@ -204,7 +216,7 @@ pub fn submit_input_with_text(repl: &mut Repl, text: &str) {
         if let Err(e) = handle_command(repl, &expanded) {
             repl.chat.add_message(ChatRole::System, format!("Error: {e}"));
         }
-    } else if let Err(e) = super::query::handle_query(repl, &expanded, None) {
+    } else if let Err(e) = super::query::handle_query(repl, &expanded, terminal) {
         repl.chat.add_message(ChatRole::System, format!("Error: {e}"));
     }
 }
@@ -399,7 +411,7 @@ fn handle_other_command(repl: &mut Repl, cmd_name: &str, args: &str) -> Result<(
                     }
 
                     repl.chat.add_message(ChatRole::System, format!("Running /{cmd_name}..."));
-                    super::query::handle_query(repl, &prompt, None)?;
+                    super::query::handle_query(repl, &prompt, &mut None)?;
                 } else {
                     repl.chat.add_message(ChatRole::System, format!("/{cmd_name} — {}", prompt_cmd.base.description));
                 }

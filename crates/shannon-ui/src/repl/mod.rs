@@ -1516,7 +1516,7 @@ impl Repl {
             }
         } else {
             // Process as AI query
-            query::handle_query(self, &input, None)?;
+            query::handle_query(self, &input, &mut None)?;
             // Output the assistant response
             if let Some(msg) = self.chat.last_message() {
                 if msg.role == ChatRole::Assistant {
