@@ -1862,9 +1862,12 @@ fn run_team_agent_mode(
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Initialize i18n — override locale from --lang flag if provided
+    // Initialize i18n — auto-detect system language, allow --lang override
     if let Some(ref lang) = cli.lang {
         i18n::set_locale(lang);
+    } else {
+        let detected = i18n::detect_system_locale();
+        i18n::set_locale(&detected);
     }
 
     // ── Team agent mode: JSON-RPC over stdin/stdout ──

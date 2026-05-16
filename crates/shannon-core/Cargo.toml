@@ -58,6 +58,7 @@ globset = "0.4"
 
 # Internationalization
 rust-i18n = { workspace = true }
+sys-locale = { workspace = true }
 
 # Platform-specific disk space info
 libc = "0.2"

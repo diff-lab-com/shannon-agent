@@ -68,6 +68,7 @@ bytes = "1.0"
 
 # Internationalization
 rust-i18n = "3"
+sys-locale = "0.3"
 
 # WebSocket support
 tokio-tungstenite = { version = "0.26", features = ["connect"] }

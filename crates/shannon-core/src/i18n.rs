@@ -33,6 +33,46 @@ pub fn current_locale() -> String {
     rust_i18n::locale().to_string()
 }
 
+/// Supported locales in Shannon.
+const SUPPORTED_LOCALES: &[&str] = &["en", "zh", "hi", "es", "fr", "ar", "bn", "pt", "ru", "ja"];
+
+/// Detect the system locale and map it to a supported Shannon locale.
+///
+/// Priority: `SHANNON_LANG` env → `sys_locale` crate → `"en"` fallback.
+/// Language tags like `"zh_CN"`, `"zh-Hans"`, `"en_US"` are normalized to the
+/// base language code (e.g. `"zh"`, `"en"`).
+pub fn detect_system_locale() -> String {
+    // 1. Explicit env override wins
+    if let Ok(lang) = std::env::var("SHANNON_LANG") {
+        let normalized = normalize_locale(&lang);
+        if SUPPORTED_LOCALES.contains(&normalized.as_str()) {
+            return normalized;
+        }
+    }
+
+    // 2. System locale detection
+    if let Some(locale) = sys_locale::get_locale() {
+        let normalized = normalize_locale(&locale);
+        if SUPPORTED_LOCALES.contains(&normalized.as_str()) {
+            return normalized;
+        }
+    }
+
+    // 3. Fallback to English
+    "en".to_string()
+}
+
+/// Normalize a locale string to a base language code.
+///
+/// Handles formats like `"zh_CN"`, `"zh-Hans"`, `"en_US.UTF-8"`, `"zh"`.
+fn normalize_locale(locale: &str) -> String {
+    let base = locale
+        .split(['_', '-', '.'])
+        .next()
+        .unwrap_or(locale);
+    base.to_lowercase()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,5 +129,25 @@ mod tests {
             let msg = t!("repl.chat_cleared", locale = lang);
             assert!(!msg.is_empty(), "locale '{lang}' returned empty for repl.chat_cleared");
         }
+    }
+
+    #[test]
+    fn test_normalize_locale_variants() {
+        assert_eq!(super::normalize_locale("zh_CN"), "zh");
+        assert_eq!(super::normalize_locale("zh-Hans"), "zh");
+        assert_eq!(super::normalize_locale("en_US.UTF-8"), "en");
+        assert_eq!(super::normalize_locale("zh"), "zh");
+        assert_eq!(super::normalize_locale("EN"), "en");
+        assert_eq!(super::normalize_locale("pt_BR"), "pt");
+        assert_eq!(super::normalize_locale("ja_JP"), "ja");
+    }
+
+    #[test]
+    fn test_detect_system_locale_returns_supported() {
+        let locale = super::detect_system_locale();
+        assert!(
+            ["en", "zh", "hi", "es", "fr", "ar", "bn", "pt", "ru", "ja"].contains(&locale.as_str()),
+            "detect_system_locale returned unsupported locale: {locale}"
+        );
     }
 }
