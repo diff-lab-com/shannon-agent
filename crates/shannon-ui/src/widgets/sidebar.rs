@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 
 use crate::theme::Theme;
+use rust_i18n::t;
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
@@ -211,7 +212,8 @@ impl SidebarWidget {
         match tab {
             crate::repl::SidebarTab::Context => {
                 // Context usage (model shown in status bar, no duplication)
-                lines.push(self.section_header("Context", SidebarSection::ContextUsage, theme));
+                let ctx_hdr = t!("ui.sidebar.context").to_string();
+                lines.push(self.section_header(&ctx_hdr, SidebarSection::ContextUsage, theme));
                 if !self.is_collapsed(SidebarSection::ContextUsage) {
                     let tokens_str = format_tokens(info.tokens_used);
                     let pct = if info.context_window > 0 {
@@ -236,16 +238,25 @@ impl SidebarWidget {
                     lines.push(Line::from(Span::styled(truncate_to(&bar_str, w), Style::default().fg(bar_color))));
 
                     // Pressure level indicator
-                    let (level_label, level_color) = if pct > 95.0 {
-                        ("EMERGENCY", theme.error)
+                    let level_label = if pct > 95.0 {
+                        t!("ui.sidebar.pressure_emergency").to_string()
                     } else if pct > 85.0 {
-                        ("CRITICAL", theme.error)
+                        t!("ui.sidebar.pressure_critical").to_string()
                     } else if pct > 75.0 {
-                        ("HIGH", theme.warning)
+                        t!("ui.sidebar.pressure_high").to_string()
                     } else if pct > 50.0 {
-                        ("NORMAL", theme.text_dim)
+                        t!("ui.sidebar.pressure_normal").to_string()
                     } else {
-                        ("LOW", theme.success)
+                        t!("ui.sidebar.pressure_low").to_string()
+                    };
+                    let level_color = if pct > 85.0 {
+                        theme.error
+                    } else if pct > 75.0 {
+                        theme.warning
+                    } else if pct > 50.0 {
+                        theme.text_dim
+                    } else {
+                        theme.success
                     };
                     lines.push(Line::from(vec![
                         Span::styled("  ", Style::default()),
@@ -255,7 +266,8 @@ impl SidebarWidget {
                 }
 
                 // Cost
-                lines.push(self.section_header("Cost", SidebarSection::Cost, theme));
+                let cost_hdr = t!("ui.sidebar.cost").to_string();
+                lines.push(self.section_header(&cost_hdr, SidebarSection::Cost, theme));
                 if !self.is_collapsed(SidebarSection::Cost) {
                     let cost_str = format!("${:.4}", info.cost_usd);
                     lines.push(Line::from(Span::styled(cost_str, Style::default().fg(theme.warning))));
@@ -264,7 +276,8 @@ impl SidebarWidget {
 
                 // Memory
                 if info.memory_rss_kb > 0 {
-                    lines.push(self.section_header("Memory", SidebarSection::Memory, theme));
+                    let mem_hdr = t!("ui.sidebar.memory").to_string();
+                    lines.push(self.section_header(&mem_hdr, SidebarSection::Memory, theme));
                     let mem_str = if info.memory_rss_kb >= 1_048_576 {
                         format!("{:.1} MB", info.memory_rss_kb as f64 / 1_048_576.0)
                     } else {
@@ -275,12 +288,13 @@ impl SidebarWidget {
                 }
 
                 // Tools
-                lines.push(self.section_header("Tools", SidebarSection::Tools, theme));
+                let tools_hdr = t!("ui.sidebar.tools").to_string();
+                lines.push(self.section_header(&tools_hdr, SidebarSection::Tools, theme));
                 if !self.is_collapsed(SidebarSection::Tools) {
                     lines.push(Line::from(Span::styled(info.tools_invoked.to_string(), Style::default().fg(theme.text))));
                     if info.error_count > 0 {
                         lines.push(Line::from(Span::styled(
-                            format!("  {} errors", info.error_count),
+                            t!("ui.errors", n => info.error_count).to_string(),
                             Style::default().fg(theme.error),
                         )));
                     }

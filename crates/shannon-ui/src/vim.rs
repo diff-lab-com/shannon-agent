@@ -4,6 +4,7 @@
 //! common vim keybindings for navigation, editing, and command execution.
 
 use std::collections::HashMap;
+use rust_i18n::t;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde::{Deserialize, Serialize};
@@ -24,8 +25,8 @@ pub enum VimMode {
 impl std::fmt::Display for VimMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            VimMode::Normal => write!(f, "NORMAL"),
-            VimMode::Insert => write!(f, "INSERT"),
+            VimMode::Normal => write!(f, "{}", t!("ui.vim_normal")),
+            VimMode::Insert => write!(f, "{}", t!("ui.vim_insert")),
             VimMode::Visual => write!(f, "VISUAL"),
             VimMode::Command => write!(f, "COMMAND"),
         }

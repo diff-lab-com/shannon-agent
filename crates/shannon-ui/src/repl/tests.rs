@@ -4214,7 +4214,7 @@ fn test_up_pops_last_queued_message_to_input() {
 
 #[test]
 fn test_up_navigates_history_when_queue_empty() {
-    let mut state = ReplState::default();
+    let state = ReplState::default();
     let mut history = ReplHistory::new(100);
 
     // No queued messages — UP should navigate history
@@ -4231,41 +4231,34 @@ fn test_up_navigates_history_when_queue_empty() {
 }
 
 #[test]
-fn test_up_pops_all_queued_then_switches_to_history() {
+fn test_up_always_navigates_history_even_with_queue() {
     let mut state = ReplState::default();
     let mut history = ReplHistory::new(100);
 
     state.queued_messages.push("queued msg".to_string());
     history.push("history entry");
 
-    // First UP: pop queued message (queue not empty)
-    let queue_was_empty = state.queued_messages.is_empty();
-    assert!(!queue_was_empty);
-    let popped = state.queued_messages.pop();
-    assert_eq!(popped, Some("queued msg".to_string()));
-
-    // Second UP: queue now empty, navigate history
-    assert!(state.queued_messages.is_empty());
+    // UP navigates history directly — queue is untouched
     let cmd = history.up();
     assert_eq!(cmd, Some("history entry"));
+    assert_eq!(state.queued_messages.len(), 1, "queue should not be touched by UP");
 }
 
 #[test]
-fn test_up_pop_does_not_cancel_streaming() {
+fn test_esc_pops_queue_without_canceling_streaming() {
     let mut state = ReplState::default();
     state.streaming_active = true;
     state.queued_messages.push("msg1".to_string());
     state.queued_messages.push("msg2".to_string());
 
-    // UP pops a message — streaming must remain active
+    // ESC pops a message — streaming must remain active
     let _ = state.queued_messages.pop();
-    assert!(state.streaming_active, "streaming must remain active after UP pop");
+    assert!(state.streaming_active, "streaming must remain active after ESC pop");
 
-    // ESC with remaining queue also does NOT cancel (existing behavior)
+    // ESC again still pops (queue not yet empty)
     assert!(!state.queued_messages.is_empty());
-    // (ESC with non-empty queue pops instead of canceling)
     let _ = state.queued_messages.pop();
-    assert!(state.streaming_active, "streaming still active after second pop");
+    assert!(state.streaming_active, "streaming still active after second ESC pop");
 }
 
 // ── Multi-Turn Drain Loop Context Tests ────────────────────────────────

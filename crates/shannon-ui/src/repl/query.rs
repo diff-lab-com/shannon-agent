@@ -2,18 +2,20 @@
 
 
 /// Rotating phrases shown during the thinking phase, cycled every 2 seconds.
-const THINKING_PHRASES: &[&str] = &[
-    "Thinking",
-    "Analyzing",
-    "Processing",
-    "Reasoning",
-    "Considering",
-    "Evaluating",
-    "Pondering",
-    "Deliberating",
-    "Working",
-    "Reflecting",
-];
+/// Returns translated phrases based on current locale.
+fn thinking_phrases() -> Vec<String> {
+    vec![
+        t!("thinking.0").to_string(),
+        t!("thinking.1").to_string(),
+        t!("thinking.2").to_string(),
+        t!("thinking.3").to_string(),
+        t!("thinking.4").to_string(),
+        t!("thinking.5").to_string(),
+        t!("thinking.6").to_string(),
+        t!("thinking.7").to_string(),
+        t!("thinking.8").to_string(),
+    ]
+}
 
 /// Fixed trailing dots (avoids flickering from animated dot count changes).
 fn animated_dots(_elapsed: std::time::Duration) -> &'static str {
@@ -103,7 +105,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
     let mut query_engine = match repl.query_engine.take() {
         Some(e) => e,
         None => {
-            repl.chat.add_message(ChatRole::System, "Error: Query engine not available. Please restart the session.".to_string());
+            repl.chat.add_message(ChatRole::System, t!("ui.query_engine_unavailable").to_string());
             repl.state.status = t!("status.ready").to_string();
             return Ok(());
         }
@@ -185,7 +187,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
         let mut tool_calls: Vec<String> = Vec::new();
         let mut tool_start_times: HashMap<String, Instant> = HashMap::new();
         let mut _tools_in_session: usize = 0;
-        let mut progress_status = "Working".to_string();
+        let mut progress_status = t!("ui.working").to_string();
         let mut steps_done = 0usize;
         let mut turn_diff = TurnDiff::new(0);
 
@@ -197,9 +199,9 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                         s.thinking_content.push_str(&content);
                         let len = s.thinking_content.chars().count();
                         s.status = if len > 1000 {
-                            format!("Thinking··· ({}k chars)", len / 1000)
+                            t!("ui.thinking_chars_k", count => len / 1000).to_string()
                         } else {
-                            format!("Thinking··· ({len} chars)")
+                            t!("ui.thinking_chars", count => len).to_string()
                         };
                     }
                 }
@@ -338,7 +340,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                         } else {
                             tokens_in_turn.to_string()
                         };
-                        summary_parts.push(format!("{turn_fmt} tokens this turn"));
+                        summary_parts.push(t!("ui.tokens_this_turn", count => &turn_fmt).to_string());
                     }
                     if let Ok(s) = ss.lock() {
                         let cache_read = s.cache_read_tokens;
@@ -350,10 +352,10 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                             } else {
                                 0.0
                             };
-                            summary_parts.push(format!("cache {hit_rate:.0}% hit"));
+                            summary_parts.push(t!("ui.cache_hit_rate", pct => format!("{:.0}", hit_rate)).to_string());
                         }
                         if s.cost > 0.0 {
-                            summary_parts.push(format!("${:.4} total", s.cost));
+                            summary_parts.push(t!("ui.cost_total", cost => format!("{:.4}", s.cost)).to_string());
                         }
                     }
                     if !summary_parts.is_empty() {
@@ -444,8 +446,9 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             repl.state.thinking_phase = is_thinking;
             if is_thinking {
                 let elapsed = stream_start.elapsed();
-                let phase_idx = (elapsed.as_secs() / 2) as usize % THINKING_PHRASES.len();
-                let phrase = THINKING_PHRASES[phase_idx];
+                let phrases = thinking_phrases();
+                let phase_idx = (elapsed.as_secs() / 2) as usize % phrases.len();
+                let phrase = &phrases[phase_idx];
                 let dots = animated_dots(elapsed);
                 repl.state.status = if thinking_len > 1000 {
                     format!("{phrase}{dots} ({}k chars)", thinking_len / 1000)
@@ -465,7 +468,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     }
                 }
             } else if repl.state.streaming_token_rate > 0.0 {
-                repl.state.status = format!("{current_status} · {:.0} tok/s", repl.state.streaming_token_rate);
+                repl.state.status = t!("ui.tokens_per_sec", status => &current_status, rate => format!("{:.0}", repl.state.streaming_token_rate)).to_string();
             } else {
                 repl.state.status = current_status.clone();
             }
@@ -476,7 +479,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                 let tool_name = streaming.lock().ok()
                     .and_then(|s| s.multi_progress.last().map(|(n, _, _)| n.clone()))
                     .unwrap_or_else(|| "query".to_string());
-                repl.state.toast = Some((format!("Running {tool_name}…"), stream_start));
+                repl.state.toast = Some((t!("ui.tool_running", name => &tool_name).to_string(), stream_start));
             }
 
             {
@@ -514,7 +517,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     let new_tools = pre_stream_tools + s.tools;
                     if new_tools > repl.tools_invoked {
                         let delta = new_tools - repl.tools_invoked;
-                        repl.notify(format!("Tool completed (×{delta})"));
+                        repl.notify(t!("ui.tool_completed_count", count => delta).to_string());
                     }
                     repl.tools_invoked = new_tools;
                 }
@@ -632,12 +635,12 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                                 repl.prompt.set_input(popped);
                                 let count = repl.state.queued_messages.len();
                                 repl.state.status = if count > 0 {
-                                    format!("Removed — {count} message(s) still queued")
+                                    t!("ui.removed_queued", count => count).to_string()
                                 } else {
-                                    "Removed last queued message — edit and re-queue".to_string()
+                                    t!("ui.removed_last").to_string()
                                 };
                                 repl.state.toast =
-                                    Some(("Removed — edit and re-queue".to_string(), std::time::Instant::now()));
+                                    Some((t!("ui.removed_edit").to_string(), std::time::Instant::now()));
                             }
                             continue;
                         }
@@ -693,28 +696,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                                 repl.state.auto_follow = true;
                             }
                         }
-                        // UP with queued messages: pop last back to prompt for editing.
-                        // This arm must come before the plain UP handler so the more
-                        // specific match fires first.
-                        crossterm::event::KeyCode::Up
-                            if !key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
-                                && !repl.state.queued_messages.is_empty() =>
-                        {
-                            if let Some(popped) = repl.state.queued_messages.pop() {
-                                repl.prompt.set_input(popped);
-                                let count = repl.state.queued_messages.len();
-                                repl.state.status = if count > 0 {
-                                    format!("Popped — {count} message(s) still queued")
-                                } else {
-                                    "Popped last queued message — edit and re-queue".to_string()
-                                };
-                                repl.state.toast = Some((
-                                    "Popped — edit and re-queue".to_string(),
-                                    std::time::Instant::now(),
-                                ));
-                            }
-                        }
-                        // History navigation during streaming (matching input.rs behavior)
+                        // History navigation during streaming
                         crossterm::event::KeyCode::Up => {
                             if !repl.state.completion_suggestions.is_empty() {
                                 if repl.state.completion_suggestion_index > 0 {
@@ -776,8 +758,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                                 let count = repl.state.queued_messages.len() + 1;
                                 repl.state.queued_messages.push(input);
                                 repl.prompt.clear();
-                                repl.state.status = format!("Message queued ({count} in queue)");
-                                repl.state.toast = Some(("Queued".to_string(), std::time::Instant::now()));
+                                repl.state.status = t!("ui.message_queued", count => count).to_string();
                             }
                         }
                         crossterm::event::KeyCode::Enter => {
@@ -822,7 +803,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
         }
         repl.chat.streaming_active = false;
         repl.state.toast = None;
-        repl.notify("Response complete");
+        repl.notify(t!("ui.response_complete").to_string());
         // Send terminal bell + desktop notification for long-running tasks (>30s)
         if stream_start.elapsed().as_secs() >= 30 {
             let _ = std::io::Write::write_all(&mut std::io::stderr(), b"\x07");
@@ -1070,7 +1051,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                 let partial_display = if current.is_empty() {
                     "\u{26A0} Cancelled by user (no text received yet)".to_string()
                 } else {
-                    format!("{current}\n\n\u{26A0} Cancelled by user (partial response)")
+                    format!("{current}\n\n\u{26A0} {}", t!("ui.cancelled_partial"))
                 };
                 let rendered = repl.output_renderer.render_output(&partial_display, "assistant");
                 repl.chat.update_message(assistant_msg_index, rendered);
@@ -1248,9 +1229,9 @@ fn extract_memory_content(response: &str) -> String {
 fn format_thinking_for_streaming(content: &str) -> String {
     let char_count = content.chars().count();
     let header = if char_count >= 1000 {
-        format!("▼ Thinking ({}k chars)", char_count / 1000)
+        t!("ui.thinking_header_k", count => char_count / 1000).to_string()
     } else {
-        format!("▼ Thinking ({char_count} chars)")
+        t!("ui.thinking_header", count => char_count).to_string()
     };
 
     // Show the tail of thinking content (last ~300 chars) so the user

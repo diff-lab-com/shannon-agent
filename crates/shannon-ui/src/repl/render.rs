@@ -4,6 +4,7 @@ use crate::{
     Result,
     theme::Theme,
 };
+use rust_i18n::t;
 use ratatui::backend::CrosstermBackend;
 use ratatui::{
     Terminal,
@@ -580,7 +581,7 @@ pub fn render_permission_dialog(
             )));
         }
     } else {
-        content_lines.push(Line::from(Span::styled("Input:", Style::default().fg(theme.muted))));
+        content_lines.push(Line::from(Span::styled(t!("ui.prompt_input_label").to_string(), Style::default().fg(theme.muted))));
         let json = serde_json::to_string_pretty(&dialog.tool_input).unwrap_or_else(|_| "(invalid)".to_string());
         for line in json.lines().take(8) {
             content_lines.push(Line::from(Span::styled(line.to_string(), Style::default().fg(theme.text_dim))));

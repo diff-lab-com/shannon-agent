@@ -4,6 +4,7 @@
 //! `[spinner] [model] [context bar] [progress] [padding] [cost] [git] [mode]`
 
 use crate::theme::Theme;
+use rust_i18n::t;
 use ratatui::{
     layout::{Alignment, Rect},
     style::{Modifier, Style},
@@ -98,9 +99,13 @@ impl StatusBarWidget {
         let mut left: Vec<Span<'static>> = Vec::new();
         let mut right: Vec<Span<'static>> = Vec::new();
 
+        // Pre-compute translated labels
+        let ready_str = t!("status.ready").to_string();
+        let err_prefix = t!("status.error", error => "").to_string();
+
         // Spinner + status
         if let Some(sp) = spinner {
-            if status != "Ready" {
+            if status != ready_str {
                 let frame_str = sp.current_char().to_string();
                 left.push(Span::styled(
                     frame_str,
@@ -110,11 +115,14 @@ impl StatusBarWidget {
             }
         }
         // Status with icon
-        let (status_icon, status_color) = match status {
-            "Ready" => ("\u{25CF}", theme.success),
-            "Error" => ("\u{2717}", theme.error),
-            s if s.contains("Thinking") || s.contains("Streaming") => ("\u{25D0}", theme.primary),
-            _ => ("\u{25CB}", theme.text_dim),
+        let (status_icon, status_color) = if status == ready_str {
+            ("\u{25CF}", theme.success)
+        } else if status.starts_with(err_prefix.trim()) || status.starts_with("Error") {
+            ("\u{2717}", theme.error)
+        } else if thinking_phase {
+            ("\u{25D0}", theme.primary)
+        } else {
+            ("\u{25CB}", theme.text_dim)
         };
         left.push(Span::styled(
             format!("{status_icon} "),
@@ -156,7 +164,7 @@ impl StatusBarWidget {
         } else {
             left.push(Span::styled(" ", Style::default().fg(theme.border_dim)));
             left.push(Span::styled(
-                "[No model configured]".to_string(),
+                format!("[{}]", t!("ui.no_model")),
                 Style::default().fg(theme.warning),
             ));
         }
@@ -328,7 +336,7 @@ impl StatusBarWidget {
                     Style::default().fg(theme.border_dim),
                 ));
                 left2.push(Span::styled(
-                    format!("Tool {tools}"),
+                    t!("ui.tool", n => tools).to_string(),
                     Style::default().fg(theme.secondary),
                 ));
             }
@@ -357,7 +365,7 @@ impl StatusBarWidget {
                 Style::default().fg(theme.border_dim),
             ));
             left2.push(Span::styled(
-                format!("Cache {pct}%"),
+                t!("ui.cache", pct => pct).to_string(),
                 Style::default().fg(color),
             ));
         }
@@ -370,7 +378,7 @@ impl StatusBarWidget {
                     Style::default().fg(theme.border_dim),
                 ));
                 left2.push(Span::styled(
-                    format!("Turn {turns}"),
+                    t!("ui.turn", n => turns).to_string(),
                     Style::default().fg(theme.text_dim),
                 ));
             }
@@ -396,7 +404,7 @@ impl StatusBarWidget {
                     Style::default().fg(theme.border_dim),
                 ));
                 left2.push(Span::styled(
-                    format!("MEM {mem_label}"),
+                    t!("ui.mem", size => &mem_label).to_string(),
                     Style::default().fg(mem_color),
                 ));
             }
