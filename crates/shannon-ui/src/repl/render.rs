@@ -534,12 +534,12 @@ pub fn render_permission_dialog(
         ]),
         Line::from(""),
         Line::from(vec![
-            Span::styled("Tool: ", Style::default().fg(theme.muted)),
+            Span::styled(format!("{}: ", t!("ui.perm_tool")), Style::default().fg(theme.muted)),
             Span::styled(&dialog.tool_name, Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
         ]),
         Line::from(""),
         Line::from(vec![
-            Span::styled("Description: ", Style::default().fg(theme.muted)),
+            Span::styled(format!("{}: ", t!("ui.perm_description")), Style::default().fg(theme.muted)),
             Span::styled(&dialog.description, Style::default().fg(theme.text)),
         ]),
         Line::from(""),
@@ -599,7 +599,7 @@ pub fn render_permission_dialog(
     if !dialog.risk_reason.is_empty() {
         content_lines.push(Line::from(""));
         content_lines.push(Line::from(vec![
-            Span::styled("Why: ", Style::default().fg(theme.muted)),
+            Span::styled(format!("{}: ", t!("ui.perm_why")), Style::default().fg(theme.muted)),
             Span::styled(&dialog.risk_reason, Style::default().fg(theme.text_dim)),
         ]));
     }
@@ -608,13 +608,13 @@ pub fn render_permission_dialog(
     content_lines.push(Line::from(""));
     content_lines.push(Line::from(vec![
         Span::styled("[Enter] ", Style::default().fg(theme.success)),
-        Span::styled("Allow Once    ", Style::default().fg(theme.text)),
+        Span::styled(format!("{}    ", t!("ui.permission_allow_once")), Style::default().fg(theme.text)),
         Span::styled("[A] ", Style::default().fg(theme.primary)),
-        Span::styled("Always Allow  ", Style::default().fg(theme.text)),
+        Span::styled(format!("{}  ", t!("ui.permission_always_allow")), Style::default().fg(theme.text)),
         Span::styled("[E] ", Style::default().fg(theme.warning)),
-        Span::styled("Edit+Run  ", Style::default().fg(theme.text)),
+        Span::styled(format!("{}  ", t!("ui.permission_edit_run")), Style::default().fg(theme.text)),
         Span::styled("[Esc] ", Style::default().fg(theme.error)),
-        Span::styled("Deny", Style::default().fg(theme.text)),
+        Span::styled(t!("ui.permission_deny").to_string(), Style::default().fg(theme.text)),
     ]));
 
     let paragraph = Paragraph::new(content_lines)
@@ -934,11 +934,11 @@ fn render_plan_overlay(
 
     content_lines.push(Line::from(vec![
         Span::styled("[Enter] ", Style::default().fg(theme.success)),
-        Span::styled("Approve    ", Style::default().fg(theme.text)),
+        Span::styled(format!("{}    ", t!("ui.plan_approve")), Style::default().fg(theme.text)),
         Span::styled("[Esc] ", Style::default().fg(theme.warning)),
-        Span::styled("Reject    ", Style::default().fg(theme.text)),
+        Span::styled(format!("{}    ", t!("ui.plan_reject")), Style::default().fg(theme.text)),
         Span::styled("[P] ", Style::default().fg(theme.muted)),
-        Span::styled("Dismiss", Style::default().fg(theme.text)),
+        Span::styled(t!("ui.plan_dismiss").to_string(), Style::default().fg(theme.text)),
     ]));
 
     let title = format!(" Plan Awaiting Review{step_label} ");

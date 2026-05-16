@@ -102,11 +102,21 @@ impl super::Repl {
             .map(shannon_core::model_registry::context_window_for)
             .unwrap_or(200_000) as u64;
 
-        if context_window == 0 || self.state.tokens_used == 0 {
+        // Use actual conversation size (not cumulative tokens_used).
+        // Cumulative tokens over-count because they include all API calls
+        // across all turns (tool calls, file reads, etc.), which triggers
+        // auto-compact prematurely and silently loses conversation context.
+        let actual_tokens = if let Some(engine) = self.query_engine.as_ref() {
+            engine.estimate_conversation_tokens() as u64
+        } else {
+            return false;
+        };
+
+        if context_window == 0 || actual_tokens == 0 {
             return false;
         }
 
-        let usage_ratio = self.state.tokens_used as f64 / context_window as f64;
+        let usage_ratio = actual_tokens as f64 / context_window as f64;
 
         if usage_ratio > 0.75 {
             if self.state.streaming_active {
@@ -125,7 +135,7 @@ impl super::Repl {
         } else if usage_ratio > 0.60 {
             // Info: context pressure moderate (>60%)
             let pct = (usage_ratio * 100.0) as u32;
-            let remaining = context_window.saturating_sub(self.state.tokens_used);
+            let remaining = context_window.saturating_sub(actual_tokens);
             self.state.toast = Some((
                 format!("  Context: {pct}% used ({remaining} tokens remaining) — /compact to reduce  "),
                 std::time::Instant::now(),
@@ -219,14 +229,14 @@ impl super::Repl {
         let context_window = self.state.model.as_deref()
             .map(shannon_core::model_registry::context_window_for)
             .unwrap_or(200_000) as u64;
-        let tokens_used = self.state.tokens_used;
+        let actual_tokens = engine.estimate_conversation_tokens() as u64;
         let history = engine.conversation_history();
         if history.len() < 4 {
             return;
         }
 
         let usage_ratio = if context_window > 0 {
-            tokens_used as f64 / context_window as f64
+            actual_tokens as f64 / context_window as f64
         } else {
             0.0
         };

@@ -443,7 +443,7 @@ impl StatusBarWidget {
                     ));
                 }
                 let diag_color = if errors > 0 { theme.error } else { theme.warning };
-                right2.push(Span::styled("Diag ", Style::default().fg(diag_color)));
+                right2.push(Span::styled(format!("{} ", t!("ui.status_diag")), Style::default().fg(diag_color)));
                 right2.extend(diag_parts);
             }
         }

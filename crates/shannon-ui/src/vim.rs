@@ -27,8 +27,8 @@ impl std::fmt::Display for VimMode {
         match self {
             VimMode::Normal => write!(f, "{}", t!("ui.vim_normal")),
             VimMode::Insert => write!(f, "{}", t!("ui.vim_insert")),
-            VimMode::Visual => write!(f, "VISUAL"),
-            VimMode::Command => write!(f, "COMMAND"),
+            VimMode::Visual => write!(f, "{}", t!("ui.vim_visual")),
+            VimMode::Command => write!(f, "{}", t!("ui.vim_command")),
         }
     }
 }

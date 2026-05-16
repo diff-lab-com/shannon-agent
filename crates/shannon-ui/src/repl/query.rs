@@ -68,7 +68,7 @@ impl Default for StreamingState {
     fn default() -> Self {
         Self {
             buffer: String::new(),
-            status: "Processing...".to_string(),
+            status: t!("status.processing").to_string(),
             done: false,
             cost: 0.0,
             progress: 0.0,
@@ -811,7 +811,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                 repl.state.desktop_notified = true;
                 let _ = repl.notifier.notify(&shannon_core::notifier::Notification {
                     title: "Shannon".to_string(),
-                    body: "Task completed".to_string(),
+                    body: t!("ui.notification_task_completed").to_string(),
                     level: shannon_core::notifier::NotificationLevel::Info,
                     id: uuid::Uuid::new_v4().to_string(),
                     timestamp: chrono::Utc::now(),

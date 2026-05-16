@@ -510,8 +510,10 @@ impl QueryEngine {
     pub fn restore_messages(&mut self, messages: Vec<crate::api::Message>) {
         let msg_count = messages.len();
         let last_role = messages.last().map(|m| m.role.as_str()).unwrap_or("none");
-        tracing::debug!(
+        let prev_count = self.conversation.messages.len();
+        tracing::info!(
             msg_count,
+            prev_count,
             last_role,
             "restore_messages: syncing conversation from background task"
         );
@@ -523,6 +525,14 @@ impl QueryEngine {
             );
         }
         self.conversation.messages = messages;
+    }
+
+    /// Estimate token count of the current conversation including system prompt.
+    /// Uses the same CJK-aware estimation as the compression threshold check.
+    pub fn estimate_conversation_tokens(&self) -> usize {
+        self.conversation.estimate_tokens_with_system_prompt(
+            self.config.system_prompt.as_deref()
+        )
     }
 
     /// Get the current conversation messages (for session persistence).
@@ -956,17 +966,17 @@ impl QueryEngine {
                     }
                 }
 
-                // Sync: if the second compression check modified `messages` (truncation
-                // or compact), the conversation state must reflect the same messages
-                // so that ConversationUpdate sends the correct (compressed) history.
+                // Sync: always keep conversation.messages in sync with the messages
+                // actually sent to the API. Compact may produce same-count but
+                // different-content messages, so sync unconditionally.
                 if conversation.messages.len() != messages.len() {
                     tracing::debug!(
                         before = conversation.messages.len(),
                         after = messages.len(),
                         "Syncing conversation.messages with compressed messages"
                     );
-                    conversation.messages = messages.clone();
                 }
+                conversation.messages = messages.clone();
 
                 // Diagnostic: log conversation state before API call
                 tracing::debug!(

@@ -1,6 +1,7 @@
 //! Input prompt widget (multi-line enabled)
 
 use crate::theme::Theme;
+use rust_i18n::t;
 use ratatui::{
     layout::{Alignment, Rect},
     style::{Modifier, Style},
@@ -38,8 +39,8 @@ impl PromptWidget {
     pub fn new() -> Self {
         Self {
             buffer: crate::repl_enhancement::InputBuffer::new(),
-            placeholder: "Type your message...".to_string(),
-            vim_mode: "INSERT".to_string(),
+            placeholder: t!("ui.placeholder").to_string(),
+            vim_mode: t!("ui.vim_insert").to_string(),
             border_color_override: None,
         }
     }

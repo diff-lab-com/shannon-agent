@@ -396,6 +396,8 @@ struct OllamaMessageResponse {
     #[serde(default)]
     eval_count: Option<u32>,
     model: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -474,6 +476,15 @@ pub fn normalize_response(
             let resp: OllamaMessageResponse = serde_json::from_str(json_str).map_err(|e| {
                 ApiError::InvalidResponse(format!("Failed to parse Ollama response: {e}"))
             })?;
+
+            // Check for Ollama error in the response body
+            if let Some(error) = &resp.error {
+                return Err(ApiError::ProviderError {
+                    provider: "ollama".to_string(),
+                    error_type: "ollama_error".to_string(),
+                    message: error.clone(),
+                });
+            }
 
             let msg = resp.message.ok_or_else(|| {
                 ApiError::InvalidResponse("Ollama response has no message".to_string())
@@ -722,6 +733,8 @@ struct OllamaChunk {
     prompt_eval_count: Option<u32>,
     #[serde(default)]
     eval_count: Option<u32>,
+    #[serde(default)]
+    error: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -751,6 +764,17 @@ fn normalize_ollama_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> 
             return vec![];
         }
     };
+
+    // Ollama can return errors mid-stream (e.g. model produces malformed output).
+    // Propagate as ProviderError so the caller can decide whether to retry.
+    if let Some(error) = &chunk.error {
+        tracing::warn!("Ollama stream error: {error}");
+        return vec![Err(ApiError::ProviderError {
+            provider: "ollama".to_string(),
+            error_type: "ollama_error".to_string(),
+            message: error.clone(),
+        })];
+    }
 
     if chunk.done {
         // Final chunk with usage info
@@ -2168,6 +2192,83 @@ mod tests {
             let val = serialize_request(&req, provider);
             // Every wire format must produce a valid JSON object
             assert!(val.is_object(), "serialize_request produced non-object for {provider:?}");
+        }
+    }
+
+    // ── Ollama error field handling ─────────────────────────────────────
+
+    #[test]
+    fn test_ollama_stream_error_in_chunk() {
+        // Ollama can return {"error": "..."} within the stream
+        let chunk_json = r#"{"error":"Value looks like object, but can't find closing '}' symbol"}"#;
+        let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
+        assert_eq!(result.len(), 1, "Should produce one error event");
+        match &result[0] {
+            Err(ApiError::ProviderError { provider, error_type, message }) => {
+                assert_eq!(provider, "ollama");
+                assert_eq!(error_type, "ollama_error");
+                assert!(message.contains("can't find closing"), "Should contain original error: {message}");
+            }
+            other => panic!("Expected ProviderError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ollama_stream_error_generic() {
+        let chunk_json = r#"{"error":"model not found"}"#;
+        let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
+        assert_eq!(result.len(), 1);
+        match &result[0] {
+            Err(ApiError::ProviderError { message, .. }) => {
+                assert_eq!(message, "model not found");
+            }
+            other => panic!("Expected ProviderError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_normalize_ollama_response_error_field() {
+        // Non-streaming Ollama response with error field
+        let resp = r#"{"error":"model 'foo' not found"}"#;
+        let result = normalize_response(resp, &LlmProvider::Ollama);
+        match result {
+            Err(ApiError::ProviderError { provider, error_type, message }) => {
+                assert_eq!(provider, "ollama");
+                assert_eq!(error_type, "ollama_error");
+                assert!(message.contains("not found"), "Should contain error: {message}");
+            }
+            other => panic!("Expected ProviderError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ollama_chunk_with_both_message_and_error() {
+        // If both are present, error takes priority
+        let chunk_json = r#"{"message":{"content":"hello"},"error":"something went wrong"}"#;
+        let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
+        assert_eq!(result.len(), 1);
+        match &result[0] {
+            Err(ApiError::ProviderError { message, .. }) => {
+                assert_eq!(message, "something went wrong");
+            }
+            other => panic!("Error should take priority over message, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ollama_chunk_no_error_still_works() {
+        // Verify normal chunks still work after adding error field
+        let chunk_json = r#"{"message":{"content":"hello","role":"assistant"}}"#;
+        let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
+        assert_eq!(result.len(), 1);
+        match &result[0] {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                match delta {
+                    ContentDelta::TextDelta { text } => assert_eq!(text, "hello"),
+                    other => panic!("Expected TextDelta, got {other:?}"),
+                }
+            }
+            other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
     }
 }

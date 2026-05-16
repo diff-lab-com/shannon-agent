@@ -55,7 +55,17 @@ impl RetryConfig {
             | ApiError::ToolUseError(_)
             | ApiError::Io(_)
             | ApiError::JsonError(_)
-            | ApiError::ProviderError { .. } => false,
+            | ApiError::ProviderError { .. } => {
+                // Ollama malformed output errors are transient — the model may
+                // produce valid output on retry (e.g. "can't find closing '}'")
+                if let ApiError::ProviderError { message, .. } = error {
+                    message.contains("can't find closing")
+                        || message.contains("unexpected end")
+                        || message.contains("malformed output")
+                } else {
+                    false
+                }
+            }
         }
     }
 
@@ -258,5 +268,104 @@ mod tests {
         assert!(result.is_err());
         // Should only have tried once (no retries for auth errors)
         assert_eq!(attempts, 1);
+    }
+
+    // ── Ollama malformed output retryability tests ─────────────────────
+
+    #[test]
+    fn test_retryable_ollama_malformed_output_closing_brace() {
+        let config = RetryConfig::default();
+        let err = ApiError::ProviderError {
+            provider: "ollama".to_string(),
+            error_type: "ollama_error".to_string(),
+            message: "Value looks like object, but can't find closing '}' symbol — the model generated malformed output.".to_string(),
+        };
+        assert!(config.is_retryable(&err), "Ollama malformed output with 'can't find closing' should be retryable");
+    }
+
+    #[test]
+    fn test_retryable_ollama_unexpected_end() {
+        let config = RetryConfig::default();
+        let err = ApiError::ProviderError {
+            provider: "ollama".to_string(),
+            error_type: "ollama_error".to_string(),
+            message: "unexpected end of input".to_string(),
+        };
+        assert!(config.is_retryable(&err), "Ollama 'unexpected end' should be retryable");
+    }
+
+    #[test]
+    fn test_retryable_ollama_malformed_output_keyword() {
+        let config = RetryConfig::default();
+        let err = ApiError::ProviderError {
+            provider: "ollama".to_string(),
+            error_type: "ollama_error".to_string(),
+            message: "the model generated malformed output".to_string(),
+        };
+        assert!(config.is_retryable(&err), "Ollama 'malformed output' should be retryable");
+    }
+
+    #[test]
+    fn test_not_retryable_ollama_model_not_found() {
+        let config = RetryConfig::default();
+        let err = ApiError::ProviderError {
+            provider: "ollama".to_string(),
+            error_type: "ollama_error".to_string(),
+            message: "model 'foo' not found".to_string(),
+        };
+        assert!(!config.is_retryable(&err), "Ollama 'model not found' should NOT be retryable");
+    }
+
+    #[test]
+    fn test_not_retryable_openai_invalid_request() {
+        let config = RetryConfig::default();
+        let err = ApiError::ProviderError {
+            provider: "openai".to_string(),
+            error_type: "invalid_request_error".to_string(),
+            message: "max_tokens is required".to_string(),
+        };
+        assert!(!config.is_retryable(&err), "OpenAI invalid request should NOT be retryable");
+    }
+
+    #[tokio::test]
+    async fn test_retry_succeeds_after_ollama_malformed_output() {
+        let config = RetryConfig::new(3, 10, 100);
+        let mut attempts = 0;
+        let result: Result<i32, ApiError> = retry_request(&config, || {
+            attempts += 1;
+            async move {
+                if attempts < 2 {
+                    Err(ApiError::ProviderError {
+                        provider: "ollama".to_string(),
+                        error_type: "ollama_error".to_string(),
+                        message: "can't find closing '}' symbol".to_string(),
+                    })
+                } else {
+                    Ok(42)
+                }
+            }
+        })
+        .await;
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(attempts, 2, "Should retry once then succeed");
+    }
+
+    #[tokio::test]
+    async fn test_no_retry_for_non_transient_provider_error() {
+        let config = RetryConfig::new(3, 10, 100);
+        let mut attempts = 0;
+        let result: Result<i32, ApiError> = retry_request(&config, || {
+            attempts += 1;
+            async move {
+                Err(ApiError::ProviderError {
+                    provider: "openai".to_string(),
+                    error_type: "invalid_request_error".to_string(),
+                    message: "invalid api key".to_string(),
+                })
+            }
+        })
+        .await;
+        assert!(result.is_err());
+        assert_eq!(attempts, 1, "Non-transient ProviderError should NOT be retried");
     }
 }
