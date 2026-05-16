@@ -956,6 +956,18 @@ impl QueryEngine {
                     }
                 }
 
+                // Sync: if the second compression check modified `messages` (truncation
+                // or compact), the conversation state must reflect the same messages
+                // so that ConversationUpdate sends the correct (compressed) history.
+                if conversation.messages.len() != messages.len() {
+                    tracing::debug!(
+                        before = conversation.messages.len(),
+                        after = messages.len(),
+                        "Syncing conversation.messages with compressed messages"
+                    );
+                    conversation.messages = messages.clone();
+                }
+
                 // Diagnostic: log conversation state before API call
                 tracing::debug!(
                     "API call: {} messages, ~{} tokens, turn {}/{}",

@@ -2430,3 +2430,300 @@ fn test_compression_preserves_story_details_for_followup_questions() {
     assert!(all_text.contains("4.2"), "Distance must be preserved");
     assert!(all_text.contains("流浪行星"), "Rogue planet must be preserved");
 }
+
+// ── Integration tests using mockito with real QueryEngine ──────────────
+
+#[cfg(test)]
+mod integration_tests {
+    use mockito::{Server, ServerGuard};
+    use shannon_core::api::LlmClientConfig;
+    use shannon_core::api::LlmProvider;
+    use shannon_core::permissions::PermissionManager;
+    use shannon_core::query_engine::{QueryEngine, QueryEngineConfig, QueryContext, QueryEvent, QueryMetadata};
+    use shannon_core::state::StateManager;
+    use shannon_core::tools::ToolRegistry;
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    fn create_engine(mock_url: &str) -> QueryEngine {
+        let config = LlmClientConfig {
+            api_key: "test-key".to_string(),
+            base_url: mock_url.to_string(),
+            model: "claude-sonnet-4-20250514".to_string(),
+            max_tokens: 4096,
+            timeout_seconds: 10,
+            api_version: "2023-06-01".to_string(),
+            provider: LlmProvider::Anthropic,
+            extra_headers: HashMap::new(),
+            retry_config: shannon_core::api::RetryConfig::default(),
+            fallback_provider: None,
+            fallback_base_url: None,
+            max_stream_reconnects: 0,
+            budget_tokens: None,
+            reasoning_effort: None,
+        };
+        let client = shannon_core::api::LlmClient::new(config);
+        let tools = ToolRegistry::new();
+        let permissions = PermissionManager::new();
+        let state = StateManager::new();
+        QueryEngine::new(client, tools, permissions, state, QueryEngineConfig::default())
+    }
+
+    fn make_query_context(user_message: &str) -> QueryContext {
+        QueryContext {
+            query_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            user_message: user_message.to_string(),
+            metadata: QueryMetadata {
+                timestamp: chrono::Utc::now(),
+                tools_allowed: true,
+                max_tokens: Some(4096),
+                model: "claude-sonnet-4-20250514".to_string(),
+                temperature: None,
+                top_p: None,
+            },
+        }
+    }
+
+    /// Build an Anthropic SSE stream that returns the given text.
+    fn sse_stream_with_text(text: &str) -> String {
+        format!(
+            "event: message_start\ndata: {{\"type\":\"message_start\",\"message\":{{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-4-20250514\",\"stop_reason\":null,\"usage\":{{\"input_tokens\":50,\"output_tokens\":0}}}}}}\n\n\
+             event: content_block_start\ndata: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"text\",\"text\":\"\"}}}}\n\n\
+             event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{}\"}}}}\n\n\
+             event: content_block_stop\ndata: {{\"type\":\"content_block_stop\",\"index\":0}}\n\n\
+             event: message_delta\ndata: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"end_turn\"}},\"usage\":{{\"input_tokens\":50,\"output_tokens\":20}}}}\n\n\
+             event: message_stop\ndata: {{\"type\":\"message_stop\"}}\n\n",
+            text.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
+        )
+    }
+
+    fn setup_stream_mock(server: &mut ServerGuard, text: &str) -> mockito::Mock {
+        server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(&sse_stream_with_text(text))
+            .create()
+    }
+
+    /// Collect all events from a query stream.
+    async fn collect_events(engine: &QueryEngine, ctx: QueryContext) -> Vec<QueryEvent> {
+        use futures::StreamExt;
+        let stream = engine.process_query(ctx, None).await;
+        let mut events = Vec::new();
+        let mut s = Box::pin(stream);
+        while let Some(event) = s.next().await {
+            match event {
+                Ok(e) => events.push(e),
+                Err(_) => break,
+            }
+        }
+        events
+    }
+
+    /// Extract the first ConversationUpdate's messages from events.
+    fn extract_conversation_update(events: &[QueryEvent]) -> Option<Vec<shannon_core::api::Message>> {
+        events.iter().find_map(|e| match e {
+            QueryEvent::ConversationUpdate { messages, .. } => Some(messages.clone()),
+            _ => None,
+        })
+    }
+
+    /// Extract concatenated text content from all Text events.
+    fn extract_text(events: &[QueryEvent]) -> String {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                QueryEvent::Text { content, .. } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Helper: get text content from a Message.
+    fn message_text(msg: &shannon_core::api::Message) -> String {
+        match &msg.content {
+            shannon_core::api::MessageContent::Text(t) => t.clone(),
+            shannon_core::api::MessageContent::Blocks(blocks) => blocks
+                .iter()
+                .filter_map(|b| match b {
+                    shannon_core::api::ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(""),
+        }
+    }
+
+    // ── Tests ──
+
+    #[test]
+    fn test_multi_turn_context_preserved_across_turns() {
+        // Simulates the exact bug report: Turn 1 writes a story,
+        // Turn 2 asks about it — the story MUST be in context.
+        let mut server = Server::new();
+        let mock_url = server.url();
+        let mut engine = create_engine(&mock_url);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        let story = "在仙女座星系的外环站，指挥官苏瑞收到了来自1387号探测器的信号。\
+                     信号中包含一组质数序列和一段音乐。科学家陈伟确认这绝非自然现象。\
+                     AI导航员NOVA计算出信号源：距外环站4.2光年的一个流浪行星。\
+                     苏瑞下令启动跃迁引擎，全船127名船员进入深眠。";
+
+        // ── Turn 1: write a story ──
+        let _m1 = setup_stream_mock(&mut server, story);
+        let ctx1 = make_query_context("写一篇关于第一接触的科幻故事");
+        let events1 = rt.block_on(collect_events(&engine, ctx1));
+
+        // Must have received text content
+        let text1 = extract_text(&events1);
+        assert!(!text1.is_empty(), "Turn 1 should produce text");
+        assert!(text1.contains("1387"), "Turn 1 text should contain the story");
+
+        // Must have ConversationUpdate with [user1, assistant1]
+        let update1 = extract_conversation_update(&events1)
+            .expect("Turn 1 must emit ConversationUpdate");
+        assert_eq!(update1.len(), 2, "After turn 1: user + assistant = 2 messages");
+        assert_eq!(update1[0].role, "user");
+        assert!(message_text(&update1[0]).contains("科幻故事"));
+        assert_eq!(update1[1].role, "assistant");
+
+        // Restore messages into the engine (simulates what query.rs does)
+        engine.restore_messages(update1);
+        assert_eq!(engine.conversation_history().len(), 2);
+
+        // ── Turn 2: ask about the story ──
+        let _m2 = setup_stream_mock(&mut server, "探测器编号是1387号。信号源在距外环站4.2光年的流浪行星。");
+        let ctx2 = make_query_context("探测器编号是多少？信号源在哪里？");
+        let events2 = rt.block_on(collect_events(&engine, ctx2));
+
+        // Must have text content
+        let text2 = extract_text(&events2);
+        assert!(!text2.is_empty(), "Turn 2 should produce text");
+        assert!(text2.contains("1387"), "Turn 2 answer should reference the story");
+
+        // ConversationUpdate should have 4 messages: [user1, asst1, user2, asst2]
+        let update2 = extract_conversation_update(&events2)
+            .expect("Turn 2 must emit ConversationUpdate");
+        assert_eq!(update2.len(), 4, "After turn 2: 4 messages total");
+
+        // Verify the story from turn 1 is preserved in message history
+        let all_text: String = update2.iter().map(|m| message_text(m)).collect();
+        assert!(
+            all_text.contains("1387") || all_text.contains("4.2"),
+            "Story details must survive into turn 2 context. Got: {}",
+            all_text.chars().take(200).collect::<String>()
+        );
+
+        // Restore and verify engine state
+        engine.restore_messages(update2);
+        assert_eq!(engine.conversation_history().len(), 4);
+        let history_text: String = engine.conversation_history()
+            .iter()
+            .map(|m| message_text(m))
+            .collect();
+        assert!(history_text.contains("科幻故事"), "User turn 1 preserved");
+        assert!(history_text.contains("仙女座"), "Story content preserved");
+    }
+
+    #[test]
+    fn test_conversation_update_sent_before_completed() {
+        // ConversationUpdate must arrive before Completed so the UI can
+        // persist messages before the "done" signal.
+        let mut server = Server::new();
+        let mock_url = server.url();
+        let engine = create_engine(&mock_url);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        let _m = setup_stream_mock(&mut server, "Hello world");
+        let ctx = make_query_context("test");
+        let events = rt.block_on(collect_events(&engine, ctx));
+
+        let update_idx = events.iter().position(|e| matches!(e, QueryEvent::ConversationUpdate { .. }));
+        let completed_idx = events.iter().position(|e| matches!(e, QueryEvent::Completed { .. }));
+
+        assert!(update_idx.is_some(), "ConversationUpdate must be emitted");
+        assert!(completed_idx.is_some(), "Completed must be emitted");
+        assert!(
+            update_idx < completed_idx,
+            "ConversationUpdate (idx {:?}) must come before Completed (idx {:?})",
+            update_idx, completed_idx
+        );
+    }
+
+    #[test]
+    fn test_restore_messages_syncs_engine_state() {
+        // Verifies that restore_messages correctly replaces the engine's
+        // internal conversation so subsequent queries use the right history.
+        let mut server = Server::new();
+        let mock_url = server.url();
+        let mut engine = create_engine(&mock_url);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        // Turn 1
+        let _m1 = setup_stream_mock(&mut server, "First response");
+        let ctx1 = make_query_context("hello");
+        let events1 = rt.block_on(collect_events(&engine, ctx1));
+        let update1 = extract_conversation_update(&events1).unwrap();
+
+        // Before restore: engine has no history from the stream
+        // (process_query clones internally, the original conversation is unchanged)
+        let _pre_restore = engine.conversation_history().len();
+        engine.restore_messages(update1);
+        assert_eq!(engine.conversation_history().len(), 2);
+
+        // Turn 2: verify the API request includes the history
+        let _m2 = setup_stream_mock(&mut server, "Second response");
+        let ctx2 = make_query_context("follow up");
+        let events2 = rt.block_on(collect_events(&engine, ctx2));
+        let update2 = extract_conversation_update(&events2).unwrap();
+
+        // 4 messages: user1 + asst1 + user2 + asst2
+        assert_eq!(update2.len(), 4, "Full conversation preserved across restore/query cycle");
+        assert_eq!(update2[0].role, "user");
+        assert_eq!(update2[1].role, "assistant");
+        assert_eq!(update2[2].role, "user");
+        assert_eq!(update2[3].role, "assistant");
+    }
+
+    #[test]
+    fn test_three_turn_conversation_accumulation() {
+        // Three turns: each should see all previous messages in context.
+        let mut server = Server::new();
+        let mock_url = server.url();
+        let mut engine = create_engine(&mock_url);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        let responses = ["Alpha", "Beta", "Gamma"];
+        let queries = ["turn 1", "turn 2", "turn 3"];
+
+        let mut expected_len = 0usize;
+
+        for (i, (query, response)) in queries.iter().zip(responses.iter()).enumerate() {
+            let _m = setup_stream_mock(&mut server, response);
+            let ctx = make_query_context(query);
+            let events = rt.block_on(collect_events(&engine, ctx));
+            let update = extract_conversation_update(&events)
+                .unwrap_or_else(|| panic!("Turn {} must emit ConversationUpdate", i + 1));
+
+            expected_len += 2; // user + assistant
+            assert_eq!(
+                update.len(),
+                expected_len,
+                "After turn {}: expected {} messages, got {}",
+                i + 1, expected_len, update.len()
+            );
+
+            engine.restore_messages(update);
+            assert_eq!(engine.conversation_history().len(), expected_len);
+        }
+
+        // Final: 6 messages total
+        let history = engine.conversation_history();
+        assert_eq!(history.len(), 6);
+        assert!(message_text(&history[0]).contains("turn 1"));
+        assert!(message_text(&history[5]).contains("Gamma"));
+    }
+}
