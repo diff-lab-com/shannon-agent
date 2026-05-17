@@ -1748,13 +1748,16 @@ impl QueryEngine {
                                         });
                                         tracing::warn!("Stream error after partial response — preserving {partial_len} chars");
                                     }
+                                    let suggestion = e.user_suggestion()
+                                        .map(|s| format!(" {s}"))
+                                        .unwrap_or_default();
                                     send_event!(tx, QueryEvent::ConversationUpdate {
                                         query_id,
                                         messages: conversation.messages.clone(),
                                     });
                                     send_event!(tx, QueryEvent::Failed {
                                         query_id,
-                                        error: e.to_string(),
+                                        error: format!("{e}.{suggestion}"),
                                     });
                                     return;
                                 }
@@ -1918,7 +1921,7 @@ impl QueryEngine {
                                                         });
                                                     }
                                                     let suggestion = retry_err.user_suggestion()
-                                                        .map(|s| format!(" {s}."))
+                                                        .map(|s| format!(" {s}"))
                                                         .unwrap_or_default();
                                                     send_event!(tx, QueryEvent::ConversationUpdate {
                                                         query_id,
@@ -1948,7 +1951,7 @@ impl QueryEngine {
                                     }
                                     Err(retry_err) => {
                                         let suggestion = retry_err.user_suggestion()
-                                            .map(|s| format!(" {s}."))
+                                            .map(|s| format!(" {s}"))
                                             .unwrap_or_default();
                                         send_event!(tx, QueryEvent::ConversationUpdate {
                                             query_id,
@@ -1964,7 +1967,7 @@ impl QueryEngine {
                             }
                         }
                         let suggestion = e.user_suggestion()
-                            .map(|s| format!(" {s}."))
+                            .map(|s| format!(" {s}"))
                             .unwrap_or_default();
                         send_event!(tx, QueryEvent::ConversationUpdate {
                             query_id,

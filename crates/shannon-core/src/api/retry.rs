@@ -278,7 +278,7 @@ mod tests {
         let err = ApiError::ProviderError {
             provider: "ollama".to_string(),
             error_type: "ollama_error".to_string(),
-            message: "Value looks like object, but can't find closing '}' symbol — the model generated malformed output.".to_string(),
+            message: "Value looks like object, but can't find closing '}' symbol".to_string(),
         };
         assert!(config.is_retryable(&err), "Ollama malformed output with 'can't find closing' should be retryable");
     }

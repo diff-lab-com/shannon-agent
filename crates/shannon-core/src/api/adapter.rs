@@ -477,13 +477,40 @@ pub fn normalize_response(
                 ApiError::InvalidResponse(format!("Failed to parse Ollama response: {e}"))
             })?;
 
-            // Check for Ollama error in the response body
+            // Check for Ollama error in the response body.
+            // Guard: skip empty error strings.
+            // For recoverable errors (malformed output), return a warning
+            // as content instead of failing the entire query.
             if let Some(error) = &resp.error {
-                return Err(ApiError::ProviderError {
-                    provider: "ollama".to_string(),
-                    error_type: "ollama_error".to_string(),
-                    message: error.clone(),
-                });
+                if !error.is_empty() {
+                    let is_recoverable = error.contains("can't find closing")
+                        || error.contains("unexpected end")
+                        || error.contains("malformed");
+
+                    if is_recoverable {
+                        tracing::warn!("Ollama recoverable error (returning warning): {error}");
+                        return Ok(super::types::MessageResponse {
+                            id: String::new(),
+                            role: "assistant".to_string(),
+                            content: vec![ContentBlock::Text {
+                                text: format!("⚠️ Ollama model output error: {error}"),
+                            }],
+                            model: resp.model.unwrap_or_default(),
+                            stop_reason: Some("end_turn".to_string()),
+                            usage: super::types::Usage {
+                                input_tokens: resp.prompt_eval_count.unwrap_or(0),
+                                output_tokens: resp.eval_count.unwrap_or(0),
+                                ..Default::default()
+                            },
+                        });
+                    }
+
+                    return Err(ApiError::ProviderError {
+                        provider: "ollama".to_string(),
+                        error_type: "ollama_error".to_string(),
+                        message: error.clone(),
+                    });
+                }
             }
 
             let msg = resp.message.ok_or_else(|| {
@@ -766,14 +793,48 @@ fn normalize_ollama_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> 
     };
 
     // Ollama can return errors mid-stream (e.g. model produces malformed output).
-    // Propagate as ProviderError so the caller can decide whether to retry.
+    // Guard: skip empty error strings (some Ollama versions include `"error":""`
+    // as a default placeholder in normal response chunks).
+    //
+    // For recoverable errors (malformed output), emit a warning as text content
+    // and end the stream gracefully so the user can continue the conversation.
+    // For hard errors (model not found, etc.), propagate as ProviderError.
     if let Some(error) = &chunk.error {
-        tracing::warn!("Ollama stream error: {error}");
-        return vec![Err(ApiError::ProviderError {
-            provider: "ollama".to_string(),
-            error_type: "ollama_error".to_string(),
-            message: error.clone(),
-        })];
+        if !error.is_empty() {
+            let is_recoverable = error.contains("can't find closing")
+                || error.contains("unexpected end")
+                || error.contains("malformed");
+
+            if is_recoverable {
+                tracing::warn!("Ollama recoverable stream error (showing warning): {error}");
+                return vec![
+                    Ok(StreamEvent::ContentBlockDelta {
+                        index: 0,
+                        delta: ContentDelta::TextDelta {
+                            text: format!("\n\n⚠️ Ollama model output error: {error}"),
+                        },
+                    }),
+                    Ok(StreamEvent::MessageDelta {
+                        delta: MessageDeltaDelta {
+                            stop_reason: Some("end_turn".to_string()),
+                            stop_sequence: None,
+                        },
+                        usage: super::types::Usage {
+                            input_tokens: chunk.prompt_eval_count.unwrap_or(0),
+                            output_tokens: chunk.eval_count.unwrap_or(0),
+                            ..Default::default()
+                        },
+                    }),
+                ];
+            }
+
+            tracing::warn!("Ollama stream error: {error}");
+            return vec![Err(ApiError::ProviderError {
+                provider: "ollama".to_string(),
+                error_type: "ollama_error".to_string(),
+                message: error.clone(),
+            })];
+        }
     }
 
     if chunk.done {
@@ -2199,17 +2260,32 @@ mod tests {
 
     #[test]
     fn test_ollama_stream_error_in_chunk() {
-        // Ollama can return {"error": "..."} within the stream
+        // Malformed output errors are recoverable — they become warning text
+        // instead of killing the stream.
         let chunk_json = r#"{"error":"Value looks like object, but can't find closing '}' symbol"}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
-        assert_eq!(result.len(), 1, "Should produce one error event");
+        assert_eq!(result.len(), 2, "Should produce warning text + MessageDelta");
+
+        // First event: text delta with warning
         match &result[0] {
-            Err(ApiError::ProviderError { provider, error_type, message }) => {
-                assert_eq!(provider, "ollama");
-                assert_eq!(error_type, "ollama_error");
-                assert!(message.contains("can't find closing"), "Should contain original error: {message}");
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                match delta {
+                    ContentDelta::TextDelta { text } => {
+                        assert!(text.contains("can't find closing"), "Warning should contain original error: {text}");
+                        assert!(text.contains("⚠️"), "Warning should have warning icon: {text}");
+                    }
+                    other => panic!("Expected TextDelta, got {other:?}"),
+                }
             }
-            other => panic!("Expected ProviderError, got {other:?}"),
+            other => panic!("Expected ContentBlockDelta, got {other:?}"),
+        }
+
+        // Second event: MessageDelta with end_turn
+        match &result[1] {
+            Ok(StreamEvent::MessageDelta { delta, .. }) => {
+                assert_eq!(delta.stop_reason, Some("end_turn".to_string()));
+            }
+            other => panic!("Expected MessageDelta, got {other:?}"),
         }
     }
 
@@ -2261,6 +2337,24 @@ mod tests {
         let chunk_json = r#"{"message":{"content":"hello","role":"assistant"}}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
         assert_eq!(result.len(), 1);
+        match &result[0] {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                match delta {
+                    ContentDelta::TextDelta { text } => assert_eq!(text, "hello"),
+                    other => panic!("Expected TextDelta, got {other:?}"),
+                }
+            }
+            other => panic!("Expected ContentBlockDelta, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ollama_chunk_with_empty_error_string_is_not_treated_as_error() {
+        // Guard against false positives: some Ollama versions may include
+        // `"error":""` as a default placeholder. This must NOT kill the stream.
+        let chunk_json = r#"{"message":{"content":"hello","role":"assistant"},"error":""}"#;
+        let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
+        assert_eq!(result.len(), 1, "Empty error string should not produce an error event");
         match &result[0] {
             Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
                 match delta {

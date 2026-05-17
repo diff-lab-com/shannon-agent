@@ -141,16 +141,7 @@ impl ApiError {
                 LlmProvider::Ollama => {
                     // Ollama: { "error": "..." }
                     if let Some(msg) = val.get("error").and_then(|v| v.as_str()) {
-                        let message = if msg.contains("can't find closing")
-                            || msg.contains("unexpected end")
-                        {
-                            format!(
-                                "{msg} — the model generated malformed output. \
-                                 Try a different model or simplify the prompt."
-                            )
-                        } else {
-                            msg.to_string()
-                        };
+                        let message = msg.to_string();
                         return ApiError::ProviderError {
                             provider: provider_name,
                             error_type: "ollama_error".to_string(),
@@ -313,23 +304,34 @@ mod tests {
     // ── Ollama error parsing tests ──────────────────────────────────────
 
     /// Regression: Ollama returns `{"error": "can't find closing '}' symbol..."}`
-    /// when a model generates malformed output. Must be parsed correctly.
+    /// when a model generates malformed output. With status 500, this maps to
+    /// ApiError (server error), not ProviderError.
     #[test]
     fn test_ollama_malformed_output_error() {
         let body = r#"{"error":"Value looks like object, but can't find closing '}' symbol"}"#;
         let err = ApiError::from_provider_response(&LlmProvider::Ollama, 500, body);
         match err {
-            ApiError::ProviderError { provider, error_type, message } => {
-                assert_eq!(provider, "ollama");
-                assert_eq!(error_type, "ollama_error");
-                assert!(message.contains("can't find closing"), "Should contain original error: {message}");
-                assert!(message.contains("malformed output"), "Should add helpful context: {message}");
-            }
             ApiError::ApiError { status, .. } => {
-                // 500 gets mapped to ApiError, not ProviderError
                 assert_eq!(status, 500);
             }
-            other => panic!("Expected ProviderError or ApiError, got {other:?}"),
+            other => panic!("Expected ApiError for status 500, got {other:?}"),
+        }
+    }
+
+    /// Ollama malformed output with status 400 should be ProviderError with
+    /// the raw Ollama message (no appended suggestion — that's user_suggestion()'s job).
+    #[test]
+    fn test_ollama_malformed_output_no_duplicate_suggestion() {
+        let body = r#"{"error":"Value looks like object, but can't find closing '}' symbol"}"#;
+        let err = ApiError::from_provider_response(&LlmProvider::Ollama, 400, body);
+        match err {
+            ApiError::ProviderError { message, .. } => {
+                // The message should be the raw Ollama error only — no appended suggestion
+                assert!(message.contains("can't find closing"), "Should contain original error: {message}");
+                assert!(!message.contains("Try switching models"), "Should NOT contain suggestion text: {message}");
+                assert!(!message.contains("simplify your prompt"), "Should NOT contain suggestion text: {message}");
+            }
+            other => panic!("Expected ProviderError for status 400, got {other:?}"),
         }
     }
 
@@ -403,5 +405,83 @@ mod tests {
             message: "model not found".to_string(),
         };
         assert!(err.user_suggestion().is_none(), "Generic ProviderError should have no suggestion");
+    }
+
+    // ── Regression: error message formatting ────────────────────────────
+
+    /// Verifies that combining error display + user_suggestion produces no
+    /// double periods (e.g. "prompt..") or duplicated content.
+    /// This mirrors the format used in engine.rs:
+    ///   format!("{e}.{suggestion}")
+    #[test]
+    fn test_error_plus_suggestion_no_double_period() {
+        let err = ApiError::ProviderError {
+            provider: "ollama".to_string(),
+            error_type: "ollama_error".to_string(),
+            message: "Value looks like object, but can't find closing '}' symbol".to_string(),
+        };
+        let suggestion = err.user_suggestion()
+            .map(|s| format!(" {s}"))
+            .unwrap_or_default();
+        let combined = format!("{err}.{suggestion}");
+
+        // No double periods
+        assert!(!combined.contains(".."), "Should not contain double periods: {combined}");
+        // No triple periods either (ellipsis is fine)
+        // The error and suggestion should both be present
+        assert!(combined.contains("can't find closing"), "Should contain error: {combined}");
+        assert!(combined.contains("/model"), "Should contain suggestion: {combined}");
+    }
+
+    /// All user_suggestion() returns must end with a period — the engine.rs
+    /// format string does NOT add one, so the suggestion must be self-contained.
+    #[test]
+    fn test_all_user_suggestions_end_with_period() {
+        let cases: Vec<ApiError> = vec![
+            ApiError::RateLimitExceeded { retry_after_secs: None },
+            ApiError::AuthenticationFailed,
+            ApiError::Timeout,
+            ApiError::ApiError { status: 500, message: "server error".to_string() },
+            ApiError::ProviderError {
+                provider: "ollama".to_string(),
+                error_type: "ollama_error".to_string(),
+                message: "can't find closing '}' symbol".to_string(),
+            },
+        ];
+        for err in cases {
+            if let Some(s) = err.user_suggestion() {
+                assert!(s.ends_with('.'), "user_suggestion for {err:?} must end with period: \"{s}\"");
+            }
+        }
+    }
+
+    /// Error message + suggestion must not duplicate content between the two.
+    #[test]
+    fn test_error_suggestion_no_content_duplication() {
+        let err = ApiError::ProviderError {
+            provider: "ollama".to_string(),
+            error_type: "ollama_error".to_string(),
+            message: "Value looks like object, but can't find closing '}' symbol".to_string(),
+        };
+        let display = format!("{err}");
+        let suggestion = err.user_suggestion();
+
+        // The display message should NOT contain the suggestion text
+        if let Some(ref _s) = suggestion {
+            // Check key phrases from the suggestion don't appear in the error display
+            assert!(
+                !display.contains("Try switching models"),
+                "Error display should not duplicate suggestion: {display}"
+            );
+            assert!(
+                !display.contains("simplify your prompt"),
+                "Error display should not duplicate suggestion: {display}"
+            );
+        }
+
+        // The suggestion itself should be present and meaningful
+        assert!(suggestion.is_some());
+        let s = suggestion.unwrap();
+        assert!(s.len() > 20, "Suggestion should be meaningful, got: {s}");
     }
 }
