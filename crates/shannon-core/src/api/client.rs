@@ -451,11 +451,21 @@ impl LlmClient {
                 return Err(ApiError::RateLimitExceeded { retry_after_secs: retry_after });
             }
             let error_text = response.text().await.unwrap_or_default();
-            return Err(ApiError::from_provider_response(
+            let err = ApiError::from_provider_response(
                 &self.config.provider,
                 status,
                 &error_text,
-            ));
+            );
+            // Ollama can return HTTP 500 with malformed-output errors for tiny
+            // models.  Treat as recoverable: return the error as content so the
+            // caller can display a warning instead of failing the entire query.
+            if err.is_ollama_malformed_output() {
+                tracing::warn!("Ollama HTTP {status} recoverable error: {error_text}");
+                return Ok(vec![super::types::ContentBlock::Text {
+                    text: format!("⚠️ Ollama model output error: {error_text}"),
+                }]);
+            }
+            return Err(err);
         }
 
         // Read the raw text first so we can apply provider-specific normalization

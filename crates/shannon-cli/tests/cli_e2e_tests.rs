@@ -1191,7 +1191,9 @@ async fn test_ollama_retry_includes_error_detail() {
 #[tokio::test]
 #[serial]
 async fn test_ollama_repeated_malformed_shows_model_incompatible() {
-    // Both attempts fail with malformed output → user should see "model incompatible" message
+    // Both attempts return malformed output. The streaming attempt fails,
+    // but the non-streaming retry treats HTTP 500 malformed output as
+    // recoverable content (a warning message) instead of a fatal error.
     let mut server = mockito::Server::new_async().await;
 
     let _mock_err1 = server
@@ -1217,12 +1219,15 @@ async fn test_ollama_repeated_malformed_shows_model_incompatible() {
         .assert();
 
     let combined = format!(
-        "{}",
+        "{}{}",
+        stdout_string(&result),
         String::from_utf8_lossy(&result.get_output().stderr)
     );
+    // The retry returns the malformed-output error as warning content
+    // (not a fatal error), so the query should succeed with a warning.
     assert!(
-        combined.contains("cannot produce valid output") || combined.contains("incompatible"),
-        "Repeated malformed failure should show model incompatibility, got: {combined}"
+        combined.contains("Ollama model output error"),
+        "Repeated malformed failure should show Ollama model output warning, got: {combined}"
     );
 }
 
