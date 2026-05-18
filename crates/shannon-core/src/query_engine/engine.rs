@@ -990,12 +990,12 @@ impl QueryEngine {
                 conversation.messages = messages.clone();
 
                 // Diagnostic: log conversation state before API call
-                tracing::debug!(
-                    "API call: {} messages, ~{} tokens, turn {}/{}",
-                    messages.len(),
-                    crate::compact::helpers::estimate_tokens(&messages),
-                    turn + 1,
-                    config.max_turns,
+                tracing::info!(
+                    msg_count = messages.len(),
+                    estimated_tokens = crate::compact::helpers::estimate_tokens(&messages),
+                    turn = turn + 1,
+                    max_turns = config.max_turns,
+                    "Sending API request"
                 );
 
                 // Call the API — use structured system blocks when available for prompt caching
