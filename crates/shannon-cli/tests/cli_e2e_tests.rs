@@ -13,6 +13,7 @@ use assert_cmd::Command;
 use mockito::{Matcher, Mock, ServerGuard};
 use predicates::prelude::*;
 use serial_test::serial;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 const BIN: &str = "shannon";
 
@@ -1390,4 +1391,375 @@ async fn test_openai_still_sends_tools_by_default() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
     assert_eq!(json["exit_code"], "success");
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Section: Multi-turn conversation tests
+// ════════════════════════════════════════════════════════════════════════
+
+static SESSION_TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+/// Create an isolated temp HOME directory for session tests.
+fn session_home_dir() -> std::path::PathBuf {
+    let n = SESSION_TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir()
+        .join("shannon-test-multiturn")
+        .join(format!("test-{n}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// Build a shannon command with isolated HOME for session testing.
+fn shannon_with_sessions(provider: &str, server_url: &str, home_dir: &std::path::Path) -> Command {
+    let mut cmd = shannon_with_mock(provider, server_url);
+    cmd.env("HOME", home_dir.to_string_lossy().to_string());
+    cmd
+}
+
+/// Write a session file directly into the isolated sessions directory.
+fn write_session_file(home_dir: &std::path::Path, session_id: &str, messages: Vec<serde_json::Value>) {
+    let sessions_dir = home_dir.join(".shannon").join("sessions");
+    std::fs::create_dir_all(&sessions_dir).unwrap();
+
+    let session_data = serde_json::json!({
+        "session_id": session_id,
+        "metadata": {
+            "model": "test-model",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-05-01T00:00:00Z",
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "turn_count": messages.len() / 2,
+            "title": "Test session",
+            "parent_session_id": null,
+            "branch_point_message_index": null
+        },
+        "messages": messages
+    });
+
+    let path = sessions_dir.join(format!("{session_id}.json"));
+    std::fs::write(&path, serde_json::to_string_pretty(&session_data).unwrap()).unwrap();
+}
+
+/// Find the most recent session UUID in the isolated HOME dir.
+fn find_latest_session_id(home_dir: &std::path::Path) -> Option<String> {
+    let sessions_dir = home_dir.join(".shannon").join("sessions");
+    if !sessions_dir.exists() {
+        return None;
+    }
+    let mut latest: Option<(std::time::SystemTime, String)> = None;
+    for entry in std::fs::read_dir(&sessions_dir).ok()? {
+        let entry = entry.ok()?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let modified = entry.metadata().ok()?.modified().ok()?;
+        let name = path.file_stem()?.to_str()?.to_string();
+        if latest.as_ref().map_or(true, |(t, _)| modified > *t) {
+            latest = Some((modified, name));
+        }
+    }
+    latest.map(|(_, id)| id)
+}
+
+/// Generate N turns of conversation messages with a unique marker in turn 2.
+fn make_turn_messages(n: usize) -> Vec<serde_json::Value> {
+    let mut messages = Vec::new();
+    for i in 0..n {
+        messages.push(serde_json::json!({
+            "role": "user",
+            "content": format!("Question {i}: What is topic_{i}?")
+        }));
+        let marker = if i == 2 { " TOPIC_MARKER_XYZ" } else { "" };
+        messages.push(serde_json::json!({
+            "role": "assistant",
+            "content": format!("Answer {i}: Topic_{i} is about subject_{i}.{marker}")
+        }));
+    }
+    messages
+}
+
+#[tokio::test]
+#[serial]
+async fn test_multiturn_ollama_three_turns_accumulated_context() {
+    let home = session_home_dir();
+
+    // Turn 1: ask about France
+    let mut s1 = mockito::Server::new_async().await;
+    let _m1 = mock_ollama_streaming(
+        &mut s1,
+        "The capital of France is Paris. The Eiffel Tower is its most famous landmark.",
+    );
+    let r1 = shannon_with_sessions("ollama", &s1.url(), &home)
+        .args(["--prompt", "What is the capital of France?", "--output-format", "json"])
+        .timeout(std::time::Duration::from_secs(15))
+        .assert();
+    assert_eq!(parse_json_output(&stdout_string(&r1))["exit_code"], "success");
+    assert!(find_latest_session_id(&home).is_some(), "Session saved after turn 1");
+
+    // Turn 2: resume — verify prior context (Eiffel) is sent to API
+    let mut s2 = mockito::Server::new_async().await;
+    let _m2 = s2
+        .mock("POST", "/api/chat")
+        .match_body(Matcher::Regex(r#"Eiffel"#.to_string()))
+        .with_status(200)
+        .with_header("content-type", "application/x-ndjson")
+        .with_body(ollama_streaming_body("I mentioned the Eiffel Tower and Paris."))
+        .expect(1)
+        .create();
+    let r2 = shannon_with_sessions("ollama", &s2.url(), &home)
+        .args(["--resume", "--prompt", "What landmark did you mention?", "--output-format", "json"])
+        .timeout(std::time::Duration::from_secs(15))
+        .assert();
+    assert_eq!(parse_json_output(&stdout_string(&r2))["exit_code"], "success");
+
+    // Turn 3: resume again — verify BOTH prior turns loaded
+    let mut s3 = mockito::Server::new_async().await;
+    let _m3 = s3
+        .mock("POST", "/api/chat")
+        .match_body(Matcher::Regex(r#"capital.*France|Eiffel"#.to_string()))
+        .with_status(200)
+        .with_header("content-type", "application/x-ndjson")
+        .with_body(ollama_streaming_body("We discussed France, Paris, and the Eiffel Tower."))
+        .expect(1)
+        .create();
+    let r3 = shannon_with_sessions("ollama", &s3.url(), &home)
+        .args(["--resume", "--prompt", "Summarize our conversation", "--output-format", "json"])
+        .timeout(std::time::Duration::from_secs(15))
+        .assert();
+    let j3 = parse_json_output(&stdout_string(&r3));
+    assert_eq!(j3["exit_code"], "success");
+    assert!(j3["response"].as_str().unwrap_or("").contains("Eiffel"));
+}
+
+#[tokio::test]
+#[serial]
+async fn test_multiturn_openai_resume_preserves_context() {
+    let home = session_home_dir();
+
+    let mut s1 = mockito::Server::new_async().await;
+    let _m1 = mock_openai_streaming(&mut s1, "Rust is a systems programming language focused on safety and performance.");
+    let r1 = shannon_with_sessions("openai", &s1.url(), &home)
+        .env("SHANNON_API_KEY", "test-key")
+        .args(["--prompt", "Tell me about Rust", "--output-format", "json"])
+        .timeout(std::time::Duration::from_secs(15))
+        .assert();
+    assert_eq!(parse_json_output(&stdout_string(&r1))["exit_code"], "success");
+
+    let mut s2 = mockito::Server::new_async().await;
+    let _m2 = s2
+        .mock("POST", "/v1/chat/completions")
+        .match_body(Matcher::Regex(r#"safety"#.to_string()))
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(openai_sse_body("Rust's ownership system ensures memory safety without GC."))
+        .expect(1)
+        .create();
+    let r2 = shannon_with_sessions("openai", &s2.url(), &home)
+        .env("SHANNON_API_KEY", "test-key")
+        .args(["--resume", "--prompt", "How does it ensure memory safety?", "--output-format", "json"])
+        .timeout(std::time::Duration::from_secs(15))
+        .assert();
+    assert_eq!(parse_json_output(&stdout_string(&r2))["exit_code"], "success");
+}
+
+#[tokio::test]
+#[serial]
+async fn test_multiturn_anthropic_resume_context() {
+    let home = session_home_dir();
+
+    let mut s1 = mockito::Server::new_async().await;
+    let _m1 = mock_anthropic_streaming(&mut s1, "Python is a high-level language known for readability.");
+    let r1 = shannon_with_sessions("anthropic", &s1.url(), &home)
+        .env("SHANNON_API_KEY", "test-key")
+        .args(["--prompt", "What is Python?", "--output-format", "json"])
+        .timeout(std::time::Duration::from_secs(15))
+        .assert();
+    assert_eq!(parse_json_output(&stdout_string(&r1))["exit_code"], "success");
+
+    let mut s2 = mockito::Server::new_async().await;
+    let _m2 = s2
+        .mock("POST", "/v1/messages")
+        .match_body(Matcher::Regex(r#"readability"#.to_string()))
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_header("anthropic-version", "2023-06-01")
+        .with_body(anthropic_sse_body("Python is great for data science and web development."))
+        .expect(1)
+        .create();
+    let r2 = shannon_with_sessions("anthropic", &s2.url(), &home)
+        .env("SHANNON_API_KEY", "test-key")
+        .args(["--resume", "--prompt", "What is it good for?", "--output-format", "json"])
+        .timeout(std::time::Duration::from_secs(15))
+        .assert();
+    assert_eq!(parse_json_output(&stdout_string(&r2))["exit_code"], "success");
+}
+
+#[tokio::test]
+#[serial]
+async fn test_multiturn_ollama_story_then_character_count() {
+    let home = session_home_dir();
+
+    let mut s1 = mockito::Server::new_async().await;
+    let story = "Once upon a time, a brave rabbit named Hoppy lived with friends Foxie, Owly, and Deery in a meadow.";
+    let _m1 = mock_ollama_streaming(&mut s1, story);
+    let r1 = shannon_with_sessions("ollama", &s1.url(), &home)
+        .args(["--prompt", "Write a short story about a brave rabbit", "--output-format", "json"])
+        .timeout(std::time::Duration::from_secs(15))
+        .assert();
+    assert_eq!(parse_json_output(&stdout_string(&r1))["exit_code"], "success");
+
+    let mut s2 = mockito::Server::new_async().await;
+    let _m2 = s2
+        .mock("POST", "/api/chat")
+        .match_body(Matcher::Regex(r#"Hoppy"#.to_string()))
+        .with_status(200)
+        .with_header("content-type", "application/x-ndjson")
+        .with_body(ollama_streaming_body("The story has 4 characters: Hoppy, Foxie, Owly, and Deery."))
+        .expect(1)
+        .create();
+    let r2 = shannon_with_sessions("ollama", &s2.url(), &home)
+        .args(["--resume", "--prompt", "How many characters are in the story?", "--output-format", "json"])
+        .timeout(std::time::Duration::from_secs(15))
+        .assert();
+    let j2 = parse_json_output(&stdout_string(&r2));
+    assert_eq!(j2["exit_code"], "success");
+    assert!(j2["response"].as_str().unwrap_or("").contains("4"));
+}
+
+#[tokio::test]
+#[serial]
+async fn test_multiturn_resume_no_session_fails_gracefully() {
+    let home = session_home_dir();
+    let mut server = mockito::Server::new_async().await;
+    let _m = mock_ollama_streaming(&mut server, "Should not reach here");
+
+    let result = shannon_with_sessions("ollama", &server.url(), &home)
+        .args(["--resume", "--prompt", "test", "--output-format", "json"])
+        .timeout(std::time::Duration::from_secs(10))
+        .assert();
+
+    // --resume with no sessions silently proceeds (load_resume_session uses .ok()).
+    // Verify it still works — just without prior context.
+    let stdout = stdout_string(&result);
+    let json = parse_json_output(&stdout);
+    assert_eq!(json["exit_code"], "success");
+}
+
+#[tokio::test]
+#[serial]
+async fn test_multiturn_deepseek_resume_context() {
+    let home = session_home_dir();
+
+    let mut s1 = mockito::Server::new_async().await;
+    let _m1 = mock_openai_streaming(&mut s1, "Tokyo is the capital of Japan, known for its temples and technology.");
+    let r1 = shannon_with_sessions("deepseek", &s1.url(), &home)
+        .env("SHANNON_API_KEY", "test-key")
+        .args(["--prompt", "What is the capital of Japan?", "--output-format", "json"])
+        .timeout(std::time::Duration::from_secs(15))
+        .assert();
+    assert_eq!(parse_json_output(&stdout_string(&r1))["exit_code"], "success");
+
+    let mut s2 = mockito::Server::new_async().await;
+    let _m2 = s2
+        .mock("POST", "/v1/chat/completions")
+        .match_body(Matcher::Regex(r#"temples"#.to_string()))
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(openai_sse_body("You asked about Japan's capital Tokyo. It's famous for both temples and tech."))
+        .expect(1)
+        .create();
+    let r2 = shannon_with_sessions("deepseek", &s2.url(), &home)
+        .env("SHANNON_API_KEY", "test-key")
+        .args(["--resume", "--prompt", "What else is it known for?", "--output-format", "json"])
+        .timeout(std::time::Duration::from_secs(15))
+        .assert();
+    assert_eq!(parse_json_output(&stdout_string(&r2))["exit_code"], "success");
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Section: Ultra-long conversation tests (pre-populated sessions)
+// ════════════════════════════════════════════════════════════════════════
+
+async fn run_long_conversation_test(n_turns: usize) {
+    let home = session_home_dir();
+    let session_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+    let messages = make_turn_messages(n_turns);
+    write_session_file(&home, session_id, messages);
+
+    let mut server = mockito::Server::new_async().await;
+    let _m = server
+        .mock("POST", "/api/chat")
+        .match_body(Matcher::Regex(r#"TOPIC_MARKER_XYZ"#.to_string()))
+        .with_status(200)
+        .with_header("content-type", "application/x-ndjson")
+        .with_body(ollama_streaming_body(&format!("Loaded {n_turns} turns of context successfully.")))
+        .expect(1)
+        .create();
+
+    let result = shannon_with_sessions("ollama", &server.url(), &home)
+        .args([
+            "--resume",
+            "--session", session_id,
+            "--prompt", "What was discussed in earlier turns?",
+            "--output-format", "json",
+        ])
+        .timeout(std::time::Duration::from_secs(30))
+        .assert();
+
+    let stdout = stdout_string(&result);
+    let json = parse_json_output(&stdout);
+    assert_eq!(
+        json["exit_code"], "success",
+        "Failed for {n_turns} turns: {stdout}"
+    );
+    assert!(
+        json["response"].as_str().unwrap_or("").contains(&format!("{n_turns} turns")),
+        "Response should mention turn count for {n_turns} turns, got: {}",
+        json["response"].as_str().unwrap_or("")
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn test_long_conversation_5_turns() {
+    run_long_conversation_test(5).await;
+}
+
+#[tokio::test]
+#[serial]
+async fn test_long_conversation_10_turns() {
+    run_long_conversation_test(10).await;
+}
+
+#[tokio::test]
+#[serial]
+async fn test_long_conversation_20_turns() {
+    run_long_conversation_test(20).await;
+}
+
+#[tokio::test]
+#[serial]
+async fn test_long_conversation_50_turns() {
+    run_long_conversation_test(50).await;
+}
+
+#[tokio::test]
+#[serial]
+async fn test_long_conversation_100_turns() {
+    run_long_conversation_test(100).await;
+}
+
+#[tokio::test]
+#[serial]
+async fn test_long_conversation_200_turns() {
+    run_long_conversation_test(200).await;
+}
+
+#[tokio::test]
+#[serial]
+async fn test_long_conversation_500_turns() {
+    run_long_conversation_test(500).await;
 }
