@@ -2139,6 +2139,7 @@ mod permission_flow_tests {
                 QueryEvent::Info { .. } => "Info",
                 QueryEvent::RateLimit { .. } => "RateLimit",
                 QueryEvent::ConversationUpdate { .. } => "ConversationUpdate",
+                QueryEvent::Warning { .. } => "Warning",
             }).collect::<Vec<_>>()
         );
     }

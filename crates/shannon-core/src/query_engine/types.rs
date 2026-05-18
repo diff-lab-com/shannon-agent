@@ -591,6 +591,10 @@ pub enum QueryEvent {
     /// Query failed with error
     Failed { query_id: Uuid, error: String },
 
+    /// Non-fatal warning — content was generated but a recoverable error occurred.
+    /// The query continues and will emit Completed after this.
+    Warning { query_id: Uuid, message: String },
+
     /// Progress update
     Progress { query_id: Uuid, message: String },
 

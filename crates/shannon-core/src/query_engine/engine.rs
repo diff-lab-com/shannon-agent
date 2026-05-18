@@ -1730,15 +1730,17 @@ impl QueryEngine {
                                     }
                                 }
                                 Err(e) => {
-                                    // Save partial assistant response before failing
-                                    // so the user can continue from what was generated
-                                    let partial_len = assistant_text.len();
-                                    if !assistant_text.is_empty() || !assistant_tool_uses.is_empty() {
-                                        let has_text = !assistant_text.is_empty();
+                                    // Content-first: if partial content was streamed before the error,
+                                    // preserve it immediately. Local models (Ollama) often generate
+                                    // valid text before hitting a malformed tool-call error, and
+                                    // retrying is expensive (new HTTP request) and may hang.
+                                    let has_partial = !assistant_text.is_empty() || !assistant_tool_uses.is_empty();
+                                    if has_partial {
+                                        let partial_len = assistant_text.len();
                                         let mut blocks: Vec<ContentBlock> = Vec::new();
-                                        if has_text {
+                                        if !assistant_text.is_empty() {
                                             blocks.push(ContentBlock::Text {
-                                                text: assistant_text,
+                                                text: std::mem::take(&mut assistant_text),
                                             });
                                         }
                                         blocks.append(&mut assistant_tool_uses);
@@ -1746,18 +1748,131 @@ impl QueryEngine {
                                             role: "assistant".to_string(),
                                             content: MessageContent::Blocks(blocks),
                                         });
-                                        tracing::warn!("Stream error after partial response — preserving {partial_len} chars");
+                                        tracing::warn!("Stream error after partial response ({partial_len} chars) — preserving content");
+                                        let suggestion = e.user_suggestion()
+                                            .map(|s| format!(" {s}"))
+                                            .unwrap_or_default();
+                                        let warning_msg = if suggestion.is_empty() {
+                                            "Stream ended unexpectedly. Partial response preserved.".to_string()
+                                        } else {
+                                            format!("Stream ended unexpectedly.{suggestion}")
+                                        };
+                                        send_event!(tx, QueryEvent::Warning {
+                                            query_id,
+                                            message: warning_msg,
+                                        });
+                                        send_event!(tx, QueryEvent::ConversationUpdate {
+                                            query_id,
+                                            messages: conversation.messages.clone(),
+                                        });
+                                        send_event!(tx, QueryEvent::Completed { query_id });
+                                        if let Err(err) = save_conversation_to_disk(
+                                            &state_for_save,
+                                            session_id_for_save,
+                                            &conversation.messages,
+                                            &client_model,
+                                        ) {
+                                            tracing::warn!(session = %session_id_for_save, "Failed to save conversation: {err}");
+                                        }
+                                        return;
                                     }
+
+                                    // No partial content — retry without tools for Ollama models
+                                    // that can't handle tool-call formatting.
+                                    // Use non-streaming mode: Ollama may return HTTP 200 with content
+                                    // even when the model generates malformed output, unlike streaming
+                                    // mode which can return HTTP 500 immediately.
+                                    if e.is_ollama_malformed_output() {
+                                        tracing::warn!("Ollama malformed output (no partial content), retrying without tools (non-streaming): {e}");
+                                        send_event!(tx, QueryEvent::Progress {
+                                            query_id,
+                                            message: "Retrying without tools...".to_string(),
+                                        });
+                                        let no_tools: Option<Vec<crate::api::ToolDefinition>> = None;
+                                        let no_system: Option<String> = None;
+                                        match tokio::time::timeout(
+                                            std::time::Duration::from_secs(60),
+                                            client.send_message(messages.clone(), no_tools, no_system),
+                                        ).await {
+                                            Ok(Ok(content_blocks)) => {
+                                                let mut retry_text = String::new();
+                                                for block in &content_blocks {
+                                                    if let ContentBlock::Text { text } = block {
+                                                        retry_text.push_str(text);
+                                                        send_event!(tx, QueryEvent::Text {
+                                                            query_id,
+                                                            content: text.clone(),
+                                                        });
+                                                    }
+                                                }
+                                                if !retry_text.is_empty() {
+                                                    let already_added = conversation.messages.last()
+                                                        .map(|m| matches!(&m.content, MessageContent::Text(t) if t == &retry_text))
+                                                        .unwrap_or(false);
+                                                    if !already_added {
+                                                        conversation.messages.push(Message {
+                                                            role: "assistant".to_string(),
+                                                            content: MessageContent::Text(retry_text),
+                                                        });
+                                                    }
+                                                }
+                                                let total_cost = CostTracker::calculate_cost(
+                                                    &client_model,
+                                                    total_input_tokens,
+                                                    total_output_tokens,
+                                                );
+                                                send_event!(tx, QueryEvent::Cost {
+                                                    query_id,
+                                                    total_cost_usd: total_cost,
+                                                    input_tokens: total_input_tokens,
+                                                    output_tokens: total_output_tokens,
+                                                });
+                                                send_event!(tx, QueryEvent::ConversationUpdate {
+                                                    query_id,
+                                                    messages: conversation.messages.clone(),
+                                                });
+                                                send_event!(tx, QueryEvent::Completed { query_id });
+                                                if let Err(err) = save_conversation_to_disk(
+                                                    &state_for_save,
+                                                    session_id_for_save,
+                                                    &conversation.messages,
+                                                    &client_model,
+                                                ) {
+                                                    tracing::warn!(session = %session_id_for_save, "Failed to save conversation: {err}");
+                                                }
+                                                return;
+                                            }
+                                            Ok(Err(retry_err)) => {
+                                                tracing::warn!("Non-streaming retry error: {retry_err}");
+                                                send_event!(tx, QueryEvent::Failed {
+                                                    query_id,
+                                                    error: "Local model error — retry without tools failed. Try /model to switch.".to_string(),
+                                                });
+                                                return;
+                                            }
+                                            Err(_) => {
+                                                tracing::warn!("Non-streaming retry timed out (60s)");
+                                                send_event!(tx, QueryEvent::Failed {
+                                                    query_id,
+                                                    error: "Local model error — retry timed out. The model may be loading, try again.".to_string(),
+                                                });
+                                                return;
+                                            }
+                                        }
+                                    }
+
+                                    // No partial content, non-recoverable — fail
                                     let suggestion = e.user_suggestion()
                                         .map(|s| format!(" {s}"))
                                         .unwrap_or_default();
-                                    send_event!(tx, QueryEvent::ConversationUpdate {
-                                        query_id,
-                                        messages: conversation.messages.clone(),
-                                    });
+                                    let user_error = if suggestion.is_empty() {
+                                        format!("{e}")
+                                    } else {
+                                        suggestion
+                                    };
                                     send_event!(tx, QueryEvent::Failed {
                                         query_id,
-                                        error: format!("{e}.{suggestion}"),
+                                        error: user_error,
                                     });
                                     return;
                                 }
@@ -1966,16 +2081,99 @@ impl QueryEngine {
                                 }
                             }
                         }
+                        // Ollama HTTP 500 with malformed output — retry without tools.
+                        // Use non-streaming mode: Ollama may return HTTP 200 with content
+                        // even when the model generates malformed output, unlike streaming
+                        // mode which can return HTTP 500 immediately.
+                        // Strip system prompt to prevent small models from attempting tool calls.
+                        if e.is_ollama_malformed_output() {
+                            tracing::warn!("Ollama HTTP error (malformed output), retrying without tools (non-streaming): {e}");
+                            send_event!(tx, QueryEvent::Progress {
+                                query_id,
+                                message: "Retrying without tools...".to_string(),
+                            });
+                            let no_tools: Option<Vec<crate::api::ToolDefinition>> = None;
+                            let no_system: Option<String> = None;
+                            match tokio::time::timeout(
+                                std::time::Duration::from_secs(60),
+                                client.send_message(messages.clone(), no_tools, no_system),
+                            ).await {
+                                Ok(Ok(content_blocks)) => {
+                                    let mut retry_text = String::new();
+                                    for block in &content_blocks {
+                                        if let ContentBlock::Text { text } = block {
+                                            retry_text.push_str(text);
+                                            send_event!(tx, QueryEvent::Text {
+                                                query_id,
+                                                content: text.clone(),
+                                            });
+                                        }
+                                    }
+                                    if !retry_text.is_empty() {
+                                        conversation.messages.push(Message {
+                                            role: "assistant".to_string(),
+                                            content: MessageContent::Text(retry_text),
+                                        });
+                                    }
+                                    let total_cost = CostTracker::calculate_cost(
+                                        &client_model,
+                                        total_input_tokens,
+                                        total_output_tokens,
+                                    );
+                                    send_event!(tx, QueryEvent::Cost {
+                                        query_id,
+                                        total_cost_usd: total_cost,
+                                        input_tokens: total_input_tokens,
+                                        output_tokens: total_output_tokens,
+                                    });
+                                    send_event!(tx, QueryEvent::ConversationUpdate {
+                                        query_id,
+                                        messages: conversation.messages.clone(),
+                                    });
+                                    send_event!(tx, QueryEvent::Completed { query_id });
+                                    if let Err(err) = save_conversation_to_disk(
+                                        &state_for_save,
+                                        session_id_for_save,
+                                        &conversation.messages,
+                                        &client_model,
+                                    ) {
+                                        tracing::warn!(session = %session_id_for_save, "Failed to save conversation: {err}");
+                                    }
+                                    return;
+                                }
+                                Ok(Err(retry_err)) => {
+                                    tracing::warn!("Non-streaming retry error: {retry_err}");
+                                    send_event!(tx, QueryEvent::Failed {
+                                        query_id,
+                                        error: "Local model error — retry without tools failed. Try /model to switch models.".to_string(),
+                                    });
+                                    return;
+                                }
+                                Err(_) => {
+                                    tracing::warn!("Non-streaming retry timed out (60s)");
+                                    send_event!(tx, QueryEvent::Failed {
+                                        query_id,
+                                        error: "Local model error — retry timed out. The model may be loading, try again.".to_string(),
+                                    });
+                                    return;
+                                }
+                            }
+                        }
                         let suggestion = e.user_suggestion()
                             .map(|s| format!(" {s}"))
                             .unwrap_or_default();
+                        let user_error = if suggestion.is_empty() {
+                            format!("{e}")
+                        } else {
+                            suggestion
+                        };
                         send_event!(tx, QueryEvent::ConversationUpdate {
                             query_id,
                             messages: conversation.messages.clone(),
                         });
                         send_event!(tx, QueryEvent::Failed {
                             query_id,
-                            error: format!("{e}.{suggestion}"),
+                            error: user_error,
                         });
                         return;
                     }

@@ -285,6 +285,12 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                         s.buffer = response_text.clone();
                     }
                 }
+                Ok(QueryEvent::Warning { message, .. }) => {
+                    response_text.push_str(&format!("\n⚠️ {message}"));
+                    if let Ok(mut s) = ss.lock() {
+                        s.buffer = response_text.clone();
+                    }
+                }
                 Ok(QueryEvent::Usage { input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, .. }) => {
                     if let Ok(mut s) = ss.lock() {
                         s.tokens = (input_tokens, output_tokens);

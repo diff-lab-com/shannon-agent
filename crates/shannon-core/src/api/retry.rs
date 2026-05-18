@@ -43,10 +43,23 @@ impl RetryConfig {
     pub fn is_retryable(&self, error: &ApiError) -> bool {
         match error {
             ApiError::RateLimitExceeded { .. } => true,
-            ApiError::ApiError { status, .. } => self.retryable_status_codes.contains(status),
+            ApiError::ApiError { status, message } => {
+                // Ollama malformed output (HTTP 500): retrying with the same tools
+                // is futile. Let the engine retry WITHOUT tools instead.
+                if *status == 500 {
+                    let msg = message.replace('\u{2019}', "'");
+                    if msg.contains("can't find closing")
+                        || msg.contains("unexpected end")
+                        || msg.contains("malformed")
+                    {
+                        return false;
+                    }
+                }
+                self.retryable_status_codes.contains(status)
+            }
             ApiError::HttpError(e) => e.is_timeout() || e.is_connect(),
             ApiError::Timeout => true,
-            // Auth errors and invalid responses are not retryable
+            // Auth errors, invalid responses, and provider errors are not retryable
             ApiError::AuthenticationFailed
             | ApiError::InvalidResponse(_)
             | ApiError::InvalidRequestBody(_)
@@ -55,17 +68,7 @@ impl RetryConfig {
             | ApiError::ToolUseError(_)
             | ApiError::Io(_)
             | ApiError::JsonError(_)
-            | ApiError::ProviderError { .. } => {
-                // Ollama malformed output errors are transient — the model may
-                // produce valid output on retry (e.g. "can't find closing '}'")
-                if let ApiError::ProviderError { message, .. } = error {
-                    message.contains("can't find closing")
-                        || message.contains("unexpected end")
-                        || message.contains("malformed output")
-                } else {
-                    false
-                }
-            }
+            | ApiError::ProviderError { .. } => false,
         }
     }
 
@@ -273,36 +276,58 @@ mod tests {
     // ── Ollama malformed output retryability tests ─────────────────────
 
     #[test]
-    fn test_retryable_ollama_malformed_output_closing_brace() {
+    fn test_not_retryable_ollama_malformed_output_500() {
+        // HTTP 500 with malformed output message → NOT retryable at HTTP level.
+        // The engine will retry WITHOUT tools at a higher level.
         let config = RetryConfig::default();
-        let err = ApiError::ProviderError {
-            provider: "ollama".to_string(),
-            error_type: "ollama_error".to_string(),
-            message: "Value looks like object, but can't find closing '}' symbol".to_string(),
+        let err = ApiError::ApiError {
+            status: 500,
+            message: "can't find closing '}' symbol".to_string(),
         };
-        assert!(config.is_retryable(&err), "Ollama malformed output with 'can't find closing' should be retryable");
+        assert!(!config.is_retryable(&err), "Ollama malformed 500 should NOT be retryable at HTTP level");
     }
 
     #[test]
-    fn test_retryable_ollama_unexpected_end() {
+    fn test_not_retryable_ollama_malformed_output_500_unexpected_end() {
         let config = RetryConfig::default();
-        let err = ApiError::ProviderError {
-            provider: "ollama".to_string(),
-            error_type: "ollama_error".to_string(),
+        let err = ApiError::ApiError {
+            status: 500,
             message: "unexpected end of input".to_string(),
         };
-        assert!(config.is_retryable(&err), "Ollama 'unexpected end' should be retryable");
+        assert!(!config.is_retryable(&err), "Ollama 'unexpected end' 500 should NOT be retryable");
     }
 
     #[test]
-    fn test_retryable_ollama_malformed_output_keyword() {
+    fn test_not_retryable_ollama_malformed_output_500_keyword() {
+        let config = RetryConfig::default();
+        let err = ApiError::ApiError {
+            status: 500,
+            message: "the model generated malformed output".to_string(),
+        };
+        assert!(!config.is_retryable(&err), "Ollama 'malformed output' 500 should NOT be retryable");
+    }
+
+    #[test]
+    fn test_retryable_generic_500() {
+        // Generic 500 (not malformed output) IS retryable
+        let config = RetryConfig::default();
+        let err = ApiError::ApiError {
+            status: 500,
+            message: "Internal Server Error".to_string(),
+        };
+        assert!(config.is_retryable(&err), "Generic 500 should be retryable");
+    }
+
+    #[test]
+    fn test_not_retryable_provider_error_malformed() {
+        // ProviderError is never retryable (engine handles retry-without-tools)
         let config = RetryConfig::default();
         let err = ApiError::ProviderError {
             provider: "ollama".to_string(),
             error_type: "ollama_error".to_string(),
-            message: "the model generated malformed output".to_string(),
+            message: "can't find closing '}' symbol".to_string(),
         };
-        assert!(config.is_retryable(&err), "Ollama 'malformed output' should be retryable");
+        assert!(!config.is_retryable(&err), "ProviderError should NOT be retryable");
     }
 
     #[test]
@@ -328,26 +353,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_retry_succeeds_after_ollama_malformed_output() {
+    async fn test_no_retry_for_ollama_malformed_500() {
+        // Malformed output 500 should NOT be retried — engine handles it
         let config = RetryConfig::new(3, 10, 100);
         let mut attempts = 0;
         let result: Result<i32, ApiError> = retry_request(&config, || {
             attempts += 1;
             async move {
-                if attempts < 2 {
-                    Err(ApiError::ProviderError {
-                        provider: "ollama".to_string(),
-                        error_type: "ollama_error".to_string(),
-                        message: "can't find closing '}' symbol".to_string(),
-                    })
-                } else {
-                    Ok(42)
-                }
+                Err(ApiError::ApiError {
+                    status: 500,
+                    message: "can't find closing '}' symbol".to_string(),
+                })
             }
         })
         .await;
-        assert_eq!(result.unwrap(), 42);
-        assert_eq!(attempts, 2, "Should retry once then succeed");
+        assert!(result.is_err());
+        assert_eq!(attempts, 1, "Malformed output 500 should NOT be retried");
     }
 
     #[tokio::test]

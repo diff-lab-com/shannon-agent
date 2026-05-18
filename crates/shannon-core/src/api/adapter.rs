@@ -483,11 +483,12 @@ pub fn normalize_response(
             // as content instead of failing the entire query.
             if let Some(error) = &resp.error {
                 if !error.is_empty() {
-                    let is_recoverable = error.contains("can't find closing")
-                        || error.contains("unexpected end")
-                        || error.contains("malformed");
-
-                    if is_recoverable {
+                    let probe = ApiError::ProviderError {
+                        provider: "ollama".to_string(),
+                        error_type: String::new(),
+                        message: error.clone(),
+                    };
+                    if probe.is_ollama_malformed_output() {
                         tracing::warn!("Ollama recoverable error (returning warning): {error}");
                         return Ok(super::types::MessageResponse {
                             id: String::new(),
@@ -796,44 +797,15 @@ fn normalize_ollama_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> 
     // Guard: skip empty error strings (some Ollama versions include `"error":""`
     // as a default placeholder in normal response chunks).
     //
-    // For recoverable errors (malformed output), emit a warning as text content
-    // and end the stream gracefully so the user can continue the conversation.
-    // For hard errors (model not found, etc.), propagate as ProviderError.
+    // Treat in-stream errors as NON-FATAL for Ollama. Many local models produce
+    // valid text alongside (or before) a malformed tool-call error. Stopping the
+    // stream kills the entire response. Instead, log the warning and continue
+    // processing — any text content in this or subsequent chunks is still valid.
+    // This matches the pre-error-field behavior where errors were silently ignored.
     if let Some(error) = &chunk.error {
         if !error.is_empty() {
-            let is_recoverable = error.contains("can't find closing")
-                || error.contains("unexpected end")
-                || error.contains("malformed");
-
-            if is_recoverable {
-                tracing::warn!("Ollama recoverable stream error (showing warning): {error}");
-                return vec![
-                    Ok(StreamEvent::ContentBlockDelta {
-                        index: 0,
-                        delta: ContentDelta::TextDelta {
-                            text: format!("\n\n⚠️ Ollama model output error: {error}"),
-                        },
-                    }),
-                    Ok(StreamEvent::MessageDelta {
-                        delta: MessageDeltaDelta {
-                            stop_reason: Some("end_turn".to_string()),
-                            stop_sequence: None,
-                        },
-                        usage: super::types::Usage {
-                            input_tokens: chunk.prompt_eval_count.unwrap_or(0),
-                            output_tokens: chunk.eval_count.unwrap_or(0),
-                            ..Default::default()
-                        },
-                    }),
-                ];
-            }
-
-            tracing::warn!("Ollama stream error: {error}");
-            return vec![Err(ApiError::ProviderError {
-                provider: "ollama".to_string(),
-                error_type: "ollama_error".to_string(),
-                message: error.clone(),
-            })];
+            tracing::warn!("Ollama stream error (non-fatal, continuing): {error}");
+            // Fall through — process content/tool_calls from this chunk if present
         }
     }
 
@@ -2260,46 +2232,19 @@ mod tests {
 
     #[test]
     fn test_ollama_stream_error_in_chunk() {
-        // Malformed output errors are recoverable — they become warning text
-        // instead of killing the stream.
+        // Ollama errors in chunks are non-fatal: logged as warnings, stream continues.
+        // A chunk with only error (no content) produces no events (skipped).
         let chunk_json = r#"{"error":"Value looks like object, but can't find closing '}' symbol"}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
-        assert_eq!(result.len(), 2, "Should produce warning text + MessageDelta");
-
-        // First event: text delta with warning
-        match &result[0] {
-            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
-                match delta {
-                    ContentDelta::TextDelta { text } => {
-                        assert!(text.contains("can't find closing"), "Warning should contain original error: {text}");
-                        assert!(text.contains("⚠️"), "Warning should have warning icon: {text}");
-                    }
-                    other => panic!("Expected TextDelta, got {other:?}"),
-                }
-            }
-            other => panic!("Expected ContentBlockDelta, got {other:?}"),
-        }
-
-        // Second event: MessageDelta with end_turn
-        match &result[1] {
-            Ok(StreamEvent::MessageDelta { delta, .. }) => {
-                assert_eq!(delta.stop_reason, Some("end_turn".to_string()));
-            }
-            other => panic!("Expected MessageDelta, got {other:?}"),
-        }
+        assert_eq!(result.len(), 0, "Error-only chunk should be skipped (non-fatal)");
     }
 
     #[test]
     fn test_ollama_stream_error_generic() {
+        // Error-only chunk is non-fatal: skipped, stream continues
         let chunk_json = r#"{"error":"model not found"}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
-        assert_eq!(result.len(), 1);
-        match &result[0] {
-            Err(ApiError::ProviderError { message, .. }) => {
-                assert_eq!(message, "model not found");
-            }
-            other => panic!("Expected ProviderError, got {other:?}"),
-        }
+        assert_eq!(result.len(), 0, "Error-only chunk should be skipped (non-fatal)");
     }
 
     #[test]
@@ -2319,15 +2264,18 @@ mod tests {
 
     #[test]
     fn test_ollama_chunk_with_both_message_and_error() {
-        // If both are present, error takes priority
+        // Error is non-fatal: content is preserved, error is just logged
         let chunk_json = r#"{"message":{"content":"hello"},"error":"something went wrong"}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
-        assert_eq!(result.len(), 1);
+        assert_eq!(result.len(), 1, "Should produce content delta only (error is non-fatal)");
         match &result[0] {
-            Err(ApiError::ProviderError { message, .. }) => {
-                assert_eq!(message, "something went wrong");
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                match delta {
+                    ContentDelta::TextDelta { text } => assert_eq!(text, "hello"),
+                    other => panic!("Expected TextDelta, got {other:?}"),
+                }
             }
-            other => panic!("Error should take priority over message, got {other:?}"),
+            other => panic!("Expected content delta, got {other:?}"),
         }
     }
 

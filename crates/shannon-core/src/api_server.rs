@@ -444,6 +444,7 @@ async fn query_stream_handler(
                     QueryEvent::Info { .. } => "info",
                     QueryEvent::RateLimit { .. } => "rate_limit",
                     QueryEvent::ConversationUpdate { .. } => "conversation_update",
+                    QueryEvent::Warning { .. } => "warning",
                 };
                 let data = serde_json::to_string(&event).unwrap_or_default();
                 Some(Ok(Event::default().event(event_type).data(data)))

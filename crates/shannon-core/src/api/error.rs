@@ -227,6 +227,36 @@ impl ApiError {
         }
     }
 
+    /// Check if this is a recoverable Ollama malformed-output error.
+    ///
+    /// Ollama can return these errors either as streaming chunks (handled in
+    /// `normalize_ollama_event`) or as HTTP error responses (handled in the
+    /// engine).  The check is Unicode-aware: Ollama sometimes uses U+2019
+    /// (RIGHT SINGLE QUOTATION MARK) instead of ASCII `'` in error messages.
+    pub fn is_ollama_malformed_output(&self) -> bool {
+        let message = match self {
+            // In-stream chunk errors (ProviderError from normalize_ollama_event)
+            ApiError::ProviderError { provider, message, .. } => {
+                if provider != "ollama" {
+                    return false;
+                }
+                message
+            }
+            // HTTP 500 errors (from_provider_response maps server errors to ApiError)
+            ApiError::ApiError { status, message } => {
+                if *status != 500 {
+                    return false;
+                }
+                message
+            }
+            _ => return false,
+        };
+        let normalized = message.replace('\u{2019}', "'");
+        normalized.contains("can't find closing")
+            || normalized.contains("unexpected end")
+            || normalized.contains("malformed")
+    }
+
     /// Return a user-facing suggestion for how to resolve this error.
     pub fn user_suggestion(&self) -> Option<String> {
         if self.is_token_overflow() {
@@ -382,6 +412,27 @@ mod tests {
             message: "can't find closing '}' symbol".to_string(),
         };
         assert!(!err.is_token_overflow(), "Malformed output is NOT a token overflow");
+    }
+
+    /// Regression: HTTP 500 from Ollama maps to ApiError::ApiError, but
+    /// `is_ollama_malformed_output()` must still detect it so the engine can
+    /// retry without tools.
+    #[test]
+    fn test_ollama_malformed_output_http_500_detected() {
+        let err = ApiError::ApiError {
+            status: 500,
+            message: r#"{"error":"Value looks like object, but can't find closing '}' symbol"}"#.to_string(),
+        };
+        assert!(err.is_ollama_malformed_output(), "HTTP 500 malformed output must be detected for retry");
+    }
+
+    #[test]
+    fn test_ollama_malformed_output_http_500_not_other_status() {
+        let err = ApiError::ApiError {
+            status: 400,
+            message: r#"{"error":"can't find closing"}"#.to_string(),
+        };
+        assert!(!err.is_ollama_malformed_output(), "Status 400 should not match");
     }
 
     #[test]
