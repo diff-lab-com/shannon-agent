@@ -21,6 +21,8 @@ pub struct ShannonConfig {
     pub timeout: Option<u64>,
     #[serde(default)]
     pub debug: bool,
+    /// Override tool calling: Some(true) = force tools on, Some(false) = force off, None = auto.
+    pub enable_tools: Option<bool>,
 }
 
 impl ShannonConfig {
@@ -41,6 +43,7 @@ impl ShannonConfig {
             temperature: other.temperature.or(self.temperature),
             timeout: other.timeout.or(self.timeout),
             debug: other.debug || self.debug,
+            enable_tools: other.enable_tools.or(self.enable_tools),
         }
     }
 }
@@ -90,17 +93,17 @@ impl ConfigBuilder {
             base_url: std::env::var("SHANNON_BASE_URL").ok(),
             max_tokens: std::env::var("SHANNON_MAX_TOKENS")
                 .ok()
-                .and_then(|s| s.parse().ok()),
+                .and_then(|v| v.parse().ok()),
             temperature: std::env::var("SHANNON_TEMPERATURE")
                 .ok()
-                .and_then(|s| s.parse().ok()),
+                .and_then(|v| v.parse().ok()),
             timeout: std::env::var("SHANNON_TIMEOUT")
                 .ok()
-                .and_then(|s| s.parse().ok()),
-            debug: std::env::var("SHANNON_DEBUG")
+                .and_then(|v| v.parse().ok()),
+            debug: std::env::var("SHANNON_DEBUG").is_ok(),
+            enable_tools: std::env::var("SHANNON_ENABLE_TOOLS")
                 .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(false),
+                .and_then(|v| v.parse().ok()),
         };
         self
     }
@@ -229,6 +232,7 @@ mod tests {
             temperature: None,
             timeout: None,
             debug: false,
+            enable_tools: None,
         };
         let override_config = ShannonConfig {
             model: Some("override-model".to_string()),
@@ -239,6 +243,7 @@ mod tests {
             temperature: Some(0.5),
             timeout: None,
             debug: true,
+            enable_tools: None,
         };
 
         let merged = base.merge(&override_config);

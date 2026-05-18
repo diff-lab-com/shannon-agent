@@ -802,6 +802,16 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("Use to enable or disable specific tools for the current session")
             .with_related(vec!["config"])
         ),
+        "notools" => Some(
+            CommandHelpEntry::new(
+                "notools".to_string(),
+                "Disable tool calling — model responds as plain text".to_string(),
+                HelpCategory::System,
+            )
+            .with_examples(vec!["/notools", "/tools (to re-enable)"])
+            .with_when_to_use("Use with local/small models that cannot handle tool definitions, or when you want pure text responses")
+            .with_related(vec!["tools", "model"])
+        ),
         "go_to_definition" => Some(
             CommandHelpEntry::new(
                 "go_to_definition".to_string(),

@@ -233,6 +233,7 @@ struct ShannonTomlConfig {
     debug: Option<bool>,
     api_key: Option<String>,
     base_url: Option<String>,
+    enable_tools: Option<bool>,
 }
 
 /// Load TOML config from disk, merging global + project-local files.
@@ -264,6 +265,7 @@ fn load_toml_config() -> ShannonTomlConfig {
                 if cfg.debug.is_some() { merged.debug = cfg.debug; }
                 if cfg.api_key.is_some() { merged.api_key = cfg.api_key; }
                 if cfg.base_url.is_some() { merged.base_url = cfg.base_url; }
+                if cfg.enable_tools.is_some() { merged.enable_tools = cfg.enable_tools; }
             }
             Err(e) => eprintln!("Warning: failed to parse .shannon.toml: {e}"),
         }
@@ -540,6 +542,12 @@ fn build_cli_config(
 /// Build an [`LlmClientConfig`] by wiring the [`ConfigBuilder`] with the
 /// user's TOML config files, environment variables, and CLI overrides.
 ///
+/// Check whether tools should be enabled for the given provider.
+/// Ollama/local models default to no tools; all others default to yes.
+fn should_enable_tools(provider: shannon_core::api::LlmProvider) -> bool {
+    !matches!(provider, shannon_core::api::LlmProvider::Ollama)
+}
+
 /// Priority (highest → lowest):
 ///   CLI overrides > env vars (`SHANNON_*`) > local `.shannon.toml` > global `~/.shannon/config.toml`
 fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {
@@ -557,6 +565,7 @@ fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {
         temperature: cli_config.temperature(),
         timeout: cli_config.timeout(),
         debug: cli_config.debug(),
+        enable_tools: None,
     };
 
     // 2. Build the merged ShannonConfig via ConfigBuilder.
@@ -759,6 +768,7 @@ fn run_noninteractive_query(
             eprintln!("Warning: {e}");
         }
 
+        let llm_provider = client_config.provider.clone();
         let client = if client_config.provider.requires_auth() {
             shannon_core::api::LlmClient::new(client_config)
         } else {
@@ -808,7 +818,7 @@ fn run_noninteractive_query(
             user_message: query.to_string(),
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
-                tools_allowed: true,
+                tools_allowed: should_enable_tools(llm_provider.clone()),
                 max_tokens: config.max_tokens().map(|v| v as u32),
                 model: config
                     .model()
@@ -1047,6 +1057,7 @@ fn run_headless_query(
             eprintln!("Warning: {e}");
         }
 
+        let llm_provider = client_config.provider.clone();
         let client = if client_config.provider.requires_auth() {
             shannon_core::api::LlmClient::new(client_config)
         } else {
@@ -1096,7 +1107,7 @@ fn run_headless_query(
             user_message: prompt.to_string(),
             metadata: QueryMetadata {
                 timestamp: chrono::Utc::now(),
-                tools_allowed: true,
+                tools_allowed: should_enable_tools(llm_provider.clone()),
                 max_tokens: config.max_tokens().map(|v| v as u32),
                 model: config.model().unwrap_or_else(|| "default".to_string()),
                 temperature: config.temperature(),
@@ -1630,6 +1641,7 @@ fn run_team_agent_mode(
             }
         }
 
+        let llm_provider = client_config.provider.clone();
         let client = if client_config.provider.requires_auth() {
             shannon_core::api::LlmClient::new(client_config)
         } else {
@@ -1740,7 +1752,7 @@ fn run_team_agent_mode(
                                     user_message: task_desc,
                                     metadata: QueryMetadata {
                                         timestamp: chrono::Utc::now(),
-                                        tools_allowed: true,
+                                        tools_allowed: should_enable_tools(llm_provider.clone()),
                                         max_tokens: None,
                                         model: config.model().unwrap_or_default(),
                                         temperature: None,

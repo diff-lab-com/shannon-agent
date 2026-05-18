@@ -661,6 +661,44 @@ impl LlmClient {
             }
         }
     }
+
+    /// Check Ollama model capabilities via `/api/show`.
+    ///
+    /// Returns `OllamaModelInfo` on success. Returns `None` if not an Ollama
+    /// provider or if the check fails (non-blocking fallback).
+    pub async fn check_ollama_capabilities(&self) -> Option<OllamaModelInfo> {
+        if self.config.provider != LlmProvider::Ollama {
+            return None;
+        }
+
+        let url = format!("{}/api/show", self.config.base_url.trim_end_matches('/'));
+        let body = serde_json::json!({"name": self.config.model});
+        let resp = self
+            .client
+            .post(&url)
+            .json(&body)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await
+            .ok()?;
+
+        if !resp.status().is_success() {
+            return None;
+        }
+
+        let raw: serde_json::Value = resp.json().await.ok()?;
+
+        // Check if the model's template or capabilities mention tools
+        let template = raw.get("template").and_then(|t| t.as_str()).unwrap_or("");
+        let supports_tools = template.contains(".Tools")
+            || template.contains("tools")
+            || template.contains("ToolCall");
+
+        Some(OllamaModelInfo {
+            name: self.config.model.clone(),
+            supports_tools,
+        })
+    }
 }
 
 /// Backward-compatible alias

@@ -1028,6 +1028,7 @@ mod unified_config_tests {
             temperature: Some(0.7),
             timeout: Some(30),
             debug: true,
+            enable_tools: None,
         };
         assert_eq!(config.model.as_deref(), Some("claude-opus-4-6"));
         assert_eq!(config.provider.as_deref(), Some("anthropic"));
@@ -1177,6 +1178,7 @@ mod unified_config_tests {
             temperature: Some(0.9),
             timeout: Some(60),
             debug: true,
+            enable_tools: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: ShannonConfig = serde_json::from_str(&json).unwrap();

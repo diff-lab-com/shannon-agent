@@ -1058,3 +1058,46 @@ async fn test_e2e_openai_streaming_assembles_text() {
 
     assert_eq!(text, "Step 1: Create main.rs.\nStep 2: Write code.");
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// Section: Ollama malformed output pattern detection
+// ════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_is_ollama_malformed_message_patterns() {
+    use shannon_core::api::error::is_ollama_malformed_message;
+
+    // Original patterns
+    assert!(is_ollama_malformed_message("can't find closing '}' symbol"));
+    assert!(is_ollama_malformed_message("unexpected end of input"));
+    assert!(is_ollama_malformed_message("malformed JSON response"));
+
+    // GLM-specific pattern
+    assert!(is_ollama_malformed_message("json: cannot unmarshal array into Go value of type string"));
+
+    // New patterns
+    assert!(is_ollama_malformed_message("invalid json: unexpected character"));
+    assert!(is_ollama_malformed_message("parse error: invalid token"));
+    assert!(is_ollama_malformed_message("unexpected token during parsing"));
+
+    // Case insensitive
+    assert!(is_ollama_malformed_message("MALFORMED output"));
+    assert!(is_ollama_malformed_message("JSON: Cannot Unmarshal something"));
+    assert!(is_ollama_malformed_message("Parse Error at line 5"));
+
+    // Unicode normalization (U+2019 → ASCII ')
+    assert!(is_ollama_malformed_message("can\u{2019}t find closing bracket"));
+
+    // GLM variant without "find"
+    assert!(is_ollama_malformed_message("can't closing '}' symbol"));
+    assert!(is_ollama_malformed_message("Value looks like object, but can't closing '}' symbol"));
+
+    // Brace-closing pattern
+    assert!(is_ollama_malformed_message("closing '}' not found"));
+
+    // Non-matching patterns
+    assert!(!is_ollama_malformed_message("Internal Server Error"));
+    assert!(!is_ollama_malformed_message("rate limit exceeded"));
+    assert!(!is_ollama_malformed_message("model not found"));
+    assert!(!is_ollama_malformed_message("connection refused"));
+}

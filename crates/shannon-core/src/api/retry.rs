@@ -46,14 +46,8 @@ impl RetryConfig {
             ApiError::ApiError { status, message } => {
                 // Ollama malformed output (HTTP 500): retrying with the same tools
                 // is futile. Let the engine retry WITHOUT tools instead.
-                if *status == 500 {
-                    let msg = message.replace('\u{2019}', "'");
-                    if msg.contains("can't find closing")
-                        || msg.contains("unexpected end")
-                        || msg.contains("malformed")
-                    {
-                        return false;
-                    }
+                if *status == 500 && super::error::is_ollama_malformed_message(message) {
+                    return false;
                 }
                 self.retryable_status_codes.contains(status)
             }

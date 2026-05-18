@@ -1085,6 +1085,18 @@ pub struct MessageDeltaDelta {
     pub stop_sequence: Option<String>,
 }
 
+/// Capability info for an Ollama model, retrieved via `/api/show`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct OllamaModelInfo {
+    /// Model name
+    #[serde(default)]
+    pub name: String,
+    /// Whether the model supports tool/function calling.
+    /// Determined by checking the model's template for tool markers.
+    #[serde(default)]
+    pub supports_tools: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

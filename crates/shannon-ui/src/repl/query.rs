@@ -133,7 +133,11 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
         user_message: input.to_string(),
         metadata: shannon_core::query_engine::QueryMetadata {
             timestamp: chrono::Utc::now(),
-            tools_allowed: true,
+            tools_allowed: {
+                let is_ollama = repl.state.selected_provider == Some(shannon_core::api::LlmProvider::Ollama)
+                    || repl.query_engine.as_ref().map_or(false, |qe| *qe.client().provider() == shannon_core::api::LlmProvider::Ollama);
+                if is_ollama { false } else { repl.state.tools_enabled }
+            },
             max_tokens: Some(4096),
             model: {
                 // Check model routing rules first

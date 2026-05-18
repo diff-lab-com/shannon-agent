@@ -50,6 +50,25 @@ pub enum ApiError {
     },
 }
 
+/// Check if a message string matches known Ollama malformed-output patterns.
+///
+/// Shared between `ApiError::is_ollama_malformed_output()` and `RetryPolicy::is_retryable()`
+/// so that pattern lists stay in sync.
+pub fn is_ollama_malformed_message(message: &str) -> bool {
+    let normalized = message.replace('\u{2019}', "'");
+    let lower = normalized.to_ascii_lowercase();
+    lower.contains("can't find closing")
+        || lower.contains("can't closing")
+        || lower.contains("closing '}'")
+        || lower.contains("unexpected end")
+        || lower.contains("malformed")
+        || lower.contains("json: cannot unmarshal")
+        || lower.contains("invalid json")
+        || lower.contains("parse error")
+        || lower.contains("unexpected token")
+        || lower.contains("looks like object")
+}
+
 impl ApiError {
     /// Parse a provider-specific error response body into a structured
     /// [`ApiError::ProviderError`].
@@ -251,10 +270,7 @@ impl ApiError {
             }
             _ => return false,
         };
-        let normalized = message.replace('\u{2019}', "'");
-        normalized.contains("can't find closing")
-            || normalized.contains("unexpected end")
-            || normalized.contains("malformed")
+        is_ollama_malformed_message(message)
     }
 
     /// Return a user-facing suggestion for how to resolve this error.

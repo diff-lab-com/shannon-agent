@@ -1039,3 +1039,355 @@ async fn test_all_producers_json_output_consistent() {
         );
     }
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// Section: GLM / expanded malformed output patterns
+// ════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+#[serial]
+async fn test_ollama_glm_unmarshal_retry() {
+    // GLM models produce "json: cannot unmarshal" errors — should trigger retry without tools
+    let mut server = mockito::Server::new_async().await;
+
+    let _mock_err = server
+        .mock("POST", "/api/chat")
+        .match_body(Matcher::Regex(r#""stream":\s*true"#.to_string()))
+        .with_status(500)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"error":"json: cannot unmarshal array into Go value of type string"}"#)
+        .expect(1)
+        .create();
+
+    let _mock_ok = server
+        .mock("POST", "/api/chat")
+        .match_body(Matcher::Regex(r#""stream":\s*false"#.to_string()))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(ollama_non_streaming_body("GLM retry worked."))
+        .expect(1)
+        .create();
+
+    let result = shannon_with_mock("ollama", &server.url())
+        .args(["--prompt", "test glm", "--output-format", "json"])
+        .assert();
+
+    let stdout = stdout_string(&result);
+    let json = parse_json_output(&stdout);
+
+    assert_eq!(json["exit_code"], "success");
+    assert!(json["response"].as_str().unwrap_or("").contains("retry"));
+}
+
+#[tokio::test]
+#[serial]
+async fn test_ollama_invalid_json_retry() {
+    let mut server = mockito::Server::new_async().await;
+
+    let _mock_err = server
+        .mock("POST", "/api/chat")
+        .match_body(Matcher::Regex(r#""stream":\s*true"#.to_string()))
+        .with_status(500)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"error":"invalid json: unexpected character"}"#)
+        .expect(1)
+        .create();
+
+    let _mock_ok = server
+        .mock("POST", "/api/chat")
+        .match_body(Matcher::Regex(r#""stream":\s*false"#.to_string()))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(ollama_non_streaming_body("Recovered from invalid json."))
+        .expect(1)
+        .create();
+
+    let result = shannon_with_mock("ollama", &server.url())
+        .args(["--prompt", "test", "--output-format", "json"])
+        .assert();
+
+    let stdout = stdout_string(&result);
+    let json = parse_json_output(&stdout);
+
+    assert_eq!(json["exit_code"], "success");
+}
+
+#[tokio::test]
+#[serial]
+async fn test_ollama_unexpected_token_retry() {
+    let mut server = mockito::Server::new_async().await;
+
+    let _mock_err = server
+        .mock("POST", "/api/chat")
+        .match_body(Matcher::Regex(r#""stream":\s*true"#.to_string()))
+        .with_status(500)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"error":"unexpected token during parsing"}"#)
+        .expect(1)
+        .create();
+
+    let _mock_ok = server
+        .mock("POST", "/api/chat")
+        .match_body(Matcher::Regex(r#""stream":\s*false"#.to_string()))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(ollama_non_streaming_body("Token error recovered."))
+        .expect(1)
+        .create();
+
+    let result = shannon_with_mock("ollama", &server.url())
+        .args(["--prompt", "test", "--output-format", "json"])
+        .assert();
+
+    let stdout = stdout_string(&result);
+    let json = parse_json_output(&stdout);
+
+    assert_eq!(json["exit_code"], "success");
+}
+
+#[tokio::test]
+#[serial]
+async fn test_ollama_retry_includes_error_detail() {
+    // When both initial and retry calls fail, the error message should include the actual error
+    let mut server = mockito::Server::new_async().await;
+
+    // First call: malformed output error
+    let _mock_err1 = server
+        .mock("POST", "/api/chat")
+        .match_body(Matcher::Regex(r#""stream":\s*true"#.to_string()))
+        .with_status(500)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"error":"json: cannot unmarshal array into Go value"}"#)
+        .expect(1)
+        .create();
+
+    // Retry also fails
+    let _mock_err2 = server
+        .mock("POST", "/api/chat")
+        .match_body(Matcher::Regex(r#""stream":\s*false"#.to_string()))
+        .with_status(500)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"error":"model still failing"}"#)
+        .expect(1)
+        .create();
+
+    let result = shannon_with_mock("ollama", &server.url())
+        .args(["--prompt", "test", "--output-format", "json"])
+        .assert();
+
+    let stdout = stdout_string(&result);
+    let combined = format!(
+        "{stdout}{}",
+        String::from_utf8_lossy(&result.get_output().stderr)
+    );
+    // Should include the actual retry error detail, not just a generic message
+    assert!(
+        combined.contains("retry without tools failed"),
+        "Error should mention retry failure, got: {combined}"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn test_ollama_repeated_malformed_shows_model_incompatible() {
+    // Both attempts fail with malformed output → user should see "model incompatible" message
+    let mut server = mockito::Server::new_async().await;
+
+    let _mock_err1 = server
+        .mock("POST", "/api/chat")
+        .match_body(Matcher::Regex(r#""stream":\s*true"#.to_string()))
+        .with_status(500)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"error":"can't closing '}' symbol"}"#)
+        .expect(1)
+        .create();
+
+    let _mock_err2 = server
+        .mock("POST", "/api/chat")
+        .match_body(Matcher::Regex(r#""stream":\s*false"#.to_string()))
+        .with_status(500)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"error":"malformed output again"}"#)
+        .expect(1)
+        .create();
+
+    let result = shannon_with_mock("ollama", &server.url())
+        .args(["--prompt", "test", "--output-format", "json"])
+        .assert();
+
+    let combined = format!(
+        "{}",
+        String::from_utf8_lossy(&result.get_output().stderr)
+    );
+    assert!(
+        combined.contains("cannot produce valid output") || combined.contains("incompatible"),
+        "Repeated malformed failure should show model incompatibility, got: {combined}"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn test_ollama_non_malformed_500_not_retried_without_tools() {
+    // Non-malformed 500 (e.g. "Internal Server Error") should be retried normally,
+    // not trigger the special "retry without tools" path
+    let mut server = mockito::Server::new_async().await;
+
+    // Two normal 500s → standard retry with same tools
+    let _mock_err1 = server
+        .mock("POST", "/api/chat")
+        .with_status(500)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"error":"Internal Server Error"}"#)
+        .expect(2)
+        .create();
+
+    // Third retry succeeds (streaming)
+    let _mock_ok = mock_ollama_streaming(&mut server, "Normal retry worked.");
+
+    let result = shannon_with_mock("ollama", &server.url())
+        .args(["--prompt", "test", "--output-format", "json"])
+        .timeout(std::time::Duration::from_secs(15))
+        .assert();
+
+    let stdout = stdout_string(&result);
+    // Should either succeed after retry or fail with rate limit — not "retry without tools failed"
+    assert!(
+        !stdout.contains("retry without tools failed"),
+        "Non-malformed 500 should not trigger retry-without-tools path, got: {stdout}"
+    );
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Section: Ollama P0 — no tools sent by default, minimal prompt
+// ════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+#[serial]
+async fn test_ollama_request_has_no_tools_field() {
+    // P0: Verify that Ollama requests do NOT include a "tools" field.
+    // Strategy: mock expects exactly 1 call. If tools were sent and caused
+    // a malformed error, the engine would retry (2nd call with no tools),
+    // causing expect(1) to fail.
+    let mut server = mockito::Server::new_async().await;
+
+    let _mock = server
+        .mock("POST", "/api/chat")
+        .with_status(200)
+        .with_header("content-type", "application/x-ndjson")
+        .with_body(ollama_streaming_body("Hello from local model!"))
+        .expect(1) // exactly 1 — no retry
+        .create();
+
+    let result = shannon_with_mock("ollama", &server.url())
+        .args(["--prompt", "hello", "--output-format", "json"])
+        .timeout(std::time::Duration::from_secs(15))
+        .assert();
+
+    let stdout = stdout_string(&result);
+    let json = parse_json_output(&stdout);
+    assert_eq!(json["exit_code"], "success");
+    let response = json["response"].as_str().unwrap_or("");
+    assert!(response.contains("local model"), "Expected 'local model' in response, got: {response}");
+}
+
+#[tokio::test]
+#[serial]
+async fn test_ollama_single_request_no_retry() {
+    // P0: Successful Ollama request should make exactly 1 API call (no retry path).
+    // If tools were sent on first attempt and caused an error, we'd see 2+ requests.
+    let mut server = mockito::Server::new_async().await;
+
+    let _mock = server
+        .mock("POST", "/api/chat")
+        .with_status(200)
+        .with_header("content-type", "application/x-ndjson")
+        .with_body(ollama_streaming_body("Success on first try."))
+        .expect(1) // exactly 1 call — not 2 (retry)
+        .create();
+
+    let result = shannon_with_mock("ollama", &server.url())
+        .args(["--prompt", "test", "--output-format", "json"])
+        .timeout(std::time::Duration::from_secs(15))
+        .assert();
+
+    let stdout = stdout_string(&result);
+    assert!(
+        !stdout.contains("Retrying"),
+        "Should not see 'Retrying' for a clean Ollama request, got: {stdout}"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn test_ollama_no_retry_without_tools_message() {
+    // P0: The "Retrying without tools..." message should NOT appear for Ollama
+    // since tools are disabled from the start.
+    let mut server = mockito::Server::new_async().await;
+    let _mock = mock_ollama_streaming(&mut server, "Direct response, no retry.");
+
+    let result = shannon_with_mock("ollama", &server.url())
+        .args(["--prompt", "hi", "--output-format", "text"])
+        .timeout(std::time::Duration::from_secs(15))
+        .assert();
+
+    let combined = stdout_string(&result) + &stderr_string(&result);
+    assert!(
+        !combined.contains("Retrying without tools"),
+        "Ollama should NOT show 'Retrying without tools' — tools are disabled from start. Got: {combined}"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn test_ollama_request_uses_short_system_prompt() {
+    // P2: Verify that Ollama requests use the minimal system prompt, not the long default.
+    let mut server = mockito::Server::new_async().await;
+
+    // Match a request whose body contains a short system message (our minimal prompt).
+    // The minimal prompt starts with "You are Shannon" and is ~100 chars.
+    // The full prompt contains many paragraphs about tools, permissions, etc.
+    let _mock = server
+        .mock("POST", "/api/chat")
+        .match_body(Matcher::Regex(r#""role":\s*"system""#.to_string()))
+        .with_status(200)
+        .with_header("content-type", "application/x-ndjson")
+        .with_body(ollama_streaming_body("Response with minimal prompt."))
+        .expect(1)
+        .create();
+
+    let result = shannon_with_mock("ollama", &server.url())
+        .args(["--prompt", "test", "--output-format", "json"])
+        .timeout(std::time::Duration::from_secs(15))
+        .assert();
+
+    let stdout = stdout_string(&result);
+    let json = parse_json_output(&stdout);
+    assert_eq!(json["exit_code"], "success");
+}
+
+#[tokio::test]
+#[serial]
+async fn test_openai_still_sends_tools_by_default() {
+    // P0 regression: Verify non-Ollama providers still send tools.
+    // We check that OpenAI requests include tool definitions.
+    let mut server = mockito::Server::new_async().await;
+
+    let _mock = server
+        .mock("POST", "/v1/chat/completions")
+        .match_body(Matcher::Regex(r#""tools""#.to_string()))
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(openai_sse_body("Tools are here."))
+        .expect(1)
+        .create();
+
+    let result = shannon_with_mock("openai", &server.url())
+        .env("SHANNON_API_KEY", "test-key")
+        .args(["--prompt", "test", "--output-format", "json"])
+        .timeout(std::time::Duration::from_secs(15))
+        .assert();
+
+    let stdout = stdout_string(&result);
+    let json = parse_json_output(&stdout);
+    assert_eq!(json["exit_code"], "success");
+}

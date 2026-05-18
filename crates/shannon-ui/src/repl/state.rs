@@ -236,6 +236,8 @@ pub struct ReplState {
     pub effort_level: Option<String>,
     /// Context focus area to limit model attention (set via /focus)
     pub focus_area: Option<String>,
+    /// Whether LLM tool calling is enabled (false = no tools sent to model)
+    pub tools_enabled: bool,
     /// Custom statusline command (shell script receiving JSON via stdin)
     pub statusline_command: Option<String>,
     /// Cached output from the last statusline command run
@@ -502,6 +504,7 @@ impl Default for ReplState {
             git_branch: None,
             effort_level: None,
             focus_area: None,
+            tools_enabled: true,
             statusline_command: None,
             cached_statusline: None,
             statusline_last_update: None,

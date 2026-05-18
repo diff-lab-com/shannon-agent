@@ -267,7 +267,21 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "search" | "?" | "hist" | "history-search" => file_ops::handle_search(repl, args)?,
             "find" | "grep" | "conv-search" => file_ops::handle_find(repl, args)?,
             "browse" | "files" => media::handle_browse(repl, args)?,
-            "select-tools" | "tools" => debug::handle_select_tools(repl)?,
+            "notools" => {
+                repl.state.tools_enabled = false;
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "Tools disabled — model will respond as plain text. Use /tools to re-enable.".to_string(),
+                );
+            }
+            "select-tools" | "tools" => {
+                if !repl.state.tools_enabled {
+                    repl.state.tools_enabled = true;
+                    repl.chat.add_message(ChatRole::System, "Tools re-enabled.".to_string());
+                } else {
+                    debug::handle_select_tools(repl)?;
+                }
+            }
             "debug" | "dbg" | "dev" => debug::handle_debug(repl, args)?,
             "doctor" | "check" | "diagnostics" => debug::handle_doctor(repl, args)?,
             "terminal-setup" => config::handle_terminal_setup(repl)?,

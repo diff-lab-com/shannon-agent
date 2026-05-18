@@ -54,6 +54,9 @@ use crate::query_engine::types::{
 };
 use crate::state::StateManager;
 use crate::tools::ToolRegistry;
+
+/// Minimal system prompt for local/small models that cannot handle tool definitions.
+const LOCAL_MODEL_SYSTEM_PROMPT: &str = "You are Shannon, a helpful AI assistant. Respond concisely in the user's language.";
 use shannon_types::recover_lock;
 use futures::stream::{self, StreamExt};
 use std::sync::{Arc, RwLock};
@@ -723,7 +726,11 @@ impl QueryEngine {
         } else {
             Some(system_blocks)
         };
-        let system_prompt = config.system_prompt.clone();
+        let system_prompt = if context.metadata.tools_allowed {
+            config.system_prompt.clone()
+        } else {
+            Some(LOCAL_MODEL_SYSTEM_PROMPT.to_string())
+        };
 
         // Clone existing conversation to preserve multi-turn context
         let mut conversation = self.conversation.clone();
@@ -860,8 +867,12 @@ impl QueryEngine {
                     conversation.messages.push(tool_msg);
                 }
 
-                // Get tools schema
-                let tools_schema = Some(tools.to_tool_definitions());
+                // Get tools schema — respect tools_allowed from QueryContext
+                let tools_schema = if context.metadata.tools_allowed {
+                    Some(tools.to_tool_definitions())
+                } else {
+                    None
+                };
 
                 // Auto-compress conversation if it exceeds the threshold
                 {
@@ -1790,9 +1801,15 @@ impl QueryEngine {
                                         });
                                         let no_tools: Option<Vec<crate::api::ToolDefinition>> = None;
                                         let no_system: Option<String> = None;
+                                        // Simplify to last user message only — small/local models
+                                        // struggle with long conversation history
+                                        let simplified_messages: Vec<Message> = messages.iter().rev()
+                                            .find(|m| m.role == "user")
+                                            .map(|m| vec![m.clone()])
+                                            .unwrap_or_else(|| messages.clone());
                                         match tokio::time::timeout(
                                             std::time::Duration::from_secs(60),
-                                            client.send_message(messages.clone(), no_tools, no_system),
+                                            client.send_message(simplified_messages, no_tools, no_system),
                                         ).await {
                                             Ok(Ok(content_blocks)) => {
                                                 let mut retry_text = String::new();
@@ -1844,9 +1861,14 @@ impl QueryEngine {
                                             }
                                             Ok(Err(retry_err)) => {
                                                 tracing::warn!("Non-streaming retry error: {retry_err}");
+                                                let error_msg = if retry_err.is_ollama_malformed_output() {
+                                                    "This model cannot produce valid output — it may be too small, corrupted, or incompatible. Try /model to switch.".to_string()
+                                                } else {
+                                                    format!("Local model error — retry without tools failed: {retry_err}")
+                                                };
                                                 send_event!(tx, QueryEvent::Failed {
                                                     query_id,
-                                                    error: "Local model error — retry without tools failed. Try /model to switch.".to_string(),
+                                                    error: error_msg,
                                                 });
                                                 return;
                                             }
@@ -2094,9 +2116,13 @@ impl QueryEngine {
                             });
                             let no_tools: Option<Vec<crate::api::ToolDefinition>> = None;
                             let no_system: Option<String> = None;
+                            let simplified_messages: Vec<Message> = messages.iter().rev()
+                                .find(|m| m.role == "user")
+                                .map(|m| vec![m.clone()])
+                                .unwrap_or_else(|| messages.clone());
                             match tokio::time::timeout(
                                 std::time::Duration::from_secs(60),
-                                client.send_message(messages.clone(), no_tools, no_system),
+                                client.send_message(simplified_messages, no_tools, no_system),
                             ).await {
                                 Ok(Ok(content_blocks)) => {
                                     let mut retry_text = String::new();
@@ -2143,9 +2169,14 @@ impl QueryEngine {
                                 }
                                 Ok(Err(retry_err)) => {
                                     tracing::warn!("Non-streaming retry error: {retry_err}");
+                                    let error_msg = if retry_err.is_ollama_malformed_output() {
+                                        "This model cannot produce valid output — it may be too small, corrupted, or incompatible. Try /model to switch.".to_string()
+                                    } else {
+                                        format!("Local model error — retry without tools failed: {retry_err}")
+                                    };
                                     send_event!(tx, QueryEvent::Failed {
                                         query_id,
-                                        error: "Local model error — retry without tools failed. Try /model to switch models.".to_string(),
+                                        error: error_msg,
                                     });
                                     return;
                                 }
