@@ -17,11 +17,52 @@ use super::types::{
 /// Convert a unified `MessageRequest` into a provider-specific JSON body.
 pub fn serialize_request(request: &MessageRequest, provider: &LlmProvider) -> Value {
     match provider.wire_format() {
-        WireFormat::Anthropic => serde_json::to_value(request)
-            .unwrap_or_else(|e| {
+        WireFormat::Anthropic => {
+            // Anthropic API only accepts `user` and `assistant` roles in the
+            // messages array.  Compression / context-reinjection may inject
+            // `role: "system"` messages.  Extract them and merge into the
+            // top-level `system` / `system_blocks` field instead.
+            let mut req = request.clone();
+            let mut system_texts: Vec<String> = Vec::new();
+            req.messages.retain(|msg| {
+                if msg.role == "system" {
+                    let text = match &msg.content {
+                        crate::api::types::MessageContent::Text(t) => t.clone(),
+                        crate::api::types::MessageContent::Blocks(blocks) => blocks
+                            .iter()
+                            .filter_map(|b| match b {
+                                crate::api::types::ContentBlock::Text { text } => {
+                                    Some(text.as_str())
+                                }
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    };
+                    if !text.is_empty() {
+                        system_texts.push(text);
+                    }
+                    false // remove from messages array
+                } else {
+                    true
+                }
+            });
+            if !system_texts.is_empty() {
+                let extra = system_texts.join("\n\n");
+                if let Some(ref mut blocks) = req.system_blocks {
+                    blocks.push(crate::api::types::SystemContentBlock::text(extra));
+                } else {
+                    req.system = match req.system.take() {
+                        Some(existing) => Some(format!("{existing}\n\n{extra}")),
+                        None => Some(extra),
+                    };
+                }
+            }
+            serde_json::to_value(&req).unwrap_or_else(|e| {
                 tracing::error!("Failed to serialize Anthropic request: {e}");
                 serde_json::json!({})
-            }),
+            })
+        }
         WireFormat::OpenAI => serialize_openai_request(request),
         WireFormat::Ollama => serialize_ollama_request(request),
         WireFormat::Gemini => serialize_gemini_request(request),
@@ -869,47 +910,160 @@ fn normalize_ollama_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> 
 /// - `max_tokens` → `generationConfig.maxOutputTokens`
 fn serialize_gemini_request(request: &MessageRequest) -> Value {
     let mut contents = Vec::new();
+    let mut extracted_system: Vec<String> = Vec::new();
 
     for msg in &request.messages {
+        // Gemini does not accept "system" in contents — extract these
+        // messages and merge into systemInstruction below.
+        if msg.role == "system" {
+            let text = match &msg.content {
+                super::types::MessageContent::Text(t) => t.clone(),
+                super::types::MessageContent::Blocks(blocks) => blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            };
+            if !text.is_empty() {
+                extracted_system.push(text);
+            }
+            continue;
+        }
+
         let gemini_role = match msg.role.as_str() {
             "assistant" => "model",
+            // Tool result messages (role="user" internally) become "user" in Gemini
+            // but use functionResponse parts instead of text.
             _ => "user",
         };
 
-        let text = match &msg.content {
-            super::types::MessageContent::Text(t) => t.clone(),
-            super::types::MessageContent::Blocks(blocks) => blocks
-                .iter()
-                .filter_map(|b| match b {
-                    ContentBlock::Text { text } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n"),
-        };
+        let mut parts: Vec<Value> = Vec::new();
 
-        contents.push(json!({
-            "role": gemini_role,
-            "parts": [{ "text": text }]
-        }));
+        match &msg.content {
+            super::types::MessageContent::Text(t) => {
+                parts.push(json!({ "text": t }));
+            }
+            super::types::MessageContent::Blocks(blocks) => {
+                for block in blocks {
+                    match block {
+                        ContentBlock::Text { text } => {
+                            parts.push(json!({ "text": text }));
+                        }
+                        ContentBlock::Image { source } => {
+                            parts.push(json!({
+                                "inline_data": {
+                                    "mime_type": source.media_type,
+                                    "data": source.data,
+                                }
+                            }));
+                        }
+                        ContentBlock::ToolUse { id, name, input } => {
+                            parts.push(json!({
+                                "functionCall": {
+                                    "name": name,
+                                    "args": input,
+                                }
+                            }));
+                            // Gemini requires functionCall and functionResponse to be
+                            // paired in order. Store the ID for matching with results.
+                            let _ = id; // Used implicitly via ordering
+                        }
+                        ContentBlock::ToolResult {
+                            tool_use_id,
+                            content,
+                            is_error,
+                        } => {
+                            let result_text = match content {
+                                Some(super::types::ToolResultContent::Single(s)) => {
+                                    s.clone()
+                                }
+                                Some(super::types::ToolResultContent::Multiple(bs)) => {
+                                    bs.iter()
+                                        .filter_map(|b| match b {
+                                            ContentBlock::Text { text } => {
+                                                Some(text.as_str())
+                                            }
+                                            _ => None,
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join("\n")
+                                }
+                                None => String::new(),
+                            };
+                            let response = json!({
+                                "name": tool_use_id, // Best effort; real name is in the preceding functionCall
+                                "response": {
+                                    "result": result_text,
+                                }
+                            });
+                            if is_error.unwrap_or(false) {
+                                parts.push(json!({
+                                    "functionResponse": {
+                                        "name": tool_use_id,
+                                        "response": {
+                                            "error": result_text,
+                                        }
+                                    }
+                                }));
+                            } else {
+                                let _ = &response; // Use the success version
+                                parts.push(json!({
+                                    "functionResponse": response
+                                }));
+                            }
+                        }
+                        ContentBlock::Thinking { .. } => {
+                            // Gemini doesn't have an equivalent; skip.
+                        }
+                    }
+                }
+            }
+        }
+
+        if !parts.is_empty() {
+            contents.push(json!({
+                "role": gemini_role,
+                "parts": parts,
+            }));
+        }
     }
 
     let mut body = json!({
         "contents": contents,
     });
 
-    // System instruction
+    // System instruction: merge explicit system prompt with any extracted
+    // system-role messages from the messages array (e.g. compression summaries).
+    let extra_system = if extracted_system.is_empty() {
+        None
+    } else {
+        Some(extracted_system.join("\n\n"))
+    };
     if let Some(ref system) = request.system {
+        let merged = match &extra_system {
+            Some(extra) => format!("{system}\n\n{extra}"),
+            None => system.clone(),
+        };
         body["systemInstruction"] = json!({
-            "parts": [{ "text": system }]
+            "parts": [{ "text": merged }]
         });
     } else if let Some(ref blocks) = request.system_blocks {
-        let text: String = blocks.iter().map(|b| b.text.as_str()).collect::<Vec<&str>>().join("\n\n");
+        let mut text: String = blocks.iter().map(|b| b.text.as_str()).collect::<Vec<&str>>().join("\n\n");
+        if let Some(extra) = &extra_system {
+            text = format!("{text}\n\n{extra}");
+        }
         if !text.is_empty() {
             body["systemInstruction"] = json!({
                 "parts": [{ "text": text }]
             });
         }
+    } else if let Some(extra) = &extra_system {
+        body["systemInstruction"] = json!({
+            "parts": [{ "text": extra }]
+        });
     }
 
     // Generation config
@@ -1183,6 +1337,115 @@ mod tests {
         assert_eq!(val["system"], "You are helpful.");
         assert_eq!(val["max_tokens"], 4096);
         assert_eq!(val["model"], "test-model");
+    }
+
+    #[test]
+    fn test_anthropic_extracts_system_role_messages() {
+        // Compression may inject role: "system" messages into the messages
+        // array.  The Anthropic adapter must extract them into the top-level
+        // `system` field so the API doesn't reject the request.
+        let req = MessageRequest {
+            model: "claude-3".to_string(),
+            max_tokens: 1024,
+            system: Some("Base prompt.".to_string()),
+            system_blocks: None,
+            messages: vec![
+                Message {
+                    role: "system".to_string(),
+                    content: crate::api::types::MessageContent::Text(
+                        "[Summary of earlier conversation]\nUser asked about X.".to_string(),
+                    ),
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: crate::api::types::MessageContent::Text("Follow up".to_string()),
+                },
+            ],
+            tools: None,
+            stream: Some(true),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+        let val = serialize_request(&req, &LlmProvider::Anthropic);
+
+        // system field should contain both the base prompt and the extracted message
+        let system = val["system"].as_str().unwrap();
+        assert!(
+            system.contains("Base prompt."),
+            "system should contain base prompt: {system}"
+        );
+        assert!(
+            system.contains("Summary of earlier conversation"),
+            "system should contain extracted system-role message: {system}"
+        );
+
+        // messages array should only have user/assistant
+        let messages = val["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 1, "only the user message should remain");
+        assert_eq!(messages[0]["role"], "user");
+    }
+
+    #[test]
+    fn test_anthropic_extracts_system_into_blocks() {
+        // When system_blocks is used (structured prompt), extracted system
+        // text should be appended as a new block.
+        let req = MessageRequest {
+            model: "claude-3".to_string(),
+            max_tokens: 1024,
+            system: None,
+            system_blocks: Some(vec![crate::api::types::SystemContentBlock::text(
+                "Base prompt.".to_string(),
+            )]),
+            messages: vec![
+                Message {
+                    role: "system".to_string(),
+                    content: crate::api::types::MessageContent::Text(
+                        "Re-injected context.".to_string(),
+                    ),
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: crate::api::types::MessageContent::Text("Hi".to_string()),
+                },
+            ],
+            tools: None,
+            stream: Some(true),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+        let val = serialize_request(&req, &LlmProvider::Anthropic);
+
+        // system_blocks should have 2 entries (base + extracted)
+        let blocks = val["system_blocks"].as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+        let combined: String = blocks
+            .iter()
+            .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        assert!(
+            combined.contains("Base prompt."),
+            "first block should be base: {combined}"
+        );
+        assert!(
+            combined.contains("Re-injected context"),
+            "second block should be extracted: {combined}"
+        );
+
+        // messages should only contain user
+        let messages = val["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
     }
 
     #[test]
@@ -1864,6 +2127,51 @@ mod tests {
         assert!(val.get("system").is_none(), "Gemini should not use top-level system");
         let sys = val["systemInstruction"]["parts"].as_array().unwrap();
         assert_eq!(sys[0]["text"], "You are helpful.");
+    }
+
+    #[test]
+    fn test_gemini_extracts_system_role_messages() {
+        // role: "system" messages must not appear in contents — they should
+        // be merged into systemInstruction.
+        let req = MessageRequest {
+            model: "gemini-2.0-flash".to_string(),
+            max_tokens: 1024,
+            system: Some("Base system prompt.".to_string()),
+            system_blocks: None,
+            messages: vec![
+                Message {
+                    role: "system".to_string(),
+                    content: crate::api::types::MessageContent::Text(
+                        "[Summary] Earlier discussion about auth.".to_string(),
+                    ),
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: crate::api::types::MessageContent::Text("Continue".to_string()),
+                },
+            ],
+            tools: None,
+            stream: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+        let val = serialize_gemini_request(&req);
+
+        // systemInstruction should contain both base + extracted
+        let sys_text = val["systemInstruction"]["parts"][0]["text"].as_str().unwrap();
+        assert!(sys_text.contains("Base system prompt."), "missing base: {sys_text}");
+        assert!(sys_text.contains("Summary"), "missing extracted: {sys_text}");
+
+        // contents should only have the user message
+        let contents = val["contents"].as_array().unwrap();
+        assert_eq!(contents.len(), 1);
+        assert_eq!(contents[0]["role"], "user");
+        assert_eq!(contents[0]["parts"][0]["text"], "Continue");
     }
 
     #[test]
