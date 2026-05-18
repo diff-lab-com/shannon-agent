@@ -460,9 +460,14 @@ impl LlmClient {
             // models.  Treat as recoverable: return the error as content so the
             // caller can display a warning instead of failing the entire query.
             if err.is_ollama_malformed_output() {
-                tracing::warn!("Ollama HTTP {status} recoverable error: {error_text}");
+                // Extract just the error message from JSON like {"error":"..."}
+                let clean_msg = serde_json::from_str::<serde_json::Value>(&error_text)
+                    .ok()
+                    .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(|s| s.to_string()))
+                    .unwrap_or_else(|| error_text.chars().take(200).collect());
+                tracing::warn!("Ollama HTTP {status} recoverable error: {clean_msg}");
                 return Ok(vec![super::types::ContentBlock::Text {
-                    text: format!("⚠️ Ollama model output error: {error_text}"),
+                    text: format!("⚠️ Ollama model output error: {clean_msg}"),
                 }]);
             }
             return Err(err);
