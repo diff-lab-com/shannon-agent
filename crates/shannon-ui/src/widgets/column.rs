@@ -368,6 +368,7 @@ mod tests {
             exit_code: None,
             thinking_content: None,
             thinking_expanded: false,
+            thinking_duration_secs: None,
         }
     }
 

@@ -1,6 +1,7 @@
 //! Tool approval overlay — shows before executing tools that need user confirmation
 
 use crate::theme::Theme;
+use crate::tool_format::display_tool_name;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::{Alignment, Rect},
@@ -221,7 +222,7 @@ impl ToolApprovalWidget {
         lines.push(Line::from(vec![
             Span::styled("Tool: ", Style::default().fg(theme.text_dim)),
             Span::styled(
-                req.tool_name.clone(),
+                display_tool_name(&req.tool_name),
                 Style::default()
                     .fg(theme.primary)
                     .add_modifier(Modifier::BOLD),

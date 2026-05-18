@@ -159,6 +159,8 @@ pub struct ChatMessage {
     pub thinking_content: Option<String>,
     /// Whether thinking content is expanded (default: false, collapsed)
     pub thinking_expanded: bool,
+    /// How long the thinking phase took, in seconds
+    pub thinking_duration_secs: Option<f64>,
 }
 
 /// Role of the chat message sender
@@ -210,6 +212,7 @@ impl ChatWidget {
             exit_code: None,
             thinking_content: None,
             thinking_expanded: false,
+            thinking_duration_secs: None,
         };
 
         let index = self.messages.len();
@@ -251,6 +254,7 @@ impl ChatWidget {
             exit_code: None,
             thinking_content: None,
             thinking_expanded: false,
+            thinking_duration_secs: None,
         };
 
         let index = self.messages.len();
@@ -279,10 +283,11 @@ impl ChatWidget {
     }
 
     /// Set thinking content on a message (for AI reasoning display)
-    pub fn set_thinking_content(&mut self, index: usize, thinking: String) {
+    pub fn set_thinking_content(&mut self, index: usize, thinking: String, duration_secs: Option<f64>) {
         if thinking.is_empty() { return; }
         if let Some(msg) = self.messages.get_mut(index) {
             msg.thinking_content = Some(thinking);
+            msg.thinking_duration_secs = duration_secs;
             if let Some(cell) = self.column.get_mut(index) {
                 cell.set_message(msg.clone());
             }
@@ -355,6 +360,7 @@ impl ChatWidget {
             exit_code: None,
             thinking_content: None,
             thinking_expanded: false,
+            thinking_duration_secs: None,
         };
         let index = self.messages.len();
         self.messages.push_back(message.clone());

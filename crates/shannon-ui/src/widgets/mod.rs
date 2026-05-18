@@ -525,6 +525,7 @@ mod tests {
             exit_code: None,
             thinking_content: None,
             thinking_expanded: false,
+            thinking_duration_secs: None,
         };
         assert_eq!(msg.content, "Test message");
         assert_eq!(msg.role, ChatRole::User);

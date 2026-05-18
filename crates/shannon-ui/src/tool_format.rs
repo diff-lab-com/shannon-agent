@@ -151,6 +151,28 @@ const JSON_MAX_LINES: usize = 50;
 /// Maximum number of characters to show for a single tool result before truncation
 const MAX_RESULT_CHARS: usize = 2000;
 
+/// Clean up a tool name for display. MCP tools have the format
+/// `mcp__plugin_{server}__{method}` — this extracts `{server}: {method}`.
+/// Skill tools like `skill_commit` show as `commit`.
+/// Non-MCP names are returned as-is.
+pub fn display_tool_name(tool_name: &str) -> String {
+    if let Some(rest) = tool_name.strip_prefix("mcp__plugin_") {
+        if let Some((server, method)) = rest.rsplit_once("__") {
+            // Deduplicate: "serena_serena" → "serena", "playwright_playwright" → "playwright"
+            let clean_server = if let Some((a, b)) = server.split_once('_') {
+                if a.eq_ignore_ascii_case(b) { a } else { server }
+            } else {
+                server
+            };
+            return format!("{clean_server}: {method}");
+        }
+    }
+    if let Some(skill_name) = tool_name.strip_prefix("skill_") {
+        return skill_name.to_string();
+    }
+    tool_name.to_string()
+}
+
 /// Classify a tool by its operation category for display purposes.
 pub fn tool_category(tool_name: &str) -> ToolCategory {
     match tool_name {
@@ -1840,5 +1862,20 @@ mod tests {
         assert_eq!(tool_category("bash"), ToolCategory::Bash);
         assert_eq!(tool_category("read"), ToolCategory::Read);
         assert_eq!(tool_category("agent"), ToolCategory::Agent);
+    }
+
+    #[test]
+    fn test_display_tool_name_mcp() {
+        assert_eq!(display_tool_name("mcp__plugin_serena_serena__find_symbol"), "serena: find_symbol");
+        assert_eq!(display_tool_name("mcp__plugin_playwright_playwright__browser_click"), "playwright: browser_click");
+        assert_eq!(display_tool_name("mcp__plugin_context7_context7__resolve-library-id"), "context7: resolve-library-id");
+    }
+
+    #[test]
+    fn test_display_tool_name_non_mcp() {
+        assert_eq!(display_tool_name("bash"), "bash");
+        assert_eq!(display_tool_name("read"), "read");
+        assert_eq!(display_tool_name("skill_commit"), "commit");
+        assert_eq!(display_tool_name("skill_pdf"), "pdf");
     }
 }

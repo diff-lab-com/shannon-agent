@@ -52,7 +52,7 @@ use super::chat::{
     wrap_line, highlight_code_cached, truncate_to,
     detect_diff_language, highlight_diff_line,
 };
-use crate::tool_format::{strip_ansi, tool_category, ToolCategory};
+use crate::tool_format::{display_tool_name, strip_ansi, tool_category, ToolCategory};
 use crate::theme::Theme;
 
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -268,7 +268,7 @@ impl MessageCell {
                 // Thinking content for assistant messages
                 if msg.role == ChatRole::Assistant {
                     if let Some(ref thinking) = msg.thinking_content {
-                        let thinking_lines = build_thinking_lines(thinking, msg.thinking_expanded, width, theme);
+                        let thinking_lines = build_thinking_lines(thinking, msg.thinking_expanded, width, theme, msg.thinking_duration_secs);
                         // Insert after separator (index 1), before content
                         let mut new_l = vec![l.remove(0)]; // separator
                         new_l.extend(thinking_lines);
@@ -336,8 +336,9 @@ impl MessageCell {
             let clean_content = strip_ansi(&msg.content);
             let first_line = clean_content.lines().next().unwrap_or("");
             let tool_label = msg.tool_name.as_deref().unwrap_or("tool");
+            let display_label = display_tool_name(tool_label);
 
-            let cat = tool_category(tool_label);
+            let cat = tool_category(&display_label);
             let (icon, prefix, cat_color) = category_style(cat, theme);
 
             // Status icon + duration badge (spinner animation for running tools)
@@ -376,7 +377,7 @@ impl MessageCell {
             };
 
             lines.push(Line::from(vec![
-                Span::styled(format!("{icon}{tool_label} "), Style::default().fg(cat_color).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{icon}{display_label} "), Style::default().fg(cat_color).add_modifier(Modifier::BOLD)),
                 Span::styled(prefix.to_string(), Style::default().fg(cat_color)),
                 Span::styled(display, Style::default().fg(theme.text_dim)),
                 Span::styled(dur_badge, Style::default().fg(theme.text_dim)),
@@ -397,7 +398,7 @@ impl MessageCell {
         };
 
         let display_name = if msg.role == ChatRole::Tool {
-            msg.tool_name.as_deref().unwrap_or("Tool").to_string()
+            display_tool_name(msg.tool_name.as_deref().unwrap_or("Tool"))
         } else {
             role_name.to_string()
         };
@@ -412,8 +413,9 @@ impl MessageCell {
         // ── Specialized tool output rendering ──
         if msg.role == ChatRole::Tool && !self.collapsed && !msg.folded {
             let tool_label = msg.tool_name.as_deref().unwrap_or("tool");
+            let display_label = display_tool_name(tool_label);
             let tool_width = inner_width.saturating_sub(4).max(20);
-            let cat = tool_category(tool_label);
+            let cat = tool_category(&display_label);
             let content = strip_ansi(&msg.content);
             let border_w = inner_width.clamp(20, 200);
 
@@ -451,11 +453,11 @@ impl MessageCell {
                 String::new()
             };
             let inner = if cat_icon.is_empty() && cat_prefix.is_empty() {
-                format!("─ {tool_label}{dur_part} ─")
+                format!("─ {display_label}{dur_part} ─")
             } else if cat_prefix.is_empty() {
-                format!("─ {cat_icon} {tool_label}{dur_part} ─")
+                format!("─ {cat_icon} {display_label}{dur_part} ─")
             } else {
-                format!("─ {cat_prefix}{tool_label}{dur_part} ─")
+                format!("─ {cat_prefix}{display_label}{dur_part} ─")
             };
             let inner_w = unicode_width::UnicodeWidthStr::width(inner.as_str());
             let remaining = border_w.saturating_sub(2 + inner_w).saturating_sub(1);
@@ -1180,18 +1182,24 @@ fn build_thinking_lines(
     expanded: bool,
     width: u16,
     theme: &Theme,
+    duration_secs: Option<f64>,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let indent = 2usize;
     let max_w = (width as usize).saturating_sub(4);
 
     if expanded {
-        // Header: "▼ Thinking (N chars)"
+        // Header: "▼ Thinking (2.3s, 1.2k chars)"
         let char_count = thinking.chars().count();
-        let label = if char_count >= 1000 {
-            format!("\u{25BC} Thinking ({}k chars)", char_count / 1000)
+        let chars_label = if char_count >= 1000 {
+            format!("{}k chars", char_count / 1000)
         } else {
-            format!("\u{25BC} Thinking ({char_count} chars)")
+            format!("{char_count} chars")
+        };
+        let label = match duration_secs {
+            Some(d) if d >= 1.0 => format!("\u{25BC} Thinking ({d:.1}s, {chars_label})"),
+            Some(d) => format!("\u{25BC} Thinking ({d:.0}ms, {chars_label})"),
+            None => format!("\u{25BC} Thinking ({chars_label})"),
         };
         lines.push(Line::from(Span::styled(
             format!(" {label}"),
@@ -1222,12 +1230,17 @@ fn build_thinking_lines(
         // Blank line separator
         lines.push(Line::from(""));
     } else {
-        // Collapsed: "▶ Thinking (N chars) — press T to expand"
+        // Collapsed: "▶ Thinking (2.3s, 1.2k chars)"
         let char_count = thinking.chars().count();
-        let label = if char_count >= 1000 {
-            format!("\u{25B6} Thinking ({}k chars)", char_count / 1000)
+        let chars_label = if char_count >= 1000 {
+            format!("{}k chars", char_count / 1000)
         } else {
-            format!("\u{25B6} Thinking ({char_count} chars)")
+            format!("{char_count} chars")
+        };
+        let label = match duration_secs {
+            Some(d) if d >= 1.0 => format!("\u{25B6} Thinking ({d:.1}s, {chars_label})"),
+            Some(d) => format!("\u{25B6} Thinking ({d:.0}ms, {chars_label})"),
+            None => format!("\u{25B6} Thinking ({chars_label})"),
         };
         lines.push(Line::from(vec![
             Span::styled(format!(" {label}"), Style::default().fg(theme.text_dim)),
@@ -1283,6 +1296,7 @@ mod tests {
             exit_code: None,
             thinking_content: None,
             thinking_expanded: false,
+            thinking_duration_secs: None,
         }
     }
 

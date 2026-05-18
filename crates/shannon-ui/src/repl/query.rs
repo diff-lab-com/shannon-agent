@@ -61,6 +61,8 @@ struct StreamingState {
     thinking_phase: bool,
     /// Accumulated thinking content from extended thinking mode
     thinking_content: String,
+    /// When thinking first started (for duration display)
+    thinking_start: Option<std::time::Instant>,
     /// Rate limit info from API (used, total)
     rate_limit: Option<(u32, u32)>,
 }
@@ -82,6 +84,7 @@ impl Default for StreamingState {
             delta: String::new(),
             thinking_phase: true,
             thinking_content: String::new(),
+            thinking_start: None,
             rate_limit: None,
         }
     }
@@ -187,6 +190,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
 
         let mut response_text = String::new();
         let mut accumulated_thinking = String::new();
+        let mut thinking_duration_secs: Option<f64> = None;
         let mut conversation_messages: Option<Vec<shannon_core::api::Message>> = None;
         let mut tokens_in_turn = 0u64;
         let mut tool_calls: Vec<String> = Vec::new();
@@ -201,6 +205,9 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                 Ok(QueryEvent::Started { .. }) => {}
                 Ok(QueryEvent::Thinking { content, .. }) => {
                     if let Ok(mut s) = ss.lock() {
+                        if s.thinking_start.is_none() {
+                            s.thinking_start = Some(std::time::Instant::now());
+                        }
                         s.thinking_content.push_str(&content);
                         let len = s.thinking_content.chars().count();
                         s.status = if len > 1000 {
@@ -215,6 +222,9 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                         if s.thinking_phase && !s.thinking_content.is_empty() {
                             let thinking = std::mem::take(&mut s.thinking_content);
                             accumulated_thinking = thinking;
+                            if let Some(start) = s.thinking_start.take() {
+                                thinking_duration_secs = Some(start.elapsed().as_secs_f64());
+                            }
                         }
                         s.thinking_phase = false;
                         response_text.push_str(&content);
@@ -401,8 +411,8 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             }
         }
 
-        Ok::<(shannon_core::query_engine::QueryEngine, String, String, Option<Vec<shannon_core::api::Message>>, u64, usize, TurnDiff, String, usize), (Option<shannon_core::query_engine::QueryEngine>, String)>(
-            (query_engine, response_text, accumulated_thinking, conversation_messages, tokens_in_turn, _tools_in_session, turn_diff, progress_status, steps_done)
+        Ok::<(shannon_core::query_engine::QueryEngine, String, String, Option<f64>, Option<Vec<shannon_core::api::Message>>, u64, usize, TurnDiff, String, usize), (Option<shannon_core::query_engine::QueryEngine>, String)>(
+            (query_engine, response_text, accumulated_thinking, thinking_duration_secs, conversation_messages, tokens_in_turn, _tools_in_session, turn_diff, progress_status, steps_done)
         )
     });
 
@@ -852,7 +862,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
     });
 
     match query_result {
-        Ok((mut engine, response, thinking, conversation_messages, tokens, tools, turn, _final_status, steps)) => {
+        Ok((mut engine, response, thinking, thinking_duration, conversation_messages, tokens, tools, turn, _final_status, steps)) => {
             // Use the proper conversation state from the query engine if available,
             // otherwise fall back to manual message addition
             if let Some(messages) = conversation_messages {
@@ -896,7 +906,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             let rendered = repl.output_renderer.render_output(&response, "assistant");
             repl.chat.update_message(assistant_msg_index, rendered);
             if !thinking.is_empty() {
-                repl.chat.set_thinking_content(assistant_msg_index, thinking);
+                repl.chat.set_thinking_content(assistant_msg_index, thinking, thinking_duration);
             }
             repl.state.tokens_used = pre_stream_tokens + tokens;
             repl.tools_invoked = pre_stream_tools + tools;
@@ -1073,8 +1083,11 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             let is_cancelled = e == "cancelled";
 
             if is_cancelled {
-                let (current, thinking) = streaming.lock()
-                    .map(|s| (s.buffer.clone(), s.thinking_content.clone()))
+                let (current, thinking, cancel_thinking_dur) = streaming.lock()
+                    .map(|s| {
+                        let dur = s.thinking_start.map(|t| t.elapsed().as_secs_f64());
+                        (s.buffer.clone(), s.thinking_content.clone(), dur)
+                    })
                     .unwrap_or_default();
                 // Render partial content through the output renderer for proper formatting
                 let partial_display = if current.is_empty() {
@@ -1086,7 +1099,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                 repl.chat.update_message(assistant_msg_index, rendered);
                 // Preserve any thinking content that was accumulated before cancellation
                 if !thinking.is_empty() {
-                    repl.chat.set_thinking_content(assistant_msg_index, thinking);
+                    repl.chat.set_thinking_content(assistant_msg_index, thinking, cancel_thinking_dur);
                 }
                 repl.state.status = t!("status.ready").to_string();
             } else {
