@@ -1,6 +1,7 @@
 //! Header bar widget showing session information and keyboard shortcuts
 
 use crate::theme::Theme;
+use rust_i18n::t;
 use ratatui::{
     layout::{Alignment, Rect},
     style::{Modifier, Style},
@@ -36,16 +37,16 @@ impl HeaderWidget {
             lines.push(Line::from(vec![
                 Span::styled("  ", Style::default()),
                 key("Enter", theme),
-                desc("Send", theme),
+                desc(&t!("ui.header_send"), theme),
                 sep.clone(),
                 key("Shift+Enter", theme),
-                desc("Newline", theme),
+                desc(&t!("ui.header_newline"), theme),
                 sep.clone(),
                 key("Ctrl+E", theme),
-                desc("Editor", theme),
+                desc(&t!("ui.header_editor"), theme),
                 sep.clone(),
                 key("F11", theme),
-                desc("Fullscreen", theme),
+                desc(&t!("ui.header_fullscreen"), theme),
             ]));
 
             // Line 3: More shortcuts (if area has room)

@@ -4,6 +4,7 @@
 //! of chat; full panel triggered by `?` key or F1.
 
 use crate::theme::Theme;
+use rust_i18n::t;
 use ratatui::{
     layout::{Alignment, Rect},
     style::{Modifier, Style},
@@ -32,34 +33,34 @@ impl KeyHintWidget {
     pub fn render(frame: &mut Frame, area: Rect, theme: &Theme, context: &HintContext) {
         let hints = match context {
             HintContext::Normal => vec![
-                ("PgUp/Dn", "Scroll"),
-                ("Ctrl+G", "Pager"),
-                ("?", "Help"),
-                ("Ctrl+Q", "Quit"),
+                ("PgUp/Dn", t!("ui.key_scroll").to_string()),
+                ("Ctrl+G", t!("ui.key_pager").to_string()),
+                ("?", t!("ui.key_help").to_string()),
+                ("Ctrl+Q", t!("ui.key_quit").to_string()),
             ],
             HintContext::VimInsert => vec![
-                ("Esc", "Normal"),
-                ("Enter", "Send"),
-                ("Tab", "Complete"),
-                ("Ctrl+Y", "Copy"),
-                ("Ctrl+E", "Editor"),
-                ("Ctrl+H", "Chat search"),
-                ("?", "Help"),
+                ("Esc", t!("ui.key_normal").to_string()),
+                ("Enter", t!("ui.key_send").to_string()),
+                ("Tab", t!("ui.key_complete").to_string()),
+                ("Ctrl+Y", t!("ui.key_copy").to_string()),
+                ("Ctrl+E", t!("ui.key_editor").to_string()),
+                ("Ctrl+H", t!("ui.key_chat_search").to_string()),
+                ("?", t!("ui.key_help").to_string()),
             ],
             HintContext::VimNormal => vec![
-                ("i", "Insert"),
-                ("v", "Visual"),
-                (":", "Command"),
-                ("h/j/k/l", "Move"),
-                ("dd", "Del line"),
-                ("Esc", "Cancel"),
+                ("i", t!("ui.key_insert").to_string()),
+                ("v", t!("ui.key_visual").to_string()),
+                (":", t!("ui.key_command").to_string()),
+                ("h/j/k/l", t!("ui.key_move").to_string()),
+                ("dd", t!("ui.key_del_line").to_string()),
+                ("Esc", t!("ui.key_cancel").to_string()),
             ],
             HintContext::VimVisual => vec![
-                ("y", "Yank"),
-                ("d", "Delete"),
-                ("Esc", "Normal"),
-                ("PgUp/Dn", "Scroll"),
-                ("?", "Help"),
+                ("y", t!("ui.key_yank").to_string()),
+                ("d", t!("ui.key_delete").to_string()),
+                ("Esc", t!("ui.key_normal").to_string()),
+                ("PgUp/Dn", t!("ui.key_scroll").to_string()),
+                ("?", t!("ui.key_help").to_string()),
             ],
         };
 
@@ -90,55 +91,55 @@ impl KeyHintWidget {
     /// Render full keyboard shortcuts panel (centered overlay)
     pub fn render_full(frame: &mut Frame, theme: &Theme) {
         let all_sections = vec![
-            ("Navigation", vec![
-                ("Page Up/Down", "Scroll chat by page"),
-                ("Home / End", "Jump to top / bottom"),
-                ("Ctrl+G / Ctrl+T", "Toggle transcript pager"),
+            (t!("ui.help_section_navigation").to_string(), vec![
+                ("Page Up/Down", t!("ui.help_scroll_page").to_string()),
+                ("Home / End", t!("ui.help_jump_top_bottom").to_string()),
+                ("Ctrl+G / Ctrl+T", t!("ui.help_toggle_transcript").to_string()),
             ]),
-            ("Input", vec![
-                ("Enter", "Send message"),
-                ("Shift+Enter", "Insert newline"),
-                ("Ctrl+C", "Clear input (or quit)"),
-                ("Ctrl+E", "Open external editor"),
-                ("Ctrl+Y", "Copy last response to clipboard"),
-                ("Ctrl+H", "Search chat messages"),
-                ("Ctrl+R", "Search command history"),
-                ("Ctrl+W", "Delete word back"),
-                ("Ctrl+K", "Kill to end of line"),
-                ("Ctrl+U", "Kill to start of line"),
-                ("Ctrl+L", "Clear screen"),
-                ("Tab", "Complete / queue while streaming"),
-                ("Shift+Tab", "Cycle approval mode"),
-                ("Up / Down", "Command history"),
+            (t!("ui.help_section_input").to_string(), vec![
+                ("Enter", t!("ui.help_send_message").to_string()),
+                ("Shift+Enter", t!("ui.help_newline").to_string()),
+                ("Ctrl+C", t!("ui.help_clear_input").to_string()),
+                ("Ctrl+E", t!("ui.help_external_editor").to_string()),
+                ("Ctrl+Y", t!("ui.help_copy_response").to_string()),
+                ("Ctrl+H", t!("ui.help_search_chat").to_string()),
+                ("Ctrl+R", t!("ui.help_search_history").to_string()),
+                ("Ctrl+W", t!("ui.help_delete_word").to_string()),
+                ("Ctrl+K", t!("ui.help_kill_line").to_string()),
+                ("Ctrl+U", t!("ui.help_kill_start").to_string()),
+                ("Ctrl+L", t!("ui.help_clear_screen").to_string()),
+                ("Tab", t!("ui.help_complete").to_string()),
+                ("Shift+Tab", t!("ui.help_approval_mode").to_string()),
+                ("Up / Down", t!("ui.help_command_history").to_string()),
             ]),
-            ("Chat", vec![
-                ("Ctrl+F", "Fold/unfold last tool output"),
-                ("Ctrl+O", "Cycle view mode (Default/Verbose)"),
-                ("Alt+F", "Toggle all tool folding"),
-                ("Ctrl+V", "Paste image from clipboard"),
-                ("Ctrl+P", "Command palette"),
-                ("Ctrl+A", "Show active agents"),
+            (t!("ui.help_section_chat").to_string(), vec![
+                ("Ctrl+F", t!("ui.help_fold_tool").to_string()),
+                ("Ctrl+O", t!("ui.help_cycle_view").to_string()),
+                ("Alt+F", t!("ui.help_toggle_fold").to_string()),
+                ("Ctrl+V", t!("ui.help_paste_image").to_string()),
+                ("Ctrl+P", t!("ui.help_command_palette").to_string()),
+                ("Ctrl+A", t!("ui.help_active_agents").to_string()),
             ]),
-            ("Vim", vec![
-                ("i", "Enter insert mode"),
-                ("v", "Visual mode (select text)"),
-                ("V", "Visual line mode"),
-                ("h/j/k/l", "Move cursor"),
-                ("w / b", "Word forward / back"),
-                ("0 / $", "Line start / end"),
-                ("dd", "Delete line"),
-                ("yy", "Yank (copy) line"),
-                ("p", "Paste after cursor"),
-                ("u", "Undo"),
-                ("Ctrl+R", "Redo"),
-                (":", "Command mode"),
-                ("Esc", "Return to normal mode"),
+            (t!("ui.help_section_vim").to_string(), vec![
+                ("i", t!("ui.help_insert_mode").to_string()),
+                ("v", t!("ui.help_visual_mode").to_string()),
+                ("V", t!("ui.help_visual_line").to_string()),
+                ("h/j/k/l", t!("ui.help_move_cursor").to_string()),
+                ("w / b", t!("ui.help_word_forward_back").to_string()),
+                ("0 / $", t!("ui.help_line_start_end").to_string()),
+                ("dd", t!("ui.help_delete_line").to_string()),
+                ("yy", t!("ui.help_yank_line").to_string()),
+                ("p", t!("ui.help_paste_after").to_string()),
+                ("u", t!("ui.help_undo").to_string()),
+                ("Ctrl+R", t!("ui.help_redo").to_string()),
+                (":", t!("ui.help_command_mode").to_string()),
+                ("Esc", t!("ui.help_return_normal").to_string()),
             ]),
-            ("Help & System", vec![
-                ("F1 / ?", "This help overlay"),
-                ("F8", "Toggle mouse scroll"),
-                ("Ctrl+Q", "Quit"),
-                ("Esc Esc", "Undo last exchange"),
+            (t!("ui.help_section_system").to_string(), vec![
+                ("F1 / ?", t!("ui.help_this_overlay").to_string()),
+                ("F8", t!("ui.help_toggle_mouse").to_string()),
+                ("Ctrl+Q", t!("ui.key_quit").to_string()),
+                ("Esc Esc", t!("ui.help_undo_exchange").to_string()),
             ]),
         ];
 
@@ -170,7 +171,7 @@ impl KeyHintWidget {
         // Footer
         all_lines.push(Line::from(vec![
             Span::styled(
-                " Press any key to close ",
+                format!(" {} ", t!("ui.help_press_any_key")),
                 Style::default().fg(theme.muted),
             ),
         ]));
@@ -194,7 +195,7 @@ impl KeyHintWidget {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(theme.border))
-                    .title(" Shortcuts ")
+                    .title(format!(" {} ", t!("ui.help_title")))
                     .title_style(Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
             )
             .alignment(Alignment::Left);

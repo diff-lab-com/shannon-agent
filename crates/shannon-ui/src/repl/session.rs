@@ -1,6 +1,7 @@
 //! Session restore and auto-restore functionality.
 
 use crate::widgets::ChatRole;
+use rust_i18n::t;
 use shannon_core::{ContentBlock, MessageContent};
 
 impl super::Repl {
@@ -95,10 +96,12 @@ impl super::Repl {
             }
 
             // Show notice before restoring messages
-            self.chat.add_message(ChatRole::System, format!(
-                "Auto-restored session: \"{}\" ({} messages, {})\nType /clear to start fresh.",
-                title, msg_count, most_recent.model,
-            ));
+            self.chat.add_message(ChatRole::System, t!(
+                "session.auto_restored",
+                title = title,
+                count = msg_count,
+                model = most_recent.model,
+            ).to_string());
 
             // Populate chat widget with restored messages
             for msg in &data.messages {

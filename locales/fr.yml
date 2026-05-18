@@ -145,3 +145,7 @@ review:
   all_discarded: "Toutes les modifications non indexées ont été abandonnées (%{count} fichiers)."
   file_accepted: "Modifications de '%{file}' acceptées (indexées)."
   file_rejected: "Modifications de '%{file}' rejetées (rétablies)."
+
+# ── Session ──────────────────────────────────────────────────────────────────
+session:
+  auto_restored: "Session restaurée automatiquement : \"%{title}\" (%{count} messages, %{model})\nTapez /clear pour recommencer."

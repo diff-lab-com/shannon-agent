@@ -39,6 +39,7 @@ use uuid::Uuid;
 
 use crate::repl_enhancement::TurnDiff;
 use shannon_core::query_engine::{QueryContext, QueryEvent};
+use shannon_core::MessageContent;
 
 use super::Repl;
 
@@ -855,7 +856,12 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             // Use the proper conversation state from the query engine if available,
             // otherwise fall back to manual message addition
             if let Some(messages) = conversation_messages {
+                let msg_count = messages.len();
                 engine.restore_messages(messages);
+                tracing::info!(
+                    msg_count,
+                    "Restored conversation from ConversationUpdate event"
+                );
             } else {
                 // Fallback: ConversationUpdate was not received. This should be
                 // rare — the engine's safety net in the post-stream handler
@@ -863,14 +869,27 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                 // does happen, the response text may include UI formatting
                 // markers (tool call displays, turn markers), which is imperfect
                 // but better than losing the turn entirely.
-                tracing::warn!(
-                    "ConversationUpdate not received — using fallback message addition. \
-                     Response text may include UI formatting."
-                );
-                engine.add_user_message(input.to_string());
-                engine.add_assistant_message(vec![shannon_core::api::ContentBlock::Text {
-                    text: response.clone(),
-                }]);
+                let history = engine.conversation_history();
+                let input_text = input.to_string();
+                let already_has_turn = history.windows(2).any(|w| {
+                    matches!(&w[0].content, MessageContent::Text(t) if t == &input_text)
+                        && w[0].role == "user"
+                });
+                if already_has_turn {
+                    tracing::warn!(
+                        history_len = history.len(),
+                        "ConversationUpdate not received but engine already has this turn"
+                    );
+                } else {
+                    tracing::warn!(
+                        history_len = history.len(),
+                        "ConversationUpdate not received — adding user+assistant as fallback"
+                    );
+                    engine.add_user_message(input_text);
+                    engine.add_assistant_message(vec![shannon_core::api::ContentBlock::Text {
+                        text: response.clone(),
+                    }]);
+                }
             }
             repl.query_engine = Some(engine);
 

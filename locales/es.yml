@@ -145,3 +145,7 @@ review:
   all_discarded: "Todos los cambios sin preparar fueron descartados (%{count} archivos)."
   file_accepted: "Cambios en '%{file}' aceptados (preparados)."
   file_rejected: "Cambios en '%{file}' rechazados (revertidos)."
+
+# ── Session ──────────────────────────────────────────────────────────────────
+session:
+  auto_restored: "Sesión restaurada automáticamente: \"%{title}\" (%{count} mensajes, %{model})\nEscribe /clear para comenzar de nuevo."
