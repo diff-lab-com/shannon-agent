@@ -1801,15 +1801,9 @@ impl QueryEngine {
                                         });
                                         let no_tools: Option<Vec<crate::api::ToolDefinition>> = None;
                                         let no_system: Option<String> = None;
-                                        // Simplify to last user message only — small/local models
-                                        // struggle with long conversation history
-                                        let simplified_messages: Vec<Message> = messages.iter().rev()
-                                            .find(|m| m.role == "user")
-                                            .map(|m| vec![m.clone()])
-                                            .unwrap_or_else(|| messages.clone());
                                         match tokio::time::timeout(
                                             std::time::Duration::from_secs(60),
-                                            client.send_message(simplified_messages, no_tools, no_system),
+                                            client.send_message(messages.clone(), no_tools, no_system),
                                         ).await {
                                             Ok(Ok(content_blocks)) => {
                                                 let mut retry_text = String::new();
@@ -2116,13 +2110,9 @@ impl QueryEngine {
                             });
                             let no_tools: Option<Vec<crate::api::ToolDefinition>> = None;
                             let no_system: Option<String> = None;
-                            let simplified_messages: Vec<Message> = messages.iter().rev()
-                                .find(|m| m.role == "user")
-                                .map(|m| vec![m.clone()])
-                                .unwrap_or_else(|| messages.clone());
                             match tokio::time::timeout(
                                 std::time::Duration::from_secs(60),
-                                client.send_message(simplified_messages, no_tools, no_system),
+                                client.send_message(messages.clone(), no_tools, no_system),
                             ).await {
                                 Ok(Ok(content_blocks)) => {
                                     let mut retry_text = String::new();
