@@ -96,7 +96,7 @@ mod tests {
         assert_eq!(config.max_turns, 20);
         assert_eq!(config.timeout_seconds, 300);
         assert!(!config.verbose);
-        assert_eq!(config.max_context_tokens, Some(100_000));
+        assert_eq!(config.max_context_tokens, None);
         assert_eq!(config.compression_threshold, 0.8);
         assert_eq!(config.keep_recent_messages, 10);
     }

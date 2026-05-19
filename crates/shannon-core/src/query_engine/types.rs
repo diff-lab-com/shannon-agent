@@ -508,7 +508,7 @@ impl Default for QueryEngineConfig {
             timeout_seconds: 300,
             verbose: false,
             enable_thinking: false,
-            max_context_tokens: Some(100_000),
+            max_context_tokens: None, // None = use model registry / Ollama num_ctx
             compression_threshold: 0.8,
             keep_recent_messages: 10,
             compression_strategy: CompressionStrategy::default(),

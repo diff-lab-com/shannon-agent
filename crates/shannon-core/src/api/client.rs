@@ -13,6 +13,8 @@ use super::types::*;
 pub struct LlmClient {
     config: LlmClientConfig,
     client: Client,
+    /// Cached Ollama model capabilities (populated by check_ollama_capabilities).
+    ollama_info: std::sync::Arc<std::sync::RwLock<Option<OllamaModelInfo>>>,
 }
 
 impl LlmClient {
@@ -34,7 +36,7 @@ impl LlmClient {
     pub fn new(config: LlmClientConfig) -> Self {
         let client = Self::build_client(config.timeout_seconds);
 
-        Self { config, client }
+        Self { config, client, ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)) }
     }
 
     /// Create a new LLM API client, returning an error if client construction fails.
@@ -43,7 +45,7 @@ impl LlmClient {
             .timeout(Duration::from_secs(config.timeout_seconds))
             .build()
             .map_err(|e| ApiError::InvalidResponse(format!("Failed to create HTTP client: {e}")))?;
-        Ok(Self { config, client })
+        Ok(Self { config, client, ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)) })
     }
 
     /// Create client from environment variables.
@@ -70,7 +72,7 @@ impl LlmClient {
     pub fn new_unauthenticated(config: LlmClientConfig) -> Self {
         let client = Self::build_client(config.timeout_seconds);
 
-        Self { config, client }
+        Self { config, client, ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)) }
     }
 
     /// Build authentication headers for the configured provider
@@ -726,11 +728,21 @@ impl LlmClient {
             })
             .unwrap_or(4096);
 
-        Some(OllamaModelInfo {
+        let info = OllamaModelInfo {
             name: self.config.model.clone(),
             supports_tools,
             num_ctx,
-        })
+        };
+        // Cache the result for subsequent queries
+        if let Ok(mut cache) = self.ollama_info.write() {
+            *cache = Some(info.clone());
+        }
+        Some(info)
+    }
+
+    /// Get cached Ollama model info (num_ctx, supports_tools) if available.
+    pub fn cached_ollama_info(&self) -> Option<OllamaModelInfo> {
+        self.ollama_info.read().ok().and_then(|info| info.clone())
     }
 }
 

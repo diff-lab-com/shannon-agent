@@ -1223,11 +1223,11 @@ async fn test_ollama_repeated_malformed_shows_model_incompatible() {
         stdout_string(&result),
         String::from_utf8_lossy(&result.get_output().stderr)
     );
-    // The retry returns the malformed-output error as warning content
-    // (not a fatal error), so the query should succeed with a warning.
+    // When all retries fail, the engine emits a clear model incompatibility
+    // error rather than displaying the raw Ollama error as AI response text.
     assert!(
-        combined.contains("Ollama model output error"),
-        "Repeated malformed failure should show Ollama model output warning, got: {combined}"
+        combined.contains("cannot produce valid output"),
+        "Repeated malformed failure should show model incompatibility error, got: {combined}"
     );
 }
 

@@ -154,6 +154,19 @@ pub struct QueryEngine {
     pub(crate) plan_mode_active: Arc<RwLock<bool>>,
     /// Git-based checkpoint manager for undo/revert support before file-modifying tools.
     pub(crate) checkpoint_manager: crate::checkpoint::CheckpointManager,
+    /// Effective maximum context tokens — resolved from user config > Ollama num_ctx > model registry.
+    pub(crate) effective_max_context_tokens: usize,
+}
+
+impl QueryEngine {
+    /// Resolve effective max context tokens from priority chain:
+    /// user config > Ollama num_ctx (queried later) > model registry > fallback (128K).
+    fn resolve_max_context_tokens(model: &str, user_override: Option<usize>) -> usize {
+        if let Some(tokens) = user_override {
+            return tokens;
+        }
+        crate::model_registry::context_window_for(model)
+    }
 }
 
 /// Helper to create a loaded HookManager
@@ -226,6 +239,9 @@ impl QueryEngine {
     ) -> Self {
         let model = client.model().to_string();
         let session_id = Uuid::new_v4();
+        let effective_max_context_tokens = Self::resolve_max_context_tokens(
+            client.model(), config.max_context_tokens,
+        );
         Self {
             client,
             tools: Arc::new(tools),
@@ -240,6 +256,7 @@ impl QueryEngine {
             context_injector: None,
             plan_mode_active: Arc::new(RwLock::new(false)),
             checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(&session_id.to_string()),
+            effective_max_context_tokens,
         }
     }
 
@@ -265,6 +282,9 @@ impl QueryEngine {
     ) -> Self {
         let model = client.model().to_string();
         let session_id = Uuid::new_v4();
+        let effective_max_context_tokens = Self::resolve_max_context_tokens(
+            client.model(), None, // defaults have no user override
+        );
         Self {
             client,
             tools,
@@ -279,6 +299,7 @@ impl QueryEngine {
             context_injector: None,
             plan_mode_active: Arc::new(RwLock::new(false)),
             checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(&session_id.to_string()),
+            effective_max_context_tokens,
         }
     }
 
@@ -295,6 +316,9 @@ impl QueryEngine {
         session_id: Uuid,
     ) -> Self {
         let model = client.model().to_string();
+        let effective_max_context_tokens = Self::resolve_max_context_tokens(
+            client.model(), config.max_context_tokens,
+        );
         Self {
             client,
             tools: Arc::new(tools),
@@ -309,6 +333,7 @@ impl QueryEngine {
             context_injector: None,
             plan_mode_active: Arc::new(RwLock::new(false)),
             checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(&session_id.to_string()),
+            effective_max_context_tokens,
         }
     }
 
@@ -628,6 +653,7 @@ impl QueryEngine {
         let context_injector = self.context_injector.clone();
         let plan_mode_active = self.plan_mode_active.clone();
         let checkpoint_manager = self.checkpoint_manager.clone();
+        let effective_max_context_tokens = self.effective_max_context_tokens;
 
         // Search for relevant memories to augment the system prompt
         let memory_entries = if let Some(ref mem_store) = self.memory {
@@ -878,19 +904,23 @@ impl QueryEngine {
                     None
                 };
 
+                // Resolve effective max context: Ollama num_ctx > model registry > fallback.
+                // Query /api/show only on the first turn to avoid redundant HTTP calls.
+                let mut effective_max_context = effective_max_context_tokens;
+                if turn == 0 && client_provider == crate::api::LlmProvider::Ollama && config.max_context_tokens.is_none() {
+                    if let Some(info) = client.check_ollama_capabilities().await {
+                        if info.num_ctx > 0 {
+                            effective_max_context = info.num_ctx;
+                        }
+                        tracing::info!(num_ctx = effective_max_context, supports_tools = info.supports_tools, "Ollama capabilities resolved from /api/show");
+                    }
+                }
+
                 // Auto-compress conversation if it exceeds the threshold
                 {
                     let estimated_tokens = crate::compact::helpers::estimate_tokens(&messages)
                         + config.system_prompt.as_ref().map(|sp| crate::compact::helpers::estimate_text_tokens(sp)).unwrap_or(0);
-                    // Ollama silently truncates via KV cache rotation when messages
-                    // exceed num_ctx. Cap the effective context limit so Shannon's
-                    // compression/truncation fires before Ollama's silent truncation
-                    // causes context loss. Default Ollama num_ctx is 4096.
-                    let max_context = if client_provider == crate::api::LlmProvider::Ollama {
-                        config.max_context_tokens.unwrap_or(4096)
-                    } else {
-                        config.max_context_tokens.unwrap_or(200_000)
-                    };
+                    let max_context = effective_max_context.max(1); // Guard against division by zero
                     let usage_ratio = estimated_tokens as f32 / max_context as f32;
 
                     // Pre-compaction warning at 60% — gives users visibility before compression fires
@@ -919,6 +949,8 @@ impl QueryEngine {
                         } else {
                             match crate::compact::CompactEngine::with_llm_summarizer(client.clone()) {
                                 Ok(mut compact_engine) => {
+                                    // Sync compact engine's context limit with our effective limit
+                                    compact_engine.config.max_context_tokens = effective_max_context;
                                     // Build re-injection context from ContextInjector if available,
                                     // otherwise fall back to the system prompt (truncated).
                                     // Build re-injection context from ContextInjector if available
@@ -1009,6 +1041,27 @@ impl QueryEngine {
                     max_turns = config.max_turns,
                     "Sending API request"
                 );
+
+                // Pre-send warning when approaching context limit
+                {
+                    let pre_send_estimate = crate::compact::helpers::estimate_tokens(&messages)
+                        + config.system_prompt.as_ref().map(|sp| crate::compact::helpers::estimate_text_tokens(sp)).unwrap_or(0);
+                    let pre_send_ratio = pre_send_estimate as f32 / effective_max_context as f32;
+                    if pre_send_ratio > 0.9 {
+                        send_event!(tx, QueryEvent::Progress {
+                            query_id,
+                            message: format!(
+                                "Warning: context at {:.0}% ({}/{} tokens) — approaching limit",
+                                pre_send_ratio * 100.0, pre_send_estimate, effective_max_context,
+                            ),
+                        });
+                        tracing::warn!(
+                            estimated_tokens = pre_send_estimate,
+                            max_context = effective_max_context,
+                            "Sending request near context limit"
+                        );
+                    }
+                }
 
                 // Call the API — use structured system blocks when available for prompt caching
                 let stream_result = if let Some(ref blocks) = system_blocks_opt {
@@ -1841,7 +1894,13 @@ impl QueryEngine {
                                                         Ok(Ok(blocks)) if !blocks.iter().any(|b| {
                                                             matches!(b, ContentBlock::Text { text } if text.starts_with("⚠️ Ollama model output error"))
                                                         }) => blocks,
-                                                        _ => content_blocks,
+                                                        _ => {
+                                                            send_event!(tx, QueryEvent::Failed {
+                                                                query_id,
+                                                                error: "This model cannot produce valid output — it may be too small or incompatible. Try /model to switch to a larger model.".to_string(),
+                                                            });
+                                                            return;
+                                                        }
                                                     }
                                                 } else {
                                                     content_blocks
@@ -2179,7 +2238,13 @@ impl QueryEngine {
                                             Ok(Ok(blocks)) if !blocks.iter().any(|b| {
                                                 matches!(b, ContentBlock::Text { text } if text.starts_with("⚠️ Ollama model output error"))
                                             }) => blocks,
-                                            _ => content_blocks,
+                                            _ => {
+                                                send_event!(tx, QueryEvent::Failed {
+                                                    query_id,
+                                                    error: "This model cannot produce valid output — it may be too small or incompatible. Try /model to switch to a larger model.".to_string(),
+                                                });
+                                                return;
+                                            }
                                         }
                                     } else {
                                         content_blocks
@@ -2853,5 +2918,82 @@ mod tests {
         assert!(!crate::tool_execution::is_file_modifying_tool("Glob"));
         assert!(!crate::tool_execution::is_file_modifying_tool("Grep"));
         assert!(!crate::tool_execution::is_file_modifying_tool("LSP"));
+    }
+
+    // ── Context resolution tests ──────────────────────────────────
+
+    #[test]
+    fn test_resolve_max_context_user_override_wins() {
+        // User override should take absolute priority
+        let result = QueryEngine::resolve_max_context_tokens("unknown-model", Some(64000));
+        assert_eq!(result, 64000);
+    }
+
+    #[test]
+    fn test_resolve_max_context_from_registry() {
+        // Known model should get context_window from MODEL_CATALOG
+        let result = QueryEngine::resolve_max_context_tokens("claude-sonnet-4-20250514", None);
+        assert_eq!(result, 200_000);
+    }
+
+    #[test]
+    fn test_resolve_max_context_unknown_model_fallback() {
+        // Unknown model falls back to context_window_for() default (200K)
+        let result = QueryEngine::resolve_max_context_tokens("nonexistent-model", None);
+        assert_eq!(result, 200_000);
+    }
+
+    #[test]
+    fn test_resolve_max_context_zero_override_prevents_division_by_zero() {
+        // Even a zero override should not crash — the compression guard uses .max(1)
+        let result = QueryEngine::resolve_max_context_tokens("any-model", Some(0));
+        assert_eq!(result, 0); // resolved as 0, but usage code uses .max(1)
+        // Verify the guard works
+        let guarded = result.max(1);
+        assert_eq!(guarded, 1);
+    }
+
+    #[test]
+    fn test_effective_max_context_initialized_in_engine() {
+        let client = create_test_client();
+        let tools = ToolRegistry::new();
+        let permissions = PermissionManager::new();
+        let state = StateManager::new();
+        let config = QueryEngineConfig::default();
+
+        let engine = QueryEngine::new(client, tools, permissions, state, config);
+        // Default config has max_context_tokens: None, so it uses registry fallback
+        // "test-model" is not in catalog, so falls back to 200_000
+        assert_eq!(engine.effective_max_context_tokens, 200_000);
+    }
+
+    #[test]
+    fn test_effective_max_context_with_user_override() {
+        let client = create_test_client();
+        let tools = ToolRegistry::new();
+        let permissions = PermissionManager::new();
+        let state = StateManager::new();
+        let mut config = QueryEngineConfig::default();
+        config.max_context_tokens = Some(32000);
+
+        let engine = QueryEngine::new(client, tools, permissions, state, config);
+        assert_eq!(engine.effective_max_context_tokens, 32000);
+    }
+
+    #[test]
+    fn test_effective_max_context_with_known_model() {
+        let config = LlmClientConfig {
+            api_key: "test".to_string(),
+            base_url: "http://localhost:11434".to_string(),
+            model: "claude-sonnet-4-20250514".to_string(),
+            ..Default::default()
+        };
+        let client = LlmClient::new(config);
+        let tools = ToolRegistry::new();
+        let permissions = PermissionManager::new();
+        let state = StateManager::new();
+
+        let engine = QueryEngine::new(client, tools, permissions, state, QueryEngineConfig::default());
+        assert_eq!(engine.effective_max_context_tokens, 200_000);
     }
 }

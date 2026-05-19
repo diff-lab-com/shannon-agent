@@ -321,7 +321,7 @@ pub fn detect_local_models() -> Vec<ModelInfo> {
             id: Box::leak(name.clone().into_boxed_str()),
             display_name: Box::leak(name.into_boxed_str()),
             provider: LlmProvider::Ollama,
-            context_window: 128_000,
+            context_window: 4096,
             max_output: 4_096,
             cost_per_m_input: 0.0,
             cost_per_m_output: 0.0,

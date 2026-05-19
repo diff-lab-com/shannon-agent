@@ -643,4 +643,263 @@ mod engine_recovery_tests {
             _ => panic!("Expected text content"),
         }
     }
+
+    // ── Ollama malformed output recovery tests ──
+    //
+    // Regression tests for the bug where Ollama "can't find closing '}' symbol"
+    // errors were displayed as AI response text instead of a clean error.
+
+    /// Create a QueryEngine configured for Ollama pointing at a mock server.
+    fn create_ollama_engine(mock_url: &str) -> QueryEngine {
+        let config = LlmClientConfig {
+            api_key: String::new(),
+            base_url: mock_url.to_string(),
+            model: "tiny-model".to_string(),
+            max_tokens: 4096,
+            timeout_seconds: 10,
+            api_version: String::new(),
+            provider: LlmProvider::Ollama,
+            extra_headers: HashMap::new(),
+            retry_config: shannon_core::api::RetryConfig::new(0, 0, 0),
+            fallback_provider: None,
+            fallback_base_url: None,
+            max_stream_reconnects: 0,
+            budget_tokens: None,
+            reasoning_effort: None,
+        };
+        let client = shannon_core::api::LlmClient::new(config);
+        let tools = ToolRegistry::new();
+        let permissions = PermissionManager::new();
+        let state = StateManager::new();
+
+        QueryEngine::new(client, tools, permissions, state, QueryEngineConfig::default())
+    }
+
+    /// Ollama streaming returns HTTP 500 with malformed output error.
+    /// This triggers the engine's error path which checks is_ollama_malformed_output().
+    fn setup_ollama_stream_error_mock(server: &mut ServerGuard) -> mockito::Mock {
+        let body = json!({"error":"Value looks like object, but can't find closing '}' symbol"});
+
+        server
+            .mock("POST", "/api/chat")
+            .match_body(mockito::Matcher::Regex(r#""stream":true"#.to_string()))
+            .with_status(500)
+            .with_header("content-type", "application/json")
+            .with_body(body.to_string())
+            .expect(1)
+            .create()
+    }
+
+    /// Ollama non-streaming response with malformed output error.
+    /// The adapter catches this and returns warning as ContentBlock::Text.
+    fn setup_ollama_non_stream_error_mock(server: &mut ServerGuard) -> mockito::Mock {
+        let body = json!({
+            "model": "tiny-model",
+            "message": {"role": "assistant", "content": ""},
+            "error": "Value looks like object, but can't find closing '}' symbol",
+            "done": true,
+            "prompt_eval_count": 5,
+            "eval_count": 0
+        });
+
+        server
+            .mock("POST", "/api/chat")
+            .match_body(mockito::Matcher::Regex(r#""stream":false"#.to_string()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body.to_string())
+            .expect(1)
+            .create()
+    }
+
+    /// Ollama non-streaming success response.
+    fn setup_ollama_non_stream_success_mock(server: &mut ServerGuard, text: &str) -> mockito::Mock {
+        let body = json!({
+            "model": "tiny-model",
+            "message": {"role": "assistant", "content": text},
+            "done": true,
+            "prompt_eval_count": 5,
+            "eval_count": 10
+        });
+
+        server
+            .mock("POST", "/api/chat")
+            .match_body(mockito::Matcher::Regex(r#""stream":false"#.to_string()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body.to_string())
+            .expect(1)
+            .create()
+    }
+
+    /// Ollama streaming success response with text content.
+    fn setup_ollama_stream_success_mock(server: &mut ServerGuard, text: &str) -> mockito::Mock {
+        let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
+        let body = format!(
+            r#"{{"model":"tiny-model","created_at":"2024-01-01T00:00:00Z","message":{{"role":"assistant","content":"{escaped}"}},"done":false}}
+{{"model":"tiny-model","created_at":"2024-01-01T00:00:00Z","done":true,"prompt_eval_count":5,"eval_count":10}}"#
+        );
+
+        server
+            .mock("POST", "/api/chat")
+            .match_body(mockito::Matcher::Regex(r#""stream":true"#.to_string()))
+            .with_status(200)
+            .with_header("content-type", "application/x-ndjson")
+            .with_body(body)
+            .expect(1)
+            .create()
+    }
+
+    #[test]
+    fn test_ollama_malformed_output_all_retries_fail() {
+        // When ALL retries fail (stream → non-stream → minimal), the engine
+        // must emit QueryEvent::Failed with a clear message — NOT the raw
+        // Ollama error as AI response text.
+        let mut server = Server::new();
+        let mut engine = create_ollama_engine(&server.url());
+        let session_id = engine.session_id();
+
+        // Mock: streaming returns malformed output error
+        setup_ollama_stream_error_mock(&mut server);
+        // Mock: non-streaming retry also returns error (adapter returns warning as content)
+        // Need 2 matches: full-history retry + minimal retry
+        setup_ollama_non_stream_error_mock(&mut server);
+        setup_ollama_non_stream_error_mock(&mut server);
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = make_query_context();
+        let events = rt.block_on(async {
+            use futures::StreamExt;
+            let stream = engine.process_query(ctx, None).await;
+            Box::pin(stream).collect::<Vec<_>>().await
+        });
+
+        // Must emit a Failed event, not Text with warning
+        let has_failed = events.iter().any(|e| {
+            matches!(e, Ok(shannon_core::query_engine::QueryEvent::Failed { error, .. })
+                if error.contains("cannot produce valid output"))
+        });
+        assert!(has_failed,
+            "Expected QueryEvent::Failed with model incompatibility message");
+
+        // Must NOT emit the raw Ollama error as AI text
+        let has_warning_text = events.iter().any(|e| {
+            matches!(e, Ok(shannon_core::query_engine::QueryEvent::Text { content, .. })
+                if content.contains("⚠️ Ollama model output error"))
+        });
+        assert!(!has_warning_text,
+            "Raw Ollama error should NOT be emitted as AI response text");
+
+        // Engine must survive for the next query
+        assert_eq!(engine.session_id(), session_id);
+        engine.add_user_message("retry after ollama error".to_string());
+        assert_eq!(engine.conversation_history().len(), 1);
+    }
+
+    #[test]
+    fn test_ollama_malformed_output_retry_succeeds_on_minimal() {
+        // When streaming fails but minimal retry (last user message only) succeeds,
+        // the engine should return the successful content.
+        let mut server = Server::new();
+        let engine = create_ollama_engine(&server.url());
+
+        // Mock: streaming returns malformed output error
+        setup_ollama_stream_error_mock(&mut server);
+        // Mock: full-history non-streaming retry returns error
+        setup_ollama_non_stream_error_mock(&mut server);
+        // Mock: minimal retry SUCCEEDS
+        setup_ollama_non_stream_success_mock(&mut server, "Hello from tiny model!");
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = make_query_context();
+        let events = rt.block_on(async {
+            use futures::StreamExt;
+            let stream = engine.process_query(ctx, None).await;
+            Box::pin(stream).collect::<Vec<_>>().await
+        });
+
+        // Should get the successful content
+        let has_content = events.iter().any(|e| {
+            matches!(e, Ok(shannon_core::query_engine::QueryEvent::Text { content, .. })
+                if content.contains("Hello from tiny model!"))
+        });
+        assert!(has_content, "Expected content from successful minimal retry");
+
+        // Should complete successfully (not fail)
+        let has_failed = events.iter().any(|e| {
+            matches!(e, Ok(shannon_core::query_engine::QueryEvent::Failed { .. }))
+        });
+        assert!(!has_failed, "Should not fail when minimal retry succeeds");
+    }
+
+    #[test]
+    fn test_ollama_malformed_output_retry_succeeds_without_tools() {
+        // When streaming fails but non-streaming retry (without tools) succeeds,
+        // the engine should return that content without attempting minimal retry.
+        let mut server = Server::new();
+        let engine = create_ollama_engine(&server.url());
+
+        // Mock: streaming returns malformed output error
+        setup_ollama_stream_error_mock(&mut server);
+        // Mock: non-streaming retry SUCCEEDS (no warning in content)
+        setup_ollama_non_stream_success_mock(&mut server, "Success without tools!");
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx = make_query_context();
+        let events = rt.block_on(async {
+            use futures::StreamExt;
+            let stream = engine.process_query(ctx, None).await;
+            Box::pin(stream).collect::<Vec<_>>().await
+        });
+
+        let has_content = events.iter().any(|e| {
+            matches!(e, Ok(shannon_core::query_engine::QueryEvent::Text { content, .. })
+                if content.contains("Success without tools!"))
+        });
+        assert!(has_content, "Expected content from successful retry without tools");
+
+        let has_failed = events.iter().any(|e| {
+            matches!(e, Ok(shannon_core::query_engine::QueryEvent::Failed { .. }))
+        });
+        assert!(!has_failed);
+    }
+
+    #[test]
+    fn test_ollama_engine_reusable_after_malformed_output() {
+        // After an Ollama malformed output error, the engine must be reusable
+        // for subsequent queries that succeed.
+        let mut server = Server::new();
+        let engine = create_ollama_engine(&server.url());
+        let session_id = engine.session_id();
+
+        // Query 1: all retries fail
+        setup_ollama_stream_error_mock(&mut server);
+        setup_ollama_non_stream_error_mock(&mut server);
+        setup_ollama_non_stream_error_mock(&mut server);
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ctx1 = make_query_context();
+        let _ = rt.block_on(async {
+            use futures::StreamExt;
+            let stream = engine.process_query(ctx1, None).await;
+            Box::pin(stream).collect::<Vec<_>>().await
+        });
+
+        // Query 2: succeeds (simulating user switched to a working model)
+        setup_ollama_stream_success_mock(&mut server, "Now working!");
+
+        let ctx2 = make_query_context();
+        let events2 = rt.block_on(async {
+            use futures::StreamExt;
+            let stream = engine.process_query(ctx2, None).await;
+            Box::pin(stream).collect::<Vec<_>>().await
+        });
+
+        let has_content = events2.iter().any(|e| {
+            matches!(e, Ok(shannon_core::query_engine::QueryEvent::Text { content, .. })
+                if content.contains("Now working!"))
+        });
+        assert!(has_content, "Second query should succeed after Ollama error recovery");
+        assert_eq!(engine.session_id(), session_id, "Session preserved");
+    }
 }

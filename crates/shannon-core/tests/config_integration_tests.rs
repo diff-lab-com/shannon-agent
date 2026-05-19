@@ -1029,6 +1029,7 @@ mod unified_config_tests {
             timeout: Some(30),
             debug: true,
             enable_tools: None,
+            max_context_tokens: None,
         };
         assert_eq!(config.model.as_deref(), Some("claude-opus-4-6"));
         assert_eq!(config.provider.as_deref(), Some("anthropic"));
@@ -1179,6 +1180,7 @@ mod unified_config_tests {
             timeout: Some(60),
             debug: true,
             enable_tools: None,
+            max_context_tokens: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: ShannonConfig = serde_json::from_str(&json).unwrap();

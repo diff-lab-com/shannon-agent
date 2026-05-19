@@ -23,6 +23,9 @@ pub struct ShannonConfig {
     pub debug: bool,
     /// Override tool calling: Some(true) = force tools on, Some(false) = force off, None = auto.
     pub enable_tools: Option<bool>,
+    /// Maximum context tokens before compression. Overrides model registry defaults.
+    /// Priority: user config > Ollama num_ctx > model registry > fallback (128K).
+    pub max_context_tokens: Option<usize>,
 }
 
 impl ShannonConfig {
@@ -44,6 +47,7 @@ impl ShannonConfig {
             timeout: other.timeout.or(self.timeout),
             debug: other.debug || self.debug,
             enable_tools: other.enable_tools.or(self.enable_tools),
+            max_context_tokens: other.max_context_tokens.or(self.max_context_tokens),
         }
     }
 }
@@ -102,6 +106,9 @@ impl ConfigBuilder {
                 .and_then(|v| v.parse().ok()),
             debug: std::env::var("SHANNON_DEBUG").is_ok(),
             enable_tools: std::env::var("SHANNON_ENABLE_TOOLS")
+                .ok()
+                .and_then(|v| v.parse().ok()),
+            max_context_tokens: std::env::var("SHANNON_MAX_CONTEXT_TOKENS")
                 .ok()
                 .and_then(|v| v.parse().ok()),
         };
@@ -201,6 +208,13 @@ fn load_config_file(path: &std::path::Path) -> ShannonConfig {
                     }
                 }
                 "debug" => config.debug = value.parse().unwrap_or(false),
+                "max_context_tokens" => {
+                    if let Ok(v) = value.parse() {
+                        config.max_context_tokens = Some(v);
+                    } else {
+                        tracing::warn!("Invalid max_context_tokens value in config: {value}");
+                    }
+                }
                 _ => {}
             }
         }
@@ -233,6 +247,7 @@ mod tests {
             timeout: None,
             debug: false,
             enable_tools: None,
+            max_context_tokens: None,
         };
         let override_config = ShannonConfig {
             model: Some("override-model".to_string()),
@@ -244,6 +259,7 @@ mod tests {
             timeout: None,
             debug: true,
             enable_tools: None,
+            max_context_tokens: None,
         };
 
         let merged = base.merge(&override_config);

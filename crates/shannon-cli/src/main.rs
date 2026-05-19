@@ -566,6 +566,7 @@ fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {
         timeout: cli_config.timeout(),
         debug: cli_config.debug(),
         enable_tools: None,
+        max_context_tokens: None,
     };
 
     // 2. Build the merged ShannonConfig via ConfigBuilder.
