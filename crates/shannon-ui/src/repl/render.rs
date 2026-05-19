@@ -168,8 +168,7 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         };
 
         // Render base layout (always)
-        let ctx_window = state.model.as_ref()
-            .map(|m| shannon_core::model_registry::context_window_for(m) as u64);
+        let ctx_window = Some(state.context_window as u64);
         let render_ctx = crate::widgets::RenderContext {
             chat, prompt, theme: &state.theme, status: display_status,
             model: state.model.as_deref(),

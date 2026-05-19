@@ -284,6 +284,7 @@ fn test_sidebar_info_default() {
         commands_run: 2,
         tokens_per_sec: Some(42.0),
         memory_rss_kb: 0,
+        tool_breakdown: vec![],
     };
 
     assert_eq!(info.model.as_deref(), Some("test-model"));
@@ -314,6 +315,7 @@ fn test_sidebar_info_with_files() {
         commands_run: 5,
         tokens_per_sec: None,
         memory_rss_kb: 0,
+        tool_breakdown: vec![],
     };
 
     assert_eq!(info.modified_files.len(), 2);

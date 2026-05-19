@@ -5,7 +5,9 @@
 //! render to prevent stale glyphs.
 
 use super::renderable::{MessageCell, Renderable, SearchParams};
+use super::chat::ChatRole;
 use crate::theme::Theme;
+use crate::tool_format::{display_tool_name, tool_category, ToolCategory};
 
 use std::collections::HashMap;
 use parking_lot::Mutex;
@@ -65,9 +67,66 @@ impl ColumnRenderable {
         self.cell_allocated.lock().clear();
     }
 
-    /// Push a new cell.
+    /// Push a new cell and recompute tool grouping.
     pub fn push(&mut self, cell: MessageCell) {
         self.cells.push(cell);
+        self.compute_tool_groups();
+    }
+
+    /// Scan cells and group consecutive same-category tool cells.
+    /// The first cell of a group becomes the header (group_count = N, shows summary).
+    /// Subsequent cells are hidden (group_hidden = true, contribute 0 height).
+    fn compute_tool_groups(&mut self) {
+        // Reset all grouping state
+        for cell in &mut self.cells {
+            cell.group_count = 0;
+            cell.group_hidden = false;
+            cell.group_total_secs = 0.0;
+        }
+
+        let n = self.cells.len();
+        if n == 0 { return; }
+
+        let mut i = 0;
+        while i < n {
+            let msg = &self.cells[i].message;
+            if msg.role != ChatRole::Tool {
+                i += 1;
+                continue;
+            }
+
+            // Get this tool's category
+            let tool_label = msg.tool_name.as_deref().unwrap_or("tool");
+            let display = display_tool_name(tool_label);
+            let cat = tool_category(&display);
+
+            // Count consecutive same-category tools
+            let mut count = 1usize;
+            let mut total_dur = msg.duration_secs.unwrap_or(0.0);
+            let mut j = i + 1;
+            while j < n {
+                let next_msg = &self.cells[j].message;
+                if next_msg.role != ChatRole::Tool { break; }
+                let next_label = next_msg.tool_name.as_deref().unwrap_or("tool");
+                let next_display = display_tool_name(next_label);
+                if tool_category(&next_display) != cat { break; }
+                total_dur += next_msg.duration_secs.unwrap_or(0.0);
+                count += 1;
+                j += 1;
+            }
+
+            if count > 1 {
+                // Mark header
+                self.cells[i].group_count = count;
+                self.cells[i].group_total_secs = total_dur;
+                // Hide the rest
+                for k in (i + 1)..j {
+                    self.cells[k].group_hidden = true;
+                }
+            }
+
+            i = j;
+        }
     }
 
     /// Remove and return the last cell.
@@ -369,6 +428,7 @@ mod tests {
             thinking_content: None,
             thinking_expanded: false,
             thinking_duration_secs: None,
+            diff_stats: None,
         }
     }
 

@@ -161,6 +161,8 @@ pub struct ChatMessage {
     pub thinking_expanded: bool,
     /// How long the thinking phase took, in seconds
     pub thinking_duration_secs: Option<f64>,
+    /// Diff stats for write/edit tools: (additions, deletions)
+    pub diff_stats: Option<(usize, usize)>,
 }
 
 /// Role of the chat message sender
@@ -213,6 +215,7 @@ impl ChatWidget {
             thinking_content: None,
             thinking_expanded: false,
             thinking_duration_secs: None,
+            diff_stats: None,
         };
 
         let index = self.messages.len();
@@ -255,6 +258,7 @@ impl ChatWidget {
             thinking_content: None,
             thinking_expanded: false,
             thinking_duration_secs: None,
+            diff_stats: None,
         };
 
         let index = self.messages.len();
@@ -361,6 +365,7 @@ impl ChatWidget {
             thinking_content: None,
             thinking_expanded: false,
             thinking_duration_secs: None,
+            diff_stats: None,
         };
         let index = self.messages.len();
         self.messages.push_back(message.clone());
@@ -1451,6 +1456,42 @@ pub(super) fn parse_inline_formatting(text: &str, base_color: ratatui::style::Co
     spans
 }
 
+/// Merge single-char punctuation tokens with adjacent words so they don't wrap alone.
+/// E.g. `["text", "<", "more"]` → `["text <", "more"]`
+fn merge_punctuation_tokens(words: &[&str]) -> Vec<String> {
+    if words.is_empty() {
+        return Vec::new();
+    }
+    // Identify which tokens are single punctuation chars
+    let is_short_punct = |w: &&str| -> bool {
+        w.chars().count() == 1 && w.chars().next().map_or(false, |c| !c.is_alphanumeric())
+    };
+
+    let mut result: Vec<String> = Vec::with_capacity(words.len());
+    let mut i = 0;
+    while i < words.len() {
+        let w = words[i];
+        if is_short_punct(&w) {
+            // Try to merge with previous word
+            if let Some(last) = result.last_mut() {
+                last.push(' ');
+                last.push_str(w);
+                i += 1;
+                continue;
+            }
+            // First word — merge with next word if available
+            if i + 1 < words.len() {
+                result.push(format!("{w} {}", words[i + 1]));
+                i += 2;
+                continue;
+            }
+        }
+        result.push(w.to_string());
+        i += 1;
+    }
+    result
+}
+
 /// Wrap a line of text to fit within `max_cols` terminal columns, returning multiple lines.
 /// Uses Unicode display width so CJK characters (2 columns each) are handled correctly.
 /// Word-boundary wrapping with mid-word fallback for long unbroken strings.
@@ -1466,7 +1507,12 @@ pub(crate) fn wrap_line(s: &str, max_cols: usize) -> Vec<String> {
     let mut current = String::new();
     let mut col = 0usize;
 
-    for word in s.split_whitespace() {
+    // Merge single-char punctuation tokens with adjacent words so they don't
+    // end up alone on a line (e.g. "<" or ">" from angle brackets).
+    let raw_words: Vec<&str> = s.split_whitespace().collect();
+    let words = merge_punctuation_tokens(&raw_words);
+
+    for word in words.iter() {
         let wcol = unicode_width(word);
         if col == 0 {
             if wcol > max_cols {

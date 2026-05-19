@@ -526,6 +526,7 @@ mod tests {
             thinking_content: None,
             thinking_expanded: false,
             thinking_duration_secs: None,
+            diff_stats: None,
         };
         assert_eq!(msg.content, "Test message");
         assert_eq!(msg.role, ChatRole::User);
@@ -842,6 +843,7 @@ mod tests {
             total_additions: 0,
             total_deletions: 0,
             error_count: 1,
+            tool_breakdown: vec![],
             context_window: 200_000,
             active_agents: vec![],
             diagnostics: vec![],
@@ -1125,6 +1127,7 @@ mod tests {
             total_additions: 70,
             total_deletions: 15,
             error_count: 0,
+            tool_breakdown: vec![],
             context_window: 200_000,
             active_agents: vec![],
             diagnostics: vec![],
@@ -1151,6 +1154,7 @@ mod tests {
             total_additions: 0,
             total_deletions: 0,
             error_count: 0,
+            tool_breakdown: vec![],
             context_window: 0,
             active_agents: vec![],
             diagnostics: vec![],

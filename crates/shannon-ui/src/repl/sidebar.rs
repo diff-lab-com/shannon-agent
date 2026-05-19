@@ -44,9 +44,30 @@ impl super::Repl {
         let error_count = self.chat.iter_messages()
             .filter(|(_, m)| m.role == ChatRole::Tool && m.is_error)
             .count();
-        let context_window = self.state.model.as_deref()
-            .map(shannon_core::model_registry::context_window_for)
-            .unwrap_or(200_000);
+
+        // Per-category tool breakdown
+        let mut cat_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for (_, m) in self.chat.iter_messages() {
+            if m.role == ChatRole::Tool {
+                if let Some(ref name) = m.tool_name {
+                    let display = crate::tool_format::display_tool_name(name);
+                    let cat = crate::tool_format::tool_category(&display);
+                    let key = match cat {
+                        crate::tool_format::ToolCategory::Read => "▸".to_string(),
+                        crate::tool_format::ToolCategory::Write => "✎".to_string(),
+                        crate::tool_format::ToolCategory::Search => "⊛".to_string(),
+                        crate::tool_format::ToolCategory::Bash => "$".to_string(),
+                        crate::tool_format::ToolCategory::Agent => "◆".to_string(),
+                        crate::tool_format::ToolCategory::Skill => "✦".to_string(),
+                    };
+                    *cat_counts.entry(key).or_insert(0) += 1;
+                }
+            }
+        }
+        // Sort by count descending
+        let mut tool_breakdown: Vec<(String, usize)> = cat_counts.into_iter().collect();
+        tool_breakdown.sort_by(|a, b| b.1.cmp(&a.1));
+        let context_window = self.state.context_window;
 
         // Refresh active_agents from registry if available
         let active_agents = if self.agent_registry.is_some() {
@@ -75,6 +96,7 @@ impl super::Repl {
             total_additions: self.diff_data.total_additions(),
             total_deletions: self.diff_data.total_deletions(),
             error_count,
+            tool_breakdown,
             context_window,
             active_agents,
             diagnostics,
@@ -98,9 +120,7 @@ impl super::Repl {
     /// Check context pressure and auto-compact if needed.
     /// Returns true if auto-compaction was performed.
     pub fn check_context_pressure(&mut self) -> bool {
-        let context_window = self.state.model.as_deref()
-            .map(shannon_core::model_registry::context_window_for)
-            .unwrap_or(200_000) as u64;
+        let context_window = self.state.context_window as u64;
 
         // Use actual conversation size (not cumulative tokens_used).
         // Cumulative tokens over-count because they include all API calls
@@ -226,9 +246,7 @@ impl super::Repl {
             return;
         };
 
-        let context_window = self.state.model.as_deref()
-            .map(shannon_core::model_registry::context_window_for)
-            .unwrap_or(200_000) as u64;
+        let context_window = self.state.context_window as u64;
         let actual_tokens = engine.estimate_conversation_tokens() as u64;
         let history = engine.conversation_history();
         if history.len() < 4 {

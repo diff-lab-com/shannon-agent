@@ -1100,6 +1100,11 @@ impl Repl {
             plan_mode_flag: plan_mode_flag.clone(),
         };
 
+        // Sync context window from engine (handles Ollama models with custom num_ctx)
+        if let Some(ref engine) = repl.query_engine {
+            repl.state.context_window = engine.resolved_context_window();
+        }
+
         repl.sync_approval_mode_label();
         repl.state.spinner.set_static_mode(repl.state.reduced_motion);
         repl.renderer.set_theme(&repl.state.theme);

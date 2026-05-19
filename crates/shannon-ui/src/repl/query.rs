@@ -199,6 +199,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
         let mut progress_status = t!("ui.working").to_string();
         let mut steps_done = 0usize;
         let mut turn_diff = TurnDiff::new(0);
+        let mut tool_file_paths: HashMap<String, String> = HashMap::new();
 
         while let Some(event_result) = stream.next().await {
             match event_result {
@@ -261,7 +262,13 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
 
                     if tool_name == "write" || tool_name == "edit" || tool_name == "WriteTool" {
                         if let Some(path) = tool_input.get("file_path").and_then(|v| v.as_str()) {
-                            turn_diff.modify_file(path.to_string(), 1, 0);
+                            let additions = tool_input.get("content")
+                                .or_else(|| tool_input.get("new_text"))
+                                .and_then(|v| v.as_str())
+                                .map(|c| c.lines().count())
+                                .unwrap_or(1);
+                            turn_diff.modify_file(path.to_string(), additions, 0);
+                            tool_file_paths.insert(tool_name.clone(), path.to_string());
                         }
                     }
                 }
@@ -276,10 +283,27 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     }).unwrap_or_default();
                     let status_icon = if is_error { "\u{2717}" } else { "\u{2713}" };
                     let formatted = crate::tool_format::format_tool_result(&tool_name, &result, is_error);
+
+                    let diff_suffix = if !is_error {
+                        if let Some(path) = tool_file_paths.get(&tool_name) {
+                            turn_diff.files_modified.iter().rev().find(|f| &f.path == path)
+                                .map(|f| {
+                                    let add = if f.additions > 0 { format!(" +{}", f.additions) } else { String::new() };
+                                    let del = if f.deletions > 0 { format!(" -{}", f.deletions) } else { String::new() };
+                                    if add.is_empty() && del.is_empty() { String::new() } else { format!(" {}{}", add, del) }
+                                })
+                                .unwrap_or_default()
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        String::new()
+                    };
+
                     if duration_str.is_empty() {
                         response_text.push_str(&format!("\n{formatted}"));
                     } else {
-                        response_text.push_str(&format!("\n{formatted}\n  [{status_icon}] {duration_str}"));
+                        response_text.push_str(&format!("\n{formatted}\n  [{status_icon}] {duration_str}{diff_suffix}"));
                     }
                     if let Ok(mut s) = ss.lock() {
                         s.buffer = response_text.clone();
@@ -515,6 +539,10 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     repl.state.output_tokens = output;
                     repl.state.cache_read_tokens = s.cache_read_tokens;
                     repl.state.cache_creation_tokens = s.cache_creation_tokens;
+                    // Sync context window from engine (Ollama num_ctx may have been resolved)
+                    if let Some(ref engine) = repl.query_engine {
+                        repl.state.context_window = engine.resolved_context_window();
+                    }
                     // Track token output rate (instantaneous)
                     if output > 0 {
                         let now = std::time::Instant::now();
@@ -592,8 +620,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                 let mut render_ctx = crate::widgets::RenderContext::new(chat, prompt, &state.theme, &state.status);
                 render_ctx.model = state.model.as_deref();
                 render_ctx.tokens_used = Some(state.tokens_used);
-                render_ctx.max_tokens = state.model.as_ref()
-                    .map(|m| shannon_core::model_registry::context_window_for(m) as u64);
+                render_ctx.max_tokens = Some(state.context_window as u64);
                 render_ctx.cost_usd = Some(state.total_cost_usd);
                 render_ctx.token_breakdown = Some((state.input_tokens, state.output_tokens));
                 render_ctx.diag_counts = Some((state.diagnostic_store.error_count(), state.diagnostic_store.warning_count()));
@@ -1276,22 +1303,43 @@ fn format_thinking_for_streaming(content: &str) -> String {
         t!("ui.thinking_header", count => char_count).to_string()
     };
 
-    // Show the tail of thinking content (last ~300 chars) so the user
-    // sees what the model is currently reasoning about.
-    let tail = if char_count > 300 {
-        let mut start = content.char_indices().nth(char_count - 300).map(|(i, _)| i).unwrap_or(0);
+    // Show the tail of thinking content (last ~500 chars, ~10 lines)
+    // so the user sees what the model is currently reasoning about.
+    let tail = if char_count > 500 {
+        let mut start = content.char_indices().nth(char_count - 500).map(|(i, _)| i).unwrap_or(0);
         // Align to a line boundary for clean display
         if start > 0 {
             if let Some(pos) = content[start..].find('\n') {
                 start += pos + 1;
             }
         }
-        format!("...\n{}", &content[start..])
+        &content[start..]
     } else {
-        content.to_string()
+        content
     };
 
-    format!("{header}\n{tail}")
+    // Keep only last 12 lines to avoid flooding the chat area
+    let lines: Vec<&str> = tail.lines().collect();
+    let display_lines = if lines.len() > 12 {
+        &lines[lines.len() - 12..]
+    } else {
+        &lines
+    };
+
+    let mut result = format!("╭ {header} ╮\n");
+    for line in display_lines {
+        // Truncate very long lines for display
+        let truncated = if line.chars().count() > 120 {
+            let mut end = 117;
+            while end > 0 && !line.is_char_boundary(end) { end -= 1; }
+            format!("{}...", &line[..end])
+        } else {
+            line.to_string()
+        };
+        result.push_str(&format!("│ {}\n", truncated));
+    }
+    result.push_str("╰───────────╯");
+    result
 }
 
 #[cfg(test)]

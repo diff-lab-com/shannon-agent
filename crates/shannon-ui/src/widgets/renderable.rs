@@ -175,10 +175,16 @@ pub trait Renderable {
 /// Wraps a `ChatMessage` and produces `Paragraph`-based rendering with
 /// exact height via `Paragraph::line_count(width)`.
 pub struct MessageCell {
-    message: ChatMessage,
+    pub(crate) message: ChatMessage,
     collapsed: bool,
     /// Whether this message continues from a same-role predecessor (suppresses turn separator).
     is_continuation: bool,
+    /// Number of consecutive same-category tools in this group (0 = not grouped, N = group header with N tools).
+    pub(crate) group_count: usize,
+    /// Whether this cell is hidden because it's a non-header member of a tool group.
+    pub(crate) group_hidden: bool,
+    /// Total duration of all tools in the group (set on header cell only).
+    pub(crate) group_total_secs: f64,
     /// Cached width (u16::MAX means no cache).
     cached_width: AtomicU16,
     /// Cached height (u16::MAX means no cache).
@@ -193,6 +199,9 @@ impl MessageCell {
             message,
             collapsed,
             is_continuation: false,
+            group_count: 0,
+            group_hidden: false,
+            group_total_secs: 0.0,
             cached_width: AtomicU16::new(u16::MAX),
             cached_height: AtomicU16::new(u16::MAX),
             cached_lines: Mutex::new(None),
@@ -333,6 +342,39 @@ impl MessageCell {
 
         // ── Collapsed tool messages ──
         if msg.role == ChatRole::Tool && (self.collapsed || msg.folded) {
+            // Hidden group member — no lines
+            if self.group_hidden {
+                return lines;
+            }
+
+            // Group header — show summary instead of individual tool
+            if self.group_count > 1 {
+                let tool_label = msg.tool_name.as_deref().unwrap_or("tool");
+                let display_label = display_tool_name(tool_label);
+                let cat = tool_category(&display_label);
+                let (icon, _, cat_color) = category_style(cat, theme);
+                let cat_name = match cat {
+                    ToolCategory::Read => "reads",
+                    ToolCategory::Write => "writes",
+                    ToolCategory::Search => "searches",
+                    ToolCategory::Bash => "commands",
+                    ToolCategory::Agent => "agents",
+                    ToolCategory::Skill => "skills",
+                };
+                let dur_str = if self.group_total_secs >= 60.0 {
+                    format!(" {}m{:.0}s", self.group_total_secs as u64 / 60, self.group_total_secs % 60.0)
+                } else if self.group_total_secs >= 0.1 {
+                    format!(" {:.1}s", self.group_total_secs)
+                } else {
+                    String::new()
+                };
+                let label = format!("{icon} {} {cat_name}{dur_str} \u{25BC}", self.group_count);
+                lines.push(Line::from(vec![
+                    Span::styled(label, Style::default().fg(cat_color).add_modifier(Modifier::BOLD)),
+                ]));
+                add_role_gutter(&mut lines, gutter_color);
+                return lines;
+            }
             let clean_content = strip_ansi(&msg.content);
             let first_line = clean_content.lines().next().unwrap_or("");
             let tool_label = msg.tool_name.as_deref().unwrap_or("tool");
@@ -369,22 +411,33 @@ impl MessageCell {
                 (icon.to_string(), color, badge)
             };
 
-            let display_budget = inner_width.min(60).saturating_sub(unicode_width::UnicodeWidthStr::width(dur_badge.as_str()));
+            let diff_add_len = msg.diff_stats.and_then(|(a, _)| if a > 0 { Some(unicode_width::UnicodeWidthStr::width(format!(" +{a}").as_str())) } else { None }).unwrap_or(0);
+            let diff_del_len = msg.diff_stats.and_then(|(_, d)| if d > 0 { Some(unicode_width::UnicodeWidthStr::width(format!(" -{d}").as_str())) } else { None }).unwrap_or(0);
+            let diff_total_width = diff_add_len + diff_del_len;
+
+            let display_budget = inner_width.min(60).saturating_sub(
+                unicode_width::UnicodeWidthStr::width(dur_badge.as_str()) + diff_total_width
+            );
             let display = if unicode_width::UnicodeWidthStr::width(first_line) > display_budget {
                 truncate_to(first_line, display_budget)
             } else {
                 first_line.to_string()
             };
 
-            lines.push(Line::from(vec![
+            let mut spans: Vec<Span<'static>> = vec![
                 Span::styled(format!("{icon}{display_label} "), Style::default().fg(cat_color).add_modifier(Modifier::BOLD)),
                 Span::styled(prefix.to_string(), Style::default().fg(cat_color)),
                 Span::styled(display, Style::default().fg(theme.text_dim)),
                 Span::styled(dur_badge, Style::default().fg(theme.text_dim)),
-                Span::styled(format!(" {status_icon}"), Style::default().fg(status_color).add_modifier(
-                    if msg.duration_secs.is_none() && !msg.is_error { Modifier::BOLD } else { Modifier::empty() }
-                )),
-            ]));
+            ];
+            if let Some((add, del)) = msg.diff_stats {
+                if add > 0 { spans.push(Span::styled(format!(" +{add}"), Style::default().fg(theme.success))); }
+                if del > 0 { spans.push(Span::styled(format!(" -{del}"), Style::default().fg(theme.error))); }
+            }
+            spans.push(Span::styled(format!(" {status_icon}"), Style::default().fg(status_color).add_modifier(
+                if msg.duration_secs.is_none() && !msg.is_error { Modifier::BOLD } else { Modifier::empty() }
+            )));
+            lines.push(Line::from(spans));
             add_role_gutter(&mut lines, gutter_color);
             return lines;
         }
@@ -1140,6 +1193,7 @@ impl Renderable for MessageCell {
     }
 
     fn desired_height(&self, width: u16) -> u16 {
+        if self.group_hidden { return 0; }
         let cached_w = self.cached_width.load(Ordering::Relaxed);
         let cached_h = self.cached_height.load(Ordering::Relaxed);
         if cached_w == width && cached_h != u16::MAX {
@@ -1297,6 +1351,7 @@ mod tests {
             thinking_content: None,
             thinking_expanded: false,
             thinking_duration_secs: None,
+            diff_stats: None,
         }
     }
 

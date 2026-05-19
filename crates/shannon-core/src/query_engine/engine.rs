@@ -167,6 +167,25 @@ impl QueryEngine {
         }
         crate::model_registry::context_window_for(model)
     }
+
+    /// Return the resolved context window size for display purposes.
+    ///
+    /// Checks the Ollama cached info first (which reflects the real `num_ctx`
+    /// queried from the running model), then falls back to the initial value
+    /// resolved from config / model registry at construction time.
+    pub fn resolved_context_window(&self) -> usize {
+        if self.config.max_context_tokens.is_some() {
+            return self.effective_max_context_tokens;
+        }
+        if *self.client.provider() == crate::api::LlmProvider::Ollama {
+            if let Some(info) = self.client.cached_ollama_info() {
+                if info.num_ctx > 0 {
+                    return info.num_ctx;
+                }
+            }
+        }
+        self.effective_max_context_tokens
+    }
 }
 
 /// Helper to create a loaded HookManager

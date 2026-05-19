@@ -33,6 +33,8 @@ pub struct SidebarInfo {
     pub total_deletions: usize,
     /// Number of tool errors in session
     pub error_count: usize,
+    /// Per-category tool breakdown: (icon, count)
+    pub tool_breakdown: Vec<(String, usize)>,
     /// Context window size for the current model (for progress bar)
     pub context_window: usize,
     /// Active sub-agents for the Agents tab
@@ -292,6 +294,15 @@ impl SidebarWidget {
                 lines.push(self.section_header(&tools_hdr, SidebarSection::Tools, theme));
                 if !self.is_collapsed(SidebarSection::Tools) {
                     lines.push(Line::from(Span::styled(info.tools_invoked.to_string(), Style::default().fg(theme.text))));
+                    if !info.tool_breakdown.is_empty() {
+                        let parts: Vec<Span<'static>> = info.tool_breakdown.iter().flat_map(|(icon, count)| {
+                            vec![
+                                Span::styled(format!(" {icon}"), Style::default().fg(theme.text_dim)),
+                                Span::styled(count.to_string(), Style::default().fg(theme.text)),
+                            ]
+                        }).collect();
+                        lines.push(Line::from(parts));
+                    }
                     if info.error_count > 0 {
                         lines.push(Line::from(Span::styled(
                             t!("ui.errors", n => info.error_count).to_string(),
@@ -480,7 +491,15 @@ impl SidebarWidget {
                         Span::styled(format!("{}", info.tools_invoked), Style::default().fg(theme.text)),
                         Span::styled(" tools", Style::default().fg(theme.text_dim)),
                     ]));
-                    lines.push(Line::from(vec![
+                    if !info.tool_breakdown.is_empty() {
+                        let parts: Vec<Span<'static>> = info.tool_breakdown.iter().flat_map(|(icon, count)| {
+                            vec![
+                                Span::styled(format!(" {icon}"), Style::default().fg(theme.text_dim)),
+                                Span::styled(count.to_string(), Style::default().fg(theme.text)),
+                            ]
+                        }).collect();
+                        lines.push(Line::from(parts));
+                    }                    lines.push(Line::from(vec![
                         Span::styled(format!("{}", info.commands_run), Style::default().fg(theme.text)),
                         Span::styled(" commands", Style::default().fg(theme.text_dim)),
                     ]));

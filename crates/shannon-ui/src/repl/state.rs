@@ -47,6 +47,8 @@ pub struct ReplState {
     pub model: Option<String>,
     /// Provider associated with the selected model (synced to QueryEngine)
     pub selected_provider: Option<shannon_core::api::LlmProvider>,
+    /// Resolved context window size (from engine: Ollama num_ctx > model registry)
+    pub context_window: usize,
     /// Total tokens used
     pub tokens_used: u64,
     /// Detailed token breakdown: input tokens
@@ -406,6 +408,7 @@ impl Default for ReplState {
             status: "Ready".to_string(),
             model: None,
             selected_provider: None,
+            context_window: 200_000,
             tokens_used: 0,
             input_tokens: 0,
             output_tokens: 0,
