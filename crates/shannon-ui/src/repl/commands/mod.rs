@@ -377,6 +377,11 @@ fn handle_clear(repl: &mut Repl) -> Result<()> {
     } else {
         repl.chat.clear();
         repl.chat.add_message(ChatRole::System, t!("repl.chat_cleared").to_string());
+        if let Some(ref mut engine) = repl.query_engine {
+            engine.new_session();
+        }
+        repl.current_turn = 0;
+        repl.state.tokens_used = 0;
     }
     Ok(())
 }
@@ -446,6 +451,11 @@ pub fn execute_pending_action(repl: &mut Repl, action: &str) -> Result<()> {
         "clear_chat" => {
             repl.chat.clear();
             repl.chat.add_message(ChatRole::System, t!("repl.chat_cleared").to_string());
+            if let Some(ref mut engine) = repl.query_engine {
+                engine.new_session();
+            }
+            repl.current_turn = 0;
+            repl.state.tokens_used = 0;
         }
         "quit" => {
             repl.running = false;

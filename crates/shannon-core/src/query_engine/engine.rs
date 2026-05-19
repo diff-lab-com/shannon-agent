@@ -430,6 +430,13 @@ impl QueryEngine {
         self.session_id
     }
 
+    /// Start a new session: clear conversation and generate a fresh session ID.
+    pub fn new_session(&mut self) -> Uuid {
+        self.clear_conversation();
+        self.session_id = Uuid::new_v4();
+        self.session_id
+    }
+
     /// Access the hook manager for firing lifecycle events (SessionStart, SessionEnd, etc.)
     pub fn hook_manager(&self) -> Arc<tokio::sync::RwLock<crate::hooks::HookManager>> {
         self.hook_manager.clone()
@@ -747,12 +754,12 @@ impl QueryEngine {
 
         // Decide whether to use structured blocks or fallback to plain string.
         // Use structured blocks only when we have content (avoids empty system arrays).
-        let system_blocks_opt = if system_blocks.is_empty() {
+        let mut system_blocks_opt = if system_blocks.is_empty() {
             None
         } else {
             Some(system_blocks)
         };
-        let system_prompt = if context.metadata.tools_allowed {
+        let mut system_prompt = if context.metadata.tools_allowed {
             config.system_prompt.clone()
         } else if client_provider == crate::api::LlmProvider::Ollama {
             // Ollama models use their own chat templates; a system prompt
@@ -793,11 +800,25 @@ impl QueryEngine {
 
             // Create a new client for this task, preserving provider from original config
             let client_config = {
+                // For Ollama models with tiny context (< 4096), cap num_predict
+                // to half the context so the model has room for input tokens.
+                let capped_max_tokens = if client_provider == crate::api::LlmProvider::Ollama
+                    && effective_max_context_tokens < 4096
+                    && client_max_tokens as usize > effective_max_context_tokens / 2
+                {
+                    tracing::info!(
+                        max_tokens = effective_max_context_tokens / 2,
+                        "Capping num_predict for tiny Ollama model"
+                    );
+                    (effective_max_context_tokens / 2) as u32
+                } else {
+                    client_max_tokens
+                };
                 let mut cfg = crate::api::LlmClientConfig {
                     api_key: client_api_key,
                     base_url: client_base_url,
                     model: client_model.clone(),
-                    max_tokens: client_max_tokens,
+                    max_tokens: capped_max_tokens,
                     provider: client_provider.clone(),
                     ..Default::default()
                 };
@@ -897,24 +918,48 @@ impl QueryEngine {
                     conversation.messages.push(tool_msg);
                 }
 
-                // Get tools schema — respect tools_allowed from QueryContext
-                let tools_schema = if context.metadata.tools_allowed {
-                    Some(tools.to_tool_definitions())
-                } else {
-                    None
-                };
-
-                // Resolve effective max context: Ollama num_ctx > model registry > fallback.
-                // Query /api/show only on the first turn to avoid redundant HTTP calls.
+                // Resolve effective max context FIRST: Ollama num_ctx > model registry > fallback.
+                // Run every turn — check_ollama_capabilities() caches results after the first
+                // HTTP call, so subsequent turns just read the cache with zero overhead.
                 let mut effective_max_context = effective_max_context_tokens;
-                if turn == 0 && client_provider == crate::api::LlmProvider::Ollama && config.max_context_tokens.is_none() {
+                if client_provider == crate::api::LlmProvider::Ollama && config.max_context_tokens.is_none() {
                     if let Some(info) = client.check_ollama_capabilities().await {
                         if info.num_ctx > 0 {
                             effective_max_context = info.num_ctx;
                         }
-                        tracing::info!(num_ctx = effective_max_context, supports_tools = info.supports_tools, "Ollama capabilities resolved from /api/show");
+                        tracing::debug!(num_ctx = effective_max_context, turn, "Ollama context resolved");
                     }
                 }
+
+                // Get tools schema — respect tools_allowed from QueryContext.
+                // For Ollama models with small context (< 8192), tool definitions
+                // consume too much of the context window and crowd out conversation
+                // history, causing multi-turn context loss. Auto-disable tools.
+                // Also replace the full system prompt with a minimal one to free up
+                // context for actual conversation.
+                let mut tools_schema = if context.metadata.tools_allowed {
+                    let tool_defs = tools.to_tool_definitions();
+                    if client_provider == crate::api::LlmProvider::Ollama
+                        && effective_max_context < 8192
+                    {
+                        tracing::info!(
+                            num_ctx = effective_max_context,
+                            "Ollama model has small context, auto-disabling tools to preserve conversation history"
+                        );
+                        send_event!(tx, QueryEvent::Progress {
+                            query_id,
+                            message: "Tools disabled for small model (context < 8K)".to_string(),
+                        });
+                        // Replace full system prompt with minimal one to free context
+                        system_blocks_opt = None;
+                        system_prompt = Some("You are a helpful assistant.".to_string());
+                        None
+                    } else {
+                        Some(tool_defs)
+                    }
+                } else {
+                    None
+                };
 
                 // Auto-compress conversation if it exceeds the threshold
                 {
@@ -1042,24 +1087,90 @@ impl QueryEngine {
                     "Sending API request"
                 );
 
-                // Pre-send warning when approaching context limit
+                // Pre-send context overflow detection: estimate total tokens including
+                // tools, warn if near limit, and auto-strip tools for Ollama to preserve
+                // conversation history.
                 {
-                    let pre_send_estimate = crate::compact::helpers::estimate_tokens(&messages)
-                        + config.system_prompt.as_ref().map(|sp| crate::compact::helpers::estimate_text_tokens(sp)).unwrap_or(0);
-                    let pre_send_ratio = pre_send_estimate as f32 / effective_max_context as f32;
+                    let tools_tokens = tools_schema.as_ref().map(|t| {
+                        // Rough estimate: ~4 chars per token for JSON tool definitions
+                        let json_len = serde_json::to_string(t).map(|s| s.len()).unwrap_or(0);
+                        json_len / 4
+                    }).unwrap_or(0);
+                    let mut pre_send_estimate = crate::compact::helpers::estimate_tokens(&messages)
+                        + config.system_prompt.as_ref().map(|sp| crate::compact::helpers::estimate_text_tokens(sp)).unwrap_or(0)
+                        + tools_tokens;
+                    let mut pre_send_ratio = pre_send_estimate as f32 / effective_max_context as f32;
                     if pre_send_ratio > 0.9 {
                         send_event!(tx, QueryEvent::Progress {
                             query_id,
                             message: format!(
-                                "Warning: context at {:.0}% ({}/{} tokens) — approaching limit",
+                                "Context at {:.0}% ({}/{} tokens) — approaching limit",
                                 pre_send_ratio * 100.0, pre_send_estimate, effective_max_context,
                             ),
                         });
                         tracing::warn!(
                             estimated_tokens = pre_send_estimate,
+                            tools_tokens,
                             max_context = effective_max_context,
                             "Sending request near context limit"
                         );
+                        // Auto-strip tools for Ollama when context overflow detected —
+                        // preserving conversation history is more important than tool support.
+                        if client_provider == crate::api::LlmProvider::Ollama
+                            && tools_schema.is_some()
+                            && tools_tokens > 0
+                        {
+                            tracing::info!("Auto-stripping tools to preserve conversation context for Ollama");
+                            send_event!(tx, QueryEvent::Progress {
+                                query_id,
+                                message: "Auto-disabling tools — context near limit".to_string(),
+                            });
+                            tools_schema = None;
+                            pre_send_estimate -= tools_tokens;
+                            pre_send_ratio = pre_send_estimate as f32 / effective_max_context as f32;
+                        }
+                        // For Ollama still over limit: strip system prompt/blocks
+                        // to free context for conversation history.
+                        if pre_send_ratio > 0.95 && client_provider == crate::api::LlmProvider::Ollama {
+                            if system_blocks_opt.is_some() {
+                                tracing::info!("Stripping system blocks for Ollama — context near limit");
+                                send_event!(tx, QueryEvent::Progress {
+                                    query_id,
+                                    message: "Stripping system context — context near limit".to_string(),
+                                });
+                                system_blocks_opt = None;
+                            } else if system_prompt.is_some() {
+                                tracing::info!("Stripping system prompt for Ollama — context near limit");
+                                system_prompt = None;
+                            }
+                        }
+                        // If still over limit after stripping tools, truncate older messages
+                        // to fit within context. Keep the most recent turns.
+                        if pre_send_ratio > 1.0 && messages.len() > 2 {
+                            let target_tokens = (effective_max_context as f32 * 0.8) as usize;
+                            while crate::compact::helpers::estimate_tokens(&messages) > target_tokens
+                                && messages.len() > 2
+                            {
+                                // Remove the oldest non-adjacent pair to maintain
+                                // assistant/user message alternation
+                                if messages.len() > 3 {
+                                    messages.remove(0);
+                                    messages.remove(0);
+                                } else {
+                                    break;
+                                }
+                            }
+                            let new_estimate = crate::compact::helpers::estimate_tokens(&messages);
+                            tracing::info!(
+                                truncated_to = messages.len(),
+                                new_estimate,
+                                "Truncated older messages to fit context"
+                            );
+                            send_event!(tx, QueryEvent::Progress {
+                                query_id,
+                                message: format!("Truncated history to {} messages ({} tokens)", messages.len(), new_estimate),
+                            });
+                        }
                     }
                 }
 
@@ -1878,13 +1989,14 @@ impl QueryEngine {
                                                     matches!(b, ContentBlock::Text { text } if text.starts_with("⚠️ Ollama model output error"))
                                                 });
                                                 let final_blocks = if is_ollama_warning {
-                                                    let minimal: Vec<Message> = messages.iter().rev()
-                                                        .find(|m| m.role == "user")
-                                                        .cloned()
-                                                        .map(|m| vec![m])
-                                                        .unwrap_or_else(|| messages.clone());
+                                                    // Keep last 2 turns (up to 4 messages) so the
+                                                    // model has enough context to answer the follow-up.
+                                                    let minimal: Vec<Message> = {
+                                                        let msgs: Vec<&Message> = messages.iter().rev().take(4).collect();
+                                                        msgs.into_iter().cloned().collect()
+                                                    };
                                                     tracing::warn!(
-                                                        "Ollama retry still errored, last-resort minimal input ({}/{} msgs)",
+                                                        "Ollama retry still errored, last-resort with last {} msgs (of {})",
                                                         minimal.len(), messages.len()
                                                     );
                                                     match tokio::time::timeout(

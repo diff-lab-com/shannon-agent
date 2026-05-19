@@ -191,6 +191,12 @@ fn serialize_ollama_request(request: &MessageRequest) -> Value {
         "stream": request.stream.unwrap_or(false),
     });
 
+    // Enable Ollama's sliding-window context management so the server
+    // keeps the most recent messages when context fills up instead of
+    // silently truncating from the front.  This preserves multi-turn
+    // coherence for small-context models.
+    body["shift"] = json!(true);
+
     // Ollama uses options bag for generation parameters
     let mut options = json!({});
     if request.max_tokens > 0 {
