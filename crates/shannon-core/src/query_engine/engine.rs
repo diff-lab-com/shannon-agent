@@ -1806,8 +1806,37 @@ impl QueryEngine {
                                             client.send_message(messages.clone(), no_tools, no_system),
                                         ).await {
                                             Ok(Ok(content_blocks)) => {
+                                                // If full-history retry returned an Ollama error
+                                                // warning, try once more with just the last user
+                                                // message — tiny models may choke on long history.
+                                                let is_ollama_warning = content_blocks.iter().any(|b| {
+                                                    matches!(b, ContentBlock::Text { text } if text.starts_with("⚠️ Ollama model output error"))
+                                                });
+                                                let final_blocks = if is_ollama_warning {
+                                                    let minimal: Vec<Message> = messages.iter().rev()
+                                                        .find(|m| m.role == "user")
+                                                        .cloned()
+                                                        .map(|m| vec![m])
+                                                        .unwrap_or_else(|| messages.clone());
+                                                    tracing::warn!(
+                                                        "Ollama retry still errored, last-resort minimal input ({}/{} msgs)",
+                                                        minimal.len(), messages.len()
+                                                    );
+                                                    match tokio::time::timeout(
+                                                        std::time::Duration::from_secs(60),
+                                                        client.send_message(minimal, None, None),
+                                                    ).await {
+                                                        Ok(Ok(blocks)) if !blocks.iter().any(|b| {
+                                                            matches!(b, ContentBlock::Text { text } if text.starts_with("⚠️ Ollama model output error"))
+                                                        }) => blocks,
+                                                        _ => content_blocks,
+                                                    }
+                                                } else {
+                                                    content_blocks
+                                                };
+
                                                 let mut retry_text = String::new();
-                                                for block in &content_blocks {
+                                                for block in &final_blocks {
                                                     if let ContentBlock::Text { text } = block {
                                                         retry_text.push_str(text);
                                                         send_event!(tx, QueryEvent::Text {
@@ -2115,8 +2144,37 @@ impl QueryEngine {
                                 client.send_message(messages.clone(), no_tools, no_system),
                             ).await {
                                 Ok(Ok(content_blocks)) => {
+                                    // If full-history retry returned an Ollama error
+                                    // warning, try once more with just the last user
+                                    // message — tiny models may choke on long history.
+                                    let is_ollama_warning = content_blocks.iter().any(|b| {
+                                        matches!(b, ContentBlock::Text { text } if text.starts_with("⚠️ Ollama model output error"))
+                                    });
+                                    let final_blocks = if is_ollama_warning {
+                                        let minimal: Vec<Message> = messages.iter().rev()
+                                            .find(|m| m.role == "user")
+                                            .cloned()
+                                            .map(|m| vec![m])
+                                            .unwrap_or_else(|| messages.clone());
+                                        tracing::warn!(
+                                            "Ollama retry still errored, last-resort minimal input ({}/{} msgs)",
+                                            minimal.len(), messages.len()
+                                        );
+                                        match tokio::time::timeout(
+                                            std::time::Duration::from_secs(60),
+                                            client.send_message(minimal, None, None),
+                                        ).await {
+                                            Ok(Ok(blocks)) if !blocks.iter().any(|b| {
+                                                matches!(b, ContentBlock::Text { text } if text.starts_with("⚠️ Ollama model output error"))
+                                            }) => blocks,
+                                            _ => content_blocks,
+                                        }
+                                    } else {
+                                        content_blocks
+                                    };
+
                                     let mut retry_text = String::new();
-                                    for block in &content_blocks {
+                                    for block in &final_blocks {
                                         if let ContentBlock::Text { text } = block {
                                             retry_text.push_str(text);
                                             send_event!(tx, QueryEvent::Text {
