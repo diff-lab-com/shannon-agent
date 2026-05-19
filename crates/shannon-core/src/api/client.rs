@@ -709,9 +709,27 @@ impl LlmClient {
             || template.contains("tools")
             || template.contains("ToolCall");
 
+        // Parse num_ctx from model parameters (format: "num_ctx 4096\n...")
+        let num_ctx = raw
+            .get("parameters")
+            .and_then(|p| p.as_str())
+            .and_then(|params| {
+                params.lines()
+                    .find_map(|line| {
+                        let parts: Vec<&str> = line.trim().splitn(2, ' ').collect();
+                        if parts.len() == 2 && parts[0] == "num_ctx" {
+                            parts[1].parse::<usize>().ok()
+                        } else {
+                            None
+                        }
+                    })
+            })
+            .unwrap_or(4096);
+
         Some(OllamaModelInfo {
             name: self.config.model.clone(),
             supports_tools,
+            num_ctx,
         })
     }
 }

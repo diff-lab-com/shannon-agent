@@ -196,10 +196,8 @@ fn serialize_ollama_request(request: &MessageRequest) -> Value {
     if request.max_tokens > 0 {
         options["num_predict"] = json!(request.max_tokens);
     }
-    // Set context window size explicitly. Ollama defaults to 2048 tokens
-    // which silently truncates multi-turn conversations. Use 32k as a
-    // reasonable default that works for most models.
-    options["num_ctx"] = json!(32768);
+    // Don't hardcode num_ctx — let Ollama use its VRAM-based default.
+    // Overriding to 32768 can exceed small models' VRAM and trigger errors.
     if let Some(temp) = request.temperature {
         options["temperature"] = json!(temp);
     }
@@ -1527,11 +1525,11 @@ mod tests {
     }
 
     #[test]
-    fn test_ollama_sets_num_ctx() {
+    fn test_ollama_no_hardcoded_num_ctx() {
         let req = make_request();
         let val = serialize_ollama_request(&req);
-        // num_ctx must be set to prevent Ollama's default 2048 truncation
-        assert_eq!(val["options"]["num_ctx"], 32768);
+        // num_ctx is not set — Ollama uses its VRAM-based default
+        assert!(val.get("options").and_then(|o| o.get("num_ctx")).is_none());
     }
 
     #[test]

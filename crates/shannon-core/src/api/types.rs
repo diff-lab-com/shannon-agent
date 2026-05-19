@@ -1095,6 +1095,14 @@ pub struct OllamaModelInfo {
     /// Determined by checking the model's template for tool markers.
     #[serde(default)]
     pub supports_tools: bool,
+    /// Model's context window size (num_ctx), parsed from model parameters.
+    /// Falls back to 4096 if not specified in the model.
+    #[serde(default = "default_num_ctx")]
+    pub num_ctx: usize,
+}
+
+fn default_num_ctx() -> usize {
+    4096
 }
 
 #[cfg(test)]

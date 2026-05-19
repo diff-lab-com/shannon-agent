@@ -728,6 +728,10 @@ impl QueryEngine {
         };
         let system_prompt = if context.metadata.tools_allowed {
             config.system_prompt.clone()
+        } else if client_provider == crate::api::LlmProvider::Ollama {
+            // Ollama models use their own chat templates; a system prompt
+            // confuses small/unstable models causing malformed output.
+            None
         } else {
             Some(LOCAL_MODEL_SYSTEM_PROMPT.to_string())
         };
@@ -768,7 +772,7 @@ impl QueryEngine {
                     base_url: client_base_url,
                     model: client_model.clone(),
                     max_tokens: client_max_tokens,
-                    provider: client_provider,
+                    provider: client_provider.clone(),
                     ..Default::default()
                 };
                 // Enable extended thinking with a budget if configured
@@ -878,7 +882,15 @@ impl QueryEngine {
                 {
                     let estimated_tokens = crate::compact::helpers::estimate_tokens(&messages)
                         + config.system_prompt.as_ref().map(|sp| crate::compact::helpers::estimate_text_tokens(sp)).unwrap_or(0);
-                    let max_context = config.max_context_tokens.unwrap_or(200_000);
+                    // Ollama silently truncates via KV cache rotation when messages
+                    // exceed num_ctx. Cap the effective context limit so Shannon's
+                    // compression/truncation fires before Ollama's silent truncation
+                    // causes context loss. Default Ollama num_ctx is 4096.
+                    let max_context = if client_provider == crate::api::LlmProvider::Ollama {
+                        config.max_context_tokens.unwrap_or(4096)
+                    } else {
+                        config.max_context_tokens.unwrap_or(200_000)
+                    };
                     let usage_ratio = estimated_tokens as f32 / max_context as f32;
 
                     // Pre-compaction warning at 60% — gives users visibility before compression fires
