@@ -65,6 +65,8 @@ struct StreamingState {
     thinking_start: Option<std::time::Instant>,
     /// Accumulated streaming output from tools (progress = -1.0 events)
     tool_streaming_content: String,
+    /// When streaming output first started (for elapsed time display)
+    streaming_start: Option<std::time::Instant>,
     /// Rate limit info from API (used, total)
     rate_limit: Option<(u32, u32)>,
 }
@@ -88,6 +90,7 @@ impl Default for StreamingState {
             thinking_content: String::new(),
             thinking_start: None,
             tool_streaming_content: String::new(),
+            streaming_start: None,
             rate_limit: None,
         }
     }
@@ -279,6 +282,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     // Clear any streaming content — the final result replaces it
                     if let Ok(mut s) = ss.lock() {
                         s.tool_streaming_content.clear();
+                        s.streaming_start = None;
                     }
                     let duration_str = tool_start_times.remove(&tool_name).map(|start| {
                         let elapsed = start.elapsed();
@@ -381,16 +385,35 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                             s.status = format!("{tool_name}: {preview}");
 
                             // Append to streaming content and show in buffer
+                            if s.streaming_start.is_none() {
+                                s.streaming_start = Some(std::time::Instant::now());
+                            }
+                            let elapsed = s.streaming_start.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
                             s.tool_streaming_content.push_str(&message);
                             s.tool_streaming_content.push('\n');
-                            // Keep only last 50 lines to avoid unbounded growth
-                            let lines: Vec<&str> = s.tool_streaming_content.lines().collect();
-                            if lines.len() > 50 {
-                                s.tool_streaming_content = lines[lines.len() - 50..].join("\n");
+                            // Collect owned lines for display, then trim storage
+                            let all_lines: Vec<String> = s.tool_streaming_content.lines().map(|l| l.to_string()).collect();
+                            if all_lines.len() > 50 {
+                                s.tool_streaming_content = all_lines[all_lines.len() - 50..].join("\n");
                                 s.tool_streaming_content.push('\n');
                             }
-                            // Show streaming content appended to the buffer
-                            s.buffer = format!("{}  ╭─ streaming ─\n  {}\n  ╰─", response_text, s.tool_streaming_content.trim_end());
+                            // Build display: elapsed time + line count header, last 10 visible lines
+                            let total_lines = all_lines.len();
+                            let header = if elapsed >= 1.0 {
+                                format!("  ╭─ ● streaming ({:.1}s, {} lines) ─", elapsed, total_lines)
+                            } else {
+                                format!("  ╭─ ● streaming ({} lines) ─", total_lines)
+                            };
+                            let visible_count = 10;
+                            let visible_lines = if total_lines > visible_count {
+                                &all_lines[total_lines - visible_count..]
+                            } else {
+                                &all_lines
+                            };
+                            let hidden = total_lines.saturating_sub(visible_count);
+                            let above = if hidden > 0 { format!("  ... {} more lines above\n", hidden) } else { String::new() };
+                            let body = visible_lines.iter().map(|l| format!("  {l}")).collect::<Vec<_>>().join("\n");
+                            s.buffer = format!("{response_text}{header}\n{above}{body}\n  ╰─");
                         }
                     } else {
                         let pct = (progress * 100.0) as u32;

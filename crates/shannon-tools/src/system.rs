@@ -679,6 +679,11 @@ pub struct BashInput {
     /// Use PTY (pseudo-terminal) for interactive command support
     #[serde(default)]
     pub use_pty: bool,
+
+    /// Delay in milliseconds before streaming output begins (default: 500).
+    /// Fast commands finishing within this window skip streaming entirely.
+    #[serde(default)]
+    pub stream_delay_ms: Option<u64>,
 }
 
 /// PowerShell command input
@@ -1177,10 +1182,10 @@ impl BashTool {
         let mut stdout_buf = String::new();
         let mut stderr_buf = String::new();
 
-        // Buffer streaming lines for 500ms before sending progress events.
+        // Buffer streaming lines before sending progress events.
         // This avoids flicker for fast commands — if the process finishes
         // within the buffer window, no streaming events are emitted at all.
-        const STREAM_DELAY: Duration = Duration::from_millis(500);
+        let stream_delay = Duration::from_millis(bash_input.stream_delay_ms.unwrap_or(500));
         let start = Instant::now();
         let mut streaming_active = false;
         let mut buffered_lines: Vec<String> = Vec::new();
@@ -1197,7 +1202,7 @@ impl BashTool {
 
                             if !streaming_active {
                                 buffered_lines.push(cleaned.clone());
-                                if start.elapsed() >= STREAM_DELAY {
+                                if start.elapsed() >= stream_delay {
                                     streaming_active = true;
                                     for bl in &buffered_lines {
                                         progress.send(bl);
@@ -1221,6 +1226,19 @@ impl BashTool {
                             let cleaned = strip_ansi(&line);
                             stderr_buf.push_str(&cleaned);
                             stderr_buf.push('\n');
+                            let tagged = format!("⚠ {cleaned}");
+                            if !streaming_active {
+                                buffered_lines.push(tagged);
+                                if start.elapsed() >= stream_delay {
+                                    streaming_active = true;
+                                    for bl in &buffered_lines {
+                                        progress.send(bl);
+                                    }
+                                    buffered_lines.clear();
+                                }
+                            } else {
+                                progress.send(&tagged);
+                            }
                         }
                         Ok(None) => {}
                         Err(_) => {}
