@@ -315,10 +315,11 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                         } else {
                             format!("{} chars", char_count)
                         };
+                        let dot = if (elapsed * 2.0) as u64 % 2 == 0 { "●" } else { "○" };
                         let header = if elapsed >= 1.0 {
-                            format!("  ╭─ ● thinking ({:.1}s, {}) ─", elapsed, size_label)
+                            format!("  ╭─ {dot} thinking ({:.1}s, {}) ─", elapsed, size_label)
                         } else {
-                            format!("  ╭─ ● thinking ({}) ─", size_label)
+                            format!("  ╭─ {dot} thinking ({}) ─", size_label)
                         };
                         let lines: Vec<&str> = s.thinking_content.lines().collect();
                         let visible = 5;
@@ -545,10 +546,12 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                             // Build display: elapsed time + line count header, last 10 visible lines
                             let total_lines = all_lines.len();
                             let filter_label = s.streaming_filter.as_ref().map(|f| format!(" filter:{f}")).unwrap_or_default();
+                            // Blink indicator: toggle ●/○ every 0.5s
+                            let dot = if (elapsed * 2.0) as u64 % 2 == 0 { "●" } else { "○" };
                             let header = if elapsed >= 1.0 {
-                                format!("  ╭─ ● streaming ({:.1}s, {} lines){filter_label} ─", elapsed, total_lines)
+                                format!("  ╭─ {dot} streaming ({:.1}s, {} lines){filter_label} ─", elapsed, total_lines)
                             } else {
-                                format!("  ╭─ ● streaming ({} lines){filter_label} ─", total_lines)
+                                format!("  ╭─ {dot} streaming ({} lines){filter_label} ─", total_lines)
                             };
                             let display_lines: Vec<&String> = if let Some(ref f) = s.streaming_filter {
                                 all_lines.iter().filter(|l| l.to_lowercase().contains(&f.to_lowercase())).collect()
