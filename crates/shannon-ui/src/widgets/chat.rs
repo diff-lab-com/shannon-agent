@@ -163,6 +163,8 @@ pub struct ChatMessage {
     pub thinking_duration_secs: Option<f64>,
     /// Diff stats for write/edit tools: (additions, deletions)
     pub diff_stats: Option<(usize, usize)>,
+    /// Token/cost stats line displayed below the content (e.g., "📊 本轮 960 tokens · 共 $0.0142")
+    pub stats_line: Option<String>,
 }
 
 /// Role of the chat message sender
@@ -216,6 +218,7 @@ impl ChatWidget {
             thinking_expanded: false,
             thinking_duration_secs: None,
             diff_stats: None,
+            stats_line: None,
         };
 
         let index = self.messages.len();
@@ -259,6 +262,7 @@ impl ChatWidget {
             thinking_expanded: false,
             thinking_duration_secs: None,
             diff_stats: None,
+            stats_line: None,
         };
 
         let index = self.messages.len();
@@ -302,6 +306,16 @@ impl ChatWidget {
     pub fn toggle_thinking(&mut self, index: usize) {
         if let Some(msg) = self.messages.get_mut(index) {
             msg.thinking_expanded = !msg.thinking_expanded;
+            if let Some(cell) = self.column.get_mut(index) {
+                cell.set_message(msg.clone());
+            }
+        }
+    }
+
+    /// Set the stats line (token count, cost) for a message
+    pub fn set_stats_line(&mut self, index: usize, stats: String) {
+        if let Some(msg) = self.messages.get_mut(index) {
+            msg.stats_line = Some(stats);
             if let Some(cell) = self.column.get_mut(index) {
                 cell.set_message(msg.clone());
             }
@@ -366,6 +380,7 @@ impl ChatWidget {
             thinking_expanded: false,
             thinking_duration_secs: None,
             diff_stats: None,
+            stats_line: None,
         };
         let index = self.messages.len();
         self.messages.push_back(message.clone());

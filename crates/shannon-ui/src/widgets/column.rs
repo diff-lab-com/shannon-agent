@@ -429,6 +429,7 @@ mod tests {
             thinking_expanded: false,
             thinking_duration_secs: None,
             diff_stats: None,
+            stats_line: None,
         }
     }
 

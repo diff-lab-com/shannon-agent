@@ -16,10 +16,16 @@ pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
             provider: repl.state.selected_provider.clone(),
             theme: Some(repl.state.theme.name.to_string()),
         });
-        repl.chat.add_message(
-            ChatRole::System,
-            t!("commands.model.set", name = args).to_string(),
-        );
+        let ctx = shannon_core::model_registry::context_window_for(args);
+        let ctx_label = if ctx >= 1_000_000 {
+            format!("{}M", ctx / 1_000_000)
+        } else if ctx >= 1_000 {
+            format!("{}K", ctx / 1_000)
+        } else {
+            ctx.to_string()
+        };
+        let msg = format!("{} (context: {ctx_label})", t!("commands.model.set", name = args));
+        repl.chat.add_message(ChatRole::System, msg);
     }
     Ok(())
 }

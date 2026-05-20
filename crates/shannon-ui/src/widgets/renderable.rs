@@ -340,6 +340,17 @@ impl MessageCell {
                     }
                 }
             }
+
+            // Stats line (token count, cost) for assistant messages
+            if msg.role == ChatRole::Assistant {
+                if let Some(ref stats) = msg.stats_line {
+                    l.push(Line::from(Span::styled(
+                        stats.clone(),
+                        Style::default().fg(theme.text_dim),
+                    )));
+                }
+            }
+
             l.push(Line::from(""));
         }
         l
@@ -1330,17 +1341,12 @@ fn build_thinking_lines(
     let max_w = (width as usize).saturating_sub(4);
 
     if expanded {
-        // Header: "▼ Thinking (2.3s, 1.2k chars)"
-        let char_count = thinking.chars().count();
-        let chars_label = if char_count >= 1000 {
-            format!("{}k chars", char_count / 1000)
-        } else {
-            format!("{char_count} chars")
-        };
+        // Header: "▼ Thought for 2.3s"
         let label = match duration_secs {
-            Some(d) if d >= 1.0 => format!("\u{25BC} Thinking ({d:.1}s, {chars_label})"),
-            Some(d) => format!("\u{25BC} Thinking ({d:.0}ms, {chars_label})"),
-            None => format!("\u{25BC} Thinking ({chars_label})"),
+            Some(d) if d >= 60.0 => format!("\u{25BC} Thought for {}m{:.0}s", d as u64 / 60, d % 60.0),
+            Some(d) if d >= 1.0 => format!("\u{25BC} Thought for {d:.1}s"),
+            Some(d) => format!("\u{25BC} Thought for {d:.0}ms"),
+            None => "\u{25BC} Thought".to_string(),
         };
         lines.push(Line::from(Span::styled(
             format!(" {label}"),
@@ -1348,12 +1354,7 @@ fn build_thinking_lines(
         )));
 
         // Content lines, dimmed and indented
-        let cap = 4000;
-        let truncated = thinking.len() > cap;
-        let mut end = cap.min(thinking.len());
-        while !thinking.is_char_boundary(end) { end -= 1; }
-        let text = &thinking[..end];
-        for line in text.lines() {
+        for line in thinking.lines() {
             let wrapped = wrap_text(line, max_w);
             for chunk in wrapped {
                 lines.push(Line::from(Span::styled(
@@ -1362,26 +1363,15 @@ fn build_thinking_lines(
                 )));
             }
         }
-        if truncated {
-            lines.push(Line::from(Span::styled(
-                format!("{}...", " ".repeat(indent)),
-                Style::default().fg(theme.text_dim),
-            )));
-        }
         // Blank line separator
         lines.push(Line::from(""));
     } else {
-        // Collapsed: "▶ Thinking (2.3s, 1.2k chars)"
-        let char_count = thinking.chars().count();
-        let chars_label = if char_count >= 1000 {
-            format!("{}k chars", char_count / 1000)
-        } else {
-            format!("{char_count} chars")
-        };
+        // Collapsed: "▶ Thought for 2.3s"
         let label = match duration_secs {
-            Some(d) if d >= 1.0 => format!("\u{25B6} Thinking ({d:.1}s, {chars_label})"),
-            Some(d) => format!("\u{25B6} Thinking ({d:.0}ms, {chars_label})"),
-            None => format!("\u{25B6} Thinking ({chars_label})"),
+            Some(d) if d >= 60.0 => format!("\u{25B6} Thought for {}m{:.0}s", d as u64 / 60, d % 60.0),
+            Some(d) if d >= 1.0 => format!("\u{25B6} Thought for {d:.1}s"),
+            Some(d) => format!("\u{25B6} Thought for {d:.0}ms"),
+            None => "\u{25B6} Thought".to_string(),
         };
         lines.push(Line::from(vec![
             Span::styled(format!(" {label}"), Style::default().fg(theme.text_dim)),
@@ -1439,6 +1429,7 @@ mod tests {
             thinking_expanded: false,
             thinking_duration_secs: None,
             diff_stats: None,
+            stats_line: None,
         }
     }
 

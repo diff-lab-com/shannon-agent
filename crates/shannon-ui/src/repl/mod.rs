@@ -1100,6 +1100,10 @@ impl Repl {
             plan_mode_flag: plan_mode_flag.clone(),
         };
 
+        // Pre-query Ollama model info so context_window is correct from the start
+        if let Some(ref mut engine) = repl.query_engine {
+            repl.runtime.block_on(engine.pre_resolve_context());
+        }
         // Sync context window from engine (handles Ollama models with custom num_ctx)
         if let Some(ref engine) = repl.query_engine {
             repl.state.context_window = engine.resolved_context_window();

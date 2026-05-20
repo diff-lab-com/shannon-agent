@@ -206,6 +206,28 @@ impl QueryEngine {
         }
         self.effective_max_context_tokens
     }
+
+    /// Pre-query provider for real context window size.
+    ///
+    /// For Ollama, queries `/api/show` to resolve the actual `num_ctx`
+    /// before the first user query, so tool-disable decisions are correct
+    /// from the start.  Safe to call multiple times — results are cached.
+    pub async fn pre_resolve_context(&mut self) {
+        if *self.client.provider() == crate::api::LlmProvider::Ollama
+            && self.config.max_context_tokens.is_none()
+        {
+            if let Some(info) = self.client.check_ollama_capabilities().await {
+                if info.num_ctx > 0 && info.num_ctx != self.effective_max_context_tokens {
+                    tracing::info!(
+                        old = self.effective_max_context_tokens,
+                        new = info.num_ctx,
+                        "Pre-resolved Ollama context window"
+                    );
+                    self.effective_max_context_tokens = info.num_ctx;
+                }
+            }
+        }
+    }
 }
 
 /// Helper to create a loaded HookManager

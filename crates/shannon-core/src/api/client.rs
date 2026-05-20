@@ -711,8 +711,8 @@ impl LlmClient {
             || template.contains("tools")
             || template.contains("ToolCall");
 
-        // Parse num_ctx from model parameters (format: "num_ctx 4096\n...")
-        let num_ctx = raw
+        // Parse num_ctx: try "parameters" string first, then "model_info" JSON
+        let num_ctx_from_params = raw
             .get("parameters")
             .and_then(|p| p.as_str())
             .and_then(|params| {
@@ -725,7 +725,20 @@ impl LlmClient {
                             None
                         }
                     })
-            })
+            });
+
+        // Fallback: check model_info for context_length (e.g. {"general.context_length": 8192})
+        let num_ctx_from_model_info = raw
+            .get("model_info")
+            .and_then(|mi| {
+                mi.get("general.context_length")
+                    .or_else(|| mi.get("general.architecture.context_length"))
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize)
+            });
+
+        let num_ctx = num_ctx_from_params
+            .or(num_ctx_from_model_info)
             .unwrap_or(4096);
 
         let info = OllamaModelInfo {

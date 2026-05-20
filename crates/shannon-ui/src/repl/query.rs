@@ -278,6 +278,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
         let mut stream = query_engine.process_query(context, permission_channel).await;
 
         let mut response_text = String::new();
+        let mut stats_summary: Option<String> = None;
         let mut accumulated_thinking = String::new();
         let mut thinking_duration_secs: Option<f64> = None;
         let mut conversation_messages: Option<Vec<shannon_core::api::Message>> = None;
@@ -321,18 +322,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                         } else {
                             format!("  ╭─ {dot} thinking ({}) ─", size_label)
                         };
-                        let lines: Vec<&str> = s.thinking_content.lines().collect();
-                        let visible = 5;
-                        let visible_lines = if lines.len() > visible {
-                            &lines[lines.len() - visible..]
-                        } else {
-                            &lines
-                        };
-                        let hidden = lines.len().saturating_sub(visible);
-                        let above = if hidden > 0 { format!("  ... {} more lines above\n", hidden) } else { String::new() };
-                        let term_w = crossterm::terminal::size().map(|(w, _)| w as usize).unwrap_or(100);
-                        let body = visible_lines.iter().flat_map(|l| wrap_line(l, term_w, "  ")).collect::<Vec<_>>().join("\n");
-                        s.buffer = format!("{response_text}{header}\n{above}{body}\n  ╰─");
+                        s.buffer = format!("{response_text}{header}");
                     }
                 }
                 Ok(QueryEvent::Text { content, .. }) => {
@@ -471,15 +461,17 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     response_text.push_str(&format!("\n\n[Turn {turn_number} completed, {tokens_used} tokens]"));
                 }
                 Ok(QueryEvent::Progress { message, .. }) => {
+                    let safe_message = escape_html_simple(&message);
                     progress_status = format!("Working: {message}");
-                    response_text.push_str(&format!("\n⏳ {message}\n"));
+                    response_text.push_str(&format!("\n⏳ {safe_message}\n"));
                     if let Ok(mut s) = ss.lock() {
                         s.status = progress_status.clone();
                         s.buffer = response_text.clone();
                     }
                 }
                 Ok(QueryEvent::Warning { message, .. }) => {
-                    response_text.push_str(&format!("\n⚠️ {message}"));
+                    let safe_message = escape_html_simple(&message);
+                    response_text.push_str(&format!("\n⚠️ {safe_message}"));
                     if let Ok(mut s) = ss.lock() {
                         s.buffer = response_text.clone();
                     }
@@ -649,7 +641,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                         }
                     }
                     if !summary_parts.is_empty() {
-                        response_text.push_str(&format!("\n📊 {}", summary_parts.join(" · ")));
+                        stats_summary = Some(format!("📊 {}", summary_parts.join(" · ")));
                     }
                 }
                 Ok(QueryEvent::Failed { error, .. }) => {
@@ -680,8 +672,8 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             }
         }
 
-        Ok::<(shannon_core::query_engine::QueryEngine, String, String, Option<f64>, Option<Vec<shannon_core::api::Message>>, u64, usize, TurnDiff, String, usize), (Option<shannon_core::query_engine::QueryEngine>, String)>(
-            (query_engine, response_text, accumulated_thinking, thinking_duration_secs, conversation_messages, tokens_in_turn, _tools_in_session, turn_diff, progress_status, steps_done)
+        Ok::<(shannon_core::query_engine::QueryEngine, String, String, Option<f64>, Option<Vec<shannon_core::api::Message>>, u64, usize, TurnDiff, String, usize, Option<String>), (Option<shannon_core::query_engine::QueryEngine>, String)>(
+            (query_engine, response_text, accumulated_thinking, thinking_duration_secs, conversation_messages, tokens_in_turn, _tools_in_session, turn_diff, progress_status, steps_done, stats_summary)
         )
     });
 
@@ -748,9 +740,18 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     format!("{phrase}{dots}")
                 };
 
-                // Show thinking content in the chat message area during thinking phase
+                // Show thinking indicator in the chat message area during thinking phase
                 if !thinking_text.is_empty() {
-                    let display = format_thinking_for_streaming(&thinking_text);
+                    let char_count = thinking_text.chars().count();
+                    let size_label = if char_count >= 1000 {
+                        format!("{:.1}k chars", char_count as f64 / 1000.0)
+                    } else {
+                        format!("{} chars", char_count)
+                    };
+                    let dot = if std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default()
+                        .as_millis() / 500 % 2 == 0 { "●" } else { "○" };
+                    let display = format!("  ╭─ {dot} thinking ({size_label}) ─");
                     let rendered = repl.output_renderer.render_streaming(&display);
                     repl.chat.update_streaming_message(assistant_msg_index, rendered, true);
                     if repl.state.auto_follow {
@@ -1134,7 +1135,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
     });
 
     match query_result {
-        Ok((mut engine, response, thinking, thinking_duration, conversation_messages, tokens, tools, turn, _final_status, steps)) => {
+        Ok((mut engine, response, thinking, thinking_duration, conversation_messages, tokens, tools, turn, _final_status, steps, stats_summary)) => {
             // Use the proper conversation state from the query engine if available,
             // otherwise fall back to manual message addition
             if let Some(messages) = conversation_messages {
@@ -1179,6 +1180,9 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             repl.chat.update_message(assistant_msg_index, rendered);
             if !thinking.is_empty() {
                 repl.chat.set_thinking_content(assistant_msg_index, thinking, thinking_duration);
+            }
+            if let Some(stats) = stats_summary {
+                repl.chat.set_stats_line(assistant_msg_index, stats);
             }
             repl.state.tokens_used = pre_stream_tokens + tokens;
             repl.tools_invoked = pre_stream_tools + tools;
@@ -1538,53 +1542,9 @@ fn extract_memory_content(response: &str) -> String {
 /// Format thinking content for display in the streaming message area.
 ///
 /// Shows a collapsible-style header with character count, then the last
-/// few lines of thinking content. Kept brief to avoid flooding the chat
-/// area during extended thinking.
-fn format_thinking_for_streaming(content: &str) -> String {
-    let char_count = content.chars().count();
-    let header = if char_count >= 1000 {
-        t!("ui.thinking_header_k", count => char_count / 1000).to_string()
-    } else {
-        t!("ui.thinking_header", count => char_count).to_string()
-    };
-
-    // Show the tail of thinking content (last ~500 chars, ~10 lines)
-    // so the user sees what the model is currently reasoning about.
-    let tail = if char_count > 500 {
-        let mut start = content.char_indices().nth(char_count - 500).map(|(i, _)| i).unwrap_or(0);
-        // Align to a line boundary for clean display
-        if start > 0 {
-            if let Some(pos) = content[start..].find('\n') {
-                start += pos + 1;
-            }
-        }
-        &content[start..]
-    } else {
-        content
-    };
-
-    // Keep only last 12 lines to avoid flooding the chat area
-    let lines: Vec<&str> = tail.lines().collect();
-    let display_lines = if lines.len() > 12 {
-        &lines[lines.len() - 12..]
-    } else {
-        &lines
-    };
-
-    let mut result = format!("╭ {header} ╮\n");
-    for line in display_lines {
-        // Truncate very long lines for display
-        let truncated = if line.chars().count() > 120 {
-            let mut end = 117;
-            while end > 0 && !line.is_char_boundary(end) { end -= 1; }
-            format!("{}...", &line[..end])
-        } else {
-            line.to_string()
-        };
-        result.push_str(&format!("│ {}\n", truncated));
-    }
-    result.push_str("╰───────────╯");
-    result
+/// Escape HTML special characters so pulldown-cmark doesn't interpret them as tags.
+fn escape_html_simple(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
 #[cfg(test)]
