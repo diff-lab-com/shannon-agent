@@ -11,6 +11,7 @@ use serde_json::json;
 use shannon_core::sandbox::{SandboxConfig, SandboxExecutor, SandboxType};
 use std::collections::HashMap;
 use std::process::Stdio;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
@@ -1074,6 +1075,23 @@ impl Tool for BashTool {
         input: serde_json::Value,
         progress: BoxedProgressSender,
     ) -> ToolResult<ToolOutput> {
+        self.execute_streaming_inner(input, progress).await
+    }
+}
+
+/// Strip ANSI escape sequences from a string.
+fn strip_ansi(s: &str) -> String {
+    regex::Regex::new(r"\x1b\[[0-9;]*[a-zA-Z]")
+        .map(|re| re.replace_all(s, "").into_owned())
+        .unwrap_or_else(|_| s.to_string())
+}
+
+impl BashTool {
+    async fn execute_streaming_inner(
+        &self,
+        input: serde_json::Value,
+        progress: BoxedProgressSender,
+    ) -> ToolResult<ToolOutput> {
         let bash_input: BashInput = match serde_json::from_value(input) {
             Ok(input) => input,
             Err(e) => return Ok(ToolOutput {
@@ -1159,15 +1177,36 @@ impl Tool for BashTool {
         let mut stdout_buf = String::new();
         let mut stderr_buf = String::new();
 
+        // Buffer streaming lines for 500ms before sending progress events.
+        // This avoids flicker for fast commands — if the process finishes
+        // within the buffer window, no streaming events are emitted at all.
+        const STREAM_DELAY: Duration = Duration::from_millis(500);
+        let start = Instant::now();
+        let mut streaming_active = false;
+        let mut buffered_lines: Vec<String> = Vec::new();
+
         // Read stdout and stderr concurrently, sending progress for each stdout line.
         loop {
             tokio::select! {
                 line = stdout_lines.next_line() => {
                     match line {
                         Ok(Some(line)) => {
-                            progress.send(&line);
-                            stdout_buf.push_str(&line);
+                            let cleaned = strip_ansi(&line);
+                            stdout_buf.push_str(&cleaned);
                             stdout_buf.push('\n');
+
+                            if !streaming_active {
+                                buffered_lines.push(cleaned.clone());
+                                if start.elapsed() >= STREAM_DELAY {
+                                    streaming_active = true;
+                                    for bl in &buffered_lines {
+                                        progress.send(bl);
+                                    }
+                                    buffered_lines.clear();
+                                }
+                            } else {
+                                progress.send(&cleaned);
+                            }
                         }
                         Ok(None) => break,
                         Err(e) => {
@@ -1179,7 +1218,8 @@ impl Tool for BashTool {
                 line = stderr_lines.next_line() => {
                     match line {
                         Ok(Some(line)) => {
-                            stderr_buf.push_str(&line);
+                            let cleaned = strip_ansi(&line);
+                            stderr_buf.push_str(&cleaned);
                             stderr_buf.push('\n');
                         }
                         Ok(None) => {}
@@ -1797,7 +1837,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_bash_streaming_captures_stdout_lines() {
+    async fn test_bash_streaming_fast_command_no_streaming_events() {
+        // Fast commands finish within the 500ms buffer window, so no
+        // streaming progress events should be emitted.
         let tool = BashTool::new();
         let sender = std::sync::Arc::new(CollectSender {
             lines: std::sync::Mutex::new(Vec::new()),
@@ -1814,10 +1856,33 @@ mod tests {
         assert!(result.content.contains("line3"));
 
         let lines = sender.lines.lock().unwrap();
-        assert_eq!(lines.len(), 3, "should have received 3 streaming lines");
-        assert_eq!(lines[0], "line1");
-        assert_eq!(lines[1], "line2");
-        assert_eq!(lines[2], "line3");
+        assert!(lines.is_empty(), "fast command should not emit streaming events, got {:?}", *lines);
+    }
+
+    #[tokio::test]
+    async fn test_bash_streaming_slow_command_emits_lines() {
+        // A slow command (sleep > 500ms) should flush the buffer and stream.
+        let tool = BashTool::new();
+        let sender = std::sync::Arc::new(CollectSender {
+            lines: std::sync::Mutex::new(Vec::new()),
+        });
+
+        let result = tool.execute_streaming(
+            json!({"command": "echo line1; sleep 0.6; echo line2; echo line3"}),
+            sender.clone(),
+        ).await.unwrap();
+
+        assert!(!result.is_error);
+        assert!(result.content.contains("line1"));
+        assert!(result.content.contains("line2"));
+        assert!(result.content.contains("line3"));
+
+        let lines = sender.lines.lock().unwrap();
+        assert!(!lines.is_empty(), "slow command should emit streaming events");
+        // After 500ms buffer, all buffered lines + subsequent lines should stream
+        assert!(lines.contains(&"line1".to_string()), "line1 should be streamed after buffer flush");
+        assert!(lines.contains(&"line2".to_string()), "line2 should be streamed");
+        assert!(lines.contains(&"line3".to_string()), "line3 should be streamed");
     }
 
     #[tokio::test]
@@ -1852,4 +1917,16 @@ mod tests {
         assert!(result.content.contains("rejected"));
         // No lines streamed for rejected commands
         assert!(sender.lines.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_strip_ansi_removes_escape_codes() {
+        let input = "\x1b[32mok\x1b[0m done";
+        assert_eq!(strip_ansi(input), "ok done");
+
+        let no_ansi = "plain text";
+        assert_eq!(strip_ansi(no_ansi), "plain text");
+
+        let multi = "\x1b[1;34mheader\x1b[0m\n\x1b[31merror\x1b[0m";
+        assert_eq!(strip_ansi(multi), "header\nerror");
     }

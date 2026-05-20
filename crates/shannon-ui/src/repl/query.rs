@@ -63,6 +63,8 @@ struct StreamingState {
     thinking_content: String,
     /// When thinking first started (for duration display)
     thinking_start: Option<std::time::Instant>,
+    /// Accumulated streaming output from tools (progress = -1.0 events)
+    tool_streaming_content: String,
     /// Rate limit info from API (used, total)
     rate_limit: Option<(u32, u32)>,
 }
@@ -85,6 +87,7 @@ impl Default for StreamingState {
             thinking_phase: true,
             thinking_content: String::new(),
             thinking_start: None,
+            tool_streaming_content: String::new(),
             rate_limit: None,
         }
     }
@@ -273,6 +276,10 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     }
                 }
                 Ok(QueryEvent::ToolUseResult { tool_name, result, is_error, .. }) => {
+                    // Clear any streaming content — the final result replaces it
+                    if let Ok(mut s) = ss.lock() {
+                        s.tool_streaming_content.clear();
+                    }
                     let duration_str = tool_start_times.remove(&tool_name).map(|start| {
                         let elapsed = start.elapsed();
                         if elapsed.as_secs() >= 60 {
@@ -362,7 +369,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                 Ok(QueryEvent::ToolProgress { progress, tool_name, message, .. }) => {
                     if progress < 0.0 {
                         // Streaming output line from tool (progress = -1.0).
-                        // Show in status bar only — final ToolUseResult displays the full output.
+                        // Accumulate in tool_streaming_content and show in buffer.
                         if let Ok(mut s) = ss.lock() {
                             let preview = if message.len() > 120 {
                                 let mut end = 120;
@@ -372,6 +379,18 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                                 message.clone()
                             };
                             s.status = format!("{tool_name}: {preview}");
+
+                            // Append to streaming content and show in buffer
+                            s.tool_streaming_content.push_str(&message);
+                            s.tool_streaming_content.push('\n');
+                            // Keep only last 50 lines to avoid unbounded growth
+                            let lines: Vec<&str> = s.tool_streaming_content.lines().collect();
+                            if lines.len() > 50 {
+                                s.tool_streaming_content = lines[lines.len() - 50..].join("\n");
+                                s.tool_streaming_content.push('\n');
+                            }
+                            // Show streaming content appended to the buffer
+                            s.buffer = format!("{}  ╭─ streaming ─\n  {}\n  ╰─", response_text, s.tool_streaming_content.trim_end());
                         }
                     } else {
                         let pct = (progress * 100.0) as u32;

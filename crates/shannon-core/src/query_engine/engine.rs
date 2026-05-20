@@ -1654,8 +1654,14 @@ impl QueryEngine {
                                                                     let tools_exec = tools.clone();
                                                                     let exec_name = tool_name.clone();
                                                                     let exec_input = effective_input.clone();
+                                                                    let progress_sender = std::sync::Arc::new(ChannelProgressSender {
+                                                                        tx: tx.clone(),
+                                                                        query_id,
+                                                                        tool_use_id: tool_id.clone(),
+                                                                        tool_name: tool_name.clone(),
+                                                                    });
                                                                     let handle = tokio::spawn(async move {
-                                                                        (tool_id, tool_name, effective_input, tools_exec.execute(&exec_name, exec_input).await)
+                                                                        (tool_id, tool_name, effective_input, tools_exec.execute_streaming(&exec_name, exec_input, progress_sender).await)
                                                                     });
                                                                     exec_handles.push((id_for_error, handle));
                                                                 }
