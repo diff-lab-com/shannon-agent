@@ -36,6 +36,102 @@ pub enum StructuredMessage {
     },
 }
 
+#[cfg(test)]
+mod structured_message_tests {
+    use super::*;
+
+    #[test]
+    fn test_shutdown_request_serialization() {
+        let msg = StructuredMessage::ShutdownRequest { reason: Some("done".into()) };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("shutdown_request"));
+        assert!(json.contains("done"));
+        let parsed: StructuredMessage = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, StructuredMessage::ShutdownRequest { .. }));
+    }
+
+    #[test]
+    fn test_shutdown_request_no_reason() {
+        let msg = StructuredMessage::ShutdownRequest { reason: None };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("shutdown_request"));
+        let parsed: StructuredMessage = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, StructuredMessage::ShutdownRequest { reason: None }));
+    }
+
+    #[test]
+    fn test_shutdown_response_serialization() {
+        let msg = StructuredMessage::ShutdownResponse {
+            request_id: "req-123".into(),
+            approve: true,
+            reason: None,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("shutdown_response"));
+        assert!(json.contains("req-123"));
+        assert!(json.contains("\"approve\":true"));
+        let parsed: StructuredMessage = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, StructuredMessage::ShutdownResponse { approve: true, .. }));
+    }
+
+    #[test]
+    fn test_plan_approval_response_serialization() {
+        let msg = StructuredMessage::PlanApprovalResponse {
+            request_id: "plan-456".into(),
+            approve: false,
+            feedback: Some("needs work".into()),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("plan_approval_response"));
+        assert!(json.contains("needs work"));
+        let parsed: StructuredMessage = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, StructuredMessage::PlanApprovalResponse { approve: false, .. }));
+    }
+
+    #[test]
+    fn test_message_content_text() {
+        let content = MessageContent::Text("hello teammate".into());
+        let json = serde_json::to_string(&content).unwrap();
+        assert!(json.contains("hello teammate"));
+    }
+
+    #[test]
+    fn test_send_message_input_text_roundtrip() {
+        let input = SendMessageInput {
+            to: "researcher".into(),
+            summary: Some("task update".into()),
+            message: MessageContent::Text("done with task 1".into()),
+        };
+        let json = serde_json::to_string(&input).unwrap();
+        let parsed: SendMessageInput = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.to, "researcher");
+    }
+
+    #[test]
+    fn test_send_message_input_structured_roundtrip() {
+        let input = SendMessageInput {
+            to: "team-lead".into(),
+            summary: Some("plan response".into()),
+            message: MessageContent::Structured(StructuredMessage::PlanApprovalResponse {
+                request_id: "p1".into(),
+                approve: true,
+                feedback: None,
+            }),
+        };
+        let json = serde_json::to_string(&input).unwrap();
+        let parsed: SendMessageInput = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.to, "team-lead");
+    }
+
+    #[test]
+    fn test_structured_message_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<StructuredMessage>();
+        assert_send_sync::<MessageContent>();
+        assert_send_sync::<SendMessageInput>();
+    }
+}
+
 /// Message content
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
