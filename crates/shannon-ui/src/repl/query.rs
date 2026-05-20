@@ -59,6 +59,45 @@ fn wrap_line(line: &str, max_width: usize, indent: &str) -> Vec<String> {
     result
 }
 
+/// Extract a one-line preview from tool input for display in the tool header.
+fn extract_tool_preview(tool_name: &str, input: &serde_json::Value) -> String {
+    let get_str = |key: &str| -> Option<String> {
+        input.get(key).and_then(|v| v.as_str()).map(|s| {
+            if s.len() > 120 {
+                let mut end = 120;
+                while !s.is_char_boundary(end) { end -= 1; }
+                format!("{}…", &s[..end])
+            } else {
+                s.to_string()
+            }
+        })
+    };
+    match tool_name {
+        "bash" | "sh" | "shell" => get_str("command").unwrap_or_default(),
+        "read" | "cat" | "head" | "tail" | "view" => get_str("file_path").unwrap_or_default(),
+        "write" | "edit" | "create" => {
+            let path = get_str("file_path").unwrap_or_default();
+            let lines = input.get("content").map(|c| c.as_str().map(|s| s.lines().count()).unwrap_or(0));
+            match lines {
+                Some(n) if n > 0 => format!("{path} ({n} lines)"),
+                _ => path,
+            }
+        }
+        "grep" | "search" => {
+            let pattern = get_str("pattern").unwrap_or_default();
+            let path = get_str("path").unwrap_or_default();
+            if path.is_empty() { pattern } else { format!("{pattern} in {path}") }
+        }
+        "glob" | "find" => get_str("pattern").or_else(|| get_str("path")).unwrap_or_default(),
+        _ => {
+            // Default: first string value found
+            input.as_object()
+                .and_then(|obj| obj.values().find_map(|v| v.as_str().map(|s| s.to_string())))
+                .unwrap_or_default()
+        }
+    }
+}
+
 use crate::{
     stream_buffer::StreamBuffer,
     widgets::ChatRole,
@@ -252,6 +291,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
         let mut steps_done = 0usize;
         let mut turn_diff = TurnDiff::new(0);
         let mut tool_file_paths: HashMap<String, String> = HashMap::new();
+        let mut tool_input_previews: HashMap<String, String> = HashMap::new();
 
         while let Some(event_result) = stream.next().await {
             match event_result {
@@ -328,8 +368,11 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                         while !input_json.is_char_boundary(end) { end -= 1; }
                         format!("{}…", &input_json[..end])
                     } else {
-                        input_json
+                        input_json.clone()
                     };
+                    // Extract one-line preview for tool result header
+                    let preview = extract_tool_preview(&tool_name, &tool_input);
+                    tool_input_previews.insert(tool_name.clone(), preview);
                     let tool_display = format!("\n> Using: {tool_name} with input: {display_input}");
                     tool_start_times.insert(tool_name.clone(), Instant::now());
                     response_text.push_str(&tool_display);
@@ -398,6 +441,12 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     } else {
                         response_text.push_str(&format!("\n{formatted}  {status_icon}{diff_suffix}"));
                     }
+                    // Show input preview as dimmed line below header
+                    if let Some(preview) = tool_input_previews.remove(&tool_name) {
+                        if !preview.is_empty() {
+                            response_text.push_str(&format!("\n  \x1b[2m{preview}\x1b[0m"));
+                        }
+                    }
                     // Track for compact timeline
                     completed_tools.push((tool_name.clone(), duration_secs, is_error, diff_suffix.clone()));
                     if let Ok(mut s) = ss.lock() {
@@ -405,11 +454,14 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                         if let Some(bar) = s.multi_progress.iter_mut().find(|(l, _, _)| l == &tool_name) {
                             bar.1 = 1.0;
                         }
-                        // Show batch progress summary when multiple tools are running
+                        // Show per-tool status when multiple tools are running
                         if s.multi_progress.len() > 1 {
-                            let done = s.multi_progress.iter().filter(|(_, p, _)| *p >= 1.0).count();
-                            let total = s.multi_progress.len();
-                            s.status = format!("▸ {done}/{total} tools complete");
+                            let badges: Vec<String> = s.multi_progress.iter().map(|(name, p, _)| {
+                                let icon = if *p >= 1.0 { "\u{2713}" } else if *p > 0.0 { "\u{25CF}" } else { "\u{23F3}" };
+                                let short: String = name.chars().take(10).collect();
+                                format!("{icon} {short}")
+                            }).collect();
+                            s.status = badges.join("  ");
                         }
                     }
                 }
