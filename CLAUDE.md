@@ -17,19 +17,19 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 
 | Crate | Responsibility | Tests |
 |-------|---------------|-------|
-| `shannon-core` | API client, query engine, permissions, tools, state management | ~2900 |
-| `shannon-ui` | Terminal UI (ratatui), REPL, vim mode, widgets, rendering | ~1035 |
-| `shannon-tools` | Tool implementations (bash, file ops, search, config manager) | ~660 |
-| `shannon-commands` | Built-in commands (/help, /config, /pdf, /commit, etc.) | ~307 |
-| `shannon-agents` | Multi-agent orchestration | ~262 |
-| `shannon-cli` | CLI entry point (clap), config loading, non-interactive mode | ~161 |
-| `shannon-skills` | Skill system (command templates) | ~166 |
-| `shannon-mcp` | MCP (Model Context Protocol) server integration | ~196 |
-| `shannon-types` | Shared types (re-exported by shannon-core) | ~9 |
-| `shannon-tool-interface` | Tool trait definitions | ~24 |
-| `shannon-desktop` | Tauri desktop app (scaffolded) | ~24 |
-| `shannon-codegen` | Code generation utilities | ~101 |
-| `shannon-agent` | Single agent runtime | ~60 |
+| `shannon-core` | API client, query engine, permissions, tools, state management | ~2256 |
+| `shannon-ui` | Terminal UI (ratatui), REPL, vim mode, widgets, rendering | ~1018 |
+| `shannon-tools` | Tool implementations (bash, file ops, search, config manager) | ~576 |
+| `shannon-commands` | Built-in commands (/help, /config, /pdf, /commit, etc.) | ~200 |
+| `shannon-agents` | Multi-agent orchestration | ~173 |
+| `shannon-cli` | CLI entry point (clap), config loading, non-interactive mode | ~91 |
+| `shannon-skills` | Skill system (command templates) | ~123 |
+| `shannon-mcp` | MCP (Model Context Protocol) server integration | ~111 |
+| `shannon-types` | Shared types (re-exported by shannon-core) | ~22 |
+| `shannon-tool-interface` | Tool trait definitions | ~20 |
+| `shannon-desktop` | Tauri desktop app (scaffolded) | ~11 |
+| `shannon-codegen` | Code generation utilities | ~8 |
+| `shannon-agent` | Single agent runtime (binary crate) | 0 |
 
 ## Key Patterns
 
