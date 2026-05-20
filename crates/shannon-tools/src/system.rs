@@ -1260,7 +1260,7 @@ impl BashTool {
         let success = status.success();
 
         let content = if success {
-            format!("{}{}", stdout_buf, command_description)
+            format!("{stdout_buf}{command_description}")
         } else {
             format!("{}Command failed with exit code {}: {}{}",
                 command_description,

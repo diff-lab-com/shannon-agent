@@ -1464,7 +1464,7 @@ fn merge_punctuation_tokens(words: &[&str]) -> Vec<String> {
     }
     // Identify which tokens are single punctuation chars
     let is_short_punct = |w: &&str| -> bool {
-        w.chars().count() == 1 && w.chars().next().map_or(false, |c| !c.is_alphanumeric())
+        w.chars().count() == 1 && w.chars().next().is_some_and(|c| !c.is_alphanumeric())
     };
 
     let mut result: Vec<String> = Vec::with_capacity(words.len());

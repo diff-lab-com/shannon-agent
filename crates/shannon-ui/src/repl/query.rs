@@ -145,7 +145,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             timestamp: chrono::Utc::now(),
             tools_allowed: {
                 let is_ollama = repl.state.selected_provider == Some(shannon_core::api::LlmProvider::Ollama)
-                    || repl.query_engine.as_ref().map_or(false, |qe| *qe.client().provider() == shannon_core::api::LlmProvider::Ollama);
+                    || repl.query_engine.as_ref().is_some_and(|qe| *qe.client().provider() == shannon_core::api::LlmProvider::Ollama);
                 if is_ollama { false } else { repl.state.tools_enabled }
             },
             max_tokens: Some(4096),
@@ -301,7 +301,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                                 .map(|f| {
                                     let add = if f.additions > 0 { format!(" +{}", f.additions) } else { String::new() };
                                     let del = if f.deletions > 0 { format!(" -{}", f.deletions) } else { String::new() };
-                                    if add.is_empty() && del.is_empty() { String::new() } else { format!(" {}{}", add, del) }
+                                    if add.is_empty() && del.is_empty() { String::new() } else { format!(" {add}{del}") }
                                 })
                                 .unwrap_or_default()
                         } else {
@@ -400,9 +400,9 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                             // Build display: elapsed time + line count header, last 10 visible lines
                             let total_lines = all_lines.len();
                             let header = if elapsed >= 1.0 {
-                                format!("  ╭─ ● streaming ({:.1}s, {} lines) ─", elapsed, total_lines)
+                                format!("  ╭─ ● streaming ({elapsed:.1}s, {total_lines} lines) ─")
                             } else {
-                                format!("  ╭─ ● streaming ({} lines) ─", total_lines)
+                                format!("  ╭─ ● streaming ({total_lines} lines) ─")
                             };
                             let visible_count = 10;
                             let visible_lines = if total_lines > visible_count {
@@ -411,7 +411,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                                 &all_lines
                             };
                             let hidden = total_lines.saturating_sub(visible_count);
-                            let above = if hidden > 0 { format!("  ... {} more lines above\n", hidden) } else { String::new() };
+                            let above = if hidden > 0 { format!("  ... {hidden} more lines above\n") } else { String::new() };
                             let body = visible_lines.iter().map(|l| format!("  {l}")).collect::<Vec<_>>().join("\n");
                             s.buffer = format!("{response_text}{header}\n{above}{body}\n  ╰─");
                         }
@@ -1392,7 +1392,7 @@ fn format_thinking_for_streaming(content: &str) -> String {
         } else {
             line.to_string()
         };
-        result.push_str(&format!("│ {}\n", truncated));
+        result.push_str(&format!("│ {truncated}\n"));
     }
     result.push_str("╰───────────╯");
     result
