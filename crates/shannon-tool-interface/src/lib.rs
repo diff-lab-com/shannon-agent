@@ -14,7 +14,17 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
 use thiserror::Error;
+
+/// Sender for streaming tool progress updates.
+/// Tools call `send(line)` to emit partial output during execution.
+pub trait ProgressSender: Send + Sync {
+    fn send(&self, line: &str);
+}
+
+/// Type-erased boxed progress sender.
+pub type BoxedProgressSender = Arc<dyn ProgressSender>;
 
 /// Errors that can occur during tool execution
 #[derive(Error, Debug)]
@@ -83,6 +93,17 @@ pub trait Tool: Send + Sync {
 
     /// Execute the tool with the given input
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput>;
+
+    /// Execute the tool with streaming progress updates.
+    /// Default implementation delegates to `execute()` (non-streaming).
+    /// Override in tools that support real-time output (e.g., bash).
+    async fn execute_streaming(
+        &self,
+        input: Value,
+        _progress: BoxedProgressSender,
+    ) -> ToolResult<ToolOutput> {
+        self.execute(input).await
+    }
 
     /// Check if the tool requires authentication
     fn requires_auth(&self) -> bool {

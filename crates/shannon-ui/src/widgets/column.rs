@@ -7,7 +7,7 @@
 use super::renderable::{MessageCell, Renderable, SearchParams};
 use super::chat::ChatRole;
 use crate::theme::Theme;
-use crate::tool_format::{display_tool_name, tool_category, ToolCategory};
+use crate::tool_format::{display_tool_name, tool_category};
 
 use std::collections::HashMap;
 use parking_lot::Mutex;

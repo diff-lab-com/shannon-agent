@@ -137,8 +137,9 @@ pub use file::sandbox::{PathSandbox, SandboxConfig as PathSandboxConfig, Sandbox
 pub use system::{SecurityLevel, SecurityAnalysis, CommandOutput, analyze_command_security};
 
 // Re-export from shannon_core
-pub use shannon_core::{
-    tools::{Tool, ToolError, ToolResult, ToolOutput, ToolRegistry},
+pub use shannon_core::tools::{
+    Tool, ToolError, ToolResult, ToolOutput, ToolRegistry,
+    ProgressSender, BoxedProgressSender,
 };
 
 /// Register all standard tools into the given registry.

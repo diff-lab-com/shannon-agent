@@ -4,13 +4,14 @@
 //! - Bash: Execute shell commands on Unix-like systems
 //! - PowerShell: Execute commands on Windows systems
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolResult, ToolOutput, BoxedProgressSender};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use shannon_core::sandbox::{SandboxConfig, SandboxExecutor, SandboxType};
 use std::collections::HashMap;
 use std::process::Stdio;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 // ---------------------------------------------------------------------------
@@ -1062,6 +1063,168 @@ impl Tool for BashTool {
                 }
                 if !output.stderr.is_empty() {
                     map.insert("stderr".to_string(), json!(output.stderr));
+                }
+                map
+            },
+        })
+    }
+
+    async fn execute_streaming(
+        &self,
+        input: serde_json::Value,
+        progress: BoxedProgressSender,
+    ) -> ToolResult<ToolOutput> {
+        let bash_input: BashInput = match serde_json::from_value(input) {
+            Ok(input) => input,
+            Err(e) => return Ok(ToolOutput {
+                content: format!("Invalid bash input: {e}"),
+                is_error: true,
+                metadata: HashMap::new(),
+            })
+        };
+
+        let analysis = analyze_command_security(&bash_input.command);
+
+        if analysis.risk_level >= SecurityLevel::Critical {
+            let error_msg = format!(
+                "Command rejected due to critical security risk:\n{}\n\nRisk Level: {}\n\nWarnings:\n  - {}",
+                bash_input.command,
+                describe_risk_level(analysis.risk_level),
+                analysis.warnings.join("\n  - ")
+            );
+            return Ok(ToolOutput {
+                content: error_msg,
+                is_error: true,
+                metadata: {
+                    let mut map = HashMap::new();
+                    map.insert("security_rejected".to_string(), json!(true));
+                    map.insert("risk_level".to_string(), json!(analysis.risk_level as i32));
+                    map.insert("warnings".to_string(), json!(analysis.warnings));
+                    map
+                },
+            });
+        }
+
+        let command_description = if analysis.risk_level >= SecurityLevel::Medium {
+            format!(
+                "\n[SECURITY WARNING]\nRisk: {}\nCommand: {}\nWarnings:\n  - {}\n",
+                describe_risk_level(analysis.risk_level),
+                bash_input.command,
+                analysis.warnings.join("\n  - ")
+            )
+        } else {
+            String::new()
+        };
+
+        // Only stream direct (non-PTY, non-sandbox) commands.
+        // PTY and sandbox modes fall back to blocking execute().
+        let use_streaming = !bash_input.use_pty
+            && self.sandbox.is_none()
+            && self.process_sandbox.is_none();
+
+        if !use_streaming {
+            // Delegate to blocking execute — wraps in a helper to reuse
+            // the same logic. We call execute() directly to avoid duplicating.
+            return self.execute(serde_json::to_value(&bash_input).unwrap_or_default()).await;
+        }
+
+        // Streaming path: spawn the process and read stdout line-by-line.
+        let mut cmd = Command::new("bash");
+        cmd.arg("-c")
+            .arg(&bash_input.command)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+
+        if let Some(ref dir) = bash_input.cwd {
+            cmd.current_dir(dir);
+        }
+        if let Some(ref env_vars) = bash_input.env {
+            for (key, value) in env_vars {
+                cmd.env(key, value);
+            }
+        }
+
+        let mut child = cmd.spawn()
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn command: {e}")))?;
+
+        let stdout = child.stdout.take()
+            .ok_or_else(|| ToolError::ExecutionFailed("Failed to capture stdout".to_string()))?;
+        let stderr = child.stderr.take()
+            .ok_or_else(|| ToolError::ExecutionFailed("Failed to capture stderr".to_string()))?;
+
+        let mut stdout_lines = BufReader::new(stdout).lines();
+        let mut stderr_lines = BufReader::new(stderr).lines();
+
+        let mut stdout_buf = String::new();
+        let mut stderr_buf = String::new();
+
+        // Read stdout and stderr concurrently, sending progress for each stdout line.
+        loop {
+            tokio::select! {
+                line = stdout_lines.next_line() => {
+                    match line {
+                        Ok(Some(line)) => {
+                            progress.send(&line);
+                            stdout_buf.push_str(&line);
+                            stdout_buf.push('\n');
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            stderr_buf.push_str(&format!("stdout read error: {e}\n"));
+                            break;
+                        }
+                    }
+                }
+                line = stderr_lines.next_line() => {
+                    match line {
+                        Ok(Some(line)) => {
+                            stderr_buf.push_str(&line);
+                            stderr_buf.push('\n');
+                        }
+                        Ok(None) => {}
+                        Err(_) => {}
+                    }
+                }
+            }
+        }
+
+        // Drain remaining stderr
+        while let Ok(Some(line)) = stderr_lines.next_line().await {
+            stderr_buf.push_str(&line);
+            stderr_buf.push('\n');
+        }
+
+        let status = child.wait().await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to wait for command: {e}")))?;
+
+        let exit_code = status.code().unwrap_or(-1);
+        let success = status.success();
+
+        let content = if success {
+            format!("{}{}", stdout_buf, command_description)
+        } else {
+            format!("{}Command failed with exit code {}: {}{}",
+                command_description,
+                exit_code,
+                stderr_buf,
+                if command_description.is_empty() { "\n" } else { "" })
+        };
+
+        Ok(ToolOutput {
+            content,
+            is_error: !success,
+            metadata: {
+                let mut map = HashMap::new();
+                map.insert("exit_code".to_string(), json!(exit_code));
+                map.insert("risk_level".to_string(), json!(analysis.risk_level as i32));
+                map.insert("is_destructive".to_string(), json!(analysis.is_destructive));
+                map.insert("is_read_only".to_string(), json!(analysis.is_read_only));
+                if !analysis.warnings.is_empty() {
+                    map.insert("warnings".to_string(), json!(analysis.warnings));
+                }
+                if !stderr_buf.is_empty() {
+                    map.insert("stderr".to_string(), json!(stderr_buf));
                 }
                 map
             },

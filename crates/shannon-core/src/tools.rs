@@ -5,7 +5,7 @@
 //! This module re-exports the core tool trait and types from `shannon_tool_interface`
 //! and provides the `ToolRegistry` for managing available tools.
 
-pub use shannon_tool_interface::{Tool, ToolError, ToolOutput, ToolResult, ToolInfo};
+pub use shannon_tool_interface::{Tool, ToolError, ToolOutput, ToolResult, ToolInfo, ProgressSender, BoxedProgressSender};
 
 use regex::Regex;
 use serde_json::Value;
@@ -458,6 +458,24 @@ impl ToolRegistry {
         let ttl = self.cache_ttl_secs;
         let mut cache = Self::recover_lock(self.result_cache.lock());
         cache.retain(|_, entry| entry.created_at.elapsed().as_secs() < ttl);
+    }
+
+    /// Execute a tool by name using streaming progress.
+    ///
+    /// Falls back to non-streaming `execute()` for tools that don't override
+    /// `execute_streaming`. The progress sender receives incremental output
+    /// lines during execution.
+    pub async fn execute_streaming(
+        &self,
+        name: &str,
+        input: Value,
+        progress: shannon_tool_interface::BoxedProgressSender,
+    ) -> ToolResult<ToolOutput> {
+        let tool = self
+            .get(name)
+            .ok_or_else(|| ToolError::NotFound(name.to_string()))?;
+
+        tool.execute_streaming(input, progress).await
     }
 
     /// Check whether a registered tool is read-only.

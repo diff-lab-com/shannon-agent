@@ -359,14 +359,28 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                         }
                     }
                 }
-                Ok(QueryEvent::ToolProgress { progress, tool_name, .. }) => {
-                    let pct = (progress * 100.0) as u32;
-                    if let Ok(mut s) = ss.lock() {
-                        s.progress = progress as f64;
-                        s.status = format!("{tool_name}: {pct}%");
-                        // Update the specific tool's progress bar
-                        if let Some(bar) = s.multi_progress.iter_mut().find(|(l, _, _)| l == &tool_name) {
-                            bar.1 = progress as f64;
+                Ok(QueryEvent::ToolProgress { progress, tool_name, message, .. }) => {
+                    if progress < 0.0 {
+                        // Streaming output line from tool (progress = -1.0).
+                        // Show in status bar only — final ToolUseResult displays the full output.
+                        if let Ok(mut s) = ss.lock() {
+                            let preview = if message.len() > 120 {
+                                let mut end = 120;
+                                while !message.is_char_boundary(end) { end -= 1; }
+                                format!("{}…", &message[..end])
+                            } else {
+                                message.clone()
+                            };
+                            s.status = format!("{tool_name}: {preview}");
+                        }
+                    } else {
+                        let pct = (progress * 100.0) as u32;
+                        if let Ok(mut s) = ss.lock() {
+                            s.progress = progress as f64;
+                            s.status = format!("{tool_name}: {pct}%");
+                            if let Some(bar) = s.multi_progress.iter_mut().find(|(l, _, _)| l == &tool_name) {
+                                bar.1 = progress as f64;
+                            }
                         }
                     }
                 }

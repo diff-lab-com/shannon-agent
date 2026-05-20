@@ -72,6 +72,26 @@ macro_rules! send_event {
     };
 }
 
+/// Progress sender that forwards tool output lines as `ToolProgress` events.
+struct ChannelProgressSender {
+    tx: mpsc::UnboundedSender<Result<QueryEvent, QueryError>>,
+    query_id: Uuid,
+    tool_use_id: String,
+    tool_name: String,
+}
+
+impl crate::tools::ProgressSender for ChannelProgressSender {
+    fn send(&self, line: &str) {
+        send_event!(self.tx, QueryEvent::ToolProgress {
+            query_id: self.query_id,
+            tool_use_id: self.tool_use_id.clone(),
+            tool_name: self.tool_name.clone(),
+            progress: -1.0,
+            message: line.to_string(),
+        });
+    }
+}
+
 // ── Streaming state machine ────────────────────────────────────────
 
 /// Phase of the streaming response lifecycle within a single turn.
@@ -1730,8 +1750,14 @@ impl QueryEngine {
                                                                     progress: 0.0,
                                                                     message: format!("{tool_name} started"),
                                                                 });
+                                                                let progress_sender = std::sync::Arc::new(ChannelProgressSender {
+                                                                    tx: tx.clone(),
+                                                                    query_id,
+                                                                    tool_use_id: tool_id.clone(),
+                                                                    tool_name: tool_name.clone(),
+                                                                });
                                                                 let result = tools
-                                                                    .execute(&tool_name, effective_input.clone())
+                                                                    .execute_streaming(&tool_name, effective_input.clone(), progress_sender)
                                                                     .await;
 
                                                                 // Run PostToolUse hooks
