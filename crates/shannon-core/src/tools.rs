@@ -1173,4 +1173,69 @@ mod tests {
         assert_eq!(registry.deferred_count(), 0);
         assert!(registry.get("DeferredTool").is_none());
     }
+
+    // ── execute_streaming tests ─────────────────────────────────────────
+
+    /// A tool that sends progress lines when streaming.
+    struct StreamingEchoTool;
+
+    #[async_trait]
+    impl Tool for StreamingEchoTool {
+        fn name(&self) -> &str { "stream_echo" }
+        fn description(&self) -> &str { "streams lines" }
+        fn input_schema(&self) -> Value {
+            json!({"type": "object", "properties": {"msg": {"type": "string"}}})
+        }
+        async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
+            let msg = input.get("msg").and_then(|v| v.as_str()).unwrap_or("");
+            Ok(ToolOutput::success(msg.to_string()))
+        }
+        async fn execute_streaming(
+            &self,
+            input: Value,
+            progress: shannon_tool_interface::BoxedProgressSender,
+        ) -> ToolResult<ToolOutput> {
+            let msg = input.get("msg").and_then(|v| v.as_str()).unwrap_or("");
+            for line in msg.lines() {
+                progress.send(line);
+            }
+            Ok(ToolOutput::success(msg.to_string()))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_registry_execute_streaming_delegates() {
+        let registry = ToolRegistry::new();
+        registry.register(Box::new(StreamingEchoTool)).unwrap();
+
+        struct Collector { lines: std::sync::Mutex<Vec<String>> }
+        impl shannon_tool_interface::ProgressSender for Collector {
+            fn send(&self, line: &str) { self.lines.lock().unwrap().push(line.to_string()); }
+        }
+        let sender = std::sync::Arc::new(Collector { lines: std::sync::Mutex::new(Vec::new()) });
+
+        let result = registry.execute_streaming(
+            "stream_echo",
+            json!({"msg": "line1\nline2\nline3"}),
+            sender.clone(),
+        ).await.unwrap();
+
+        assert_eq!(result.content, "line1\nline2\nline3");
+        assert!(!result.is_error);
+        assert_eq!(sender.lines.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_registry_execute_streaming_unknown_tool() {
+        let registry = ToolRegistry::new();
+        struct NopSender;
+        impl shannon_tool_interface::ProgressSender for NopSender { fn send(&self, _: &str) {} }
+
+        let result = registry.execute_streaming(
+            "nonexistent",
+            json!({}),
+            std::sync::Arc::new(NopSender),
+        ).await;
+        assert!(matches!(result, Err(ToolError::NotFound(_))));
+    }
 }

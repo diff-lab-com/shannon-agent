@@ -193,4 +193,61 @@ mod tests {
         let err = ToolError::InvalidInput("bad input".to_string());
         assert_eq!(err.to_string(), "Invalid tool input: bad input");
     }
+
+    // ── ProgressSender and execute_streaming tests ──────────────────────
+
+    /// Collecting ProgressSender that stores all sent lines.
+    struct CollectingSender {
+        lines: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl CollectingSender {
+        fn new() -> Self {
+            Self { lines: std::sync::Mutex::new(Vec::new()) }
+        }
+        fn collected(&self) -> Vec<String> {
+            self.lines.lock().unwrap().clone()
+        }
+    }
+
+    impl ProgressSender for CollectingSender {
+        fn send(&self, line: &str) {
+            self.lines.lock().unwrap().push(line.to_string());
+        }
+    }
+
+    struct EchoTool;
+
+    #[async_trait]
+    impl Tool for EchoTool {
+        fn name(&self) -> &str { "echo" }
+        fn description(&self) -> &str { "echo tool" }
+        fn input_schema(&self) -> Value {
+            json!({"type": "object", "properties": {"msg": {"type": "string"}}})
+        }
+        async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
+            let msg = input.get("msg").and_then(|v| v.as_str()).unwrap_or("");
+            Ok(ToolOutput::success(msg.to_string()))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_streaming_default_delegates_to_execute() {
+        let tool = EchoTool;
+        let sender = Arc::new(CollectingSender::new());
+        let result = tool.execute_streaming(json!({"msg": "hello"}), sender.clone()).await.unwrap();
+        assert_eq!(result.content, "hello");
+        assert!(!result.is_error);
+        // Default implementation does NOT call the progress sender
+        assert!(sender.collected().is_empty());
+    }
+
+    #[test]
+    fn test_collecting_sender_captures_lines() {
+        let sender = CollectingSender::new();
+        sender.send("line 1");
+        sender.send("line 2");
+        sender.send("line 3");
+        assert_eq!(sender.collected(), vec!["line 1", "line 2", "line 3"]);
+    }
 }

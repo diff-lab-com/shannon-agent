@@ -1783,3 +1783,73 @@ mod tests {
         let analysis3 = analyze_command_security("chown -r user file");
         assert_eq!(analysis3.risk_level, SecurityLevel::Critical);
     }
+
+    // ── BashTool streaming tests ──────────────────────────────────────────
+
+    struct CollectSender {
+        lines: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl crate::ProgressSender for CollectSender {
+        fn send(&self, line: &str) {
+            self.lines.lock().unwrap().push(line.to_string());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_bash_streaming_captures_stdout_lines() {
+        let tool = BashTool::new();
+        let sender = std::sync::Arc::new(CollectSender {
+            lines: std::sync::Mutex::new(Vec::new()),
+        });
+
+        let result = tool.execute_streaming(
+            json!({"command": "echo line1; echo line2; echo line3"}),
+            sender.clone(),
+        ).await.unwrap();
+
+        assert!(!result.is_error);
+        assert!(result.content.contains("line1"));
+        assert!(result.content.contains("line2"));
+        assert!(result.content.contains("line3"));
+
+        let lines = sender.lines.lock().unwrap();
+        assert_eq!(lines.len(), 3, "should have received 3 streaming lines");
+        assert_eq!(lines[0], "line1");
+        assert_eq!(lines[1], "line2");
+        assert_eq!(lines[2], "line3");
+    }
+
+    #[tokio::test]
+    async fn test_bash_streaming_captures_exit_code() {
+        let tool = BashTool::new();
+        let sender = std::sync::Arc::new(CollectSender {
+            lines: std::sync::Mutex::new(Vec::new()),
+        });
+
+        let result = tool.execute_streaming(
+            json!({"command": "echo ok; exit 42"}),
+            sender,
+        ).await.unwrap();
+
+        assert!(result.is_error);
+        assert_eq!(result.metadata.get("exit_code"), Some(&json!(42)));
+    }
+
+    #[tokio::test]
+    async fn test_bash_streaming_rejects_critical_commands() {
+        let tool = BashTool::new();
+        let sender = std::sync::Arc::new(CollectSender {
+            lines: std::sync::Mutex::new(Vec::new()),
+        });
+
+        let result = tool.execute_streaming(
+            json!({"command": "rm -rf /"}),
+            sender.clone(),
+        ).await.unwrap();
+
+        assert!(result.is_error);
+        assert!(result.content.contains("rejected"));
+        // No lines streamed for rejected commands
+        assert!(sender.lines.lock().unwrap().is_empty());
+    }
