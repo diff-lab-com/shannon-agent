@@ -249,9 +249,9 @@ pub fn format_read_summary(tool_name: &str, result: &str) -> String {
 }
 
 /// Format a write tool result as a command+output block with category icon.
-pub fn format_write_result(tool_name: &str, result: &str, is_error: bool) -> String {
+pub fn format_write_result(tool_name: &str, result: &str, is_error: bool, duration_label: &str) -> String {
     if is_error {
-        return format_error(tool_name, result);
+        return format_error(tool_name, result, duration_label);
     }
     let (icon, color) = match tool_category(tool_name) {
         ToolCategory::Read => ("\u{25B8}", colors::CYAN),       // ▸ read
@@ -262,7 +262,7 @@ pub fn format_write_result(tool_name: &str, result: &str, is_error: bool) -> Str
         ToolCategory::Skill => ("\u{2726}", colors::MAGENTA),   // ✦ skill
     };
     let mut output = String::new();
-    output.push_str(&format!("{color}{icon} --- {tool_name} ---{}\n", colors::RESET));
+    output.push_str(&format!("{color}{icon} {tool_name}{duration_label}{}\n", colors::RESET));
     let truncated = truncate_result(result);
     if !truncated.is_empty() {
         output.push_str(&truncated);
@@ -279,9 +279,16 @@ pub fn format_write_result(tool_name: &str, result: &str, is_error: bool) -> Str
 /// - File lists get tree-drawing characters
 /// - Tables get aligned columns
 /// - Everything else passes through as-is
-pub fn format_tool_result(tool_name: &str, result: &str, is_error: bool) -> String {
+pub fn format_tool_result(tool_name: &str, result: &str, is_error: bool, duration_secs: Option<f64>) -> String {
+    let duration_label = duration_secs.map(|d| {
+        if d >= 60.0 {
+            format!(" ({}m{:.0}s)", d as u64 / 60, d % 60.0)
+        } else {
+            format!(" ({:.1}s)", d)
+        }
+    }).unwrap_or_default();
     if is_error {
-        return format_error(tool_name, &truncate_result(result));
+        return format_error(tool_name, &truncate_result(result), &duration_label);
     }
     let truncated = truncate_result(result);
     // Content-aware formatting for all tool types
@@ -297,8 +304,16 @@ pub fn format_tool_result(tool_name: &str, result: &str, is_error: bool) -> Stri
         highlight_code_by_tool(&truncated, tool_name)
     } else {
         match tool_category(tool_name) {
-            ToolCategory::Read | ToolCategory::Search => format_read_summary(tool_name, result),
-            ToolCategory::Write | ToolCategory::Bash | ToolCategory::Agent | ToolCategory::Skill => format_write_result(tool_name, result, false),
+            ToolCategory::Read | ToolCategory::Search => {
+                let mut s = format_read_summary(tool_name, result);
+                if !duration_label.is_empty() {
+                    s = format!("{s}{duration_label}");
+                }
+                s
+            }
+            ToolCategory::Write | ToolCategory::Bash | ToolCategory::Agent | ToolCategory::Skill => {
+                format_write_result(tool_name, result, false, &duration_label)
+            }
         }
     }
 }
@@ -308,7 +323,7 @@ pub fn format_tool_result_full(tool_name: &str, result: &str, is_error: bool) ->
     let truncated = truncate_result(result);
 
     if is_error {
-        format_error(tool_name, &truncated)
+        format_error(tool_name, &truncated, "")
     } else if looks_like_diff(&truncated) {
         format_diff(&truncated)
     } else if looks_like_json(&truncated) {
@@ -1288,15 +1303,15 @@ fn format_table(s: &str) -> String {
 }
 
 /// Format an error result with red coloring, a cross prefix, and subtle background.
-fn format_error(tool_name: &str, s: &str) -> String {
-    let bg = if is_light_terminal() { diff_colors::BG_ERROR_LIGHT } else { diff_colors::BG_ERROR };
-    let reset = diff_colors::RESET;
+fn format_error(tool_name: &str, s: &str, duration_label: &str) -> String {
+    let reset = colors::RESET;
+    let red = colors::RED;
+    let dim = colors::DIM;
+    let bold = colors::BOLD;
+    let lines: Vec<&str> = s.trim().lines().collect();
+    let body = lines.iter().map(|l| format!("  {dim}{l}{reset}")).collect::<Vec<_>>().join("\n");
     format!(
-        "{bg}{}\u{2717} {} failed:{} {}{reset}",
-        colors::RED,
-        tool_name,
-        colors::RESET,
-        s.trim(),
+        "{red}{bold}╔═ \u{2717} {tool_name}{duration_label} failed ═{reset}\n{body}\n{red}{bold}╚═══{reset}",
     )
 }
 
@@ -1722,7 +1737,7 @@ mod tests {
 
     #[test]
     fn test_format_error_basic() {
-        let formatted = format_error("bash", "command not found");
+        let formatted = format_error("bash", "command not found", "");
         assert!(formatted.contains("\u{2717}")); // ✗
         assert!(formatted.contains("bash failed"));
         assert!(formatted.contains("command not found"));
@@ -1730,20 +1745,17 @@ mod tests {
     }
 
     #[test]
-    fn test_format_error_has_background() {
-        let formatted = format_error("bash", "command not found");
-        // Should contain a background fill (dark or light variant)
-        assert!(
-            formatted.contains(diff_colors::BG_ERROR) || formatted.contains(diff_colors::BG_ERROR_LIGHT),
-            "Error formatting should include a background fill"
-        );
+    fn test_format_error_has_border() {
+        let formatted = format_error("bash", "command not found", "");
+        // Should contain box-drawing border
+        assert!(formatted.contains("╔") || formatted.contains("╚"), "Error formatting should include box border");
     }
 
     // ── Main entry point tests ────────────────────────────────────────
 
     #[test]
     fn test_format_tool_result_error() {
-        let result = format_tool_result("bash", "command failed", true);
+        let result = format_tool_result("bash", "command failed", true, None);
         assert!(result.contains("\u{2717}"));
         assert!(result.contains("bash failed"));
     }
@@ -1760,14 +1772,14 @@ mod tests {
     #[test]
     fn test_format_tool_result_json() {
         let json = r#"{"status":"ok","count":5}"#;
-        let result = format_tool_result("query", json, false);
+        let result = format_tool_result("query", json, false, None);
         assert!(result.contains('\n'));
     }
 
     #[test]
     fn test_format_tool_result_file_list() {
         let list = "src/main.rs\nsrc/lib.rs\nCargo.toml\n";
-        let result = format_tool_result("glob", list, false);
+        let result = format_tool_result("glob", list, false, None);
         // File lists are rendered as a tree by format_file_tree
         let plain = strip_ansi(&result);
         assert!(plain.contains("src/main.rs"));
@@ -1778,7 +1790,7 @@ mod tests {
     #[test]
     fn test_format_tool_result_table() {
         let table = "| Name | Value |\n| --- | --- |\n| foo | bar |\n";
-        let result = format_tool_result("query", table, false);
+        let result = format_tool_result("query", table, false, None);
         let plain = strip_ansi(&result);
         assert!(plain.contains("foo"));
         assert!(plain.contains("bar"));
@@ -1787,7 +1799,7 @@ mod tests {
     #[test]
     fn test_format_tool_result_plain_text() {
         let text = "Just some plain text output from a tool.";
-        let result = format_tool_result("echo", text, false);
+        let result = format_tool_result("echo", text, false, None);
         // echo is Read category → format_read_summary
         let plain = strip_ansi(&result);
         assert!(plain.contains("Just some plain text"));
@@ -1797,21 +1809,21 @@ mod tests {
     fn test_format_tool_result_truncation() {
         let long_text = "x".repeat(5000);
         // Use format_write_result for truncation since Read category summarizes
-        let result = format_tool_result("bash", &long_text, false);
+        let result = format_tool_result("bash", &long_text, false, None);
         let plain = strip_ansi(&result);
         assert!(plain.contains("bash"));
     }
 
     #[test]
     fn test_format_tool_result_empty_string() {
-        let result = format_tool_result("read", "", false);
+        let result = format_tool_result("read", "", false, None);
         let plain = strip_ansi(&result);
         assert!(plain.contains("0 lines") || plain.is_empty());
     }
 
     #[test]
     fn test_format_tool_result_whitespace_only() {
-        let result = format_tool_result("read", "   \n  \n  ", false);
+        let result = format_tool_result("read", "   \n  \n  ", false, None);
         let plain = strip_ansi(&result);
         assert!(plain.contains("0 lines") || plain.is_empty());
     }
@@ -1850,14 +1862,14 @@ mod tests {
 
     #[test]
     fn test_format_write_result_has_icon() {
-        let result = format_write_result("edit", "done", false);
+        let result = format_write_result("edit", "done", false, "");
         let plain = strip_ansi(&result);
-        assert!(plain.contains("--- edit ---"));
+        assert!(plain.contains("edit"));
     }
 
     #[test]
     fn test_format_write_result_error_delegates() {
-        let result = format_write_result("bash", "failed", true);
+        let result = format_write_result("bash", "failed", true, "");
         assert!(result.contains("\u{2717}")); // ✗
         assert!(result.contains("bash failed"));
     }

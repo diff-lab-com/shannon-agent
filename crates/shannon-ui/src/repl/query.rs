@@ -245,6 +245,8 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
         let mut tokens_in_turn = 0u64;
         let mut tool_calls: Vec<String> = Vec::new();
         let mut tool_start_times: HashMap<String, Instant> = HashMap::new();
+        // Track completed tool results for compact timeline: (name, duration_secs, is_error, diff_suffix)
+        let mut completed_tools: Vec<(String, Option<f64>, bool, String)> = Vec::new();
         let mut _tools_in_session: usize = 0;
         let mut progress_status = t!("ui.working").to_string();
         let mut steps_done = 0usize;
@@ -370,16 +372,10 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     if let Some(ref summary) = streaming_summary {
                         response_text.push_str(summary);
                     }
-                    let duration_str = tool_start_times.remove(&tool_name).map(|start| {
-                        let elapsed = start.elapsed();
-                        if elapsed.as_secs() >= 60 {
-                            format!("{}m{:.0}s", elapsed.as_secs() / 60, elapsed.as_secs_f64() % 60.0)
-                        } else {
-                            format!("{:.1}s", elapsed.as_secs_f64())
-                        }
-                    }).unwrap_or_default();
+                    // Get duration from start time, then remove
+                    let duration_secs = tool_start_times.remove(&tool_name).map(|t| t.elapsed().as_secs_f64());
                     let status_icon = if is_error { "\u{2717}" } else { "\u{2713}" };
-                    let formatted = crate::tool_format::format_tool_result(&tool_name, &result, is_error);
+                    let formatted = crate::tool_format::format_tool_result(&tool_name, &result, is_error, duration_secs);
 
                     let diff_suffix = if !is_error {
                         if let Some(path) = tool_file_paths.get(&tool_name) {
@@ -397,11 +393,13 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                         String::new()
                     };
 
-                    if duration_str.is_empty() {
+                    if diff_suffix.is_empty() {
                         response_text.push_str(&format!("\n{formatted}"));
                     } else {
-                        response_text.push_str(&format!("\n{formatted}\n  [{status_icon}] {duration_str}{diff_suffix}"));
+                        response_text.push_str(&format!("\n{formatted}  {status_icon}{diff_suffix}"));
                     }
+                    // Track for compact timeline
+                    completed_tools.push((tool_name.clone(), duration_secs, is_error, diff_suffix.clone()));
                     if let Ok(mut s) = ss.lock() {
                         s.buffer = response_text.clone();
                         if let Some(bar) = s.multi_progress.iter_mut().find(|(l, _, _)| l == &tool_name) {
@@ -521,11 +519,16 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     } else {
                         let pct = (progress * 100.0) as u32;
                         let dur = tool_elapsed.map(|e| format!(" ({:.1}s)", e)).unwrap_or_default();
+                        // Mini progress bar: [████░░░░] 45%
+                        let bar_len = 12usize;
+                        let filled = ((progress.max(0.0).min(1.0)) * bar_len as f32).round() as usize;
+                        let bar: String = "█".repeat(filled) + &"░".repeat(bar_len - filled);
                         if let Ok(mut s) = ss.lock() {
                             s.progress = progress as f64;
-                            s.status = format!("{tool_name}{dur}: {pct}%");
-                            if let Some(bar) = s.multi_progress.iter_mut().find(|(l, _, _)| l == &tool_name) {
-                                bar.1 = progress as f64;
+                            s.status = format!("{tool_name}{dur}: [{bar}] {pct}%");
+                            s.buffer = format!("{response_text}  {tool_name}{dur} [{bar}] {pct}%\n");
+                            if let Some(bar_entry) = s.multi_progress.iter_mut().find(|(l, _, _)| l == &tool_name) {
+                                bar_entry.1 = progress as f64;
                             }
                         }
                     }
@@ -537,6 +540,15 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     // Signal streaming loop that the query is done
                     if let Ok(mut s) = ss.lock() {
                         s.done = true;
+                    }
+                    // Compact tool timeline: ✓ read 0.1s ✓ write 0.2s ✓ bash 3.1s
+                    if completed_tools.len() > 1 {
+                        let badges: Vec<String> = completed_tools.iter().map(|(name, dur, err, diff)| {
+                            let icon = if *err { "\u{2717}" } else { "\u{2713}" };
+                            let d = dur.map(|d| format!(" {:.1}s", d)).unwrap_or_default();
+                            format!("{icon} {name}{d}{diff}")
+                        }).collect();
+                        response_text.push_str(&format!("\n  {}", badges.join("  ")));
                     }
                     let mut summary_parts = Vec::new();
                     if tokens_in_turn > 0 {
