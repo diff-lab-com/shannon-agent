@@ -250,4 +250,251 @@ mod tests {
         sender.send("line 3");
         assert_eq!(sender.collected(), vec!["line 1", "line 2", "line 3"]);
     }
+
+    // ── Additional comprehensive tests ──────────────────────────────────
+
+    #[test]
+    fn test_tool_output_serialization_roundtrip() {
+        let output = ToolOutput::success("hello".to_string())
+            .with_metadata("lines".to_string(), json!(42))
+            .with_metadata("files".to_string(), json!(["a.rs", "b.rs"]));
+        let json = serde_json::to_string(&output).unwrap();
+        let deserialized: ToolOutput = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.content, "hello");
+        assert!(!deserialized.is_error);
+        assert_eq!(deserialized.metadata.get("lines"), Some(&json!(42)));
+    }
+
+    #[test]
+    fn test_tool_output_error_serialization() {
+        let output = ToolOutput::error("permission denied".to_string());
+        let json = serde_json::to_string(&output).unwrap();
+        let deserialized: ToolOutput = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.is_error);
+        assert_eq!(deserialized.content, "permission denied");
+    }
+
+    #[test]
+    fn test_tool_output_empty_metadata() {
+        let output = ToolOutput::success("".to_string());
+        assert!(output.metadata.is_empty());
+        let json = serde_json::to_string(&output).unwrap();
+        assert!(json.contains("\"metadata\":{}"));
+    }
+
+    #[test]
+    fn test_tool_output_with_metadata_overwrites() {
+        let output = ToolOutput::success("ok".to_string())
+            .with_metadata("key".to_string(), json!(1))
+            .with_metadata("key".to_string(), json!(2));
+        assert_eq!(output.metadata.get("key"), Some(&json!(2)));
+    }
+
+    #[test]
+    fn test_tool_error_variants() {
+        let cases = vec![
+            (ToolError::NotFound("x".into()), "Tool not found: x"),
+            (ToolError::InvalidInput("y".into()), "Invalid tool input: y"),
+            (ToolError::ExecutionFailed("z".into()), "Tool execution failed: z"),
+            (ToolError::RegistryError("w".into()), "Tool registry error: w"),
+        ];
+        for (err, expected) in cases {
+            assert_eq!(err.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn test_tool_error_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<ToolError>();
+    }
+
+    #[test]
+    fn test_tool_info_serialization() {
+        let info = ToolInfo {
+            name: "bash".to_string(),
+            description: "Run shell commands".to_string(),
+            category: "system".to_string(),
+            requires_auth: false,
+            input_schema: json!({"type": "object"}),
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        let deserialized: ToolInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.name, "bash");
+        assert_eq!(deserialized.category, "system");
+        assert!(!deserialized.requires_auth);
+    }
+
+    #[test]
+    fn test_tool_info_requires_auth() {
+        let info = ToolInfo {
+            name: "github".to_string(),
+            description: "GitHub API".to_string(),
+            category: "remote".to_string(),
+            requires_auth: true,
+            input_schema: json!({"type": "object"}),
+        };
+        assert!(info.requires_auth);
+    }
+
+    #[test]
+    fn test_tool_result_ok_and_err() {
+        let ok: ToolResult<ToolOutput> = Ok(ToolOutput::success("ok".into()));
+        assert!(ok.is_ok());
+
+        let err: ToolResult<ToolOutput> = Err(ToolError::ExecutionFailed("boom".into()));
+        assert!(err.is_err());
+        match err {
+            Err(ToolError::ExecutionFailed(msg)) => assert_eq!(msg, "boom"),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_echo_tool_trait_methods() {
+        let tool = EchoTool;
+        assert_eq!(tool.name(), "echo");
+        assert_eq!(tool.description(), "echo tool");
+        assert_eq!(tool.category(), "general");
+        assert!(!tool.requires_auth());
+        assert!(!tool.is_read_only());
+        assert!(!tool.is_concurrency_safe());
+        assert!(!tool.is_destructive());
+    }
+
+    #[tokio::test]
+    async fn test_echo_tool_execute() {
+        let tool = EchoTool;
+        let result = tool.execute(json!({"msg": "test"})).await.unwrap();
+        assert_eq!(result.content, "test");
+        assert!(!result.is_error);
+    }
+
+    #[tokio::test]
+    async fn test_echo_tool_execute_missing_field() {
+        let tool = EchoTool;
+        let result = tool.execute(json!({})).await.unwrap();
+        assert_eq!(result.content, "");
+    }
+
+    // ── Tool trait default method tests ──────────────────────────────────
+
+    struct ReadOnlyTool;
+
+    #[async_trait]
+    impl Tool for ReadOnlyTool {
+        fn name(&self) -> &str { "readonly" }
+        fn description(&self) -> &str { "read-only tool" }
+        fn input_schema(&self) -> Value { json!({"type": "object"}) }
+        fn is_read_only(&self) -> bool { true }
+        async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
+            Ok(ToolOutput::success("read".into()))
+        }
+    }
+
+    #[test]
+    fn test_readonly_tool_defaults() {
+        let tool = ReadOnlyTool;
+        assert!(tool.is_read_only());
+        assert!(tool.is_concurrency_safe()); // defaults to is_read_only
+        assert!(!tool.is_destructive());
+        assert!(!tool.requires_auth());
+        assert_eq!(tool.category(), "general");
+    }
+
+    struct DestructiveTool;
+
+    #[async_trait]
+    impl Tool for DestructiveTool {
+        fn name(&self) -> &str { "rm_rf" }
+        fn description(&self) -> &str { "destructive tool" }
+        fn input_schema(&self) -> Value { json!({"type": "object"}) }
+        fn is_destructive(&self) -> bool { true }
+        async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
+            Ok(ToolOutput::success("deleted".into()))
+        }
+    }
+
+    #[test]
+    fn test_destructive_tool() {
+        let tool = DestructiveTool;
+        assert!(tool.is_destructive());
+        assert!(!tool.is_read_only());
+        assert!(!tool.is_concurrency_safe());
+    }
+
+    struct ConcurrentWriteTool;
+
+    #[async_trait]
+    impl Tool for ConcurrentWriteTool {
+        fn name(&self) -> &str { "concurrent_write" }
+        fn description(&self) -> &str { "concurrent write tool" }
+        fn input_schema(&self) -> Value { json!({"type": "object"}) }
+        fn is_read_only(&self) -> bool { false }
+        fn is_concurrency_safe(&self) -> bool { true }
+        async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
+            Ok(ToolOutput::success("wrote".into()))
+        }
+    }
+
+    #[test]
+    fn test_concurrent_write_overrides_safety() {
+        let tool = ConcurrentWriteTool;
+        assert!(!tool.is_read_only());
+        assert!(tool.is_concurrency_safe()); // overridden independently
+    }
+
+    struct StreamingTool;
+
+    #[async_trait]
+    impl Tool for StreamingTool {
+        fn name(&self) -> &str { "streaming" }
+        fn description(&self) -> &str { "streaming tool" }
+        fn input_schema(&self) -> Value { json!({"type": "object"}) }
+        async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
+            Ok(ToolOutput::success("base".into()))
+        }
+        async fn execute_streaming(
+            &self,
+            _input: Value,
+            progress: BoxedProgressSender,
+        ) -> ToolResult<ToolOutput> {
+            progress.send("line 1");
+            progress.send("line 2");
+            Ok(ToolOutput::success("streamed".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_streaming_tool_overrides_default() {
+        let tool = StreamingTool;
+        let sender = Arc::new(CollectingSender::new());
+        let result = tool.execute_streaming(json!({}), sender.clone()).await.unwrap();
+        assert_eq!(result.content, "streamed");
+        assert_eq!(sender.collected(), vec!["line 1", "line 2"]);
+    }
+
+    #[test]
+    fn test_progress_sender_thread_safety() {
+        use std::thread;
+        let sender = Arc::new(CollectingSender::new());
+        let mut handles = vec![];
+        for i in 0..4 {
+            let s = sender.clone();
+            handles.push(thread::spawn(move || {
+                s.send(&format!("thread-{i}"));
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        let lines = sender.collected();
+        assert_eq!(lines.len(), 4);
+    }
+
+    #[test]
+    fn test_boxed_progress_sender_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<BoxedProgressSender>();
+    }
 }

@@ -112,7 +112,7 @@ fn inject_cache_control_on_last_block(msg: &mut Value) {
             for block in blocks.iter_mut().rev() {
                 let block_type = block.get("type").and_then(|t| t.as_str());
                 if block_type == Some("text") || block_type == Some("image") {
-                    block.as_object_mut().unwrap().insert(
+                    block.as_object_mut().expect("text/image block is always a JSON object").insert(
                         "cache_control".to_string(),
                         cache_marker,
                     );
@@ -125,9 +125,9 @@ fn inject_cache_control_on_last_block(msg: &mut Value) {
         Some(Value::String(_)) => {
             let text = match msg.get("content") {
                 Some(Value::String(s)) => s.clone(),
-                _ => unreachable!(),
+                _ => unreachable!("already matched String above"),
             };
-            *msg.get_mut("content").unwrap() = serde_json::json!([{
+            *msg.get_mut("content").expect("content field exists in String branch") = serde_json::json!([{
                 "type": "text",
                 "text": text,
                 "cache_control": cache_marker,
