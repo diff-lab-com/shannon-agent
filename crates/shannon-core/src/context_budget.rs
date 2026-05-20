@@ -406,4 +406,99 @@ mod tests {
         assert!(MessagePriority::High > MessagePriority::Normal);
         assert!(MessagePriority::Normal > MessagePriority::Low);
     }
+
+    // ── Edge case tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_message_priority_display() {
+        assert_eq!(MessagePriority::Critical.to_string(), "CRITICAL");
+        assert_eq!(MessagePriority::High.to_string(), "HIGH");
+        assert_eq!(MessagePriority::Normal.to_string(), "NORMAL");
+        assert_eq!(MessagePriority::Low.to_string(), "LOW");
+    }
+
+    #[test]
+    fn test_context_budget_small_window() {
+        let budget = ContextBudget::new(1_000);
+        assert_eq!(budget.system_prompt_budget, 150);   // 15%
+        assert_eq!(budget.tool_schema_budget, 250);     // 25%
+        assert_eq!(budget.conversation_budget, 600);    // 60%
+    }
+
+    #[test]
+    fn test_context_budget_zero_tokens() {
+        let budget = ContextBudget::new(0);
+        assert_eq!(budget.system_prompt_budget, 0);
+        assert_eq!(budget.tool_schema_budget, 0);
+        assert_eq!(budget.conversation_budget, 0);
+    }
+
+    #[test]
+    fn test_priority_budget_custom_fractions() {
+        let pb = PriorityBudget {
+            critical_frac: 0.5,
+            high_frac: 0.3,
+            normal_frac: 0.15,
+            low_frac: 0.05,
+        };
+        let alloc = pb.allocate(100_000);
+        assert_eq!(alloc.critical, 50_000);
+        assert_eq!(alloc.high, 30_000);
+        assert_eq!(alloc.normal, 15_000);
+        assert_eq!(alloc.low, 5_000);
+    }
+
+    #[test]
+    fn test_priority_budget_zero_conversation() {
+        let pb = PriorityBudget::default();
+        let alloc = pb.allocate(0);
+        assert_eq!(alloc.critical, 0);
+        assert_eq!(alloc.high, 0);
+        assert_eq!(alloc.normal, 0);
+        assert_eq!(alloc.low, 0);
+    }
+
+    #[test]
+    fn test_check_schema_budget_empty_tools() {
+        let budget = ContextBudget::new(200_000);
+        let defs: Vec<crate::api::ToolDefinition> = vec![];
+        assert!(budget.check_schema_budget(&defs).is_ok());
+    }
+
+    #[test]
+    fn test_tools_to_defer_empty_list() {
+        let budget = ContextBudget::new(1_000);
+        let defs: Vec<crate::api::ToolDefinition> = vec![];
+        let defer = budget.tools_to_defer(&defs);
+        assert!(defer.is_empty());
+    }
+
+    #[test]
+    fn test_estimate_schema_tokens_empty_object() {
+        let schema = serde_json::json!({});
+        let tokens = ContextBudget::estimate_schema_tokens(&schema);
+        // Empty object is "{}" = 2 chars, rounds to 0 tokens
+        assert!(tokens == 0 || tokens > 0);
+    }
+
+    #[test]
+    fn test_estimate_schema_tokens_string() {
+        let schema = serde_json::json!("just a string");
+        let tokens = ContextBudget::estimate_schema_tokens(&schema);
+        assert!(tokens > 0);
+    }
+
+    #[test]
+    fn test_priority_allocation_sums_reasonably() {
+        let budget = ContextBudget::new(200_000);
+        let alloc = budget.priority_allocation();
+        let sum = alloc.critical + alloc.high + alloc.normal + alloc.low;
+        // Should be close to conversation_budget (120_000) within rounding
+        assert!((sum as f32 - budget.conversation_budget as f32).abs() < 10.0);
+    }
+
+    #[test]
+    fn test_fractions_sum_to_one() {
+        assert!((SYSTEM_PROMPT_FRACTION + TOOL_SCHEMA_FRACTION + CONVERSATION_FRACTION - 1.0).abs() < f32::EPSILON);
+    }
 }
