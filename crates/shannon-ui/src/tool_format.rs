@@ -453,7 +453,7 @@ fn looks_like_diff(s: &str) -> bool {
 }
 
 /// Check if the content looks like JSON (starts with `{` or `[`).
-fn looks_like_json(s: &str) -> bool {
+pub fn looks_like_json(s: &str) -> bool {
     let trimmed = s.trim_start();
     trimmed.starts_with('{') || trimmed.starts_with('[')
 }

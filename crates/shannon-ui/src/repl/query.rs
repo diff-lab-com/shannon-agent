@@ -596,14 +596,32 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     if let Ok(mut s) = ss.lock() {
                         s.done = true;
                     }
-                    // Compact tool timeline: ✓ read 0.1s ✓ write 0.2s ✓ bash 3.1s
+                    // Compact tool timeline: visual bar chart proportional to duration
                     if completed_tools.len() > 1 {
-                        let badges: Vec<String> = completed_tools.iter().map(|(name, dur, err, diff)| {
+                        let max_dur = completed_tools.iter()
+                            .filter_map(|(_, d, _, _)| *d)
+                            .fold(0.0f64, f64::max);
+                        let max_bar = 16usize;
+                        response_text.push('\n');
+                        for (name, dur, err, diff) in &completed_tools {
                             let icon = if *err { "\u{2717}" } else { "\u{2713}" };
-                            let d = dur.map(|d| format!(" {:.1}s", d)).unwrap_or_default();
-                            format!("{icon} {name}{d}{diff}")
-                        }).collect();
-                        response_text.push_str(&format!("\n  {}", badges.join("  ")));
+                            let d = dur.unwrap_or(0.0);
+                            let bar_len = if max_dur > 0.0 {
+                                ((d / max_dur) * max_bar as f64).round() as usize
+                            } else {
+                                0
+                            };
+                            let bar_len = bar_len.max(1);
+                            let bar = "\u{2588}".repeat(bar_len);
+                            let dur_str = if d >= 60.0 {
+                                format!("{}m{:.0}s", d as u64 / 60, d % 60.0)
+                            } else if d >= 0.1 {
+                                format!("{d:.1}s")
+                            } else {
+                                "\u{2014}".to_string()
+                            };
+                            response_text.push_str(&format!("  {icon} {name} {bar} {dur_str}{diff}\n"));
+                        }
                     }
                     let mut summary_parts = Vec::new();
                     if tokens_in_turn > 0 {

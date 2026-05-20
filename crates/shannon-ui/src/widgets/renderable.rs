@@ -52,7 +52,7 @@ use super::chat::{
     wrap_line, highlight_code_cached, truncate_to,
     detect_diff_language, highlight_diff_line,
 };
-use crate::tool_format::{display_tool_name, strip_ansi, tool_category, ToolCategory};
+use crate::tool_format::{display_tool_name, looks_like_json, strip_ansi, tool_category, ToolCategory};
 use crate::theme::Theme;
 
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -77,6 +77,60 @@ fn category_style(cat: ToolCategory, theme: &Theme) -> (&'static str, &'static s
         ToolCategory::Agent => ("\u{25C6}", "", theme.accent),
         ToolCategory::Skill => ("\u{2726}", "", theme.accent),
     }
+}
+
+/// Fixed palette for MCP server color coding.
+const MCP_PALETTE: &[Color] = &[
+    Color::Cyan,
+    Color::Magenta,
+    Color::Yellow,
+    Color::Rgb(255, 165, 0),   // Orange
+    Color::Rgb(148, 103, 189), // Purple
+    Color::Rgb(0, 206, 209),   // Dark Turquoise
+    Color::Rgb(255, 127, 80),  // Coral
+    Color::Rgb(50, 205, 50),   // Lime Green
+];
+
+/// Returns a fixed color for MCP tools based on server name, or None for built-in tools.
+fn mcp_server_color(tool_name: &str) -> Option<Color> {
+    if !tool_name.starts_with("mcp__") {
+        return None;
+    }
+    let rest = tool_name.strip_prefix("mcp__")?;
+    let server = rest.split("__").next()?;
+    let hash = server.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
+    Some(MCP_PALETTE[(hash as usize) % MCP_PALETTE.len()])
+}
+
+/// Colorize a JSON line into spans with syntax highlighting.
+fn json_line_spans(line: &str, theme: &Theme) -> Vec<Span<'static>> {
+    let trimmed = line.trim();
+    // Brace/bracket only lines
+    if trimmed == "{" || trimmed == "}" || trimmed == "[" || trimmed == "]"
+        || trimmed == "}," || trimmed == "],"
+    {
+        return vec![Span::styled(line.to_string(), Style::default().fg(theme.muted))];
+    }
+    // Key: value lines
+    if let Some(colon_pos) = line.find(": ") {
+        let key_part = &line[..colon_pos + 1];
+        let value_part = &line[colon_pos + 2..];
+        let mut spans = vec![
+            Span::styled(key_part.to_string(), Style::default().fg(Color::Cyan)),
+        ];
+        let val_trim = value_part.trim_end_matches(',').trim_end_matches(']');
+        if val_trim.starts_with('"') {
+            spans.push(Span::styled(value_part.to_string(), Style::default().fg(Color::Green)));
+        } else if val_trim.parse::<f64>().is_ok() {
+            spans.push(Span::styled(value_part.to_string(), Style::default().fg(Color::Yellow)));
+        } else if val_trim == "true" || val_trim == "false" || val_trim == "null" {
+            spans.push(Span::styled(value_part.to_string(), Style::default().fg(Color::Magenta)));
+        } else {
+            spans.push(Span::styled(value_part.to_string(), Style::default().fg(theme.text_dim)));
+        }
+        return spans;
+    }
+    vec![Span::styled(line.to_string(), Style::default().fg(theme.text_dim))]
 }
 
 /// Prepend a colored role gutter `▕ ` to every line for visual lane separation.
@@ -353,6 +407,7 @@ impl MessageCell {
                 let display_label = display_tool_name(tool_label);
                 let cat = tool_category(&display_label);
                 let (icon, _, cat_color) = category_style(cat, theme);
+                let tool_color = mcp_server_color(tool_label).unwrap_or(cat_color);
                 let cat_name = match cat {
                     ToolCategory::Read => "reads",
                     ToolCategory::Write => "writes",
@@ -370,7 +425,7 @@ impl MessageCell {
                 };
                 let label = format!("{icon} {} {cat_name}{dur_str} \u{25BC}", self.group_count);
                 lines.push(Line::from(vec![
-                    Span::styled(label, Style::default().fg(cat_color).add_modifier(Modifier::BOLD)),
+                    Span::styled(label, Style::default().fg(tool_color).add_modifier(Modifier::BOLD)),
                 ]));
                 add_role_gutter(&mut lines, gutter_color);
                 return lines;
@@ -382,6 +437,7 @@ impl MessageCell {
 
             let cat = tool_category(&display_label);
             let (icon, prefix, cat_color) = category_style(cat, theme);
+            let tool_color = mcp_server_color(tool_label).unwrap_or(cat_color);
 
             // Status icon + duration badge (spinner animation for running tools)
             let (status_icon, status_color, dur_badge) = if msg.duration_secs.is_none() && !msg.is_error {
@@ -425,8 +481,8 @@ impl MessageCell {
             };
 
             let mut spans: Vec<Span<'static>> = vec![
-                Span::styled(format!("{icon}{display_label} "), Style::default().fg(cat_color).add_modifier(Modifier::BOLD)),
-                Span::styled(prefix.to_string(), Style::default().fg(cat_color)),
+                Span::styled(format!("{icon}{display_label} "), Style::default().fg(tool_color).add_modifier(Modifier::BOLD)),
+                Span::styled(prefix.to_string(), Style::default().fg(tool_color)),
                 Span::styled(display, Style::default().fg(theme.text_dim)),
                 Span::styled(dur_badge, Style::default().fg(theme.text_dim)),
             ];
@@ -437,6 +493,9 @@ impl MessageCell {
             spans.push(Span::styled(format!(" {status_icon}"), Style::default().fg(status_color).add_modifier(
                 if msg.duration_secs.is_none() && !msg.is_error { Modifier::BOLD } else { Modifier::empty() }
             )));
+            if msg.duration_secs.is_some() || msg.is_error {
+                spans.push(Span::styled(" \u{21B5}".to_string(), Style::default().fg(theme.muted)));
+            }
             lines.push(Line::from(spans));
             add_role_gutter(&mut lines, gutter_color);
             return lines;
@@ -473,7 +532,11 @@ impl MessageCell {
             let border_w = inner_width.clamp(20, 200);
 
             // Category icon and border color
-            let (cat_icon, cat_prefix, tool_border) = category_style(cat, theme);
+            let (cat_icon, cat_prefix, mut tool_border) = category_style(cat, theme);
+            // Force red border for error tools regardless of category
+            if msg.is_error {
+                tool_border = theme.error;
+            }
 
             // Top border: ╭─ toolname ── ✓ duration ──╮
             let (status_icon, status_color) = if msg.is_error {
@@ -743,8 +806,20 @@ impl MessageCell {
             }
 
             // Generic expanded tool: show content with row-aware truncation
+            let is_json = looks_like_json(&content);
             let row_budget: usize = if cat == ToolCategory::Agent { 3 } else { 10 };
-            let all_lines: Vec<String> = content.lines()
+
+            // For JSON content, try pretty-printing first
+            let display_content = if is_json {
+                match serde_json::from_str::<serde_json::Value>(&content) {
+                    Ok(v) => serde_json::to_string_pretty(&v).unwrap_or_else(|_| content.clone()),
+                    Err(_) => content.clone(),
+                }
+            } else {
+                content.clone()
+            };
+
+            let all_lines: Vec<String> = display_content.lines()
                 .filter(|l| !l.trim().is_empty())
                 .flat_map(|l| wrap_line(l, tool_width))
                 .collect();
@@ -753,10 +828,14 @@ impl MessageCell {
                 let head = row_budget / 2;
                 let tail = row_budget - head;
                 for line in &all_lines[..head] {
-                    lines.push(Line::from(vec![
-                        Span::styled("│ ", Style::default().fg(status_color)),
-                        Span::styled(line.clone(), Style::default().fg(theme.text_dim)),
-                    ]));
+                    let content_spans = if is_json {
+                        json_line_spans(line, theme)
+                    } else {
+                        vec![Span::styled(line.clone(), Style::default().fg(theme.text_dim))]
+                    };
+                    let mut spans = vec![Span::styled("│ ", Style::default().fg(status_color))];
+                    spans.extend(content_spans);
+                    lines.push(Line::from(spans));
                 }
                 let hidden = all_lines.len() - row_budget;
                 lines.push(Line::from(Span::styled(
@@ -764,20 +843,28 @@ impl MessageCell {
                     Style::default().fg(theme.muted),
                 )));
                 for line in &all_lines[all_lines.len().saturating_sub(tail)..] {
-                    lines.push(Line::from(vec![
-                        Span::styled("│ ", Style::default().fg(status_color)),
-                        Span::styled(line.clone(), Style::default().fg(theme.text_dim)),
-                    ]));
+                    let content_spans = if is_json {
+                        json_line_spans(line, theme)
+                    } else {
+                        vec![Span::styled(line.clone(), Style::default().fg(theme.text_dim))]
+                    };
+                    let mut spans = vec![Span::styled("│ ", Style::default().fg(status_color))];
+                    spans.extend(content_spans);
+                    lines.push(Line::from(spans));
                 }
             } else {
-                for raw_line in content.lines() {
+                for raw_line in display_content.lines() {
                     if raw_line.trim().is_empty() { continue; }
                     let wrapped = wrap_line(raw_line, tool_width);
                     for wl in wrapped {
-                        lines.push(Line::from(vec![
-                            Span::styled("│ ", Style::default().fg(status_color)),
-                            Span::styled(wl, Style::default().fg(theme.text_dim)),
-                        ]));
+                        let content_spans = if is_json {
+                            json_line_spans(&wl, theme)
+                        } else {
+                            vec![Span::styled(wl, Style::default().fg(theme.text_dim))]
+                        };
+                        let mut spans = vec![Span::styled("│ ", Style::default().fg(status_color))];
+                        spans.extend(content_spans);
+                        lines.push(Line::from(spans));
                     }
                 }
             }
