@@ -472,7 +472,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                 }
                 Ok(QueryEvent::Progress { message, .. }) => {
                     progress_status = format!("Working: {message}");
-                    response_text.push_str(&format!("\n⏳ {message}"));
+                    response_text.push_str(&format!("\n⏳ {message}\n"));
                     if let Ok(mut s) = ss.lock() {
                         s.status = progress_status.clone();
                         s.buffer = response_text.clone();

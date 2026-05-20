@@ -1925,6 +1925,16 @@ impl QueryEngine {
                                                 break;
                                             } else {
                                                 // No tool uses — save assistant text to conversation
+                                                if assistant_text.is_empty() && total_output_tokens > 0 {
+                                                    tracing::warn!(
+                                                        output_tokens = total_output_tokens,
+                                                        "Model returned output tokens but no text content — context may be too small"
+                                                    );
+                                                    send_event!(tx, QueryEvent::Warning {
+                                                        query_id,
+                                                        message: "Model produced no text output — context window may be too small for this turn.".to_string(),
+                                                    });
+                                                }
                                                 if !assistant_text.is_empty() {
                                                     conversation.messages.push(Message {
                                                         role: "assistant".to_string(),
