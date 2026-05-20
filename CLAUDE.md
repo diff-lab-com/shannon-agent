@@ -17,9 +17,9 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 
 | Crate | Responsibility | Tests |
 |-------|---------------|-------|
-| `shannon-core` | API client, query engine, permissions, tools, state management | ~2300 |
-| `shannon-ui` | Terminal UI (ratatui), REPL, vim mode, widgets, rendering | ~1018 |
-| `shannon-tools` | Tool implementations (bash, file ops, search, config manager) | ~576 |
+| `shannon-core` | API client, query engine, permissions, tools, state management | ~2476 |
+| `shannon-ui` | Terminal UI (ratatui), REPL, vim mode, widgets, rendering | ~1023 |
+| `shannon-tools` | Tool implementations (bash, file ops, search, config manager) | ~847 |
 | `shannon-commands` | Built-in commands (/help, /config, /pdf, /commit, etc.) | ~200 |
 | `shannon-agents` | Multi-agent orchestration | ~173 |
 | `shannon-cli` | CLI entry point (clap), config loading, non-interactive mode | ~91 |
@@ -78,7 +78,7 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **Tool grouping in UI**: Consecutive same-category tools not visually grouped (plan exists, not implemented).
 - **Streaming thinking display**: Thinking content streams as char count only, no inline preview.
 - **Inline diff stats**: Write/Edit tools don't show `+N -N` line counts in collapsed display.
-- **Test coverage**: 59 source files with zero test coverage (17 core, 33 UI, 9 tools). Compact/hooks/protection modules now covered (87 tests added).
+- **Test coverage**: 59 source files with zero test coverage (17 core, 33 UI, 9 tools). Recent additions: compact (67), hooks (20), streaming (27), task (20), write (8), messaging (8) = 150 new tests.
 
 ## Gotchas
 
