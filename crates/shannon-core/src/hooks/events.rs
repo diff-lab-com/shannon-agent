@@ -456,3 +456,212 @@ impl HookEvent {
         serde_json::to_vec(self).unwrap_or_default()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── HookEventType ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_event_type_display_roundtrip() {
+        let all_types = [
+            HookEventType::PreToolUse, HookEventType::PostToolUse,
+            HookEventType::SessionStart, HookEventType::SessionEnd,
+            HookEventType::Notification, HookEventType::UserPromptSubmit,
+            HookEventType::PreCompact, HookEventType::Stop,
+            HookEventType::FileChanged, HookEventType::CwdChanged,
+        ];
+        for ty in &all_types {
+            let s = ty.to_string();
+            assert_eq!(HookEventType::from_str_lossy(&s), Some(ty.clone()));
+        }
+    }
+
+    #[test]
+    fn test_from_str_lossy_unknown() {
+        assert_eq!(HookEventType::from_str_lossy("NonExistent"), None);
+        assert_eq!(HookEventType::from_str_lossy(""), None);
+    }
+
+    #[test]
+    fn test_from_str_lossy_all_variants() {
+        let all_strs = [
+            "PreToolUse", "PostToolUse", "SessionStart", "SessionEnd",
+            "Notification", "UserPromptSubmit", "TeamTaskCreated",
+            "TeamTaskCompleted", "TeammateIdle", "PreCompact",
+            "SubagentStart", "SubagentStop", "PermissionDenied", "Stop",
+            "PostToolUseFailure", "PostCompact", "StopFailure",
+            "FileChanged", "CwdChanged", "PermissionRequest",
+            "UserPromptExpansion", "PostToolBatch", "ConfigChange",
+            "InstructionsLoaded", "WorktreeCreate", "WorktreeRemove",
+            "Elicitation", "ElicitationResult", "TaskCreated", "TaskCompleted",
+        ];
+        for s in &all_strs {
+            assert!(HookEventType::from_str_lossy(s).is_some(), "Failed for {s}");
+        }
+    }
+
+    #[test]
+    fn test_event_type_serialization_roundtrip() {
+        let types = [HookEventType::PreToolUse, HookEventType::Stop, HookEventType::FileChanged];
+        for ty in &types {
+            let json = serde_json::to_string(ty).unwrap();
+            let parsed: HookEventType = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, *ty);
+        }
+    }
+
+    // ── HookEvent ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_pre_tool_use_event_type() {
+        let event = HookEvent::PreToolUse {
+            tool_name: "bash".to_string(),
+            input: serde_json::json!({"command": "ls"}),
+        };
+        assert_eq!(event.event_type(), HookEventType::PreToolUse);
+        assert_eq!(event.match_subject(), "bash");
+    }
+
+    #[test]
+    fn test_post_tool_use_event_type() {
+        let event = HookEvent::PostToolUse {
+            tool_name: "read".to_string(),
+            input: serde_json::json!({"path": "/tmp"}),
+            output: serde_json::json!("contents"),
+        };
+        assert_eq!(event.event_type(), HookEventType::PostToolUse);
+        assert_eq!(event.match_subject(), "read");
+    }
+
+    #[test]
+    fn test_session_events() {
+        let start = HookEvent::SessionStart { session_id: "s1".into() };
+        let end = HookEvent::SessionEnd { session_id: "s1".into() };
+        assert_eq!(start.event_type(), HookEventType::SessionStart);
+        assert_eq!(end.event_type(), HookEventType::SessionEnd);
+        assert_eq!(start.match_subject(), "s1");
+    }
+
+    #[test]
+    fn test_notification_event() {
+        let event = HookEvent::Notification { message: "hello".into() };
+        assert_eq!(event.event_type(), HookEventType::Notification);
+        assert_eq!(event.match_subject(), "hello");
+    }
+
+    #[test]
+    fn test_user_prompt_submit() {
+        let event = HookEvent::UserPromptSubmit { prompt: "fix bug".into() };
+        assert_eq!(event.event_type(), HookEventType::UserPromptSubmit);
+        assert_eq!(event.match_subject(), "fix bug");
+    }
+
+    #[test]
+    fn test_pre_compact() {
+        let event = HookEvent::PreCompact { messages_count: 50, estimated_tokens: 80000 };
+        assert_eq!(event.event_type(), HookEventType::PreCompact);
+        assert_eq!(event.match_subject(), "50");
+    }
+
+    #[test]
+    fn test_post_compact() {
+        let event = HookEvent::PostCompact { messages_before: 50, messages_after: 10, tokens_freed: 30000 };
+        assert_eq!(event.event_type(), HookEventType::PostCompact);
+        assert_eq!(event.match_subject(), "30000");
+    }
+
+    #[test]
+    fn test_stop_event() {
+        let event = HookEvent::Stop { tool_calls_count: 5, should_continue: false };
+        assert_eq!(event.event_type(), HookEventType::Stop);
+        assert_eq!(event.match_subject(), "5");
+    }
+
+    #[test]
+    fn test_file_changed_event() {
+        let event = HookEvent::FileChanged { path: "/src/main.rs".into(), change_type: "modify".into() };
+        assert_eq!(event.event_type(), HookEventType::FileChanged);
+        assert_eq!(event.match_subject(), "/src/main.rs");
+    }
+
+    #[test]
+    fn test_cwd_changed_event() {
+        let event = HookEvent::CwdChanged { old_cwd: "/old".into(), new_cwd: "/new".into() };
+        assert_eq!(event.event_type(), HookEventType::CwdChanged);
+        assert_eq!(event.match_subject(), "/new");
+    }
+
+    #[test]
+    fn test_permission_denied() {
+        let event = HookEvent::PermissionDenied {
+            tool_name: "bash".into(),
+            input: serde_json::json!({"command": "rm -rf /"}),
+            retry_count: 3,
+        };
+        assert_eq!(event.event_type(), HookEventType::PermissionDenied);
+        assert_eq!(event.match_subject(), "bash");
+    }
+
+    #[test]
+    fn test_post_tool_batch() {
+        let event = HookEvent::PostToolBatch {
+            tool_names: vec!["read".into(), "edit".into(), "bash".into()],
+            success_count: 2,
+            failure_count: 1,
+        };
+        assert_eq!(event.event_type(), HookEventType::PostToolBatch);
+        assert_eq!(event.match_subject(), "read,edit,bash");
+    }
+
+    #[test]
+    fn test_team_events() {
+        let created = HookEvent::TeamTaskCreated {
+            task_id: "t1".into(), team_name: "team".into(),
+            agent_name: Some("agent".into()), subject: "task".into(), priority: "high".into(),
+        };
+        let completed = HookEvent::TeamTaskCompleted {
+            task_id: "t1".into(), team_name: "team".into(),
+            agent_name: "agent".into(), subject: "task".into(),
+        };
+        let idle = HookEvent::TeammateIdle {
+            team_name: "team".into(), agent_name: "agent".into(), available_tasks: 3,
+        };
+        assert_eq!(created.event_type(), HookEventType::TeamTaskCreated);
+        assert_eq!(completed.event_type(), HookEventType::TeamTaskCompleted);
+        assert_eq!(idle.event_type(), HookEventType::TeammateIdle);
+    }
+
+    // ── Serialization ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_hook_event_json_roundtrip() {
+        let event = HookEvent::PreToolUse {
+            tool_name: "bash".into(),
+            input: serde_json::json!({"command": "ls -la"}),
+        };
+        let bytes = event.to_json_bytes();
+        assert!(!bytes.is_empty());
+        let parsed: HookEvent = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.event_type(), HookEventType::PreToolUse);
+    }
+
+    #[test]
+    fn test_hook_event_json_has_pascal_case() {
+        let event = HookEvent::PostToolUse {
+            tool_name: "x".into(),
+            input: serde_json::json!(null),
+            output: serde_json::json!(null),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"PostToolUse\""), "Expected PascalCase, got: {json}");
+    }
+
+    #[test]
+    fn test_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<HookEventType>();
+        assert_send_sync::<HookEvent>();
+    }
+}
