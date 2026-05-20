@@ -51,13 +51,34 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **Mockito**: For HTTP API tests. Server matchers are order-dependent with `.expect(N)`.
 - **Test helpers**: `CollectingSender` (progress sender), `tempfile::TempDir` (file tests), `mockito::Server` (HTTP tests).
 
-## Known Gaps (compared to Claude Code/Codex/OpenCode)
+## Known Gaps (vs Claude Code / Codex CLI / OpenCode)
 
-- **shannon-desktop**: Scaffolded Tauri app with TODO stubs for QueryEngine, model_registry, tool_registry.
-- **Plugin system**: Module structure exists (`crates/shannon-core/src/plugin/`) but marked "scaffolded for future use".
+### CRITICAL — Shannon lacks entirely
+
+- **Permission auto-mode**: Claude Code has AI-based classifier that auto-allows safe operations. Shannon has manual allow/deny only.
+- **Rich subagent system**: Claude Code/Codex support spawning per-task agents with isolated context, tool restrictions, and model overrides. Shannon's `shannon-agents` has orchestration but no per-agent config or isolation.
+- **Non-interactive/CI mode**: `claude -p` and `codex exec` support headless execution. Shannon has `--non-interactive` flag but limited tool approval flow.
+- **Session resume by ID**: Competitors can resume past sessions. Shannon has session files but no `--resume <id>` CLI flag.
+- **Worktree isolation**: Claude Code creates git worktrees for isolated agent work. No equivalent in Shannon.
+
+### HIGH — Shannon has partial support
+
+- **MCP tool search**: `tools/list` works, but no `tools/call` pagination or tool search/filter for large MCP server fleets.
+- **Auto-trigger compaction**: `CompactConfig.trigger_threshold` exists but no background compaction loop — compaction is manual (`/compact`) only.
+- **Project memory (MEMORY.md)**: `MemoryStore` + `AutoDreamService` exist but no `MEMORY.md` index file pattern like Claude Code for cross-session context.
+- **LSP diagnostics integration**: OpenCode has real-time `tsc --noEmit` / `cargo check` integration. Shannon has no LSP client.
+- **Plugin system wiring**: Module structure exists (`crates/shannon-core/src/plugin/`) but marked "scaffolded for future use".
+- **Desktop app**: Scaffolded Tauri app with TODO stubs for QueryEngine, model_registry, tool_registry.
+
+### MEDIUM — Quality-of-life gaps
+
 - **File watching**: Limited to skill files only; no general project file watching.
 - **Vision/multimodal**: Display only; no vision model integration for image analysis.
 - **Patch application**: Basic diff rendering; no three-way merge or conflict markers.
+- **Tool grouping in UI**: Consecutive same-category tools not visually grouped (plan exists, not implemented).
+- **Streaming thinking display**: Thinking content streams as char count only, no inline preview.
+- **Inline diff stats**: Write/Edit tools don't show `+N -N` line counts in collapsed display.
+- **Test coverage**: 59 source files with zero test coverage (17 core, 33 UI, 9 tools). Compact/hooks/protection modules now covered (87 tests added).
 
 ## Gotchas
 
