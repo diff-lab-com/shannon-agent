@@ -1089,11 +1089,14 @@ impl Tool for BashTool {
     }
 }
 
-/// Strip ANSI escape sequences from a string.
+/// Strip non-renderable ANSI escape sequences, preserving SGR color/style codes.
+///
+/// Keeps `\x1b[...m` sequences (colors, bold, underline, reset) but removes
+/// cursor movement, screen clearing, and other control sequences.
 fn strip_ansi(s: &str) -> String {
-    regex::Regex::new(r"\x1b\[[0-9;]*[a-zA-Z]")
-        .map(|re| re.replace_all(s, "").into_owned())
-        .unwrap_or_else(|_| s.to_string())
+    // Strip all CSI sequences except SGR (which ends with 'm')
+    let re = regex::Regex::new(r"\x1b\[[0-9;]*[A-HJ-Za-ln-z]").unwrap();
+    re.replace_all(s, "").into_owned()
 }
 
 impl BashTool {
@@ -1953,13 +1956,22 @@ mod tests {
     }
 
     #[test]
-    fn test_strip_ansi_removes_escape_codes() {
-        let input = "\x1b[32mok\x1b[0m done";
-        assert_eq!(strip_ansi(input), "ok done");
+    fn test_strip_ansi_preserves_colors_removes_control() {
+        // Color codes (SGR) are preserved
+        let colored = "\x1b[32mok\x1b[0m done";
+        assert_eq!(strip_ansi(colored), "\x1b[32mok\x1b[0m done");
 
         let no_ansi = "plain text";
         assert_eq!(strip_ansi(no_ansi), "plain text");
 
         let multi = "\x1b[1;34mheader\x1b[0m\n\x1b[31merror\x1b[0m";
-        assert_eq!(strip_ansi(multi), "header\nerror");
+        assert_eq!(strip_ansi(multi), "\x1b[1;34mheader\x1b[0m\n\x1b[31merror\x1b[0m");
+
+        // Cursor movement and clear screen are stripped
+        let cursor = "\x1b[2J\x1b[H\x1b[1mbold\x1b[0m";
+        assert_eq!(strip_ansi(cursor), "\x1b[1mbold\x1b[0m");
+
+        // Cursor up/down are stripped
+        let movement = "line1\x1b[A\x1b[2Kline2";
+        assert_eq!(strip_ansi(movement), "line1line2");
     }

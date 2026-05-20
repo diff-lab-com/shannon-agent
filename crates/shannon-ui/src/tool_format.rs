@@ -150,6 +150,10 @@ const JSON_MAX_LINES: usize = 50;
 
 /// Maximum number of characters to show for a single tool result before truncation
 const MAX_RESULT_CHARS: usize = 2000;
+/// Line count threshold above which results are line-truncated
+const MAX_RESULT_LINES: usize = 100;
+/// Number of lines to show when line-truncating
+const VISIBLE_RESULT_LINES: usize = 20;
 
 /// Clean up a tool name for display. MCP tools have the format
 /// `mcp__plugin_{server}__{method}` — this extracts `{server}: {method}`.
@@ -322,15 +326,32 @@ pub fn format_tool_result_full(tool_name: &str, result: &str, is_error: bool) ->
 
 /// Truncate result to a reasonable display length, appending an indicator if truncated.
 fn truncate_result(result: &str) -> String {
-    if result.len() <= MAX_RESULT_CHARS {
-        result.to_string()
+    // Line-based truncation: for very long results, show only first N lines
+    let lines: Vec<&str> = result.lines().collect();
+    let line_truncated = if lines.len() > MAX_RESULT_LINES {
+        let visible: String = lines[..VISIBLE_RESULT_LINES].join("\n");
+        format!(
+            "{}\n{}  [... {} more lines ({} total)]{}",
+            visible,
+            colors::DIM,
+            lines.len() - VISIBLE_RESULT_LINES,
+            lines.len(),
+            colors::RESET,
+        )
     } else {
-        let truncated: String = result.chars().take(MAX_RESULT_CHARS).collect();
+        result.to_string()
+    };
+
+    // Character-based truncation on top of line truncation
+    if line_truncated.len() <= MAX_RESULT_CHARS {
+        line_truncated
+    } else {
+        let truncated: String = line_truncated.chars().take(MAX_RESULT_CHARS).collect();
         format!(
             "{}{}  [... {} more characters]{}",
             truncated,
             colors::DIM,
-            result.len() - MAX_RESULT_CHARS,
+            line_truncated.len() - MAX_RESULT_CHARS,
             colors::RESET,
         )
     }

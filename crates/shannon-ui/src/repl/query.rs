@@ -22,6 +22,43 @@ fn animated_dots(_elapsed: std::time::Duration) -> &'static str {
     "···"
 }
 
+/// Wrap a single line to fit within `max_width` columns, breaking at char boundaries.
+/// Returns a list of lines, each prefixed with `indent`.
+fn wrap_line(line: &str, max_width: usize, indent: &str) -> Vec<String> {
+    if line.len() <= max_width {
+        return vec![format!("{indent}{line}")];
+    }
+    let indent_len = indent.len();
+    let content_width = max_width.saturating_sub(indent_len);
+    if content_width == 0 {
+        return vec![format!("{indent}{line}")];
+    }
+    let mut result = Vec::new();
+    let mut remaining = line;
+    let mut first = true;
+    while !remaining.is_empty() {
+        let width = if first { max_width } else { content_width };
+        let prefix = if first { indent } else { indent };
+        if remaining.len() <= width {
+            result.push(format!("{prefix}{remaining}"));
+            break;
+        }
+        // Find a break point near the width
+        let mut break_at = width;
+        while break_at > 0 && !remaining.is_char_boundary(break_at) {
+            break_at -= 1;
+        }
+        // Try to break at a space
+        if let Some(sp) = remaining[..break_at].rfind(' ') {
+            break_at = sp + 1;
+        }
+        result.push(format!("{prefix}{}", &remaining[..break_at]));
+        remaining = &remaining[break_at..];
+        first = false;
+    }
+    result
+}
+
 use crate::{
     stream_buffer::StreamBuffer,
     widgets::ChatRole,
@@ -70,6 +107,7 @@ struct StreamingState {
     /// Optional keyword filter for streaming output — only show matching lines
     streaming_filter: Option<String>,
     /// Cancel flag — set to true to abort a running streaming tool
+    #[allow(dead_code)]
     cancel_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Rate limit info from API (used, total)
     rate_limit: Option<(u32, u32)>,
@@ -249,7 +287,8 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                         };
                         let hidden = lines.len().saturating_sub(visible);
                         let above = if hidden > 0 { format!("  ... {} more lines above\n", hidden) } else { String::new() };
-                        let body = visible_lines.iter().map(|l| format!("  {l}")).collect::<Vec<_>>().join("\n");
+                        let term_w = crossterm::terminal::size().map(|(w, _)| w as usize).unwrap_or(100);
+                        let body = visible_lines.iter().flat_map(|l| wrap_line(l, term_w, "  ")).collect::<Vec<_>>().join("\n");
                         s.buffer = format!("{response_text}{header}\n{above}{body}\n  ╰─");
                     }
                 }
@@ -308,10 +347,28 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     }
                 }
                 Ok(QueryEvent::ToolUseResult { tool_name, result, is_error, .. }) => {
-                    // Clear any streaming content — the final result replaces it
+                    // Capture streaming stats before clearing, then collapse
+                    let streaming_summary = if let Ok(s) = ss.lock() {
+                        let line_count = s.tool_streaming_content.lines().count();
+                        let elapsed = s.streaming_start.map(|t| t.elapsed().as_secs_f64());
+                        if line_count > 0 && elapsed.is_some() {
+                            let e = elapsed.unwrap();
+                            let icon = if is_error { "✗" } else { "✓" };
+                            Some(format!("\n  ▸ {tool_name} ({e:.1}s, {line_count} lines) {icon}"))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    // Clear any streaming content
                     if let Ok(mut s) = ss.lock() {
                         s.tool_streaming_content.clear();
                         s.streaming_start = None;
+                    }
+                    // Add compact streaming summary to history
+                    if let Some(ref summary) = streaming_summary {
+                        response_text.push_str(summary);
                     }
                     let duration_str = tool_start_times.remove(&tool_name).map(|start| {
                         let elapsed = start.elapsed();
@@ -457,7 +514,8 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                             };
                             let hidden = display_count.saturating_sub(visible_count);
                             let above = if hidden > 0 { format!("  ... {} more matches above\n", hidden) } else { String::new() };
-                            let body = visible_lines.iter().map(|l| format!("  {l}")).collect::<Vec<_>>().join("\n");
+                            let term_w = crossterm::terminal::size().map(|(w, _)| w as usize).unwrap_or(100);
+                            let body = visible_lines.iter().flat_map(|l| wrap_line(l, term_w, "  ")).collect::<Vec<_>>().join("\n");
                             s.buffer = format!("{response_text}{header}\n{above}{body}\n  ╰─");
                         }
                     } else {
