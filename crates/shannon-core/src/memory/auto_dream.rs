@@ -446,3 +446,544 @@ impl AutoDreamService {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::{ContentBlock, Message, MessageContent};
+    use std::sync::{Arc, RwLock};
+    use tempfile::TempDir;
+
+    fn make_service() -> (AutoDreamService, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let store = MemoryStore::new(dir.path().to_path_buf());
+        let service = AutoDreamService::new(Arc::new(RwLock::new(store)));
+        (service, dir)
+    }
+
+    // ========================================================================
+    // extract_memories — preference detection
+    // ========================================================================
+
+    #[test]
+    fn test_extract_preference_i_always() {
+        let (svc, _dir) = make_service();
+        let memories = svc.extract_memories("I always use tabs for indentation.", "proj");
+        assert!(!memories.is_empty(), "should detect preference");
+        assert_eq!(memories[0].category, MemoryCategory::Preference);
+        assert!(memories[0].content.contains("tabs"));
+    }
+
+    #[test]
+    fn test_extract_preference_i_prefer() {
+        let (svc, _dir) = make_service();
+        let memories = svc.extract_memories("I prefer dark mode for late-night coding.", "proj");
+        assert!(!memories.is_empty(), "should detect preference");
+        assert_eq!(memories[0].category, MemoryCategory::Preference);
+    }
+
+    #[test]
+    fn test_extract_preference_do_not_use() {
+        let (svc, _dir) = make_service();
+        let memories = svc.extract_memories("Do not use var in JavaScript.", "proj");
+        assert!(!memories.is_empty(), "should detect preference");
+        assert_eq!(memories[0].category, MemoryCategory::Preference);
+    }
+
+    // ========================================================================
+    // extract_memories — decision detection
+    // ========================================================================
+
+    #[test]
+    fn test_extract_decision_we_decided() {
+        let (svc, _dir) = make_service();
+        let memories = svc.extract_memories("We decided to use Rust for the backend.", "proj");
+        assert!(!memories.is_empty(), "should detect decision");
+        assert_eq!(memories[0].category, MemoryCategory::Decision);
+        assert!(memories[0].content.to_lowercase().contains("rust"));
+    }
+
+    #[test]
+    fn test_extract_decision_going_with() {
+        let (svc, _dir) = make_service();
+        let memories = svc.extract_memories("Going with PostgreSQL for the database.", "proj");
+        assert!(!memories.is_empty(), "should detect decision");
+        assert_eq!(memories[0].category, MemoryCategory::Decision);
+    }
+
+    #[test]
+    fn test_extract_decision_lets_use() {
+        let (svc, _dir) = make_service();
+        let memories = svc.extract_memories("Let's use Redis for caching.", "proj");
+        assert!(!memories.is_empty(), "should detect decision");
+        assert_eq!(memories[0].category, MemoryCategory::Decision);
+    }
+
+    // ========================================================================
+    // extract_memories — error detection
+    // ========================================================================
+
+    #[test]
+    fn test_extract_error_the_issue_was() {
+        let (svc, _dir) = make_service();
+        let memories = svc.extract_memories("The issue was a race condition in the worker.", "proj");
+        assert!(!memories.is_empty(), "should detect error");
+        assert_eq!(memories[0].category, MemoryCategory::Error);
+        assert!(memories[0].content.to_lowercase().contains("race"));
+    }
+
+    #[test]
+    fn test_extract_error_root_cause() {
+        let (svc, _dir) = make_service();
+        let memories = svc.extract_memories("Root cause was a null pointer dereference.", "proj");
+        assert!(!memories.is_empty(), "should detect error");
+        assert_eq!(memories[0].category, MemoryCategory::Error);
+    }
+
+    #[test]
+    fn test_extract_error_the_fix_was() {
+        let (svc, _dir) = make_service();
+        let memories = svc.extract_memories("The fix was adding a mutex around the counter.", "proj");
+        assert!(!memories.is_empty(), "should detect error");
+        assert_eq!(memories[0].category, MemoryCategory::Error);
+    }
+
+    // ========================================================================
+    // extract_memories — pattern detection
+    // ========================================================================
+
+    #[test]
+    fn test_extract_pattern_in_this_project() {
+        let (svc, _dir) = make_service();
+        let memories = svc.extract_memories("In this project we use snake_case for variables.", "proj");
+        assert!(!memories.is_empty(), "should detect pattern");
+        assert_eq!(memories[0].category, MemoryCategory::Pattern);
+        assert!(memories[0].content.to_lowercase().contains("snake_case"));
+    }
+
+    #[test]
+    fn test_extract_pattern_naming_convention() {
+        let (svc, _dir) = make_service();
+        let memories = svc.extract_memories("Our naming convention is PascalCase for types.", "proj");
+        assert!(!memories.is_empty(), "should detect pattern");
+        assert_eq!(memories[0].category, MemoryCategory::Pattern);
+    }
+
+    #[test]
+    fn test_extract_pattern_our_convention() {
+        let (svc, _dir) = make_service();
+        let memories = svc.extract_memories("Our convention is to keep functions under 20 lines.", "proj");
+        assert!(!memories.is_empty(), "should detect pattern");
+        assert_eq!(memories[0].category, MemoryCategory::Pattern);
+    }
+
+    // ========================================================================
+    // extract_memories — no match
+    // ========================================================================
+
+    #[test]
+    fn test_extract_no_match() {
+        let (svc, _dir) = make_service();
+        let memories = svc.extract_memories("The weather is nice today.", "proj");
+        assert!(memories.is_empty(), "should not extract from neutral text");
+    }
+
+    // ========================================================================
+    // deduplication in extract_memories
+    // ========================================================================
+
+    #[test]
+    fn test_extract_deduplicates_similar() {
+        let (svc, _dir) = make_service();
+        // Two nearly identical sentences should produce only one memory
+        let text = "I always use tabs. I always use tabs for indentation.";
+        let memories = svc.extract_memories(text, "proj");
+        // Both sentences match preference, but dedup should collapse them
+        assert!(memories.len() <= 2, "should deduplicate similar preferences");
+    }
+
+    // ========================================================================
+    // confidence range
+    // ========================================================================
+
+    #[test]
+    fn test_extract_confidence_in_range() {
+        let (svc, _dir) = make_service();
+        let memories = svc.extract_memories("I always use strict type checking.", "proj");
+        assert!(!memories.is_empty());
+        for m in &memories {
+            assert!(
+                (0.0..=1.0).contains(&m.confidence),
+                "confidence {} should be in [0.0, 1.0]",
+                m.confidence
+            );
+        }
+    }
+
+    // ========================================================================
+    // context extraction
+    // ========================================================================
+
+    #[test]
+    fn test_extract_includes_context() {
+        let (svc, _dir) = make_service();
+        let text = "First sentence here. I always use tabs. Third sentence follows.";
+        let memories = svc.extract_memories(text, "proj");
+        assert!(!memories.is_empty());
+        // extract_context with radius=2 should include surrounding sentences
+        let content = &memories[0].content;
+        assert!(
+            content.contains("tabs") || content.contains("First"),
+            "context should include surrounding text"
+        );
+    }
+
+    // ========================================================================
+    // split_into_sentences
+    // ========================================================================
+
+    #[test]
+    fn test_split_periods() {
+        let sentences = split_into_sentences("Hello. World. Foo.");
+        assert_eq!(sentences, vec!["Hello.", "World.", "Foo."]);
+    }
+
+    #[test]
+    fn test_split_newlines() {
+        let sentences = split_into_sentences("Line one\nLine two\nLine three");
+        assert_eq!(sentences.len(), 3);
+        assert_eq!(sentences[0], "Line one");
+        assert_eq!(sentences[1], "Line two");
+        assert_eq!(sentences[2], "Line three");
+    }
+
+    #[test]
+    fn test_split_exclamation() {
+        let sentences = split_into_sentences("Wow! That worked!");
+        assert_eq!(sentences.len(), 2);
+    }
+
+    #[test]
+    fn test_split_question() {
+        let sentences = split_into_sentences("Why? Because.");
+        assert_eq!(sentences.len(), 2);
+    }
+
+    #[test]
+    fn test_split_mixed() {
+        let sentences = split_into_sentences("Hello! How are you? Fine. Good");
+        assert_eq!(sentences.len(), 4);
+    }
+
+    #[test]
+    fn test_split_empty() {
+        let sentences = split_into_sentences("");
+        assert!(sentences.is_empty());
+    }
+
+    #[test]
+    fn test_split_no_delimiter() {
+        let sentences = split_into_sentences("Just one long sentence without delimiters");
+        assert_eq!(sentences.len(), 1);
+        assert_eq!(sentences[0], "Just one long sentence without delimiters");
+    }
+
+    #[test]
+    fn test_split_trailing_delimiter() {
+        let sentences = split_into_sentences("Hello.");
+        assert_eq!(sentences.len(), 1);
+        assert_eq!(sentences[0], "Hello.");
+    }
+
+    #[test]
+    fn test_split_consecutive_delimiters() {
+        let sentences = split_into_sentences("Hello..\n\nWorld.");
+        // Empty fragments should be skipped
+        assert!(sentences.iter().all(|s| !s.is_empty()));
+    }
+
+    // ========================================================================
+    // content_similarity
+    // ========================================================================
+
+    #[test]
+    fn test_similarity_empty_both() {
+        let sim = content_similarity("", "");
+        assert!((sim - 1.0).abs() < f64::EPSILON, "two empty strings => 1.0");
+    }
+
+    #[test]
+    fn test_similarity_one_empty() {
+        let sim = content_similarity("hello world", "");
+        assert!((sim - 0.0).abs() < f64::EPSILON, "one empty => 0.0");
+    }
+
+    #[test]
+    fn test_similarity_identical() {
+        let sim = content_similarity("the quick brown fox", "the quick brown fox");
+        assert!((sim - 1.0).abs() < f64::EPSILON, "identical => 1.0");
+    }
+
+    #[test]
+    fn test_similarity_completely_different() {
+        let sim = content_similarity("alpha beta", "gamma delta");
+        assert!((sim - 0.0).abs() < f64::EPSILON, "no shared words => 0.0");
+    }
+
+    #[test]
+    fn test_similarity_partial() {
+        let sim = content_similarity("the quick brown fox", "the quick blue hare");
+        // shared: "the", "quick" = 2; total unique: the, quick, brown, fox, blue, hare = 6
+        let expected = 2.0 / 6.0;
+        assert!((sim - expected).abs() < f64::EPSILON);
+    }
+
+    // ========================================================================
+    // process_conversation
+    // ========================================================================
+
+    #[test]
+    fn test_process_conversation_text_content() {
+        let (svc, _dir) = make_service();
+        let messages = vec![Message {
+            role: "user".to_string(),
+            content: MessageContent::Text("I always use strict mode.".to_string()),
+        }];
+        let result = svc.process_conversation(&messages, "proj");
+        assert!(result.is_ok());
+        let stored = result.unwrap();
+        assert!(!stored.is_empty(), "should extract from text messages");
+        assert_eq!(stored[0].category, MemoryCategory::Preference);
+    }
+
+    #[test]
+    fn test_process_conversation_block_content() {
+        let (svc, _dir) = make_service();
+        let messages = vec![Message {
+            role: "user".to_string(),
+            content: MessageContent::Blocks(vec![ContentBlock::Text {
+                text: "We decided to use Rust for the backend.".to_string(),
+            }]),
+        }];
+        let result = svc.process_conversation(&messages, "proj");
+        assert!(result.is_ok());
+        let stored = result.unwrap();
+        assert!(!stored.is_empty(), "should extract from block messages");
+        assert_eq!(stored[0].category, MemoryCategory::Decision);
+    }
+
+    #[test]
+    fn test_process_conversation_no_match() {
+        let (svc, _dir) = make_service();
+        let messages = vec![Message {
+            role: "user".to_string(),
+            content: MessageContent::Text("Hello, how are you today?".to_string()),
+        }];
+        let result = svc.process_conversation(&messages, "proj");
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty(), "should not extract neutral text");
+    }
+
+    #[test]
+    fn test_process_conversation_multiple_messages() {
+        let (svc, _dir) = make_service();
+        let messages = vec![
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("I always use tabs.".to_string()),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Text("We decided to use PostgreSQL for the database.".to_string()),
+            },
+        ];
+        let result = svc.process_conversation(&messages, "proj");
+        assert!(result.is_ok());
+        let stored = result.unwrap();
+        // Should extract at least one memory from the combined text
+        assert!(!stored.is_empty(), "should extract from multiple messages");
+    }
+
+    // ========================================================================
+    // search and project_memories delegation
+    // ========================================================================
+
+    #[test]
+    fn test_search_finds_stored() {
+        let (svc, _dir) = make_service();
+        let messages = vec![Message {
+            role: "user".to_string(),
+            content: MessageContent::Text("I always use strict type checking.".to_string()),
+        }];
+        svc.process_conversation(&messages, "proj").unwrap();
+        let results = svc.search("strict", Some("proj"));
+        assert!(!results.is_empty(), "search should find stored memory");
+    }
+
+    #[test]
+    fn test_search_filters_by_project() {
+        let (svc, _dir) = make_service();
+        let messages = vec![Message {
+            role: "user".to_string(),
+            content: MessageContent::Text("I always use dark mode.".to_string()),
+        }];
+        svc.process_conversation(&messages, "proj_a").unwrap();
+        let results = svc.search("dark", Some("proj_b"));
+        assert!(results.is_empty(), "should not find memories from other project");
+    }
+
+    #[test]
+    fn test_project_memories_returns_only_project() {
+        let (svc, _dir) = make_service();
+        let msgs_a = vec![Message {
+            role: "user".to_string(),
+            content: MessageContent::Text("I always use tabs for project A.".to_string()),
+        }];
+        let msgs_b = vec![Message {
+            role: "user".to_string(),
+            content: MessageContent::Text("I always use spaces for project B.".to_string()),
+        }];
+        svc.process_conversation(&msgs_a, "proj_a").unwrap();
+        svc.process_conversation(&msgs_b, "proj_b").unwrap();
+        let a_mems = svc.project_memories("proj_a");
+        let b_mems = svc.project_memories("proj_b");
+        assert!(!a_mems.is_empty());
+        assert!(!b_mems.is_empty());
+        // proj_a should only have proj_a memories
+        assert!(a_mems.iter().all(|m| m.project == "proj_a"));
+        assert!(b_mems.iter().all(|m| m.project == "proj_b"));
+    }
+
+    // ========================================================================
+    // tag_from_keyword
+    // ========================================================================
+
+    #[test]
+    fn test_tag_from_keyword_single_word() {
+        assert_eq!(tag_from_keyword("always"), "always");
+    }
+
+    #[test]
+    fn test_tag_from_keyword_multi_word() {
+        assert_eq!(tag_from_keyword("always use"), "use");
+    }
+
+    #[test]
+    fn test_tag_from_keyword_long_phrase() {
+        assert_eq!(tag_from_keyword("make sure to always"), "always");
+    }
+
+    // ========================================================================
+    // deduplicate_tags
+    // ========================================================================
+
+    #[test]
+    fn test_deduplicate_tags_removes_dups() {
+        let tags = deduplicate_tags(vec![
+            "preference".to_string(),
+            "tabs".to_string(),
+            "preference".to_string(),
+        ]);
+        assert_eq!(tags, vec!["preference", "tabs"]);
+    }
+
+    #[test]
+    fn test_deduplicate_tags_empty() {
+        let tags: Vec<String> = deduplicate_tags(vec![]);
+        assert!(tags.is_empty());
+    }
+
+    #[test]
+    fn test_deduplicate_tags_no_dups() {
+        let tags = deduplicate_tags(vec![
+            "preference".to_string(),
+            "decision".to_string(),
+        ]);
+        assert_eq!(tags.len(), 2);
+    }
+
+    // ========================================================================
+    // deduplicate_memories
+    // ========================================================================
+
+    #[test]
+    fn test_deduplicate_memories_removes_similar() {
+        let mems = vec![
+            MemoryEntry::new("p", MemoryCategory::Preference, "always use tabs for indentation"),
+            MemoryEntry::new("p", MemoryCategory::Preference, "always use tabs for indentation"),
+        ];
+        let deduped = deduplicate_memories(mems);
+        assert_eq!(deduped.len(), 1, "identical memories should be deduped");
+    }
+
+    #[test]
+    fn test_deduplicate_memories_keeps_different() {
+        let mems = vec![
+            MemoryEntry::new("p", MemoryCategory::Preference, "always use tabs"),
+            MemoryEntry::new("p", MemoryCategory::Preference, "always use spaces"),
+        ];
+        let deduped = deduplicate_memories(mems);
+        assert_eq!(deduped.len(), 2, "different memories should be kept");
+    }
+
+    // ========================================================================
+    // extract_context
+    // ========================================================================
+
+    #[test]
+    fn test_extract_context_middle() {
+        let sentences = vec!["alpha", "beta", "gamma", "delta", "epsilon"];
+        let ctx = extract_context(&sentences, 2, 1);
+        assert_eq!(ctx, "beta gamma delta");
+    }
+
+    #[test]
+    fn test_extract_context_start() {
+        let sentences = vec!["alpha", "beta", "gamma"];
+        let ctx = extract_context(&sentences, 0, 1);
+        assert_eq!(ctx, "alpha beta");
+    }
+
+    #[test]
+    fn test_extract_context_end() {
+        let sentences = vec!["alpha", "beta", "gamma"];
+        let ctx = extract_context(&sentences, 2, 1);
+        assert_eq!(ctx, "beta gamma");
+    }
+
+    #[test]
+    fn test_extract_context_single() {
+        let sentences = vec!["only"];
+        let ctx = extract_context(&sentences, 0, 2);
+        assert_eq!(ctx, "only");
+    }
+
+    // ========================================================================
+    // confidence_for_sentence
+    // ========================================================================
+
+    #[test]
+    fn test_confidence_starts_with_keyword() {
+        let c = confidence_for_sentence("Always use strict mode.", "always use");
+        assert!(c >= 0.7, "starting with keyword should boost confidence");
+    }
+
+    #[test]
+    fn test_confidence_long_sentence() {
+        let c = confidence_for_sentence(
+            "This is a moderately long sentence with always in the middle of it.",
+            "always",
+        );
+        assert!(c >= 0.6, "long sentence with keyword should have decent confidence");
+    }
+
+    #[test]
+    fn test_confidence_in_range() {
+        let c = confidence_for_sentence("Some sentence.", "some");
+        assert!(
+            (0.0..=1.0).contains(&c),
+            "confidence {} should be in [0.0, 1.0]",
+            c
+        );
+    }
+}

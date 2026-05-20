@@ -1434,4 +1434,135 @@ mod tests {
         let spans = parse_inline_formatting("hello **world** end", Color::White, &theme);
         assert!(spans.len() >= 3);
     }
+
+    // ── MessageCell grouping fields ───────────────────────────────────────
+
+    #[test]
+    fn test_message_cell_default_group_count_zero() {
+        let msg = test_message(ChatRole::Tool, "output");
+        let cell = MessageCell::new(msg, true);
+        assert_eq!(cell.group_count, 0, "new cell should have group_count 0");
+    }
+
+    #[test]
+    fn test_message_cell_default_not_group_hidden() {
+        let msg = test_message(ChatRole::Tool, "output");
+        let cell = MessageCell::new(msg, true);
+        assert!(!cell.group_hidden, "new cell should not be group_hidden");
+    }
+
+    #[test]
+    fn test_message_cell_default_group_total_secs_zero() {
+        let msg = test_message(ChatRole::Tool, "output");
+        let cell = MessageCell::new(msg, true);
+        assert_eq!(cell.group_total_secs, 0.0);
+    }
+
+    #[test]
+    fn test_message_cell_group_count_set() {
+        let msg = test_message(ChatRole::Tool, "output");
+        let mut cell = MessageCell::new(msg, true);
+        cell.group_count = 5;
+        assert_eq!(cell.group_count, 5);
+    }
+
+    #[test]
+    fn test_message_cell_group_hidden_set() {
+        let msg = test_message(ChatRole::Tool, "output");
+        let mut cell = MessageCell::new(msg, true);
+        cell.group_hidden = true;
+        assert!(cell.group_hidden);
+    }
+
+    #[test]
+    fn test_message_cell_group_total_secs_set() {
+        let msg = test_message(ChatRole::Tool, "output");
+        let mut cell = MessageCell::new(msg, true);
+        cell.group_total_secs = 3.7;
+        assert!((cell.group_total_secs - 3.7).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_message_cell_group_hidden_zero_desired_height() {
+        let msg = test_message(ChatRole::Assistant, "some content");
+        let mut cell = MessageCell::new(msg, false);
+        cell.group_hidden = true;
+        let h = cell.desired_height(80);
+        assert_eq!(h, 0, "hidden cell should have zero desired height");
+    }
+
+    // ── MessageCell continuation ──────────────────────────────────────────
+
+    #[test]
+    fn test_message_cell_default_not_continuation() {
+        let msg = test_message(ChatRole::Assistant, "content");
+        let cell = MessageCell::new(msg, false);
+        assert!(!cell.is_continuation());
+    }
+
+    #[test]
+    fn test_message_cell_set_continuation() {
+        let msg = test_message(ChatRole::Assistant, "content");
+        let mut cell = MessageCell::new(msg, false);
+        cell.set_continuation(true);
+        assert!(cell.is_continuation());
+        cell.set_continuation(false);
+        assert!(!cell.is_continuation());
+    }
+
+    // ── MessageCell set_message ───────────────────────────────────────────
+
+    #[test]
+    fn test_message_cell_set_message_updates_content() {
+        let msg = test_message(ChatRole::Assistant, "original");
+        let mut cell = MessageCell::new(msg, false);
+        assert_eq!(cell.message.content, "original");
+
+        let mut new_msg = test_message(ChatRole::Assistant, "updated");
+        new_msg.diff_stats = Some((3, 1));
+        cell.set_message(new_msg);
+        assert_eq!(cell.message.content, "updated");
+        assert_eq!(cell.message.diff_stats, Some((3, 1)));
+    }
+
+    // ── MessageCell cache invalidation on set_message ─────────────────────
+
+    #[test]
+    fn test_message_cell_set_message_invalidates_cache() {
+        let msg = test_message(ChatRole::Assistant, "content");
+        let mut cell = MessageCell::new(msg, false);
+        // Populate cache
+        let _ = cell.desired_height(80);
+        assert_ne!(cell.cached_width.load(Ordering::Relaxed), u16::MAX);
+
+        let new_msg = test_message(ChatRole::Assistant, "new content");
+        cell.set_message(new_msg);
+        assert_eq!(cell.cached_width.load(Ordering::Relaxed), u16::MAX, "cache should be invalidated after set_message");
+    }
+
+    // ── ChatRole equality ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_chat_role_equality() {
+        assert_eq!(ChatRole::User, ChatRole::User);
+        assert_eq!(ChatRole::Assistant, ChatRole::Assistant);
+        assert_eq!(ChatRole::Tool, ChatRole::Tool);
+        assert_eq!(ChatRole::System, ChatRole::System);
+        assert_ne!(ChatRole::User, ChatRole::Assistant);
+        assert_ne!(ChatRole::Tool, ChatRole::System);
+    }
+
+    // ── ChatMessage clone ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_chat_message_clone() {
+        let mut msg = test_message(ChatRole::Tool, "output");
+        msg.tool_name = Some("bash".to_string());
+        msg.diff_stats = Some((5, 3));
+        let clone = msg.clone();
+        assert_eq!(clone.role, ChatRole::Tool);
+        assert_eq!(clone.content, "output");
+        assert_eq!(clone.tool_name, Some("bash".to_string()));
+        assert_eq!(clone.diff_stats, Some((5, 3)));
+    }
 }

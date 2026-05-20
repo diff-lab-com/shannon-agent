@@ -58,14 +58,82 @@ pub fn serialize_request(request: &MessageRequest, provider: &LlmProvider) -> Va
                     };
                 }
             }
-            serde_json::to_value(&req).unwrap_or_else(|e| {
+            let mut val = serde_json::to_value(&req).unwrap_or_else(|e| {
                 tracing::error!("Failed to serialize Anthropic request: {e}");
                 serde_json::json!({})
-            })
+            });
+
+            // Inject prompt-caching breakpoints for Anthropic.
+            //
+            // The system prompt breakpoint is already handled via
+            // SystemContentBlock::cached() at build time.  Here we add a
+            // breakpoint on the last user message's last content block so
+            // that the conversation prefix (system + earlier turns) is cached.
+            //
+            // Only inject when there are at least 2 user messages -- caching a
+            // single-message conversation provides negligible benefit.
+            if let Some(messages) = val.get_mut("messages").and_then(|m| m.as_array_mut()) {
+                let user_msg_count = messages
+                    .iter()
+                    .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+                    .count();
+
+                if user_msg_count >= 2 {
+                    // Walk backwards to find the last user message
+                    for msg in messages.iter_mut().rev() {
+                        if msg.get("role").and_then(|r| r.as_str()) == Some("user") {
+                            inject_cache_control_on_last_block(msg);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            val
         }
         WireFormat::OpenAI => serialize_openai_request(request),
         WireFormat::Ollama => serialize_ollama_request(request),
         WireFormat::Gemini => serialize_gemini_request(request),
+    }
+}
+
+/// Inject `cache_control: {"type":"ephemeral"}` on the last content block
+/// of a user message (represented as a JSON Value).
+///
+/// The content may be either a plain string or an array of content blocks.
+/// For arrays, we walk backwards to find the last cacheable block type
+/// (text or image) and attach the marker there.
+fn inject_cache_control_on_last_block(msg: &mut Value) {
+    let cache_marker = serde_json::json!({"type": "ephemeral"});
+
+    match msg.get_mut("content") {
+        // Content is an array of blocks -- attach to the last cacheable one
+        Some(Value::Array(blocks)) => {
+            for block in blocks.iter_mut().rev() {
+                let block_type = block.get("type").and_then(|t| t.as_str());
+                if block_type == Some("text") || block_type == Some("image") {
+                    block.as_object_mut().unwrap().insert(
+                        "cache_control".to_string(),
+                        cache_marker,
+                    );
+                    return;
+                }
+            }
+        }
+        // Content is a plain string -- wrap in a content array so we can
+        // attach cache_control to the text block.
+        Some(Value::String(_)) => {
+            let text = match msg.get("content") {
+                Some(Value::String(s)) => s.clone(),
+                _ => unreachable!(),
+            };
+            *msg.get_mut("content").unwrap() = serde_json::json!([{
+                "type": "text",
+                "text": text,
+                "cache_control": cache_marker,
+            }]);
+        }
+        _ => {}
     }
 }
 
@@ -2637,4 +2705,241 @@ mod tests {
             other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
     }
+
+    // -- Prompt caching breakpoint tests --
+
+    #[test]
+    fn test_anthropic_cache_control_on_last_user_message_text() {
+        let req = MessageRequest {
+            model: "claude-sonnet-4-20250514".to_string(),
+            max_tokens: 4096,
+            system: Some("You are helpful.".to_string()),
+            system_blocks: None,
+            messages: vec![
+                Message {
+                    role: "user".to_string(),
+                    content: crate::api::types::MessageContent::Text("First message".to_string()),
+                },
+                Message {
+                    role: "assistant".to_string(),
+                    content: crate::api::types::MessageContent::Text("Response".to_string()),
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: crate::api::types::MessageContent::Text("Second message".to_string()),
+                },
+            ],
+            tools: None,
+            stream: Some(true),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+
+        let val = serialize_request(&req, &LlmProvider::Anthropic);
+        let messages = val["messages"].as_array().unwrap();
+        assert_eq!(messages[0]["role"], "user");
+        assert!(messages[0]["content"].is_string());
+        assert_eq!(messages[1]["role"], "assistant");
+        assert!(messages[1]["content"].is_string());
+
+        // Last user message gets cache_control
+        assert_eq!(messages[2]["role"], "user");
+        let last_content = messages[2]["content"].as_array().unwrap();
+        assert_eq!(last_content.len(), 1);
+        assert_eq!(last_content[0]["type"], "text");
+        assert_eq!(last_content[0]["text"], "Second message");
+        assert_eq!(last_content[0]["cache_control"]["type"], "ephemeral");
+    }
+
+    #[test]
+    fn test_anthropic_no_cache_control_single_user_msg() {
+        let req = MessageRequest {
+            model: "claude-sonnet-4-20250514".to_string(),
+            max_tokens: 4096,
+            system: None,
+            system_blocks: None,
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: crate::api::types::MessageContent::Text("Hello".to_string()),
+            }],
+            tools: None,
+            stream: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+
+        let val = serialize_request(&req, &LlmProvider::Anthropic);
+        let messages = val["messages"].as_array().unwrap();
+        assert!(messages[0]["content"].is_string());
+    }
+
+    #[test]
+    fn test_anthropic_cache_control_with_content_blocks() {
+        use crate::api::types::MessageContent;
+        let req = MessageRequest {
+            model: "claude-sonnet-4-20250514".to_string(),
+            max_tokens: 4096,
+            system: None,
+            system_blocks: None,
+            messages: vec![
+                Message {
+                    role: "user".to_string(),
+                    content: MessageContent::Text("First".to_string()),
+                },
+                Message {
+                    role: "assistant".to_string(),
+                    content: MessageContent::Text("Reply".to_string()),
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: MessageContent::Blocks(vec![
+                        ContentBlock::Text { text: "Part 1".to_string() },
+                        ContentBlock::Text { text: "Part 2".to_string() },
+                    ]),
+                },
+            ],
+            tools: None,
+            stream: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+
+        let val = serialize_request(&req, &LlmProvider::Anthropic);
+        let blocks = val["messages"].as_array().unwrap()[2]["content"].as_array().unwrap();
+        assert!(blocks[0].get("cache_control").is_none());
+        assert_eq!(blocks[1]["cache_control"]["type"], "ephemeral");
+    }
+
+    #[test]
+    fn test_anthropic_cache_control_not_for_openai() {
+        let req = MessageRequest {
+            model: "gpt-4o".to_string(),
+            max_tokens: 4096,
+            system: None,
+            system_blocks: None,
+            messages: vec![
+                Message {
+                    role: "user".to_string(),
+                    content: crate::api::types::MessageContent::Text("First".to_string()),
+                },
+                Message {
+                    role: "assistant".to_string(),
+                    content: crate::api::types::MessageContent::Text("Reply".to_string()),
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: crate::api::types::MessageContent::Text("Second".to_string()),
+                },
+            ],
+            tools: None,
+            stream: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+
+        let val = serialize_request(&req, &LlmProvider::OpenAI);
+        let json_str = serde_json::to_string(&val).unwrap();
+        assert!(!json_str.contains("cache_control"));
+    }
+
+    #[test]
+    fn test_anthropic_cache_skips_tool_result() {
+        use crate::api::types::MessageContent;
+        let req = MessageRequest {
+            model: "claude-sonnet-4-20250514".to_string(),
+            max_tokens: 4096,
+            system: None,
+            system_blocks: None,
+            messages: vec![
+                Message {
+                    role: "user".to_string(),
+                    content: MessageContent::Text("First".to_string()),
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: MessageContent::Blocks(vec![
+                        ContentBlock::Text { text: "Some text".to_string() },
+                        ContentBlock::ToolResult {
+                            tool_use_id: "tool_123".to_string(),
+                            content: Some(crate::api::types::ToolResultContent::Single("result".to_string())),
+                            is_error: None,
+                        },
+                    ]),
+                },
+            ],
+            tools: None,
+            stream: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+
+        let val = serialize_request(&req, &LlmProvider::Anthropic);
+        let blocks = val["messages"].as_array().unwrap()[1]["content"].as_array().unwrap();
+        assert_eq!(blocks[0]["cache_control"]["type"], "ephemeral");
+        assert!(blocks[1].get("cache_control").is_none());
+    }
+
+    #[test]
+    fn test_anthropic_cache_control_with_system_blocks() {
+        let req = MessageRequest {
+            model: "claude-sonnet-4-20250514".to_string(),
+            max_tokens: 4096,
+            system: None,
+            system_blocks: Some(vec![
+                crate::api::types::SystemContentBlock::cached("System prompt"),
+            ]),
+            messages: vec![
+                Message {
+                    role: "user".to_string(),
+                    content: crate::api::types::MessageContent::Text("First".to_string()),
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: crate::api::types::MessageContent::Text("Second".to_string()),
+                },
+            ],
+            tools: None,
+            stream: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+
+        let val = serialize_request(&req, &LlmProvider::Anthropic);
+        let sys_blocks = val["system_blocks"].as_array().unwrap();
+        assert_eq!(sys_blocks[0]["cache_control"]["type"], "ephemeral");
+        let messages = val["messages"].as_array().unwrap();
+        let last_content = messages[1]["content"].as_array().unwrap();
+        assert_eq!(last_content[0]["cache_control"]["type"], "ephemeral");
+    }
+
 }

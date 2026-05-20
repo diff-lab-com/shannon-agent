@@ -46,6 +46,7 @@ mod repl;
 mod image;
 mod repomap;
 mod outline;
+mod context;
 
 /// Register all built-in commands
 pub fn register_all(registry: &CommandRegistry) {
@@ -85,6 +86,7 @@ pub fn all_commands() -> Vec<Command> {
         image::command(),
         repomap::command(),
         outline::command(),
+        context::command(),
     ];
     cmds.extend(repl::all_commands());
     cmds

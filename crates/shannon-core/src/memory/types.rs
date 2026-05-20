@@ -236,3 +236,210 @@ impl MemoryEntry {
             || self.tags.iter().any(|t| t.to_lowercase().contains(&query_lower))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_memory_entry_new_basic_fields() {
+        let entry = MemoryEntry::new("my-project", MemoryCategory::Preference, "Use tabs not spaces");
+        assert!(!entry.id.is_empty(), "id should be a non-empty UUID string");
+        assert_eq!(entry.project, "my-project");
+        assert_eq!(entry.category, MemoryCategory::Preference);
+        assert_eq!(entry.content, "Use tabs not spaces");
+        assert!(entry.tags.is_empty());
+        assert!((entry.confidence - 1.0).abs() < f64::EPSILON);
+        assert_eq!(entry.access_count, 0);
+    }
+
+    #[test]
+    fn test_memory_entry_new_timestamps_are_recent() {
+        let before = Utc::now();
+        let entry = MemoryEntry::new("proj", MemoryCategory::Pattern, "content");
+        let after = Utc::now();
+        assert!(entry.created_at >= before);
+        assert!(entry.created_at <= after);
+        assert!(entry.accessed_at >= before);
+        assert!(entry.accessed_at <= after);
+    }
+
+    #[test]
+    fn test_with_confidence_valid() {
+        let entry = MemoryEntry::with_confidence(
+            "proj", MemoryCategory::Decision, "Use PostgreSQL", 0.85,
+            vec!["database".to_string()],
+        ).unwrap();
+        assert!((entry.confidence - 0.85).abs() < f64::EPSILON);
+        assert_eq!(entry.tags, vec!["database"]);
+        assert_eq!(entry.category, MemoryCategory::Decision);
+    }
+
+    #[test]
+    fn test_with_confidence_zero() {
+        let entry = MemoryEntry::with_confidence("p", MemoryCategory::Error, "msg", 0.0, vec![]);
+        assert!(entry.is_ok());
+        assert!((entry.unwrap().confidence).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_with_confidence_one() {
+        let entry = MemoryEntry::with_confidence("p", MemoryCategory::Error, "msg", 1.0, vec![]);
+        assert!(entry.is_ok());
+        assert!((entry.unwrap().confidence - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_with_confidence_negative_rejected() {
+        let result = MemoryEntry::with_confidence("p", MemoryCategory::Preference, "x", -0.1, vec![]);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            MemoryError::InvalidConfidence(v) => assert!((v - (-0.1)).abs() < f64::EPSILON),
+            other => panic!("expected InvalidConfidence, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_with_confidence_above_one_rejected() {
+        let result = MemoryEntry::with_confidence("p", MemoryCategory::Preference, "x", 1.5, vec![]);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            MemoryError::InvalidConfidence(v) => assert!((v - 1.5).abs() < f64::EPSILON),
+            other => panic!("expected InvalidConfidence, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_touch_updates_access_count() {
+        let mut entry = MemoryEntry::new("p", MemoryCategory::Context, "data");
+        assert_eq!(entry.access_count, 0);
+        entry.touch();
+        assert_eq!(entry.access_count, 1);
+        entry.touch();
+        assert_eq!(entry.access_count, 2);
+    }
+
+    #[test]
+    fn test_touch_updates_accessed_at() {
+        let mut entry = MemoryEntry::new("p", MemoryCategory::Context, "data");
+        let original = entry.accessed_at;
+        entry.touch();
+        assert!(entry.accessed_at >= original);
+    }
+
+    #[test]
+    fn test_matches_query_content_substring() {
+        let entry = MemoryEntry::new("p", MemoryCategory::Preference, "Always use tabs for indentation");
+        assert!(entry.matches_query("tabs"));
+        assert!(entry.matches_query("TABS"));
+        assert!(entry.matches_query("always use"));
+        assert!(!entry.matches_query("spaces"));
+    }
+
+    #[test]
+    fn test_matches_query_tag_match() {
+        let entry = MemoryEntry::with_confidence(
+            "p", MemoryCategory::Decision, "Use PostgreSQL", 0.9,
+            vec!["database".to_string(), "sql".to_string()],
+        ).unwrap();
+        assert!(entry.matches_query("database"));
+        assert!(entry.matches_query("SQL"));
+        assert!(!entry.matches_query("mongodb"));
+    }
+
+    #[test]
+    fn test_memory_type_all_returns_all_variants() {
+        let all = MemoryType::all();
+        assert_eq!(all.len(), 4);
+        assert!(all.contains(&MemoryType::UserPreference));
+        assert!(all.contains(&MemoryType::ProjectConvention));
+        assert!(all.contains(&MemoryType::TechnicalDecision));
+        assert!(all.contains(&MemoryType::DebuggingInsight));
+    }
+
+    #[test]
+    fn test_memory_type_from_string_roundtrip() {
+        for mt in MemoryType::all() {
+            assert_eq!(MemoryType::from_string(mt.as_str()), Some(mt.clone()));
+        }
+    }
+
+    #[test]
+    fn test_memory_type_from_string_unknown() {
+        assert_eq!(MemoryType::from_string("NonExistent"), None);
+    }
+
+    #[test]
+    fn test_memory_type_display() {
+        assert_eq!(format!("{}", MemoryType::UserPreference), "UserPreference");
+        assert_eq!(format!("{}", MemoryType::DebuggingInsight), "DebuggingInsight");
+    }
+
+    #[test]
+    fn test_memory_type_descriptions_are_non_empty() {
+        for mt in MemoryType::all() {
+            assert!(!mt.description().is_empty());
+        }
+    }
+
+    #[test]
+    fn test_memory_type_scope_directories() {
+        assert_eq!(MemoryType::UserPreference.scope_directory(), "user");
+        assert_eq!(MemoryType::ProjectConvention.scope_directory(), "project");
+        assert_eq!(MemoryType::TechnicalDecision.scope_directory(), "project");
+        assert_eq!(MemoryType::DebuggingInsight.scope_directory(), "shared");
+    }
+
+    #[test]
+    fn test_memory_type_to_category_conversion() {
+        assert_eq!(MemoryCategory::from(MemoryType::UserPreference), MemoryCategory::Preference);
+        assert_eq!(MemoryCategory::from(MemoryType::ProjectConvention), MemoryCategory::Pattern);
+        assert_eq!(MemoryCategory::from(MemoryType::TechnicalDecision), MemoryCategory::Decision);
+        assert_eq!(MemoryCategory::from(MemoryType::DebuggingInsight), MemoryCategory::Error);
+    }
+
+    #[test]
+    fn test_memory_category_display() {
+        assert_eq!(format!("{}", MemoryCategory::Preference), "preference");
+        assert_eq!(format!("{}", MemoryCategory::Pattern), "pattern");
+        assert_eq!(format!("{}", MemoryCategory::Decision), "decision");
+        assert_eq!(format!("{}", MemoryCategory::Error), "error");
+        assert_eq!(format!("{}", MemoryCategory::Context), "context");
+    }
+
+    #[test]
+    fn test_session_memory_config_defaults() {
+        let config = SessionMemoryConfig::default();
+        assert!(config.auto_extract_enabled);
+        assert_eq!(config.max_memories_per_category, 100);
+        assert_eq!(config.memory_ttl, Duration::days(90));
+        assert!(config.consolidation_enabled);
+    }
+
+    #[test]
+    fn test_memory_entry_serialization_roundtrip() {
+        let entry = MemoryEntry::with_confidence(
+            "test-proj", MemoryCategory::Decision, "Use React for frontend", 0.92,
+            vec!["frontend".to_string(), "react".to_string()],
+        ).unwrap();
+        let json = serde_json::to_string(&entry).unwrap();
+        let deserialized: MemoryEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.id, entry.id);
+        assert_eq!(deserialized.project, entry.project);
+        assert_eq!(deserialized.category, entry.category);
+        assert_eq!(deserialized.content, entry.content);
+        assert_eq!(deserialized.tags, entry.tags);
+        assert!((deserialized.confidence - entry.confidence).abs() < f64::EPSILON);
+        assert_eq!(deserialized.access_count, entry.access_count);
+    }
+
+    #[test]
+    fn test_session_memory_config_serialization_roundtrip() {
+        let config = SessionMemoryConfig::default();
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: SessionMemoryConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.auto_extract_enabled, config.auto_extract_enabled);
+        assert_eq!(deserialized.max_memories_per_category, config.max_memories_per_category);
+        assert_eq!(deserialized.consolidation_enabled, config.consolidation_enabled);
+    }
+}
