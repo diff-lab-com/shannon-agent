@@ -684,6 +684,11 @@ pub struct BashInput {
     /// Fast commands finishing within this window skip streaming entirely.
     #[serde(default)]
     pub stream_delay_ms: Option<u64>,
+
+    /// Shared cancellation flag — when set to true, the streaming loop
+    /// will kill the child process and return. Not deserialized from JSON.
+    #[serde(skip)]
+    pub cancelled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 /// PowerShell command input
@@ -1191,7 +1196,16 @@ impl BashTool {
         let mut buffered_lines: Vec<String> = Vec::new();
 
         // Read stdout and stderr concurrently, sending progress for each stdout line.
+        let cancel_flag = bash_input.cancelled.clone();
         loop {
+            // Check cancellation
+            if let Some(ref flag) = cancel_flag {
+                if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = child.kill().await;
+                    stderr_buf.push_str("Command cancelled by user\n");
+                    break;
+                }
+            }
             tokio::select! {
                 line = stdout_lines.next_line() => {
                     match line {

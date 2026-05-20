@@ -67,6 +67,10 @@ struct StreamingState {
     tool_streaming_content: String,
     /// When streaming output first started (for elapsed time display)
     streaming_start: Option<std::time::Instant>,
+    /// Optional keyword filter for streaming output — only show matching lines
+    streaming_filter: Option<String>,
+    /// Cancel flag — set to true to abort a running streaming tool
+    cancel_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Rate limit info from API (used, total)
     rate_limit: Option<(u32, u32)>,
 }
@@ -91,6 +95,8 @@ impl Default for StreamingState {
             thinking_start: None,
             tool_streaming_content: String::new(),
             streaming_start: None,
+            streaming_filter: None,
+            cancel_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             rate_limit: None,
         }
     }
@@ -216,12 +222,35 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                             s.thinking_start = Some(std::time::Instant::now());
                         }
                         s.thinking_content.push_str(&content);
-                        let len = s.thinking_content.chars().count();
-                        s.status = if len > 1000 {
-                            t!("ui.thinking_chars_k", count => len / 1000).to_string()
+                        let char_count = s.thinking_content.chars().count();
+                        let elapsed = s.thinking_start.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
+                        s.status = if char_count > 1000 {
+                            t!("ui.thinking_chars_k", count => char_count / 1000).to_string()
                         } else {
-                            t!("ui.thinking_chars", count => len).to_string()
+                            t!("ui.thinking_chars", count => char_count).to_string()
                         };
+                        // Show thinking content with bordered display
+                        let size_label = if char_count > 1000 {
+                            format!("{:.1}k chars", char_count as f64 / 1000.0)
+                        } else {
+                            format!("{} chars", char_count)
+                        };
+                        let header = if elapsed >= 1.0 {
+                            format!("  ╭─ ● thinking ({:.1}s, {}) ─", elapsed, size_label)
+                        } else {
+                            format!("  ╭─ ● thinking ({}) ─", size_label)
+                        };
+                        let lines: Vec<&str> = s.thinking_content.lines().collect();
+                        let visible = 5;
+                        let visible_lines = if lines.len() > visible {
+                            &lines[lines.len() - visible..]
+                        } else {
+                            &lines
+                        };
+                        let hidden = lines.len().saturating_sub(visible);
+                        let above = if hidden > 0 { format!("  ... {} more lines above\n", hidden) } else { String::new() };
+                        let body = visible_lines.iter().map(|l| format!("  {l}")).collect::<Vec<_>>().join("\n");
+                        s.buffer = format!("{response_text}{header}\n{above}{body}\n  ╰─");
                     }
                 }
                 Ok(QueryEvent::Text { content, .. }) => {
@@ -321,6 +350,12 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                         if let Some(bar) = s.multi_progress.iter_mut().find(|(l, _, _)| l == &tool_name) {
                             bar.1 = 1.0;
                         }
+                        // Show batch progress summary when multiple tools are running
+                        if s.multi_progress.len() > 1 {
+                            let done = s.multi_progress.iter().filter(|(_, p, _)| *p >= 1.0).count();
+                            let total = s.multi_progress.len();
+                            s.status = format!("▸ {done}/{total} tools complete");
+                        }
                     }
                 }
                 Ok(QueryEvent::TurnCompleted { turn_number, tokens_used, .. }) => {
@@ -371,6 +406,8 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     }
                 }
                 Ok(QueryEvent::ToolProgress { progress, tool_name, message, .. }) => {
+                    let tool_elapsed: Option<f64> = tool_start_times.get(&tool_name)
+                        .map(|t| t.elapsed().as_secs_f64());
                     if progress < 0.0 {
                         // Streaming output line from tool (progress = -1.0).
                         // Accumulate in tool_streaming_content and show in buffer.
@@ -382,7 +419,8 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                             } else {
                                 message.clone()
                             };
-                            s.status = format!("{tool_name}: {preview}");
+                            let dur = tool_elapsed.map(|e| format!(" ({:.1}s)", e)).unwrap_or_default();
+                            s.status = format!("{tool_name}{dur}: {preview}");
 
                             // Append to streaming content and show in buffer
                             if s.streaming_start.is_none() {
@@ -399,27 +437,35 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                             }
                             // Build display: elapsed time + line count header, last 10 visible lines
                             let total_lines = all_lines.len();
+                            let filter_label = s.streaming_filter.as_ref().map(|f| format!(" filter:{f}")).unwrap_or_default();
                             let header = if elapsed >= 1.0 {
-                                format!("  ╭─ ● streaming ({:.1}s, {} lines) ─", elapsed, total_lines)
+                                format!("  ╭─ ● streaming ({:.1}s, {} lines){filter_label} ─", elapsed, total_lines)
                             } else {
-                                format!("  ╭─ ● streaming ({} lines) ─", total_lines)
+                                format!("  ╭─ ● streaming ({} lines){filter_label} ─", total_lines)
                             };
+                            let display_lines: Vec<&String> = if let Some(ref f) = s.streaming_filter {
+                                all_lines.iter().filter(|l| l.to_lowercase().contains(&f.to_lowercase())).collect()
+                            } else {
+                                all_lines.iter().collect()
+                            };
+                            let display_count = display_lines.len();
                             let visible_count = 10;
-                            let visible_lines = if total_lines > visible_count {
-                                &all_lines[total_lines - visible_count..]
+                            let visible_lines = if display_count > visible_count {
+                                &display_lines[display_count - visible_count..]
                             } else {
-                                &all_lines
+                                &display_lines
                             };
-                            let hidden = total_lines.saturating_sub(visible_count);
-                            let above = if hidden > 0 { format!("  ... {} more lines above\n", hidden) } else { String::new() };
+                            let hidden = display_count.saturating_sub(visible_count);
+                            let above = if hidden > 0 { format!("  ... {} more matches above\n", hidden) } else { String::new() };
                             let body = visible_lines.iter().map(|l| format!("  {l}")).collect::<Vec<_>>().join("\n");
                             s.buffer = format!("{response_text}{header}\n{above}{body}\n  ╰─");
                         }
                     } else {
                         let pct = (progress * 100.0) as u32;
+                        let dur = tool_elapsed.map(|e| format!(" ({:.1}s)", e)).unwrap_or_default();
                         if let Ok(mut s) = ss.lock() {
                             s.progress = progress as f64;
-                            s.status = format!("{tool_name}: {pct}%");
+                            s.status = format!("{tool_name}{dur}: {pct}%");
                             if let Some(bar) = s.multi_progress.iter_mut().find(|(l, _, _)| l == &tool_name) {
                                 bar.1 = progress as f64;
                             }
