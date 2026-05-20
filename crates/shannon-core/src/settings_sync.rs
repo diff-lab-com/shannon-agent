@@ -176,9 +176,7 @@ impl DeviceRegistry {
 
         let info = DeviceInfo::new(device_id, device_name);
         self.devices.insert(device_id.to_string(), info);
-        Ok(self.devices.get(device_id).unwrap_or_else(|| {
-            unreachable!("device was just inserted with id {device_id}")
-        }))
+        Ok(self.devices.get(device_id).expect("device was just inserted after contains_key check"))
     }
 
     /// Unregister a device.

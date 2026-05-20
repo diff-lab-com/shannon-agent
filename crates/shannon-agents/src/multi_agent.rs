@@ -378,9 +378,7 @@ pub fn topological_sort(
 
         if let Some(children) = dependents.get(name) {
             for &child in children {
-                let deg = in_degree.get_mut(child).unwrap_or_else(|| {
-                    unreachable!("in_degree entry initialized for all agents above")
-                });
+                let deg = in_degree.get_mut(child).expect("in_degree entry initialized for all agents above");
                 *deg -= 1;
                 if *deg == 0 {
                     queue.push_back(child);

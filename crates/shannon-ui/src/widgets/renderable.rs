@@ -250,7 +250,7 @@ impl MessageCell {
                     ChatRole::Assistant => theme.assistant_msg,
                     ChatRole::Tool => theme.tool_msg,
                     ChatRole::System => theme.system_msg,
-                    ChatRole::User => unreachable!(),
+                    ChatRole::User => unreachable!("User role handled in if-branch above"),
                 };
                 // Separator: show timestamp only on first message of a role group
                 if !self.is_continuation {
