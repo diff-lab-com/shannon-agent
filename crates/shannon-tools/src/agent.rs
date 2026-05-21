@@ -44,6 +44,10 @@ pub struct AgentSpawnInput {
 
     /// Optional priority level
     pub priority: Option<String>,
+
+    /// Optional model override (e.g., "claude-sonnet-4-6", "gpt-4o").
+    /// When set, the sub-agent uses this model instead of the parent's model.
+    pub model: Option<String>,
 }
 
 /// Output from agent spawn
@@ -259,7 +263,7 @@ impl AgentTool {
 
             let config = AgentConfig {
                 name: format!("{}-{}", &agent_type, &agent_id[6..14]), // readable name
-                model: ctx.client_config.model.clone(),
+                model: input.model.clone().unwrap_or_else(|| ctx.client_config.model.clone()),
                 system_prompt: format!(
                     "You are a sub-agent of type '{agent_type}'. Focus on completing the assigned task concisely."
                 ),
@@ -277,11 +281,15 @@ impl AgentTool {
             let agent_uid = agent.id.clone();
 
             // 2. Execute task via real QueryEngine
+            let mut subagent_config = ctx.client_config.clone();
+            if let Some(ref model) = input.model {
+                subagent_config.model = model.clone();
+            }
             let result = self.execute_subagent(
                 agent_uid.clone(),
                 agent_type.clone(),
                 input,
-                ctx.client_config.clone(),
+                subagent_config,
             ).await?;
 
             // 3. Update agent status in registry (use list to find and update)
@@ -675,6 +683,10 @@ impl Tool for AgentTool {
                     "type": "object",
                     "description": "Optional context (can include 'team' for team assignment)"
                 },
+                "model": {
+                    "type": "string",
+                    "description": "Optional model override for the sub-agent (e.g. 'claude-sonnet-4-6', 'gpt-4o')"
+                },
                 "agent_id": {
                     "type": "string",
                     "description": "Agent ID or name for operations"
@@ -723,6 +735,7 @@ mod tests {
             task: "Design auth system".into(),
             context: Some(json!({"team": "alpha"})),
             priority: Some("high".into()),
+            model: None,
         };
         let ser = serde_json::to_string(&input).unwrap();
         let de: AgentSpawnInput = serde_json::from_str(&ser).unwrap();
@@ -739,6 +752,7 @@ mod tests {
             task: "Investigate".into(),
             context: None,
             priority: None,
+            model: None,
         };
         let ser = serde_json::to_string(&input).unwrap();
         let de: AgentSpawnInput = serde_json::from_str(&ser).unwrap();
