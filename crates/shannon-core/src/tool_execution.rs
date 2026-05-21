@@ -1917,4 +1917,82 @@ mod tests {
         assert_eq!(result.output.content, "test");
         assert!(!result.is_error);
     }
+
+    // -- ToolProgress additional tests --
+
+    #[test]
+    fn test_tool_progress_started_helper() {
+        let p = ToolProgress::started("id-1", "Bash");
+        assert_eq!(p.tool_id, "id-1");
+        assert_eq!(p.tool_name, "Bash");
+        assert_eq!(p.status, ToolProgressStatus::Started);
+        assert!(p.message.is_none());
+        assert!(p.elapsed.is_none());
+    }
+
+    #[test]
+    fn test_tool_progress_updated_helper() {
+        let p = ToolProgress::updated("id-2", "Bash", "running ls...");
+        assert_eq!(p.status, ToolProgressStatus::Updated);
+        assert_eq!(p.message, Some("running ls...".to_string()));
+    }
+
+    #[test]
+    fn test_tool_progress_completed_helper() {
+        let p = ToolProgress::completed("id-3", "Read");
+        assert_eq!(p.status, ToolProgressStatus::Completed);
+        assert!(p.message.is_none());
+    }
+
+    #[test]
+    fn test_tool_progress_failed_helper() {
+        let p = ToolProgress::failed("id-4", "Bash", "command not found");
+        assert_eq!(p.status, ToolProgressStatus::Failed);
+        assert_eq!(p.message, Some("command not found".to_string()));
+    }
+
+    #[test]
+    fn test_tool_progress_serialization_roundtrip() {
+        let p = ToolProgress::updated("id-5", "Bash", "partial output");
+        let json = serde_json::to_string(&p).unwrap();
+        let back: ToolProgress = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.tool_id, "id-5");
+        assert_eq!(back.tool_name, "Bash");
+        assert_eq!(back.status, ToolProgressStatus::Updated);
+        assert_eq!(back.message, Some("partial output".to_string()));
+    }
+
+    #[test]
+    fn test_tool_progress_status_equality() {
+        assert_eq!(ToolProgressStatus::Started, ToolProgressStatus::Started);
+        assert_ne!(ToolProgressStatus::Started, ToolProgressStatus::Completed);
+        assert_ne!(ToolProgressStatus::Updated, ToolProgressStatus::Failed);
+    }
+
+    #[test]
+    fn test_tool_progress_status_serde_roundtrip() {
+        for status in [ToolProgressStatus::Started, ToolProgressStatus::Updated,
+                       ToolProgressStatus::Completed, ToolProgressStatus::Failed] {
+            let json = serde_json::to_string(&status).unwrap();
+            let back: ToolProgressStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(status, back);
+        }
+    }
+
+    #[test]
+    fn test_tool_execution_error_display() {
+        let e = ToolExecutionError::ToolNotFound("Foo".to_string());
+        assert!(e.to_string().contains("Foo"));
+
+        let e = ToolExecutionError::Timeout { tool_name: "Bash".to_string(), timeout_secs: 30 };
+        assert!(e.to_string().contains("30"));
+        assert!(e.to_string().contains("Bash"));
+
+        let e = ToolExecutionError::PermissionDenied {
+            tool_name: "Write".to_string(),
+            reason: "not allowed".to_string(),
+        };
+        assert!(e.to_string().contains("Write"));
+        assert!(e.to_string().contains("not allowed"));
+    }
 }
