@@ -340,18 +340,17 @@ struct Cli {
     #[arg(long = "allowed-tools", hide = true)]
     team_allowed_tools: Option<String>,
 
-    /// Resume the most recent session, loading its conversation history.
-    /// With a prompt argument, continues the session in non-interactive mode.
-    #[arg(short = 'r', long)]
-    resume: bool,
+    /// Resume the most recent session, or a specific session by UUID.
+    /// Without a UUID argument, loads the most recent session.
+    /// With a UUID argument, loads that specific session.
+    /// Example: shannon --resume           (most recent)
+    ///          shannon --resume abc-123... (specific session)
+    #[arg(short = 'r', long, value_name = "UUID", num_args = 0..=1)]
+    resume: Option<String>,
 
     /// Continue the most recent session (alias for --resume).
     #[arg(short = 'c', long, alias = "cont")]
     r#continue: bool,
-
-    /// Resume a specific session by its UUID (requires --resume or --continue).
-    #[arg(long)]
-    session: Option<String>,
 
     /// CI/CD headless mode: non-interactive prompt (pipe-friendly).
     /// Skips TUI entirely. Use with --output-format, --allowed-tools, --max-turns.
@@ -1907,7 +1906,9 @@ fn main() -> Result<()> {
     }
 
     // Determine if session resume is requested (used by multiple code paths below)
-    let should_resume = cli.resume || cli.r#continue;
+    let should_resume = cli.resume.is_some() || cli.r#continue;
+    // Normalize empty string from bare --resume (no UUID) to None
+    let resume_session_id: Option<&str> = cli.resume.as_deref().filter(|s| !s.is_empty());
 
     // ── CI/CD Headless mode: --prompt flag ──
     // Takes priority over bare prompt and pipe mode.
@@ -1924,7 +1925,7 @@ fn main() -> Result<()> {
             HashMap::new(),
         );
         let resume_data = if should_resume {
-            load_resume_session(cli.session.as_deref()).ok()
+            load_resume_session(resume_session_id).ok()
         } else {
             None
         };
@@ -1982,7 +1983,7 @@ fn main() -> Result<()> {
             HashMap::new(),
         );
         let resume_data = if should_resume {
-            load_resume_session(cli.session.as_deref()).ok()
+            load_resume_session(resume_session_id).ok()
         } else {
             None
         };
@@ -2002,7 +2003,7 @@ fn main() -> Result<()> {
             HashMap::new(),
         );
         let resume_data = if should_resume {
-            load_resume_session(cli.session.as_deref()).ok()
+            load_resume_session(resume_session_id).ok()
         } else {
             None
         };
@@ -2081,7 +2082,7 @@ fn main() -> Result<()> {
         None => {
             let mut repl = Repl::new().map_err(|e| anyhow::anyhow!("{e:?}"))?;
             if should_resume {
-                match load_resume_session(cli.session.as_deref()) {
+                match load_resume_session(resume_session_id) {
                     Ok(session_data) => {
                         let count = repl.restore_session(session_data);
                         eprintln!("Resumed session ({count} messages loaded)");
@@ -2100,7 +2101,7 @@ fn main() -> Result<()> {
             }
             let mut repl = Repl::new().map_err(|e| anyhow::anyhow!("{e:?}"))?;
             if should_resume {
-                match load_resume_session(cli.session.as_deref()) {
+                match load_resume_session(resume_session_id) {
                     Ok(session_data) => {
                         let count = repl.restore_session(session_data);
                         eprintln!("Resumed session ({count} messages loaded)");
@@ -2178,7 +2179,7 @@ fn main() -> Result<()> {
             ..
         }) => {
             let resume_data = if should_resume {
-                load_resume_session(cli.session.as_deref()).ok()
+                load_resume_session(resume_session_id).ok()
             } else {
                 None
             };
