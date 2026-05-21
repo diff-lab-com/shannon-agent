@@ -720,3 +720,116 @@ impl Tool for RemoteAddAgentTool {
         Ok(success_output(result.clone()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn coordinator_channel_default() {
+        let channel = CoordinatorChannel::default();
+        let _ = channel;
+    }
+
+    #[test]
+    fn coordinator_channel_new() {
+        let channel = CoordinatorChannel::new();
+        let _ = channel;
+    }
+
+    #[test]
+    fn success_output_helper() {
+        let output = success_output(json!({"status": "ok"}));
+        assert!(!output.is_error);
+        assert!(output.content.contains("ok"));
+    }
+
+    #[test]
+    fn remote_team_task_list_tool_schema() {
+        let channel = CoordinatorChannel::new();
+        let tool = RemoteTeamTaskListTool::new(channel);
+        assert_eq!(tool.name(), "team_task_list");
+        assert!(!tool.description().is_empty());
+        let schema = tool.input_schema();
+        assert_eq!(schema["type"], "object");
+    }
+
+    #[test]
+    fn remote_team_task_claim_tool_schema() {
+        let channel = CoordinatorChannel::new();
+        let tool = RemoteTeamTaskClaimTool::new(channel, "worker-1".into());
+        assert_eq!(tool.name(), "team_task_claim");
+        let schema = tool.input_schema();
+        assert!(schema["properties"]["task_id"].is_object());
+    }
+
+    #[test]
+    fn remote_team_notify_idle_tool_schema() {
+        let channel = CoordinatorChannel::new();
+        let tool = RemoteTeamNotifyIdleTool::new(channel, "worker-1".into());
+        assert_eq!(tool.name(), "team_notify_idle");
+        let schema = tool.input_schema();
+        assert_eq!(schema["type"], "object");
+    }
+
+    #[test]
+    fn remote_send_message_tool_schema() {
+        let channel = CoordinatorChannel::new();
+        let tool = RemoteSendMessageTool::new(channel, "worker-1".into());
+        assert_eq!(tool.name(), "team_send_message");
+        let schema = tool.input_schema();
+        assert!(schema["required"].as_array().unwrap().contains(&json!("message")));
+    }
+
+    #[test]
+    fn remote_team_task_create_tool_schema() {
+        let channel = CoordinatorChannel::new();
+        let tool = RemoteTeamTaskCreateTool::new(channel);
+        assert_eq!(tool.name(), "team_task_create");
+        let schema = tool.input_schema();
+        assert!(schema["required"].as_array().unwrap().contains(&json!("subject")));
+    }
+
+    #[test]
+    fn remote_team_task_update_tool_schema() {
+        let channel = CoordinatorChannel::new();
+        let tool = RemoteTeamTaskUpdateTool::new(channel, "worker-1".into());
+        assert_eq!(tool.name(), "team_task_update");
+        let schema = tool.input_schema();
+        assert!(schema["required"].as_array().unwrap().contains(&json!("task_id")));
+    }
+
+    #[test]
+    fn remote_team_task_get_tool_schema() {
+        let channel = CoordinatorChannel::new();
+        let tool = RemoteTeamTaskGetTool::new(channel);
+        assert_eq!(tool.name(), "team_task_get");
+    }
+
+    #[test]
+    fn remote_team_manifest_tool_schema() {
+        let channel = CoordinatorChannel::new();
+        let tool = RemoteTeamManifestTool::new(channel);
+        assert_eq!(tool.name(), "team_manifest");
+    }
+
+    #[test]
+    fn remote_disband_team_tool_schema() {
+        let channel = CoordinatorChannel::new();
+        let tool = RemoteDisbandTeamTool::new(channel);
+        assert_eq!(tool.name(), "disband_team");
+    }
+
+    #[test]
+    fn remote_add_agent_tool_schema() {
+        let channel = CoordinatorChannel::new();
+        let tool = RemoteAddAgentTool::new(channel);
+        assert_eq!(tool.name(), "add_agent");
+    }
+
+    #[test]
+    fn send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<CoordinatorChannel>();
+    }
+}
