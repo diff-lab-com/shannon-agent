@@ -709,3 +709,264 @@ impl Tool for AgentTool {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Input serialization ────────────────────────────────────────────────
+
+    #[test]
+    fn test_agent_spawn_input_roundtrip() {
+        let input = AgentSpawnInput {
+            agent_type: "backend-architect".into(),
+            task: "Design auth system".into(),
+            context: Some(json!({"team": "alpha"})),
+            priority: Some("high".into()),
+        };
+        let ser = serde_json::to_string(&input).unwrap();
+        let de: AgentSpawnInput = serde_json::from_str(&ser).unwrap();
+        assert_eq!(de.agent_type, "backend-architect");
+        assert_eq!(de.task, "Design auth system");
+        assert!(de.context.is_some());
+        assert_eq!(de.priority.unwrap(), "high");
+    }
+
+    #[test]
+    fn test_agent_spawn_input_minimal() {
+        let input = AgentSpawnInput {
+            agent_type: "researcher".into(),
+            task: "Investigate".into(),
+            context: None,
+            priority: None,
+        };
+        let ser = serde_json::to_string(&input).unwrap();
+        let de: AgentSpawnInput = serde_json::from_str(&ser).unwrap();
+        assert!(de.context.is_none());
+        assert!(de.priority.is_none());
+    }
+
+    #[test]
+    fn test_send_message_input_roundtrip() {
+        let input = SendMessageInput {
+            agent_id: "agent-1".into(),
+            message: "hello".into(),
+            metadata: Some(json!({"key": "val"})),
+        };
+        let ser = serde_json::to_string(&input).unwrap();
+        let de: SendMessageInput = serde_json::from_str(&ser).unwrap();
+        assert_eq!(de.agent_id, "agent-1");
+        assert_eq!(de.message, "hello");
+    }
+
+    #[test]
+    fn test_create_team_input_roundtrip() {
+        let input = CreateTeamInput {
+            team_name: "team-a".into(),
+            description: "A team".into(),
+            agents: vec!["backend".into(), "frontend".into()],
+            team_lead: Some("lead".into()),
+        };
+        let ser = serde_json::to_string(&input).unwrap();
+        let de: CreateTeamInput = serde_json::from_str(&ser).unwrap();
+        assert_eq!(de.agents.len(), 2);
+        assert_eq!(de.team_lead.unwrap(), "lead");
+    }
+
+    #[test]
+    fn test_shutdown_input_roundtrip() {
+        let input = ShutdownInput {
+            agent_id: "agent-1".into(),
+            reason: Some("done".into()),
+            force: true,
+        };
+        let ser = serde_json::to_string(&input).unwrap();
+        let de: ShutdownInput = serde_json::from_str(&ser).unwrap();
+        assert!(de.force);
+        assert_eq!(de.reason.unwrap(), "done");
+    }
+
+    #[test]
+    fn test_shutdown_input_default_force() {
+        let json = r#"{"agent_id":"a1"}"#;
+        let de: ShutdownInput = serde_json::from_str(json).unwrap();
+        assert!(!de.force);
+        assert!(de.reason.is_none());
+    }
+
+    // ── AgentOperation tagged enum ─────────────────────────────────────────
+
+    #[test]
+    fn test_agent_operation_spawn() {
+        let json = json!({
+            "operation": "Spawn",
+            "agent_type": "coder",
+            "task": "fix bug"
+        });
+        let op: AgentOperation = serde_json::from_value(json).unwrap();
+        assert!(matches!(op, AgentOperation::Spawn(_)));
+    }
+
+    #[test]
+    fn test_agent_operation_send_message() {
+        let json = json!({
+            "operation": "SendMessage",
+            "agent_id": "a1",
+            "message": "hi"
+        });
+        let op: AgentOperation = serde_json::from_value(json).unwrap();
+        assert!(matches!(op, AgentOperation::SendMessage(_)));
+    }
+
+    #[test]
+    fn test_agent_operation_create_team() {
+        let json = json!({
+            "operation": "CreateTeam",
+            "team_name": "t1",
+            "description": "desc",
+            "agents": ["a"]
+        });
+        let op: AgentOperation = serde_json::from_value(json).unwrap();
+        assert!(matches!(op, AgentOperation::CreateTeam(_)));
+    }
+
+    #[test]
+    fn test_agent_operation_shutdown() {
+        let json = json!({
+            "operation": "Shutdown",
+            "agent_id": "a1"
+        });
+        let op: AgentOperation = serde_json::from_value(json).unwrap();
+        assert!(matches!(op, AgentOperation::Shutdown(_)));
+    }
+
+    // ── Tool execution (fallback without context) ──────────────────────────
+
+    #[tokio::test]
+    async fn test_spawn_without_context() {
+        let tool = AgentTool::new();
+        let output = tool.execute(json!({
+            "operation": "Spawn",
+            "agent_type": "researcher",
+            "task": "Investigate something"
+        })).await.unwrap();
+        assert!(!output.is_error);
+        assert!(output.metadata.contains_key("agent_id"));
+        assert!(output.metadata.contains_key("agent_type"));
+        assert!(output.metadata.contains_key("status"));
+    }
+
+    #[tokio::test]
+    async fn test_send_message_without_context() {
+        let tool = AgentTool::new();
+        let output = tool.execute(json!({
+            "operation": "SendMessage",
+            "agent_id": "agent-1",
+            "message": "hello"
+        })).await.unwrap();
+        assert!(!output.is_error);
+        assert!(output.metadata.contains_key("message_id"));
+        assert!(output.metadata["delivered"].as_bool().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_create_team_without_context() {
+        let tool = AgentTool::new();
+        let output = tool.execute(json!({
+            "operation": "CreateTeam",
+            "team_name": "test-team",
+            "description": "A test team",
+            "agents": ["backend", "frontend"]
+        })).await.unwrap();
+        assert!(!output.is_error);
+        assert!(output.content.contains("test-team"));
+        let agent_ids = output.metadata["agent_ids"].as_array().unwrap();
+        assert_eq!(agent_ids.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_without_context() {
+        let tool = AgentTool::new();
+        let output = tool.execute(json!({
+            "operation": "Shutdown",
+            "agent_id": "agent-1"
+        })).await.unwrap();
+        assert!(!output.is_error);
+        assert!(output.metadata["success"].as_bool().unwrap());
+    }
+
+    // ── Error cases ────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_missing_operation() {
+        let tool = AgentTool::new();
+        let result = tool.execute(json!({"agent_type": "x"})).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_unknown_operation() {
+        let tool = AgentTool::new();
+        let result = tool.execute(json!({"operation": "Fly"})).await;
+        assert!(result.is_err());
+    }
+
+    // ── Context injection ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_context_handle_returns_arc() {
+        let tool = AgentTool::new();
+        let handle = tool.context_handle();
+        assert!(handle.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_inject_and_get_context() {
+        let tool = AgentTool::new();
+        // Without injection, get_team_context returns None
+        assert!(tool.get_team_context().is_none());
+    }
+
+    // ── Tool trait ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_tool_name() {
+        let tool = AgentTool::new();
+        assert_eq!(tool.name(), "Agent");
+    }
+
+    #[test]
+    fn test_tool_description() {
+        let tool = AgentTool::new();
+        assert!(!tool.description().is_empty());
+    }
+
+    #[test]
+    fn test_tool_input_schema() {
+        let tool = AgentTool::new();
+        let schema = tool.input_schema();
+        assert_eq!(schema["type"], "object");
+        assert!(schema["properties"]["operation"].is_object());
+        let ops = schema["properties"]["operation"]["enum"].as_array().unwrap();
+        assert_eq!(ops.len(), 4);
+    }
+
+    #[test]
+    fn test_default_creates_tool() {
+        let tool = AgentTool::default();
+        assert_eq!(tool.name(), "Agent");
+    }
+
+    // ── Send + Sync ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<AgentTool>();
+        assert_send_sync::<AgentSpawnInput>();
+        assert_send_sync::<SendMessageInput>();
+        assert_send_sync::<CreateTeamInput>();
+        assert_send_sync::<ShutdownInput>();
+        assert_send_sync::<AgentOperation>();
+    }
+}
