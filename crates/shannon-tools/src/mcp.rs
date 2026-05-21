@@ -53,7 +53,7 @@ pub struct ListMcpResourcesInput {
 }
 
 /// Output from listing MCP resources
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpResourceInfo {
     /// Resource URI
     pub uri: String,
@@ -333,4 +333,282 @@ impl Tool for McpResourceTool {
         })
     }
     fn is_read_only(&self) -> bool {        true    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── McpResourceContent ──────────────────────────────────────
+
+    #[test]
+    fn mcp_resource_content_serde_roundtrip() {
+        let content = McpResourceContent {
+            uri: "file:///project/memory".to_string(),
+            mime_type: Some("text/plain".to_string()),
+            text: Some("hello world".to_string()),
+            blob_saved_to: None,
+        };
+        let json = serde_json::to_string(&content).unwrap();
+        let deserialized: McpResourceContent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.uri, "file:///project/memory");
+        assert_eq!(deserialized.mime_type, Some("text/plain".to_string()));
+        assert_eq!(deserialized.text, Some("hello world".to_string()));
+        assert!(deserialized.blob_saved_to.is_none());
+    }
+
+    #[test]
+    fn mcp_resource_content_minimal() {
+        let content = McpResourceContent {
+            uri: "test://resource".to_string(),
+            mime_type: None,
+            text: None,
+            blob_saved_to: None,
+        };
+        let json = serde_json::to_string(&content).unwrap();
+        assert!(json.contains("test://resource"));
+        let back: McpResourceContent = serde_json::from_str(&json).unwrap();
+        assert!(back.mime_type.is_none());
+        assert!(back.text.is_none());
+    }
+
+    #[test]
+    fn mcp_resource_content_with_blob() {
+        let content = McpResourceContent {
+            uri: "file:///data.bin".to_string(),
+            mime_type: Some("application/octet-stream".to_string()),
+            text: None,
+            blob_saved_to: Some("/tmp/blob.dat".to_string()),
+        };
+        let json = serde_json::to_string(&content).unwrap();
+        let back: McpResourceContent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.blob_saved_to, Some("/tmp/blob.dat".to_string()));
+    }
+
+    // ── ReadMcpResourceInput ────────────────────────────────────
+
+    #[test]
+    fn read_mcp_resource_input_serde() {
+        let input = ReadMcpResourceInput {
+            server: "serena".to_string(),
+            uri: "file:///project/memory".to_string(),
+        };
+        let json = serde_json::to_string(&input).unwrap();
+        assert!(json.contains("serena"));
+        assert!(json.contains("file:///project/memory"));
+        let back: ReadMcpResourceInput = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.server, "serena");
+        assert_eq!(back.uri, "file:///project/memory");
+    }
+
+    #[test]
+    fn read_mcp_resource_input_from_json_value() {
+        let val = serde_json::json!({
+            "server": "sequential",
+            "uri": "sequential://thoughts"
+        });
+        let input: ReadMcpResourceInput = serde_json::from_value(val).unwrap();
+        assert_eq!(input.server, "sequential");
+    }
+
+    // ── ListMcpResourcesInput ───────────────────────────────────
+
+    #[test]
+    fn list_mcp_resources_input_with_server() {
+        let input = ListMcpResourcesInput {
+            server: Some("serena".to_string()),
+        };
+        let json = serde_json::to_string(&input).unwrap();
+        let back: ListMcpResourcesInput = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.server, Some("serena".to_string()));
+    }
+
+    #[test]
+    fn list_mcp_resources_input_without_server() {
+        let input = ListMcpResourcesInput { server: None };
+        let json = serde_json::to_string(&input).unwrap();
+        let back: ListMcpResourcesInput = serde_json::from_str(&json).unwrap();
+        assert!(back.server.is_none());
+    }
+
+    // ── McpResourceInfo ─────────────────────────────────────────
+
+    #[test]
+    fn mcp_resource_info_serde_roundtrip() {
+        let info = McpResourceInfo {
+            uri: "file:///project/memory".to_string(),
+            name: "Project Memory".to_string(),
+            mime_type: Some("text/plain".to_string()),
+            description: Some("Persistent memory".to_string()),
+            server: "serena".to_string(),
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        let back: McpResourceInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.uri, "file:///project/memory");
+        assert_eq!(back.name, "Project Memory");
+        assert_eq!(back.server, "serena");
+        assert_eq!(back.mime_type, Some("text/plain".to_string()));
+    }
+
+    #[test]
+    fn mcp_resource_info_minimal() {
+        let info = McpResourceInfo {
+            uri: "test://x".to_string(),
+            name: "Test".to_string(),
+            mime_type: None,
+            description: None,
+            server: "test".to_string(),
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        let back: McpResourceInfo = serde_json::from_str(&json).unwrap();
+        assert!(back.mime_type.is_none());
+        assert!(back.description.is_none());
+    }
+
+    // ── McpResourceTool trait ───────────────────────────────────
+
+    #[test]
+    fn mcp_resource_tool_name() {
+        let tool = McpResourceTool::new();
+        assert_eq!(tool.name(), "McpResource");
+    }
+
+    #[test]
+    fn mcp_resource_tool_description() {
+        let tool = McpResourceTool::new();
+        assert!(tool.description().contains("MCP"));
+    }
+
+    #[test]
+    fn mcp_resource_tool_default() {
+        let tool = McpResourceTool::default();
+        assert_eq!(tool.name(), "McpResource");
+    }
+
+    #[test]
+    fn mcp_resource_tool_input_schema() {
+        let tool = McpResourceTool::new();
+        let schema = tool.input_schema();
+        let ops = schema["properties"]["operation"]["enum"].as_array().unwrap();
+        assert!(ops.iter().any(|v| v.as_str() == Some("Read")));
+        assert!(ops.iter().any(|v| v.as_str() == Some("List")));
+    }
+
+    #[test]
+    fn mcp_resource_tool_is_read_only() {
+        let tool = McpResourceTool::new();
+        assert!(tool.is_read_only());
+    }
+
+    // ── McpResourceTool read_resource (mock) ────────────────────
+
+    #[tokio::test]
+    async fn read_resource_serena() {
+        let tool = McpResourceTool::new();
+        let input = ReadMcpResourceInput {
+            server: "serena".to_string(),
+            uri: "file:///project/memory".to_string(),
+        };
+        let output = tool.read_resource(input).await.unwrap();
+        assert_eq!(output.contents.len(), 1);
+        assert_eq!(output.contents[0].uri, "file:///project/memory");
+        assert!(output.contents[0].text.is_some());
+    }
+
+    #[tokio::test]
+    async fn read_resource_unknown_server() {
+        let tool = McpResourceTool::new();
+        let input = ReadMcpResourceInput {
+            server: "nonexistent".to_string(),
+            uri: "test://x".to_string(),
+        };
+        let err = tool.read_resource(input).await.unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    // ── McpResourceTool list_resources (mock) ───────────────────
+
+    #[tokio::test]
+    async fn list_resources_all_servers() {
+        let tool = McpResourceTool::new();
+        let input = ListMcpResourcesInput { server: None };
+        let output = tool.list_resources(input).await.unwrap();
+        let resources = output.resources.unwrap();
+        assert!(resources.len() >= 2); // serena + sequential
+    }
+
+    #[tokio::test]
+    async fn list_resources_filtered_by_server() {
+        let tool = McpResourceTool::new();
+        let input = ListMcpResourcesInput {
+            server: Some("serena".to_string()),
+        };
+        let output = tool.list_resources(input).await.unwrap();
+        let resources = output.resources.unwrap();
+        assert!(resources.iter().all(|r| r.server == "serena"));
+    }
+
+    #[tokio::test]
+    async fn list_resources_unknown_server() {
+        let tool = McpResourceTool::new();
+        let input = ListMcpResourcesInput {
+            server: Some("nonexistent".to_string()),
+        };
+        let err = tool.list_resources(input).await.unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    // ── Tool execute ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn execute_read_operation() {
+        let tool = McpResourceTool::new();
+        let input = json!({
+            "operation": "Read",
+            "server": "serena",
+            "uri": "file:///project/memory"
+        });
+        let output = tool.execute(input).await.unwrap();
+        assert!(!output.is_error);
+        assert!(output.content.contains("MCP resource"));
+    }
+
+    #[tokio::test]
+    async fn execute_list_operation() {
+        let tool = McpResourceTool::new();
+        let input = json!({
+            "operation": "List"
+        });
+        let output = tool.execute(input).await.unwrap();
+        assert!(!output.is_error);
+        assert!(output.content.contains("resources"));
+    }
+
+    #[tokio::test]
+    async fn execute_unknown_operation() {
+        let tool = McpResourceTool::new();
+        let input = json!({
+            "operation": "Delete"
+        });
+        let err = tool.execute(input).await.unwrap_err();
+        assert!(err.to_string().contains("Unknown operation"));
+    }
+
+    #[tokio::test]
+    async fn execute_missing_operation() {
+        let tool = McpResourceTool::new();
+        let input = json!({"server": "serena"});
+        let err = tool.execute(input).await.unwrap_err();
+        assert!(err.to_string().contains("operation"));
+    }
+
+    #[test]
+    fn send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<McpResourceTool>();
+        assert_send_sync::<McpResourceContent>();
+        assert_send_sync::<ReadMcpResourceInput>();
+        assert_send_sync::<ListMcpResourcesInput>();
+        assert_send_sync::<McpResourceInfo>();
+    }
 }

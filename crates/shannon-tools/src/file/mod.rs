@@ -417,3 +417,211 @@ impl Tool for GlobTool {
     }
     fn is_read_only(&self) -> bool {        true    }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── FileOperation serde ─────────────────────────────────────
+
+    #[test]
+    fn file_operation_read_tag() {
+        let json = serde_json::json!({
+            "operation": "Read",
+            "file_path": "/tmp/test.txt"
+        });
+        let op: FileOperation = serde_json::from_value(json).unwrap();
+        match op {
+            FileOperation::Read(r) => assert_eq!(r.file_path, "/tmp/test.txt"),
+            _ => panic!("Expected Read variant"),
+        }
+    }
+
+    #[test]
+    fn file_operation_write_tag() {
+        let json = serde_json::json!({
+            "operation": "Write",
+            "file_path": "/tmp/out.txt",
+            "content": "hello"
+        });
+        let op: FileOperation = serde_json::from_value(json).unwrap();
+        match op {
+            FileOperation::Write(w) => {
+                assert_eq!(w.file_path, "/tmp/out.txt");
+                assert_eq!(w.content, "hello");
+            }
+            _ => panic!("Expected Write variant"),
+        }
+    }
+
+    #[test]
+    fn file_operation_edit_tag() {
+        let json = serde_json::json!({
+            "operation": "Edit",
+            "file_path": "/tmp/test.txt",
+            "old_string": "foo",
+            "new_string": "bar"
+        });
+        let op: FileOperation = serde_json::from_value(json).unwrap();
+        match op {
+            FileOperation::Edit(e) => {
+                assert_eq!(e.file_path, "/tmp/test.txt");
+                assert_eq!(e.old_string, "foo");
+                assert_eq!(e.new_string, "bar");
+            }
+            _ => panic!("Expected Edit variant"),
+        }
+    }
+
+    #[test]
+    fn file_operation_glob_tag() {
+        let json = serde_json::json!({
+            "operation": "Glob",
+            "pattern": "**/*.rs"
+        });
+        let op: FileOperation = serde_json::from_value(json).unwrap();
+        match op {
+            FileOperation::Glob(g) => assert_eq!(g.pattern, "**/*.rs"),
+            _ => panic!("Expected Glob variant"),
+        }
+    }
+
+    #[test]
+    fn file_operation_unknown_tag_fails() {
+        let json = serde_json::json!({
+            "operation": "Delete",
+            "file_path": "/tmp/test.txt"
+        });
+        assert!(serde_json::from_value::<FileOperation>(json).is_err());
+    }
+
+    // ── Tool name/description/schema ────────────────────────────
+
+    #[test]
+    fn read_tool_name_and_schema() {
+        let tool = ReadTool::new();
+        assert_eq!(tool.name(), "Read");
+        assert!(tool.description().contains("Read"));
+        let schema = tool.input_schema();
+        assert!(schema["properties"]["file_path"].is_object());
+        assert!(schema["properties"]["offset"].is_object());
+        assert!(schema["properties"]["limit"].is_object());
+    }
+
+    #[test]
+    fn read_tool_is_read_only() {
+        let tool = ReadTool::new();
+        assert!(tool.is_read_only());
+    }
+
+    #[test]
+    fn read_tool_default() {
+        let tool = ReadTool::default();
+        assert_eq!(tool.name(), "Read");
+    }
+
+    #[test]
+    fn write_tool_name_and_schema() {
+        let tool = WriteTool::new();
+        assert_eq!(tool.name(), "Write");
+        let schema = tool.input_schema();
+        assert!(schema["properties"]["file_path"].is_object());
+        assert!(schema["properties"]["content"].is_object());
+    }
+
+    #[test]
+    fn write_tool_default() {
+        let tool = WriteTool::default();
+        assert_eq!(tool.name(), "Write");
+    }
+
+    #[test]
+    fn edit_tool_name_and_schema() {
+        let tool = EditTool::new();
+        assert_eq!(tool.name(), "Edit");
+        let schema = tool.input_schema();
+        assert!(schema["properties"]["old_string"].is_object());
+        assert!(schema["properties"]["new_string"].is_object());
+        assert!(schema["properties"]["replace_all"].is_object());
+    }
+
+    #[test]
+    fn edit_tool_default() {
+        let tool = EditTool::default();
+        assert_eq!(tool.name(), "Edit");
+    }
+
+    #[test]
+    fn multiedit_tool_name_and_schema() {
+        let tool = MultiEditTool::new();
+        assert_eq!(tool.name(), "MultiEdit");
+        let schema = tool.input_schema();
+        assert!(schema["properties"]["edits"].is_object());
+    }
+
+    #[test]
+    fn multiedit_tool_default() {
+        let tool = MultiEditTool::default();
+        assert_eq!(tool.name(), "MultiEdit");
+    }
+
+    #[test]
+    fn glob_tool_name_and_schema() {
+        let tool = GlobTool::new();
+        assert_eq!(tool.name(), "Glob");
+        let schema = tool.input_schema();
+        assert!(schema["properties"]["pattern"].is_object());
+    }
+
+    #[test]
+    fn glob_tool_is_read_only() {
+        let tool = GlobTool::new();
+        assert!(tool.is_read_only());
+    }
+
+    #[test]
+    fn glob_tool_default() {
+        let tool = GlobTool::default();
+        assert_eq!(tool.name(), "Glob");
+    }
+
+    // ── with_sandbox constructors ───────────────────────────────
+
+    #[test]
+    fn read_tool_with_sandbox() {
+        let sandbox = PathSandbox::new();
+        let tool = ReadTool::with_sandbox(sandbox);
+        assert_eq!(tool.name(), "Read");
+    }
+
+    #[test]
+    fn write_tool_with_sandbox() {
+        let sandbox = PathSandbox::new();
+        let tool = WriteTool::with_sandbox(sandbox);
+        assert_eq!(tool.name(), "Write");
+    }
+
+    #[test]
+    fn edit_tool_with_sandbox() {
+        let sandbox = PathSandbox::new();
+        let tool = EditTool::with_sandbox(sandbox);
+        assert_eq!(tool.name(), "Edit");
+    }
+
+    #[test]
+    fn glob_tool_with_sandbox() {
+        let sandbox = PathSandbox::new();
+        let tool = GlobTool::with_sandbox(sandbox);
+        assert_eq!(tool.name(), "Glob");
+    }
+
+    #[test]
+    fn send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<ReadTool>();
+        assert_send_sync::<WriteTool>();
+        assert_send_sync::<EditTool>();
+        assert_send_sync::<MultiEditTool>();
+        assert_send_sync::<GlobTool>();
+    }
+}
