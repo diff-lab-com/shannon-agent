@@ -273,7 +273,10 @@ impl AgentTool {
                     "You are a sub-agent of type '{agent_type}'. Focus on completing the assigned task concisely."
                 ),
                 tools: input.allowed_tools.clone().unwrap_or_default(),
-                working_directory: std::path::PathBuf::from("."),
+                working_directory: input.context.as_ref()
+                    .and_then(|c| c.get("working_directory").and_then(|v| v.as_str()))
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| std::path::PathBuf::from(".")),
                 max_turns: 50,
                 team,
             };
@@ -378,8 +381,13 @@ impl AgentTool {
         );
 
         // Build context with agent type role
+        let working_dir_hint = input.context.as_ref()
+            .and_then(|c| c.get("working_directory").and_then(|v| v.as_str()))
+            .map(|wd| format!("\n\nIMPORTANT: You are working in an isolated worktree at '{wd}'. All file operations must be relative to this directory. Use `cd {wd}` before running any commands."))
+            .unwrap_or_default();
+
         let system_hint = format!(
-            "You are a sub-agent of type '{agent_type}'. Focus on completing the assigned task concisely.\n\nTask: {task}",
+            "You are a sub-agent of type '{agent_type}'. Focus on completing the assigned task concisely.{working_dir_hint}\n\nTask: {task}",
             task = input.task,
         );
         let user_message = match &input.context {
@@ -795,6 +803,67 @@ mod tests {
         let tools = de.allowed_tools.unwrap();
         assert_eq!(tools.len(), 3);
         assert!(tools.contains(&"Read".to_string()));
+    }
+
+    #[test]
+    fn test_agent_spawn_input_with_working_directory() {
+        let input = AgentSpawnInput {
+            agent_type: "coder".into(),
+            task: "Fix bug in auth".into(),
+            context: Some(serde_json::json!({
+                "working_directory": "/tmp/worktree-auth-fix"
+            })),
+            priority: None,
+            model: None,
+            allowed_tools: None,
+        };
+        let ser = serde_json::to_string(&input).unwrap();
+        let de: AgentSpawnInput = serde_json::from_str(&ser).unwrap();
+        let wd = de.context.as_ref()
+            .and_then(|c| c.get("working_directory").and_then(|v| v.as_str()));
+        assert_eq!(wd, Some("/tmp/worktree-auth-fix"));
+    }
+
+    #[test]
+    fn test_working_directory_extraction_from_context() {
+        // With working_directory in context
+        let input = AgentSpawnInput {
+            agent_type: "coder".into(),
+            task: "Fix".into(),
+            context: Some(json!({"working_directory": "/tmp/wt-1"})),
+            priority: None,
+            model: None,
+            allowed_tools: None,
+        };
+        let wd = input.context.as_ref()
+            .and_then(|c| c.get("working_directory").and_then(|v| v.as_str()));
+        assert_eq!(wd, Some("/tmp/wt-1"));
+
+        // Without working_directory in context
+        let input2 = AgentSpawnInput {
+            agent_type: "coder".into(),
+            task: "Fix".into(),
+            context: Some(json!({"team": "alpha"})),
+            priority: None,
+            model: None,
+            allowed_tools: None,
+        };
+        let wd2 = input2.context.as_ref()
+            .and_then(|c| c.get("working_directory").and_then(|v| v.as_str()));
+        assert_eq!(wd2, None);
+
+        // Without context at all
+        let input3 = AgentSpawnInput {
+            agent_type: "coder".into(),
+            task: "Fix".into(),
+            context: None,
+            priority: None,
+            model: None,
+            allowed_tools: None,
+        };
+        let wd3 = input3.context.as_ref()
+            .and_then(|c| c.get("working_directory").and_then(|v| v.as_str()));
+        assert_eq!(wd3, None);
     }
 
     #[test]

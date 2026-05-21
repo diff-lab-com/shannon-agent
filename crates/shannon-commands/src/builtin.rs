@@ -15,6 +15,7 @@
 use crate::command::Command;
 use crate::registry::CommandRegistry;
 
+mod batch;
 mod commit;
 mod review_pr;
 mod review;
@@ -58,6 +59,7 @@ pub fn register_all(registry: &CommandRegistry) {
 /// Get all built-in commands
 pub fn all_commands() -> Vec<Command> {
     let mut cmds = vec![
+        batch::command(),
         commit::command(),
         review_pr::command(),
         review::command(),
