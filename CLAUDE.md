@@ -65,10 +65,10 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **Non-interactive/CI mode**: `--prompt` flag with FullAuto permissions (auto-approve non-critical, deny critical). NDJSON streaming, tool restrictions, exit codes. Gap: no structured outputs (validated JSON return like Claude Code SDK), no deep links (`claude-cli://` URLs).
 - **MCP tool search**: `tools/list` works with deferred schema loading. Gap: Claude Code has on-demand tool search that scales to thousands of MCP tools. No MCP channel support (push webhooks/alerts into live sessions).
 - **Hook system**: `HookManager` with `HookEvent`/`HookEventType`. Gap: Claude Code has 18+ hook events including `SubagentStart`, `SubagentStop`, `TaskCompleted`, `TeammateIdle`, `PreCompact`, `WorktreeCreate`, `WorktreeRemove`, `ConfigChange`. Shannon has fewer event types.
-- **LSP integration**: 6 LSP tools + `DiagnosticRegistry` + two client implementations. `DiagnosticStore.mark_stale()` called on source file changes. Gap: not wired for automatic background diagnostics — tools must be explicitly invoked (OpenCode runs `gopls`/`tsc` automatically).
+- **LSP integration**: 6 LSP tools + `DiagnosticRegistry` + two client implementations. `DiagnosticStore.mark_stale()` called on source file changes. Background `cargo check` diagnostics auto-run via `DiagnosticWatcher` when source files change — debounce, parse, display in UI.
 - **Plugin system**: `PluginRegistry` with manifest parsing. Tool plugins fully wired (MCP discovery). Command plugins register as `PromptCommand` in `CommandRegistry` (source: `Plugin`). Skill plugins register as `PromptCommand` with trigger as slash command name and entry file as template. Loading in both REPL (`new()`) and CLI headless mode.
 - **Desktop app**: Scaffolded Tauri app with TODO stubs.
-- **Agent creation flow**: `AgentTool` spawns sub-processes but no model override or tool restriction per agent.
+- **Agent creation flow**: `AgentTool` spawns sub-processes with optional model override via `AgentSpawnInput.model`. No per-agent tool restriction yet.
 
 ### MEDIUM — Quality-of-life gaps
 
@@ -84,6 +84,7 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **Headless permissions**: `FullAuto` by default (auto-approve non-critical, deny critical). `BypassPermissions` only with explicit `--yes` flag.
 - **Tool grouping/diff stats/streaming thinking**: All implemented in UI.
 - **File watching for source code**: `SourceWatcher` detects project file changes; `DiagnosticStore.sync_from_registry()` bridges diagnostics to UI.
+- **Background diagnostics**: `DiagnosticWatcher` auto-runs `cargo check` on source changes, parses output, updates `DiagnosticStore` with debounce.
 - **Skill plugin execution**: Skill plugins now register as executable slash commands (trigger → command name, entry file → template).
 
 ### Test Coverage
@@ -100,7 +101,7 @@ Multi-provider LLM, tool use, file read/write/edit, bash execution, MCP extensio
 - **Worktree isolation**: Claude Code auto-isolates agents. Not implemented.
 - **OS sandbox**: Codex uses macOS Seatbelt/AppArmor/Docker. Shannon uses project-dir sandboxing only.
 - **Auto-permission classifier**: Claude Code uses LLM-based 4-tier classification. Shannon has rule-based `PermissionClassifier`.
-- **LSP integration**: OpenCode runs language servers in background. Shannon has 6 LSP tools but no automatic diagnostics loop.
+- **LSP integration**: Shannon has 6 LSP tools plus automatic background `cargo check` diagnostics on source changes. OpenCode runs `gopls`/`tsc` automatically.
 - **Hook system**: Claude Code has 18+ hook events. Shannon has 32 hook events (more coverage).
 - **Non-interactive/CI mode**: Claude Code `claude -p` with structured outputs. Shannon has `--prompt` with NDJSON output.
 
