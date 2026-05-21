@@ -17,19 +17,19 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 
 | Crate | Responsibility | Tests |
 |-------|---------------|-------|
-| `shannon-core` | API client, query engine, permissions, tools, state management | ~2505 |
-| `shannon-ui` | Terminal UI (ratatui), REPL, vim mode, widgets, rendering | ~1023 |
-| `shannon-tools` | Tool implementations (bash, file ops, search, config manager) | ~870 |
-| `shannon-commands` | Built-in commands (/help, /config, /pdf, /commit, etc.) | ~200 |
-| `shannon-agents` | Multi-agent orchestration | ~173 |
-| `shannon-cli` | CLI entry point (clap), config loading, non-interactive mode | ~91 |
-| `shannon-skills` | Skill system (command templates) | ~123 |
-| `shannon-mcp` | MCP (Model Context Protocol) server integration | ~111 |
+| `shannon-core` | API client, query engine, permissions, tools, state management | ~3340 |
+| `shannon-ui` | Terminal UI (ratatui), REPL, vim mode, widgets, rendering | ~1041 |
+| `shannon-tools` | Tool implementations (bash, file ops, search, config manager) | ~1092 |
+| `shannon-commands` | Built-in commands (/help, /config, /pdf, /commit, etc.) | ~335 |
+| `shannon-agents` | Multi-agent orchestration | ~457 |
+| `shannon-cli` | CLI entry point (clap), config loading, non-interactive mode | ~191 |
+| `shannon-skills` | Skill system (command templates) | ~171 |
+| `shannon-mcp` | MCP (Model Context Protocol) server integration | ~294 |
 | `shannon-types` | Shared types (re-exported by shannon-core) | ~22 |
 | `shannon-tool-interface` | Tool trait definitions | ~24 |
-| `shannon-desktop` | Tauri desktop app (scaffolded) | ~25 |
-| `shannon-codegen` | Code generation utilities | ~8 |
-| `shannon-agent` | Single agent runtime (binary crate) | 0 |
+| `shannon-desktop` | Tauri desktop app (scaffolded) | ~24 |
+| `shannon-codegen` | Code generation utilities | ~102 |
+| `shannon-agent` | Single agent runtime (binary crate) | ~65 |
 
 ## Key Patterns
 
@@ -78,7 +78,7 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **Tool grouping in UI**: Consecutive same-category tools not visually grouped (plan exists, not implemented).
 - **Streaming thinking display**: Thinking content streams as char count only, no inline preview.
 - **Inline diff stats**: Write/Edit tools don't show `+N -N` line counts in collapsed display.
-- **Test coverage**: ~47 source files with zero test coverage (15 core, 28 UI, 4 tools). Recent additions: compact (96), hooks (38), streaming (27), task (20), write (8), messaging (8), skill (19), agent (23) = 239 new tests.
+- **Test coverage**: 7158 total tests. Zero-test files remain in core (11: api_server, compact/mod, error, hooks/{mod,types}, lsp/{client,mod}, memory/mod, plugin/*), UI (20+ large files), tools (12: worktree, mcp, file/*, etc.), agents (3: coordinator, teammate, remote_tools).
 
 ## Gotchas
 
