@@ -138,7 +138,11 @@ impl super::Repl {
 
         let usage_ratio = actual_tokens as f64 / context_window as f64;
 
-        if usage_ratio > 0.75 {
+        // Derive pressure tiers from CompactConfig so thresholds are configurable in one place.
+        let trigger = shannon_core::compact::CompactConfig::default().trigger_threshold as f64;
+        let moderate = (trigger - 0.15).max(0.0);
+
+        if usage_ratio > trigger {
             if self.state.streaming_active {
                 // Defer auto-compact until streaming completes
                 self.state.pending_auto_compact = true;
@@ -152,7 +156,7 @@ impl super::Repl {
                 self.do_auto_compact();
                 return true;
             }
-        } else if usage_ratio > 0.60 {
+        } else if usage_ratio > moderate {
             // Info: context pressure moderate (>60%)
             let pct = (usage_ratio * 100.0) as u32;
             let remaining = context_window.saturating_sub(actual_tokens);
@@ -236,9 +240,9 @@ impl super::Repl {
 
     /// Perform auto-compaction using progressive strategy based on pressure level.
     ///
-    /// - High (75-85%): Prune stale tool results only (lightest touch)
-    /// - Critical (85-95%): Micro-compact large messages + prune
-    /// - Emergency (95%+): Full summarization + micro-compact
+    /// - High (trigger–critical%): Prune stale tool results only (lightest touch)
+    /// - Critical (critical–emergency%): Micro-compact large messages + prune
+    /// - Emergency (emergency%+): Full summarization + micro-compact
     pub(crate) fn do_auto_compact(&mut self) {
         use shannon_core::compact::CompactEngine;
 
@@ -259,11 +263,16 @@ impl super::Repl {
             0.0
         };
 
+        // Derive pressure tiers from CompactConfig
+        let trigger = shannon_core::compact::CompactConfig::default().trigger_threshold as f64;
+        let critical = (trigger + 0.10).min(1.0);
+        let emergency = (trigger + 0.20).min(1.0);
+
         let before = history.len();
         let mut messages = history;
         let mut toast_msg: Option<String> = None;
 
-        if usage_ratio > 0.95 {
+        if usage_ratio > emergency {
             // Emergency: full summarization + micro-compact
             let client = engine.client().clone();
             if let Ok(mut compact_engine) = CompactEngine::with_llm_summarizer(client) {
@@ -299,7 +308,7 @@ impl super::Repl {
                     toast_msg = Some(format!("  Auto-compacted: {before}→{after} messages  "));
                 }
             }
-        } else if usage_ratio > 0.85 {
+        } else if usage_ratio > critical {
             // Critical: micro-compact large messages
             let client = engine.client().clone();
             let compact_engine = CompactEngine::with_llm_summarizer(client)
@@ -312,7 +321,7 @@ impl super::Repl {
                     toast_msg = Some(format!("  Auto-compacted: {before}→{after} messages  "));
                 }
             }
-        } else if usage_ratio > 0.75 {
+        } else if usage_ratio > trigger {
             // High: just prune stale tool results (no API call needed)
             CompactEngine::prune_stale_tool_results(&mut messages);
             engine.replace_conversation(messages);
