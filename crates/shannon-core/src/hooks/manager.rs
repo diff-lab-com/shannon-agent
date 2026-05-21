@@ -739,3 +739,191 @@ Do not include any other text, explanation, or formatting.";
         self.llm_client = Some(client);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn allow_result() -> HookResult {
+        HookResult {
+            exit_code: 0,
+            stdout: r#"{"decision":"allow"}"#.into(),
+            stderr: String::new(),
+            decision: HookDecision::Allow,
+            command: "echo allow".into(),
+        }
+    }
+
+    fn deny_result(reason: &str) -> HookResult {
+        HookResult {
+            exit_code: 2,
+            stdout: String::new(),
+            stderr: reason.into(),
+            decision: HookDecision::Deny { reason: reason.into() },
+            command: "echo deny".into(),
+        }
+    }
+
+    fn modify_result(input: Option<Value>, output: Option<Value>) -> HookResult {
+        HookResult {
+            exit_code: 0,
+            stdout: r#"{"decision":"modify"}"#.into(),
+            stderr: String::new(),
+            decision: HookDecision::Modify {
+                modified_input: input,
+                modified_output: output,
+            },
+            command: "echo modify".into(),
+        }
+    }
+
+    // ── Creation ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_new_creates_manager() {
+        let mgr = HookManager::new();
+        assert!(mgr.user_config_path().to_string_lossy().contains("shannon"));
+        assert!(mgr.project_config_path().to_string_lossy().contains("hooks.json"));
+    }
+
+    #[test]
+    fn test_default_is_new() {
+        let _mgr = HookManager::default();
+    }
+
+    #[test]
+    fn test_with_paths_custom() {
+        let mgr = HookManager::with_paths(
+            PathBuf::from("/tmp/user-hooks.json"),
+            PathBuf::from("/tmp/proj-hooks.json"),
+        );
+        assert_eq!(mgr.user_config_path(), Path::new("/tmp/user-hooks.json"));
+        assert_eq!(mgr.project_config_path(), Path::new("/tmp/proj-hooks.json"));
+    }
+
+    #[test]
+    fn test_with_base_dir() {
+        let mgr = HookManager::with_base_dir(PathBuf::from("/tmp/myproject"));
+        assert!(mgr.project_config_path().starts_with("/tmp/myproject"));
+    }
+
+    // ── Accessors ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_hooks_file_empty_initially() {
+        let mgr = HookManager::new();
+        assert!(mgr.hooks_file().hooks.is_empty());
+    }
+
+    #[test]
+    fn test_configured_event_types_empty_initially() {
+        let mgr = HookManager::new();
+        assert!(mgr.configured_event_types().is_empty());
+    }
+
+    // ── resolve_results ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_resolve_all_allow() {
+        let results = vec![allow_result(), allow_result()];
+        let decision = HookManager::resolve_results(&results);
+        assert!(matches!(decision, HookDecision::Allow));
+    }
+
+    #[test]
+    fn test_resolve_deny_wins() {
+        let results = vec![allow_result(), deny_result("blocked")];
+        let decision = HookManager::resolve_results(&results);
+        assert!(matches!(decision, HookDecision::Deny { .. }));
+    }
+
+    #[test]
+    fn test_resolve_deny_first_stops() {
+        let results = vec![deny_result("first deny"), allow_result()];
+        let decision = HookManager::resolve_results(&results);
+        if let HookDecision::Deny { reason } = decision {
+            assert_eq!(reason, "first deny");
+        } else {
+            panic!("expected Deny");
+        }
+    }
+
+    #[test]
+    fn test_resolve_modify_last_wins_over_allow() {
+        let results = vec![
+            allow_result(),
+            modify_result(Some(json!("modified")), None),
+        ];
+        let decision = HookManager::resolve_results(&results);
+        assert!(matches!(decision, HookDecision::Modify { .. }));
+    }
+
+    #[test]
+    fn test_resolve_deny_overrides_modify() {
+        let results = vec![
+            modify_result(None, Some(json!("out"))),
+            deny_result("nope"),
+        ];
+        let decision = HookManager::resolve_results(&results);
+        assert!(matches!(decision, HookDecision::Deny { .. }));
+    }
+
+    #[test]
+    fn test_resolve_empty_returns_allow() {
+        let decision = HookManager::resolve_results(&[]);
+        assert!(matches!(decision, HookDecision::Allow));
+    }
+
+    // ── extract_event_type_from_json ───────────────────────────────────────
+
+    #[test]
+    fn test_extract_event_type_known() {
+        let json = r#"{"PreToolUse":{"tool_name":"Bash","tool_input":{}}}"#;
+        let etype = HookManager::extract_event_type_from_json(json);
+        assert_eq!(etype, "PreToolUse");
+    }
+
+    #[test]
+    fn test_extract_event_type_empty_object() {
+        let json = "{}";
+        let etype = HookManager::extract_event_type_from_json(json);
+        assert_eq!(etype, "Unknown");
+    }
+
+    #[test]
+    fn test_extract_event_type_invalid_json() {
+        let etype = HookManager::extract_event_type_from_json("not json");
+        assert_eq!(etype, "Unknown");
+    }
+
+    // ── load_from_path errors ──────────────────────────────────────────────
+
+    #[test]
+    fn test_load_from_nonexistent_path_returns_empty() {
+        let mut mgr = HookManager::new();
+        let result = mgr.load_from_path(Path::new("/tmp/no-such-hooks-file-xyz.json"));
+        // load_from_file returns Ok(empty) for nonexistent files
+        assert!(result.is_ok());
+        assert!(mgr.hooks_file().hooks.is_empty());
+    }
+
+    // ── Debug trait ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_debug_format() {
+        let mgr = HookManager::new();
+        let debug_str = format!("{mgr:?}");
+        assert!(debug_str.contains("user_config_path"));
+        assert!(debug_str.contains("hooks_file"));
+        assert!(debug_str.contains("llm_client"));
+    }
+
+    // ── Send + Sync ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<HookManager>();
+    }
+}
