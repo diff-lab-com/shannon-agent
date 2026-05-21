@@ -55,30 +55,58 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 
 ### CRITICAL — Shannon lacks entirely
 
-- **Permission auto-mode**: Claude Code has AI-based classifier that auto-allows safe operations. Shannon has manual allow/deny only.
-- **Rich subagent system**: Claude Code/Codex support spawning per-task agents with isolated context, tool restrictions, and model overrides. Shannon's `shannon-agents` has orchestration but no per-agent config or isolation.
-- **Non-interactive/CI mode**: `claude -p` and `codex exec` support headless execution. Shannon has `--non-interactive` flag but limited tool approval flow.
-- **Session resume by ID**: `--resume [<UUID>]` now accepts optional UUID argument. `shannon --resume` for most recent, `shannon --resume <uuid>` for specific session. Removed separate `--session` flag.
+- **Permission auto-mode**: Claude Code has AI-based classifier that auto-allows safe operations. Shannon has manual allow/deny only. Headless mode uses `BypassPermissions` for all tools — no read-only auto-approve.
+- **Rich subagent system**: Claude Code/Codex support spawning per-task agents with isolated context, tool restrictions, and model overrides. Shannon's `shannon-agents` has orchestration but teammate executor falls back to placeholder responses when no LLM is available.
 - **Worktree isolation**: Claude Code creates git worktrees for isolated agent work. No equivalent in Shannon.
 
 ### HIGH — Shannon has partial support
 
-- **MCP tool search**: `tools/list` works, but no `tools/call` pagination or tool search/filter for large MCP server fleets.
-- **Auto-trigger compaction**: Post-query `check_context_pressure()` uses `CompactConfig.trigger_threshold`. Defers during streaming via `pending_auto_compact`. Toast notification shown when approaching limit. No separate background loop needed for CLI tool.
+- **Non-interactive/CI mode**: `--prompt` flag supports headless execution with exit codes, tool restrictions, NDJSON streaming. All tools bypass permissions in headless mode — should auto-approve read-only tools and only prompt for destructive ones.
+- **MCP tool search**: `tools/list` works, but deferred tool schemas aren't loaded on demand. No `tools/call` pagination for large MCP server fleets.
+- **Auto-trigger compaction**: Post-query `check_context_pressure()` uses `CompactConfig.trigger_threshold`. Defers during streaming via `pending_auto_compact`. No separate background loop needed for CLI tool.
 - **Project memory (MEMORY.md)**: `MemoryStore` + `AutoDreamService` exist but no `MEMORY.md` index file pattern like Claude Code for cross-session context.
-- **LSP diagnostics integration**: OpenCode has real-time `tsc --noEmit` / `cargo check` integration. Shannon has no LSP client.
-- **Plugin system wiring**: Module structure exists (`crates/shannon-core/src/plugin/`) but marked "scaffolded for future use".
+- **LSP integration**: 6 LSP tools fully implemented in `shannon-tools/src/lsp.rs` (GoToDefinition, FindReferences, Hover, DocumentSymbol, WorkspaceSymbol, RenameSymbol, CodeActions) + `DiagnosticRegistry` in `lsp_diagnostics.rs`. Two LSP client implementations: `shannon-core/src/lsp/client.rs` (lsp_types) and `shannon-tools/src/lsp.rs` (custom JSON-RPC). Gap: not wired into query engine for automatic real-time diagnostics — tools must be explicitly invoked.
+- **Plugin system wiring**: Module structure exists (`crates/shannon-core/src/plugin/`) with `PluginRegistry`, `PluginManifest`, manifest parsing. CLI auto-discovers plugins from `~/.shannon/plugins/`. Tool transport works but non-tool plugin kinds (hooks, skills) are stubbed.
 - **Desktop app**: Scaffolded Tauri app with TODO stubs for QueryEngine, model_registry, tool_registry.
+- **Agent creation flow**: `AgentTool` spawns sub-processes but creation command is placeholder — no model override or tool restriction per agent.
 
 ### MEDIUM — Quality-of-life gaps
 
 - **File watching**: Limited to skill files only; no general project file watching.
 - **Vision/multimodal**: Display only; no vision model integration for image analysis.
 - **Patch application**: Basic diff rendering; no three-way merge or conflict markers.
-- **Tool grouping in UI**: Consecutive same-category tools not visually grouped (plan exists, not implemented).
+- **Tool grouping in UI**: Consecutive same-category tools not visually grouped (plan exists at `.claude/plans/proud-stargazing-bumblebee.md`).
 - **Streaming thinking display**: Thinking content streams as char count only, no inline preview.
 - **Inline diff stats**: Write/Edit tools don't show `+N -N` line counts in collapsed display.
-- **Test coverage**: 7455 total tests. Recent additions: agents (+92: task/message/task_board, error, teammate, remote_tools, task_tools), tools (+46: mcp, file/mod), UI (+35: a11y, preferences), core (+15: plugin error, LSP mod). Zero-test files remain: core (api_server, compact/mod, error [orphan], lsp/client, memory/mod, plugin/{config,index,index_builder,registry}), UI (20+ widget/command files), tools (lib.rs).
+- **Multi-agent executor**: `multi_agent.rs` has coordinator/worker split but workers fall back to placeholder text when LLM unavailable.
+- **CLI tool result display**: Tool result for unknown tools returns `"Tool result displayed in UI"` placeholder in non-UI contexts.
+
+### Resolved
+
+- **Session resume by ID**: `--resume [<UUID>]` accepts optional UUID. `shannon --resume` for most recent, `shannon --resume <uuid>` for specific session. `--continue` / `-c` as alias.
+
+### Test Coverage
+
+7455 total tests. Zero-test files remain:
+- **core**: `api_server`, `compact/mod`, `error` (orphan — not in module tree), `lsp/client`, `memory/mod`
+- **UI**: 20+ widget/command files (renderable, sidebar, markdown, diff_view, etc.)
+- **tools**: `lib.rs`
+
+## Competitor Feature Tiers
+
+### Tier 1 — Table Stakes (Shannon has most)
+Multi-provider LLM, tool use, file read/write/edit, bash execution, MCP extensions, streaming output, session persistence, context compaction, config files, i18n.
+
+### Tier 2 — Differentiators (Shannon partially has)
+- **Subagent system**: Claude Code/Codex spawn isolated agents. Shannon has `shannon-agents` orchestration but no per-agent model/tool config.
+- **Worktree isolation**: Claude Code creates git worktrees for agents. Not implemented.
+- **OS sandbox**: Codex uses macOS Seatbelt/AppArmor. Shannon uses project-dir sandboxing only.
+- **Auto-permission classifier**: Claude Code AI-classifies tool safety. Shannon has static categories only.
+- **LSP integration**: OpenCode runs `tsc --noEmit` / `cargo check` in background. Shannon has 6 LSP tools + DiagnosticRegistry, but no automatic background diagnostics loop.
+- **Non-interactive/CI mode**: Claude Code `claude -p`, Codex `codex exec`. Shannon has `--prompt` flag with NDJSON output.
+
+### Tier 3 — Quality of Life
+Multi-surface (web/desktop/CLI), hooks system, agent teams, skills system, model switching, prompt caching, token counting UI.
 
 ## Gotchas
 
