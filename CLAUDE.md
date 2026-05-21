@@ -66,14 +66,14 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **MCP tool search**: `tools/list` works with deferred schema loading. Gap: Claude Code has on-demand tool search that scales to thousands of MCP tools. No MCP channel support (push webhooks/alerts into live sessions).
 - **Hook system**: `HookManager` with `HookEvent`/`HookEventType`. Gap: Claude Code has 18+ hook events including `SubagentStart`, `SubagentStop`, `TaskCompleted`, `TeammateIdle`, `PreCompact`, `WorktreeCreate`, `WorktreeRemove`, `ConfigChange`. Shannon has fewer event types.
 - **LSP integration**: 6 LSP tools + `DiagnosticRegistry` + two client implementations. Gap: not wired for automatic background diagnostics — tools must be explicitly invoked (OpenCode runs `gopls`/`tsc` automatically).
-- **Plugin system**: `PluginRegistry` with manifest parsing. Tool plugins fully wired (MCP discovery). Command plugins register as `PromptCommand` in `CommandRegistry` (source: `Plugin`). Skill plugins loaded and logged. Loading in both REPL (`new()`) and CLI headless mode.
+- **Plugin system**: `PluginRegistry` with manifest parsing. Tool plugins fully wired (MCP discovery). Command plugins register as `PromptCommand` in `CommandRegistry` (source: `Plugin`). Skill plugins register as `PromptCommand` with trigger as slash command name and entry file as template. Loading in both REPL (`new()`) and CLI headless mode.
 - **Desktop app**: Scaffolded Tauri app with TODO stubs.
 - **Agent creation flow**: `AgentTool` spawns sub-processes but no model override or tool restriction per agent.
 
 ### MEDIUM — Quality-of-life gaps
 
 - **Multi-surface**: Claude Code runs on CLI, VS Code, JetBrains, web, desktop. Shannon has CLI + scaffolded Tauri desktop app.
-- **File watching**: Limited to skill files only; no general project file watching.
+- **File watching**: `SourceWatcher` watches project source files (.rs, .ts, .py, etc.) via `notify` crate. `CustomCommandWatcher` watches command directories. `SettingsWatcher` watches config files. `DiagnosticStore.sync_from_registry()` bridges tool-layer diagnostics to UI display.
 - **Vision/multimodal**: Display only; no vision model integration for image analysis.
 - **Patch application**: Basic diff rendering; no three-way merge or conflict markers.
 - **Computer use**: Claude Code can click, type, see screen on macOS. Shannon has no equivalent.
@@ -83,10 +83,12 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **Session resume by ID**: `--resume [<UUID>]` accepts optional UUID. `shannon --resume` for most recent, `shannon --resume <uuid>` for specific session. `--continue` / `-c` as alias.
 - **Headless permissions**: `FullAuto` by default (auto-approve non-critical, deny critical). `BypassPermissions` only with explicit `--yes` flag.
 - **Tool grouping/diff stats/streaming thinking**: All implemented in UI.
+- **File watching for source code**: `SourceWatcher` detects project file changes; `DiagnosticStore.sync_from_registry()` bridges diagnostics to UI.
+- **Skill plugin execution**: Skill plugins now register as executable slash commands (trigger → command name, entry file → template).
 
 ### Test Coverage
 
-7546 total tests across all crates (7488 passing, 58 e2e require API access). Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them.
+7560 total tests across all crates (7502 passing, 58 e2e require API access). Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them.
 
 ## Competitor Feature Tiers
 
