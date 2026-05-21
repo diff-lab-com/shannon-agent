@@ -382,6 +382,14 @@ struct Cli {
     #[arg(long)]
     diff_only: bool,
 
+    /// JSON Schema file or inline JSON for structured output validation (headless mode).
+    /// When provided, the assistant is instructed to return JSON matching the schema.
+    /// The response is validated before output. Exit code 1 on validation failure.
+    /// Example: shannon --prompt "analyze" --schema schema.json
+    ///          shannon --prompt "analyze" --schema '{"type":"object","required":["result"]}'
+    #[arg(long)]
+    schema: Option<String>,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -954,6 +962,23 @@ fn emit_output_event(event: &OutputEvent) {
     }
 }
 
+/// Load a JSON Schema from a file path or inline JSON string.
+///
+/// If the input starts with `{` or `[`, it's parsed as inline JSON.
+/// Otherwise it's treated as a file path and its contents are read and parsed.
+fn load_schema(input: &str) -> Result<shannon_core::StructuredOutputConfig> {
+    let trimmed = input.trim();
+    let json_str = if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        trimmed.to_string()
+    } else {
+        std::fs::read_to_string(trimmed)
+            .map_err(|e| anyhow::anyhow!("Failed to read schema file '{}': {e}", trimmed))?
+    };
+    let schema: serde_json::Value = serde_json::from_str(&json_str)
+        .map_err(|e| anyhow::anyhow!("Invalid JSON in schema: {e}"))?;
+    Ok(shannon_core::StructuredOutputConfig::new(schema))
+}
+
 /// Run a CI/CD headless query.
 ///
 /// When `--prompt` is provided (the `--prompt` long flag, not the positional arg),
@@ -977,6 +1002,7 @@ fn run_headless_query(
     quiet: bool,
     diff_only: bool,
     resume_session: Option<shannon_core::state::SessionData>,
+    schema_config: Option<&shannon_core::StructuredOutputConfig>,
 ) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     let exit_code: HeadlessExitCode = rt.block_on(async {
@@ -1095,6 +1121,11 @@ fn run_headless_query(
         // Auto-load project instructions
         if let Some(instructions) = shannon_core::project_instructions::load_from_cwd() {
             engine.append_system_prompt(&instructions.content);
+        }
+
+        // Append structured output schema instructions
+        if let Some(schema) = schema_config {
+            engine.append_system_prompt(&schema.system_prompt_suffix());
         }
 
         // Restore prior conversation history if --resume was specified
@@ -1318,6 +1349,26 @@ fn run_headless_query(
         }
 
         let duration_ms = start.elapsed().as_millis() as u64;
+
+        // Validate structured output schema if provided
+        if let Some(schema) = schema_config {
+            match schema.validate_response(&response_text) {
+                Ok(validated) => {
+                    // Replace response with validated/cleaned JSON
+                    response_text = serde_json::to_string_pretty(&validated)
+                        .unwrap_or_else(|_| validated.to_string());
+                }
+                Err(e) => {
+                    eprintln!("Schema validation failed: {e}");
+                    exit_code = HeadlessExitCode::Error;
+                    if output_format == OutputFormat::JsonStream {
+                        emit_output_event(&OutputEvent::Error {
+                            message: format!("Schema validation failed: {e}"),
+                        });
+                    }
+                }
+            }
+        }
 
         // Output results based on format
         match output_format {
@@ -1937,6 +1988,11 @@ fn main() -> Result<()> {
             .team_allowed_tools
             .as_deref()
             .map(|s| s.split(',').map(|t| t.trim().to_string()).collect());
+        // Parse --schema: load from file or parse inline JSON
+        let schema_config = cli.schema.as_deref().map(|s| {
+            load_schema(s)
+        }).transpose()?;
+
         return run_headless_query(
             headless_prompt,
             &config,
@@ -1947,6 +2003,7 @@ fn main() -> Result<()> {
             cli.quiet || cli.diff_only,
             cli.diff_only,
             resume_data,
+            schema_config.as_ref(),
         );
     }
 
@@ -3359,5 +3416,44 @@ mod tests {
         let line = event.to_ndjson();
         assert!(line.ends_with('\n'));
         assert_eq!(line.matches('\n').count(), 1);
+    }
+
+    // ── load_schema tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_load_schema_inline_object() {
+        let config = load_schema(r#"{"type":"object","required":["name"]}"#).unwrap();
+        assert!(config.schema.is_object());
+        assert_eq!(config.schema["type"], "object");
+        assert!(config.name.is_none());
+    }
+
+    #[test]
+    fn test_load_schema_inline_with_whitespace() {
+        let config = load_schema(r#"  {"type":"array"}  "#).unwrap();
+        assert_eq!(config.schema["type"], "array");
+    }
+
+    #[test]
+    fn test_load_schema_invalid_json() {
+        let result = load_schema(r#"{invalid json}"#);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid JSON"));
+    }
+
+    #[test]
+    fn test_load_schema_file_not_found() {
+        let result = load_schema("/nonexistent/path/schema.json");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Failed to read schema file"));
+    }
+
+    #[test]
+    fn test_load_schema_from_file() {
+        let tmp = std::env::temp_dir().join("shannon_test_schema.json");
+        std::fs::write(&tmp, r#"{"type":"object","properties":{"x":{"type":"number"}}}"#).unwrap();
+        let config = load_schema(tmp.to_str().unwrap()).unwrap();
+        assert!(config.schema["properties"]["x"]["type"].is_string());
+        let _ = std::fs::remove_file(&tmp);
     }
 }
