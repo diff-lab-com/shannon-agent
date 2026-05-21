@@ -200,6 +200,7 @@ pub use session_history::{
 };
 pub use streaming_tool_executor::{StreamingToolExecutor, TrackedTool, ToolStatus};
 pub use tool_execution::{ToolExecutionService, ToolExecutionResult, ToolProgress, ToolProgressStatus};
+pub use output_format::{OutputEvent, StructuredOutputConfig, StructuredOutputError};
 pub use session_recovery::{SessionRecovery, SessionRecoveryError, RecoveryMetadata, SessionLogEntry};
 pub use compact::{CompactEngine, CompactConfig, CompactResult, CompactStrategy, MessageGroup, CompactError, RuleBasedSummarizer, Summarizer};
 pub use context_pressure::{
