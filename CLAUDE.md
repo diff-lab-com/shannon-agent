@@ -17,9 +17,9 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 
 | Crate | Responsibility | Tests |
 |-------|---------------|-------|
-| `shannon-core` | API client, query engine, permissions, tools, state management | ~2476 |
+| `shannon-core` | API client, query engine, permissions, tools, state management | ~2505 |
 | `shannon-ui` | Terminal UI (ratatui), REPL, vim mode, widgets, rendering | ~1023 |
-| `shannon-tools` | Tool implementations (bash, file ops, search, config manager) | ~847 |
+| `shannon-tools` | Tool implementations (bash, file ops, search, config manager) | ~870 |
 | `shannon-commands` | Built-in commands (/help, /config, /pdf, /commit, etc.) | ~200 |
 | `shannon-agents` | Multi-agent orchestration | ~173 |
 | `shannon-cli` | CLI entry point (clap), config loading, non-interactive mode | ~91 |
@@ -64,7 +64,7 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 ### HIGH — Shannon has partial support
 
 - **MCP tool search**: `tools/list` works, but no `tools/call` pagination or tool search/filter for large MCP server fleets.
-- **Auto-trigger compaction**: `CompactConfig.trigger_threshold` exists but no background compaction loop — compaction is manual (`/compact`) only.
+- **Auto-trigger compaction**: UI sidebar now derives pressure tiers from `CompactConfig.trigger_threshold` (no longer hardcoded). Still no background compaction loop — compaction triggers during active streaming only.
 - **Project memory (MEMORY.md)**: `MemoryStore` + `AutoDreamService` exist but no `MEMORY.md` index file pattern like Claude Code for cross-session context.
 - **LSP diagnostics integration**: OpenCode has real-time `tsc --noEmit` / `cargo check` integration. Shannon has no LSP client.
 - **Plugin system wiring**: Module structure exists (`crates/shannon-core/src/plugin/`) but marked "scaffolded for future use".
@@ -78,7 +78,7 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **Tool grouping in UI**: Consecutive same-category tools not visually grouped (plan exists, not implemented).
 - **Streaming thinking display**: Thinking content streams as char count only, no inline preview.
 - **Inline diff stats**: Write/Edit tools don't show `+N -N` line counts in collapsed display.
-- **Test coverage**: 59 source files with zero test coverage (17 core, 33 UI, 9 tools). Recent additions: compact (67), hooks (20), streaming (27), task (20), write (8), messaging (8) = 150 new tests.
+- **Test coverage**: ~47 source files with zero test coverage (15 core, 28 UI, 4 tools). Recent additions: compact (96), hooks (38), streaming (27), task (20), write (8), messaging (8), skill (19), agent (23) = 239 new tests.
 
 ## Gotchas
 
