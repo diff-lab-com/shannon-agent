@@ -746,3 +746,345 @@ impl CompactEngine {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::{ContentBlock, Message, MessageContent, ToolResultContent};
+
+    fn text_msg(role: &str, text: &str) -> Message {
+        Message { role: role.into(), content: MessageContent::Text(text.into()) }
+    }
+
+    fn make_engine() -> CompactEngine {
+        CompactEngine::with_defaults().unwrap()
+    }
+
+    fn make_engine_with_max_tokens(max: usize) -> CompactEngine {
+        CompactEngine::new(
+            CompactConfig { max_context_tokens: max, ..Default::default() },
+            Box::new(RuleBasedSummarizer::new()),
+        ).unwrap()
+    }
+
+    // ── Creation ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_engine_with_defaults() {
+        let engine = make_engine();
+        assert!(!engine.compacting);
+        assert_eq!(engine.config().max_context_tokens, 200_000);
+    }
+
+    #[test]
+    fn test_engine_rejects_invalid_config() {
+        let config = CompactConfig { max_output_tokens: 0, ..Default::default() };
+        let result = CompactEngine::new(config, Box::new(RuleBasedSummarizer::new()));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_set_config() {
+        let mut engine = make_engine();
+        let new_config = CompactConfig { max_context_tokens: 50_000, ..Default::default() };
+        engine.set_config(new_config).unwrap();
+        assert_eq!(engine.config().max_context_tokens, 50_000);
+    }
+
+    // ── analyze_context ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_analyze_empty_messages() {
+        let engine = make_engine();
+        let analysis = engine.analyze_context(&[]);
+        assert!(!analysis.should_compact);
+        assert_eq!(analysis.estimated_tokens, 0);
+        assert_eq!(analysis.compactable_message_count, 0);
+    }
+
+    #[test]
+    fn test_analyze_under_threshold() {
+        let engine = make_engine_with_max_tokens(100_000);
+        let msgs = vec![text_msg("user", "short message")];
+        let analysis = engine.analyze_context(&msgs);
+        assert!(!analysis.should_compact);
+        assert!(analysis.context_usage_ratio < 0.1);
+    }
+
+    #[test]
+    fn test_analyze_over_threshold() {
+        // max_context=100, threshold=0.75 => trigger at 75 tokens
+        let engine = make_engine_with_max_tokens(100);
+        let msgs: Vec<Message> = (0..50)
+            .map(|i| text_msg(if i % 2 == 0 { "user" } else { "assistant" },
+                             &format!("This is message number {} with some content", i)))
+            .collect();
+        let analysis = engine.analyze_context(&msgs);
+        assert!(analysis.should_compact);
+        assert!(analysis.context_usage_ratio > 0.75);
+    }
+
+    #[test]
+    fn test_analyze_micro_compact_candidates() {
+        let mut engine = make_engine();
+        engine.config.enable_micro_compact = true;
+        engine.config.micro_compact_threshold = 10; // very low threshold
+        let msgs = vec![text_msg("tool", &"x".repeat(500))];
+        let analysis = engine.analyze_context(&msgs);
+        assert_eq!(analysis.micro_compact_candidates, 1);
+    }
+
+    #[test]
+    fn test_auto_compact_check() {
+        let engine = make_engine_with_max_tokens(100);
+        let msgs = vec![text_msg("user", &"word ".repeat(200))];
+        assert!(engine.auto_compact_check(&msgs));
+        assert!(!engine.auto_compact_check(&[text_msg("user", "hi")]));
+    }
+
+    // ── prune_stale_tool_results ─────────────────────────────────────────
+
+    #[test]
+    fn test_prune_truncates_long_tool_result() {
+        let long_content = "x".repeat(1000);
+        let mut msgs = vec![Message {
+            role: "user".into(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: "t1".into(),
+                content: Some(ToolResultContent::Single(long_content)),
+                is_error: Some(false),
+            }]),
+        }];
+        CompactEngine::prune_stale_tool_results(&mut msgs);
+        if let MessageContent::Blocks(blocks) = &msgs[0].content {
+            if let ContentBlock::ToolResult { content: Some(ToolResultContent::Single(t)), .. } = &blocks[0] {
+                assert!(t.len() < 1000);
+                assert!(t.contains("[truncated"));
+            }
+        }
+    }
+
+    #[test]
+    fn test_prune_keeps_short_tool_result() {
+        let short_content = "short".to_string();
+        let mut msgs = vec![Message {
+            role: "user".into(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: "t1".into(),
+                content: Some(ToolResultContent::Single(short_content.clone())),
+                is_error: Some(false),
+            }]),
+        }];
+        CompactEngine::prune_stale_tool_results(&mut msgs);
+        if let MessageContent::Blocks(blocks) = &msgs[0].content {
+            if let ContentBlock::ToolResult { content: Some(ToolResultContent::Single(t)), .. } = &blocks[0] {
+                assert_eq!(t, "short");
+            }
+        }
+    }
+
+    #[test]
+    fn test_prune_keeps_error_results() {
+        let long_error = "e".repeat(1000);
+        let mut msgs = vec![Message {
+            role: "user".into(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: "t1".into(),
+                content: Some(ToolResultContent::Single(long_error.clone())),
+                is_error: Some(true),
+            }]),
+        }];
+        CompactEngine::prune_stale_tool_results(&mut msgs);
+        if let MessageContent::Blocks(blocks) = &msgs[0].content {
+            if let ContentBlock::ToolResult { content: Some(ToolResultContent::Single(t)), .. } = &blocks[0] {
+                assert_eq!(t.len(), 1000); // unchanged
+            }
+        }
+    }
+
+    // ── verify_summary_quality ───────────────────────────────────────────
+
+    #[test]
+    fn test_verify_rejects_empty() {
+        let msgs = vec![text_msg("user", "hello"), text_msg("assistant", "hi"), text_msg("user", "bye")];
+        assert!(!CompactEngine::verify_summary_quality("", &msgs));
+    }
+
+    #[test]
+    fn test_verify_rejects_too_short() {
+        let msgs = vec![text_msg("user", "hello"), text_msg("assistant", "hi"), text_msg("user", "bye")];
+        assert!(!CompactEngine::verify_summary_quality("ok", &msgs));
+    }
+
+    #[test]
+    fn test_verify_accepts_good_summary() {
+        let msgs = vec![text_msg("user", "hello"), text_msg("assistant", "hi"), text_msg("user", "bye")];
+        let summary = "The user asked for help with a coding task. The assistant provided \
+                       guidance on file operations. The user then confirmed the fix worked.";
+        assert!(CompactEngine::verify_summary_quality(summary, &msgs));
+    }
+
+    #[test]
+    fn test_verify_accepts_short_for_few_messages() {
+        let msgs = vec![text_msg("user", "hello")];
+        assert!(CompactEngine::verify_summary_quality("short", &msgs));
+    }
+
+    // ── group_messages ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_group_empty() {
+        let engine = make_engine();
+        assert!(engine.group_messages(&[]).is_empty());
+    }
+
+    #[test]
+    fn test_group_system_messages() {
+        let engine = make_engine();
+        let msgs = vec![
+            text_msg("system", "instruction 1"),
+            text_msg("system", "instruction 2"),
+            text_msg("user", "hello"),
+        ];
+        let groups = engine.group_messages(&msgs);
+        assert_eq!(groups.len(), 2);
+        assert!(matches!(&groups[0], MessageGroup::SystemMessage { messages } if messages.len() == 2));
+    }
+
+    #[test]
+    fn test_group_user_messages() {
+        let engine = make_engine();
+        let msgs = vec![
+            text_msg("user", "hello"),
+            text_msg("user", "world"),
+        ];
+        let groups = engine.group_messages(&msgs);
+        assert_eq!(groups.len(), 1);
+        assert!(matches!(&groups[0], MessageGroup::UserTurn { messages } if messages.len() == 2));
+    }
+
+    #[test]
+    fn test_group_assistant_turn() {
+        let engine = make_engine();
+        let msgs = vec![text_msg("assistant", "response")];
+        let groups = engine.group_messages(&msgs);
+        assert_eq!(groups.len(), 1);
+        assert!(matches!(&groups[0], MessageGroup::AssistantTurn { .. }));
+    }
+
+    #[test]
+    fn test_group_tool_use_turn() {
+        let engine = make_engine();
+        let msgs = vec![
+            Message {
+                role: "assistant".into(),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                    id: "t1".into(), name: "Read".into(), input: serde_json::json!({"file": "x.rs"}),
+                }]),
+            },
+            Message {
+                role: "user".into(),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                    tool_use_id: "t1".into(),
+                    content: Some(ToolResultContent::Single("file content".into())),
+                    is_error: None,
+                }]),
+            },
+        ];
+        let groups = engine.group_messages(&msgs);
+        assert_eq!(groups.len(), 1);
+        if let MessageGroup::ToolUseTurn { tool_name, messages, .. } = &groups[0] {
+            assert_eq!(tool_name, "Read");
+            assert_eq!(messages.len(), 2);
+        } else {
+            panic!("Expected ToolUseTurn group");
+        }
+    }
+
+    #[test]
+    fn test_group_labels() {
+        let engine = make_engine();
+        let groups = engine.group_messages(&[text_msg("system", "s")]);
+        assert!(groups[0].label().contains("SystemMessage"));
+    }
+
+    #[test]
+    fn test_group_total_tokens() {
+        let engine = make_engine();
+        let groups = engine.group_messages(&[text_msg("user", "hello")]);
+        assert!(groups[0].total_tokens() > 0);
+    }
+
+    // ── post_compact_cleanup ────────────────────────────────────────────
+
+    #[test]
+    fn test_cleanup_removes_duplicate_summaries() {
+        let engine = make_engine();
+        let mut msgs = vec![
+            text_msg("system", "[Previous conversation summary - 5 messages]\nSummary A"),
+            text_msg("system", "[Previous conversation summary - 5 messages]\nSummary A"),
+            text_msg("user", "hello"),
+        ];
+        let removed = engine.post_compact_cleanup(&mut msgs);
+        assert_eq!(removed, 1);
+        assert_eq!(msgs.len(), 2);
+    }
+
+    #[test]
+    fn test_cleanup_collapses_many_system_messages() {
+        let engine = make_engine();
+        let mut msgs: Vec<Message> = (0..5)
+            .map(|i| text_msg("system", &format!("System msg {}", i)))
+            .chain(std::iter::once(text_msg("user", "hello")))
+            .collect();
+        engine.post_compact_cleanup(&mut msgs);
+        // Some system messages should have been collapsed
+        assert!(msgs.len() <= 5);
+    }
+
+    // ── compact (full flow) ──────────────────────────────────────────────
+
+    #[test]
+    fn test_compact_empty_errors() {
+        let mut engine = make_engine();
+        let result = engine.compact(&mut Vec::new());
+        assert!(matches!(result, Err(CompactError::NoMessagesToCompact)));
+    }
+
+    #[test]
+    fn test_compact_too_few_messages_no_change() {
+        let mut engine = make_engine();
+        let mut msgs = vec![text_msg("user", "hi"), text_msg("assistant", "hello")];
+        let result = engine.compact(&mut msgs).unwrap();
+        assert_eq!(result.messages_removed, 0);
+        assert_eq!(result.messages_compacted, 0);
+    }
+
+    #[test]
+    fn test_compact_already_in_progress() {
+        let mut engine = make_engine();
+        engine.compacting = true;
+        let result = engine.compact(&mut vec![text_msg("user", "hi")]);
+        assert!(matches!(result, Err(CompactError::AlreadyInProgress)));
+    }
+
+    // ── micro_compact ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_micro_compact_disabled() {
+        let mut config = CompactConfig::default();
+        config.enable_micro_compact = false;
+        let engine = CompactEngine::new(config, Box::new(RuleBasedSummarizer::new())).unwrap();
+        let mut msgs = vec![text_msg("user", "hello")];
+        let result = engine.micro_compact(&mut msgs).unwrap();
+        assert_eq!(result.messages_compacted, 0);
+    }
+
+    // ── Send/Sync ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_engine_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<CompactEngine>();
+    }
+}
