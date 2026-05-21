@@ -485,4 +485,143 @@ mod tests {
         assert_ne!(RestoreMode::CodeAndConversation, RestoreMode::ConversationOnly);
         assert_ne!(RestoreMode::CodeOnly, RestoreMode::ConversationOnly);
     }
+
+    #[test]
+    fn test_default_trait() {
+        let mgr = CheckpointManager::default();
+        assert!(mgr.is_empty());
+    }
+
+    #[test]
+    fn test_for_session_constructor() {
+        let mgr = CheckpointManager::for_session("test-session-123");
+        assert!(mgr.is_enabled());
+        assert!(mgr.is_empty());
+    }
+
+    #[test]
+    fn test_set_session_id() {
+        let mut mgr = CheckpointManager::new();
+        mgr.set_session_id("abc-def");
+        // After setting session ID, save_to_disk will use it
+        mgr.clear(); // Should not panic
+    }
+
+    #[test]
+    fn test_record_turn_stores_checkpoint() {
+        let mgr = CheckpointManager::new();
+        let cp = Checkpoint {
+            hash: "deadbeef1234567890".to_string(),
+            short_hash: "deadbee".to_string(),
+            description: "before edit".to_string(),
+            timestamp: 1700000000,
+        };
+        mgr.record_turn(0, cp, vec!["src/main.rs".to_string()], Some("fix bug".to_string()));
+        assert_eq!(mgr.len(), 1);
+
+        let list = mgr.list_checkpoints();
+        assert_eq!(list[0].turn_index, 0);
+        assert_eq!(list[0].files_changed, vec!["src/main.rs"]);
+        assert_eq!(list[0].prompt_preview, Some("fix bug".to_string()));
+    }
+
+    #[test]
+    fn test_record_turn_truncates_at_max() {
+        let mgr = CheckpointManager::new();
+        for i in 0..MAX_CHECKPOINTS + 5 {
+            let cp = Checkpoint {
+                hash: format!("hash{i:020}"),
+                short_hash: format!("hash{i:07}"),
+                description: format!("turn {i}"),
+                timestamp: 1700000000 + i as i64,
+            };
+            mgr.record_turn(i, cp, vec![], None);
+        }
+        assert_eq!(mgr.len(), MAX_CHECKPOINTS);
+    }
+
+    #[test]
+    fn test_discard_last_with_data() {
+        let mgr = CheckpointManager::new();
+        let cp = Checkpoint {
+            hash: "aaa111bbb222".to_string(),
+            short_hash: "aaa111b".to_string(),
+            description: "test".to_string(),
+            timestamp: 1700000000,
+        };
+        mgr.record_turn(0, cp, vec!["a.rs".to_string()], None);
+        assert_eq!(mgr.len(), 1);
+
+        let discarded = mgr.discard_last().unwrap();
+        assert_eq!(discarded.turn_index, 0);
+        assert!(mgr.is_empty());
+    }
+
+    #[test]
+    fn test_list_legacy_checkpoints() {
+        let mgr = CheckpointManager::new();
+        let cp = Checkpoint {
+            hash: "cccccc1234567890".to_string(),
+            short_hash: "cccccc1".to_string(),
+            description: "legacy".to_string(),
+            timestamp: 1700000000,
+        };
+        mgr.record_turn(0, cp, vec![], None);
+        let legacy = mgr.list_legacy_checkpoints();
+        assert_eq!(legacy.len(), 1);
+        assert_eq!(legacy[0].hash, "cccccc1234567890");
+    }
+
+    #[test]
+    fn test_checkpoint_serialization_roundtrip() {
+        let cp = Checkpoint {
+            hash: "a1b2c3d4e5f6".to_string(),
+            short_hash: "a1b2c3d".to_string(),
+            description: "before write".to_string(),
+            timestamp: 1700000000,
+        };
+        let json = serde_json::to_string(&cp).unwrap();
+        let back: Checkpoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.hash, cp.hash);
+        assert_eq!(back.short_hash, cp.short_hash);
+        assert_eq!(back.description, cp.description);
+        assert_eq!(back.timestamp, cp.timestamp);
+    }
+
+    #[test]
+    fn test_multiple_turns_ordering() {
+        let mgr = CheckpointManager::new();
+        for i in 0..3 {
+            let cp = Checkpoint {
+                hash: format!("h{i:016}"),
+                short_hash: format!("h{i:07}"),
+                description: format!("turn {i}"),
+                timestamp: 1700000000 + i as i64,
+            };
+            mgr.record_turn(i, cp, vec![format!("file{i}.rs")], Some(format!("prompt {i}")));
+        }
+        assert_eq!(mgr.len(), 3);
+        let list = mgr.list_checkpoints();
+        assert_eq!(list[0].turn_index, 0);
+        assert_eq!(list[2].turn_index, 2);
+    }
+
+    #[test]
+    fn test_revert_truncates_checkpoints() {
+        let mgr = CheckpointManager::new();
+        for i in 0..3 {
+            let cp = Checkpoint {
+                hash: format!("h{i:016}"),
+                short_hash: format!("h{i:07}"),
+                description: format!("turn {i}"),
+                timestamp: 1700000000 + i as i64,
+            };
+            mgr.record_turn(i, cp, vec![], None);
+        }
+        assert_eq!(mgr.len(), 3);
+        // revert_to with ConversationOnly doesn't need git
+        let result = mgr.revert_to(0, RestoreMode::ConversationOnly);
+        assert!(result.is_ok());
+        assert_eq!(mgr.len(), 1); // Only index 0 remains
+    }
 }

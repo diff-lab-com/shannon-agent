@@ -56,12 +56,12 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 ### CRITICAL — Shannon lacks entirely
 
 - **Agent view dashboard**: Claude Code shows background agent sessions in a dashboard UI. Shannon has no equivalent.
-- **File checkpointing/rewind**: Claude Code tracks and restores any prior file state mid-session. Shannon has `CheckpointManager` but no file-level rewind.
+- **File checkpointing/rewind**: `CheckpointManager` creates git commits before file-modifying tool executions, tracks per-turn file changes, supports `revert_to()` with `git reset --hard` for code restore. Four `RestoreMode` variants (CodeAndConversation, ConversationOnly, CodeOnly). Gap: no interactive UI for browsing checkpoint history and selecting restore points.
 
 ### HIGH — Shannon has partial support
 
 - **Permission auto-mode**: 9 `ApprovalMode` variants with `PermissionClassifier` (2928 lines) wired into `PermissionRuleChecker`. `LlmPermissionClassifier` wraps the rule-based classifier with async LLM fallback for ambiguous cases (confidence < 0.7, Medium+ risk). 4-tier precedence: hard_deny > soft_deny > allow > explicit intent. LLM classification disabled by default, enabled via `with_llm()`.
-- **Non-interactive/CI mode**: `--prompt` flag with FullAuto permissions (auto-approve non-critical, deny critical). NDJSON streaming, tool restrictions, exit codes. `StructuredOutputConfig` provides JSON schema validation for headless mode — `validate_response()` checks type and required fields. Gap: no deep links (`claude-cli://` URLs).
+- **Non-interactive/CI mode**: `--prompt` flag with FullAuto permissions (auto-approve non-critical, deny critical). NDJSON streaming, tool restrictions, exit codes. `--schema` flag accepts file path or inline JSON Schema for structured output validation — assistant is instructed to return valid JSON, response is validated before output, exit code 1 on validation failure. Gap: no deep links (`claude-cli://` URLs).
 - **MCP tool search**: `tools/list` works with deferred schema loading. Gap: Claude Code has on-demand tool search that scales to thousands of MCP tools. No MCP channel support (push webhooks/alerts into live sessions).
 - **Hook system**: `HookManager` with `HookEvent`/`HookEventType`. Gap: Claude Code has 18+ hook events including `SubagentStart`, `SubagentStop`, `TaskCompleted`, `TeammateIdle`, `PreCompact`, `WorktreeCreate`, `WorktreeRemove`, `ConfigChange`. Shannon has fewer event types.
 - **LSP integration**: 6 LSP tools + `DiagnosticRegistry` + two client implementations. `DiagnosticStore.mark_stale()` called on source file changes. Background `cargo check` diagnostics auto-run via `DiagnosticWatcher` when source files change — debounce, parse, display in UI.
@@ -85,6 +85,7 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **File watching for source code**: `SourceWatcher` detects project file changes; `DiagnosticStore.sync_from_registry()` bridges diagnostics to UI.
 - **Background diagnostics**: `DiagnosticWatcher` auto-runs `cargo check` on source changes, parses output, updates `DiagnosticStore` with debounce.
 - **Skill plugin execution**: Skill plugins now register as executable slash commands (trigger → command name, entry file → template).
+- **Structured output CLI flag**: `--schema` flag wired into headless mode — accepts file path or inline JSON Schema, instructs assistant to return valid JSON, validates response before output, exit code 1 on failure.
 - **Per-agent model/tool config**: `AgentSpawnInput.model` for LLM override, `AgentSpawnInput.allowed_tools` for tool restriction.
 - **Worktree isolation for agents**: `context.working_directory` passed to sub-agents with worktree path; system prompt includes isolation instructions.
 - **`/batch` command**: Parallel worktree-isolated PR creation via `/batch` or `/parallel` command. Decomposes tasks, creates worktrees, spawns agents, creates PRs.
@@ -93,7 +94,7 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 
 ### Test Coverage
 
-7698 total tests across all crates (58 e2e require API access). Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them.
+7714 total tests across all crates (58 e2e require API access). Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them.
 
 ## Competitor Feature Tiers
 
@@ -107,7 +108,7 @@ Multi-provider LLM, tool use, file read/write/edit, bash execution, MCP extensio
 - **Auto-permission classifier**: Claude Code uses LLM-based 4-tier classification. Shannon has `LlmPermissionClassifier` wired into `PermissionManager` with async `classify_and_check_with_llm()`. Rule-based by default, LLM fallback for ambiguous cases when enabled via `with_llm_classifier()`.
 - **LSP integration**: Shannon has 6 LSP tools plus automatic background `cargo check` diagnostics on source changes. OpenCode runs `gopls`/`tsc` automatically.
 - **Hook system**: Claude Code has 18+ hook events. Shannon has 32 hook events (more coverage).
-- **Non-interactive/CI mode**: Claude Code `claude -p` with structured outputs. Shannon has `--prompt` with NDJSON output and `StructuredOutputConfig` for JSON schema validation.
+- **Non-interactive/CI mode**: Claude Code `claude -p` with structured outputs. Shannon has `--prompt` with NDJSON output, `--schema` for JSON schema validation, and `StructuredOutputConfig` for programmatic use.
 
 ### Tier 3 — Quality of Life
 Multi-surface (web/desktop/CLI/IDE), computer use, file checkpointing/rewind, agent SDK (library mode), deep links, MCP channels, model switching, prompt caching, token counting UI.
