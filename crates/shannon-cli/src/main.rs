@@ -1064,9 +1064,9 @@ fn run_headless_query(
             shannon_core::api::LlmClient::new_unauthenticated(client_config)
         };
 
-        // Permissions: bypass all in headless mode
+        // Permissions: FullAuto in headless mode (auto-approve non-critical, deny critical)
         let mut permissions = shannon_core::permissions::PermissionManager::new();
-        permissions.set_approval_mode(shannon_core::permissions::ApprovalMode::BypassPermissions);
+        permissions.set_approval_mode(shannon_core::permissions::ApprovalMode::FullAuto);
         let state = StateManager::new();
 
         let mut engine = QueryEngine::with_defaults(client, tools, permissions, state)
@@ -1655,7 +1655,7 @@ fn run_team_agent_mode(
             Some("full-auto") => shannon_core::permissions::ApprovalMode::FullAuto,
             Some("dontAsk") => shannon_core::permissions::ApprovalMode::DontAsk,
             Some("readonly") => shannon_core::permissions::ApprovalMode::Readonly,
-            _ => shannon_core::permissions::ApprovalMode::BypassPermissions,
+            _ => shannon_core::permissions::ApprovalMode::FullAuto,
         };
         permissions.set_approval_mode(approval_mode);
         let state = StateManager::new();
