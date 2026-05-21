@@ -522,3 +522,105 @@ impl Default for ReplState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn view_mode_cycle_default_to_verbose() {
+        assert_eq!(ViewMode::Default.cycle(), ViewMode::Verbose);
+    }
+
+    #[test]
+    fn view_mode_cycle_verbose_to_default() {
+        assert_eq!(ViewMode::Verbose.cycle(), ViewMode::Default);
+    }
+
+    #[test]
+    fn view_mode_label() {
+        assert_eq!(ViewMode::Default.label(), "Default");
+        assert_eq!(ViewMode::Verbose.label(), "Verbose");
+    }
+
+    #[test]
+    fn view_mode_cycle_roundtrip() {
+        let mode = ViewMode::Default;
+        assert_eq!(mode.cycle().cycle(), ViewMode::Default);
+    }
+
+    #[test]
+    fn sidebar_tab_next_cycles() {
+        assert_eq!(SidebarTab::Context.next(), SidebarTab::Files);
+        assert_eq!(SidebarTab::Files.next(), SidebarTab::Agents);
+        assert_eq!(SidebarTab::Agents.next(), SidebarTab::Perf);
+        assert_eq!(SidebarTab::Perf.next(), SidebarTab::Context);
+    }
+
+    #[test]
+    fn sidebar_tab_prev_cycles() {
+        assert_eq!(SidebarTab::Context.prev(), SidebarTab::Perf);
+        assert_eq!(SidebarTab::Perf.prev(), SidebarTab::Agents);
+        assert_eq!(SidebarTab::Agents.prev(), SidebarTab::Files);
+        assert_eq!(SidebarTab::Files.prev(), SidebarTab::Context);
+    }
+
+    #[test]
+    fn sidebar_tab_next_prev_roundtrip() {
+        assert_eq!(SidebarTab::Context.next().prev(), SidebarTab::Context);
+        assert_eq!(SidebarTab::Files.next().prev(), SidebarTab::Files);
+    }
+
+    #[test]
+    fn sidebar_tab_default_is_context() {
+        assert_eq!(SidebarTab::default(), SidebarTab::Context);
+    }
+
+    #[test]
+    fn plan_state_default() {
+        let plan = PlanState::default();
+        assert!(!plan.active);
+        assert!(plan.content.is_empty());
+        assert!(plan.description.is_empty());
+        assert!(!plan.approved);
+        assert_eq!(plan.scroll_offset, 0);
+    }
+
+    #[test]
+    fn agent_display_fields() {
+        let agent = AgentDisplay {
+            name: "worker-1".to_string(),
+            status: "running".to_string(),
+            active: true,
+            team: Some("team-a".to_string()),
+            turns_used: 3,
+            max_turns: 10,
+        };
+        assert_eq!(agent.name, "worker-1");
+        assert!(agent.active);
+        assert_eq!(agent.turns_used, 3);
+    }
+
+    #[test]
+    fn persisted_ui_state_default() {
+        let state = PersistedUiState::default();
+        assert!(state.collapsed_tools);
+        assert_eq!(state.view_mode, "Default");
+        assert!(!state.focus_mode);
+        assert!(!state.fullscreen_mode);
+        assert_eq!(state.scroll_offset, 0);
+    }
+
+    #[test]
+    fn loop_state_fields() {
+        let ls = LoopState {
+            task: "fix bugs".to_string(),
+            max_iterations: 5,
+            iteration: 2,
+            active: true,
+        };
+        assert_eq!(ls.task, "fix bugs");
+        assert!(ls.active);
+        assert_eq!(ls.iteration, 2);
+    }
+}
