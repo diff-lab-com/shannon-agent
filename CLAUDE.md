@@ -19,12 +19,12 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 |-------|---------------|-------|
 | `shannon-core` | API client, query engine, permissions, tools, state management | ~3340 |
 | `shannon-ui` | Terminal UI (ratatui), REPL, vim mode, widgets, rendering | ~1041 |
-| `shannon-tools` | Tool implementations (bash, file ops, search, config manager) | ~1092 |
+| `shannon-tools` | Tool implementations (bash, file ops, search, config manager) | ~1107 |
 | `shannon-commands` | Built-in commands (/help, /config, /pdf, /commit, etc.) | ~335 |
-| `shannon-agents` | Multi-agent orchestration | ~457 |
+| `shannon-agents` | Multi-agent orchestration | ~471 |
 | `shannon-cli` | CLI entry point (clap), config loading, non-interactive mode | ~191 |
 | `shannon-skills` | Skill system (command templates) | ~171 |
-| `shannon-mcp` | MCP (Model Context Protocol) server integration | ~294 |
+| `shannon-mcp` | MCP (Model Context Protocol) server integration | ~373 |
 | `shannon-types` | Shared types (re-exported by shannon-core) | ~22 |
 | `shannon-tool-interface` | Tool trait definitions | ~24 |
 | `shannon-desktop` | Tauri desktop app (scaffolded) | ~24 |
