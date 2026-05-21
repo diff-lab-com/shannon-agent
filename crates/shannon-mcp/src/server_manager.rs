@@ -575,4 +575,75 @@ mod tests {
         assert!(result.servers.is_empty());
         assert!(result.tools.is_empty());
     }
+
+    #[tokio::test]
+    async fn test_discover_all_servers_with_invalid_config() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join(".mcp.json"), "not valid json {{{").unwrap();
+
+        let result = discover_all_servers(temp.path()).await;
+        assert!(result.servers.is_empty());
+        assert!(result.tools.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_discover_all_servers_pooled_no_config() {
+        let temp = tempfile::tempdir().unwrap();
+        let result = discover_all_servers_pooled(temp.path()).await;
+        assert!(result.servers.is_empty());
+        assert!(result.tools.is_empty());
+        // Pool should exist even with no servers
+        assert!(Arc::strong_count(&result.pool) >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_discover_all_servers_pooled_empty_config() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = serde_json::json!({ "mcpServers": {} });
+        std::fs::write(temp.path().join(".mcp.json"), serde_json::to_string(&config).unwrap())
+            .unwrap();
+
+        let result = discover_all_servers_pooled(temp.path()).await;
+        assert!(result.servers.is_empty());
+        assert!(result.tools.is_empty());
+    }
+
+    #[test]
+    fn test_discover_nonblocking_no_config() {
+        let temp = tempfile::tempdir().unwrap();
+        let called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let called_clone = called.clone();
+        let on_ready = Arc::new(move |_tools: Vec<PooledMcpToolAdapter>| {
+            called_clone.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
+
+        let result = discover_all_servers_pooled_nonblocking(temp.path(), on_ready);
+        assert!(result.servers.is_empty());
+        assert!(result.tools.is_empty());
+        assert!(!called.load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_discovery_result_structs() {
+        let result = McpDiscoveryResult {
+            servers: vec![("test-server".to_string(), 5)],
+            tools: Vec::new(),
+        };
+        assert_eq!(result.servers.len(), 1);
+        assert_eq!(result.servers[0].0, "test-server");
+        assert_eq!(result.servers[0].1, 5);
+    }
+
+    #[test]
+    fn test_pooled_discovery_result_struct() {
+        let pool = Arc::new(McpProcessPool::new());
+        let result = PooledMcpDiscoveryResult {
+            servers: vec![("server-a".to_string(), 3), ("server-b".to_string(), 7)],
+            tools: Vec::new(),
+            pool,
+        };
+        assert_eq!(result.servers.len(), 2);
+        assert_eq!(result.servers[0].1, 3);
+        assert_eq!(result.servers[1].1, 7);
+    }
 }
