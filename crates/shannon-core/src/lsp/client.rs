@@ -59,7 +59,6 @@ struct JsonRpcRequest {
 /// JSON-RPC response received from the language server
 #[derive(Debug, Deserialize)]
 struct JsonRpcResponse {
-    #[allow(dead_code)]
     jsonrpc: String,
     id: Option<serde_json::Value>,
     #[serde(default)]
@@ -71,7 +70,6 @@ struct JsonRpcResponse {
 /// JSON-RPC error
 #[derive(Debug, Deserialize)]
 struct JsonRpcError {
-    #[allow(dead_code)]
     code: i64,
     message: String,
     data: Option<Value>,
@@ -80,7 +78,6 @@ struct JsonRpcError {
 /// LSP client that communicates over stdio with a language server
 pub struct LspClient {
     /// The child process
-    #[allow(dead_code)]
     process: tokio::process::Child,
     /// Writer for sending requests
     writer: BufWriter<tokio::process::ChildStdin>,

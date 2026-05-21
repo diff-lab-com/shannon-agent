@@ -140,7 +140,6 @@ impl Drop for AgentHandle {
 }
 
 /// Handle to a running agent process.
-#[allow(dead_code)]
 pub struct AgentHandle {
     /// The spawned child process.
     child: Child,

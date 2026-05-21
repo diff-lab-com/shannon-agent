@@ -46,7 +46,6 @@ impl std::fmt::Display for OutputFormat {
 /// Exit codes for non-interactive CI mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
-#[allow(dead_code)]
 enum HeadlessExitCode {
     /// 0 - assistant completed the task successfully.
     Success = 0,
@@ -104,7 +103,6 @@ struct HeadlessOutput {
 /// Each event is serialized as a single JSON object per line (newline-delimited).
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "type")]
-#[allow(dead_code)]
 enum CiEvent {
     /// Session started.
     #[serde(rename = "start")]

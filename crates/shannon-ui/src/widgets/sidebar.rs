@@ -135,7 +135,6 @@ impl SidebarWidget {
     }
 
     /// Toggle the collapsed state of a section.
-    #[allow(dead_code)]
     pub fn toggle_section(&mut self, section: SidebarSection) {
         if self.collapsed.contains(&section) {
             self.collapsed.remove(&section);

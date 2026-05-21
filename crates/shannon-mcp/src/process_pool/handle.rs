@@ -17,7 +17,6 @@ use super::SamplingProvider;
 use super::ElicitationProvider;
 
 /// Manages a single persistent MCP server process.
-#[allow(dead_code)]
 pub(crate) struct McpServerHandle {
     /// Server name (for logging).
     pub(crate) name: String,

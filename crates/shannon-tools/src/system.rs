@@ -1844,7 +1844,6 @@ mod tests {
 
     // ── BashTool streaming tests ──────────────────────────────────────────
 
-    #[allow(dead_code)]
     struct CollectSender {
         lines: std::sync::Mutex<Vec<String>>,
     }

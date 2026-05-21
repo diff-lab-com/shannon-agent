@@ -491,7 +491,6 @@ struct OpenAiResponseMessage {
 struct OpenAiResponseToolCall {
     id: String,
     #[serde(rename = "type")]
-    #[allow(dead_code)] // Deserialized from OpenAI wire format; used for type discrimination
     call_type: Option<String>,
     function: OpenAiResponseFunction,
 }

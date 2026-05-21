@@ -1050,7 +1050,6 @@ pub fn render_diff(diff_text: &str, theme: &Theme) -> Vec<Line<'static>> {
 // ---------------------------------------------------------------------------
 
 /// Return the heading level (1-6) if the line starts with `#` markers, else `None`.
-#[allow(dead_code)]
 fn heading_level(line: &str) -> Option<usize> {
     let mut count = 0;
     for ch in line.chars() {
@@ -1076,7 +1075,6 @@ fn heading_level(line: &str) -> Option<usize> {
 /// - Last N/2 lines
 ///
 /// Returns the lines unchanged if they fit within max_lines.
-#[allow(dead_code)]
 pub fn truncate_output(lines: &[Line<'_>], max_lines: usize, theme: &Theme) -> Vec<Line<'static>> {
     if lines.len() <= max_lines {
         return lines
@@ -1114,7 +1112,6 @@ pub fn truncate_output(lines: &[Line<'_>], max_lines: usize, theme: &Theme) -> V
 }
 
 /// Convert a Line with any lifetime to a Line<'static> by owning all strings.
-#[allow(dead_code)]
 fn to_static_line(line: &Line<'_>) -> Line<'static> {
     Line::from(
         line.spans
@@ -1125,7 +1122,6 @@ fn to_static_line(line: &Line<'_>) -> Line<'static> {
 }
 
 /// Parse inline markdown fragments: `**bold**` and `` `code` ``.
-#[allow(dead_code)]
 fn parse_inline_fragments(text: &str, theme: &Theme) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut chars = text.char_indices().peekable();

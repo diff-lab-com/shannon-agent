@@ -83,7 +83,6 @@ pub(crate) fn is_tool_allowed_by_patterns(tool_name: &str, patterns: &[String]) 
 /// When a tool result is compressed or truncated, the full content is stored
 /// here with a unique chunk ID. The LLM can then request the full result
 /// or the next chunk if needed.
-#[allow(dead_code)]
 pub(crate) struct ToolResultStore {
     /// Full results keyed by chunk ID.
     results: DashMap<String, StoredResult>,
@@ -92,7 +91,6 @@ pub(crate) struct ToolResultStore {
 }
 
 /// A stored tool result with metadata.
-#[allow(dead_code)]
 struct StoredResult {
     /// The full content.
     full_content: String,
@@ -480,7 +478,6 @@ pub struct ServerStatus {
 // ---------------------------------------------------------------------------
 
 /// A pending JSON-RPC request waiting for a response.
-#[allow(dead_code)]
 pub(crate) struct PendingRequest {
     /// Oneshot channel to deliver the response.
     pub(crate) tx: oneshot::Sender<Value>,

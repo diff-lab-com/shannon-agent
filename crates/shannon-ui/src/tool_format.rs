@@ -10,7 +10,6 @@ use syntect::highlighting::FontStyle;
 use syntect::util::LinesWithEndings;
 
 /// ANSI color codes for terminal output
-#[allow(dead_code)]
 mod colors {
     pub const RED: &str = "\x1b[31m";
     pub const GREEN: &str = "\x1b[32m";
@@ -24,7 +23,6 @@ mod colors {
 }
 
 /// Diff-specific ANSI escape codes for background fills and word highlights.
-#[allow(dead_code)]
 mod diff_colors {
     // Background fills for dark terminals (subtle tints)
     pub const BG_ADDED: &str = "\x1b[48;5;22m";       // Dark green background
@@ -529,7 +527,6 @@ pub fn format_diff_summary(stats: &DiffStats) -> String {
 }
 
 /// A parsed hunk header with line number information.
-#[allow(dead_code)]
 struct HunkHeader {
     old_start: usize,
     old_count: usize,

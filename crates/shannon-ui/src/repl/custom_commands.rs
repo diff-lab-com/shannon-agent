@@ -113,7 +113,6 @@ pub(crate) fn dedup_custom_commands(commands: &mut Vec<CustomCommandEntry>) {
 /// and re-registered in the [`CommandRegistry`].
 pub(crate) struct CustomCommandWatcher {
     dirs: Vec<std::path::PathBuf>,
-    #[allow(dead_code)]
     watcher: Option<notify::RecommendedWatcher>,
     dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
     registered_names: Vec<String>,
@@ -244,7 +243,6 @@ impl CustomCommandWatcher {
 /// `.claude/settings.json`, `.shannon/settings.json`, and `.shannon.toml` / `.shannon/config.toml`.
 /// Uses the `notify` crate for efficient filesystem events.
 pub(crate) struct SettingsWatcher {
-    #[allow(dead_code)]
     watcher: Option<notify::RecommendedWatcher>,
     dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Paths being watched, for diagnostic logging.
