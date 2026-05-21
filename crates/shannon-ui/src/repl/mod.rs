@@ -1098,10 +1098,51 @@ impl Repl {
                                     tracing::info!("Registered command '/plugin:{}' from plugin '{}'", name, plugin.manifest.name);
                                 }
                                 Ok(shannon_core::plugin::PluginKind::Skill { trigger, template }) => {
-                                    tracing::info!(
-                                        "Skill plugin '{}' (trigger: '{}') loaded — template: {:.40}…",
-                                        plugin.manifest.name, trigger, template
-                                    );
+                                    let plugin_dir = plugin.path.parent()
+                                        .map(|p| p.to_path_buf())
+                                        .unwrap_or_default();
+                                    let entry_path = plugin_dir.join(&plugin.manifest.entry);
+                                    // Use entry file content if it exists, otherwise use inline template
+                                    let prompt_template = if entry_path.exists() {
+                                        std::fs::read_to_string(&entry_path).unwrap_or(template.clone())
+                                    } else {
+                                        template.clone()
+                                    };
+                                    // Strip leading slash from trigger for command name
+                                    let cmd_name = trigger.trim_start_matches('/');
+                                    let cmd = Command::Prompt(Box::new(PromptCommand {
+                                        base: CommandBase {
+                                            name: format!("plugin:{cmd_name}"),
+                                            aliases: vec![trigger.clone()],
+                                            description: plugin.manifest.description.clone(),
+                                            has_user_specified_description: true,
+                                            availability: vec![shannon_commands::CommandAvailability::All],
+                                            source: shannon_commands::CommandSource::Plugin,
+                                            is_enabled: true,
+                                            is_hidden: false,
+                                            argument_hint: Some("$ARGUMENTS".to_string()),
+                                            when_to_use: None,
+                                            version: Some(plugin.manifest.version.clone()),
+                                            disable_model_invocation: false,
+                                            user_invocable: true,
+                                            is_workflow: false,
+                                            immediate: false,
+                                            is_sensitive: false,
+                                            user_facing_name: Some(trigger.clone()),
+                                        },
+                                        progress_message: format!("Running skill /{}…", trigger),
+                                        content_length: prompt_template.len(),
+                                        arg_names: vec!["$ARGUMENTS".to_string()],
+                                        allowed_tools: Vec::new(),
+                                        model: None,
+                                        hooks: HashMap::new(),
+                                        context: ExecutionContext::Inline,
+                                        agent: None,
+                                        paths: Vec::new(),
+                                        prompt_template: Some(prompt_template),
+                                    }));
+                                    registry.register_sync(cmd);
+                                    tracing::info!("Registered skill '/{}' from plugin '{}'", trigger, plugin.manifest.name);
                                 }
                                 Err(e) => {
                                     tracing::warn!("Plugin '{}' has invalid config: {e}", plugin.manifest.name);

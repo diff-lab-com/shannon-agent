@@ -737,7 +737,7 @@ fn run_noninteractive_query(
                                 eprintln!("  Command plugin '{}' ({}) — use /plugin:{}", plugin.manifest.name, description, name);
                             }
                             Ok(shannon_core::plugin::PluginKind::Skill { trigger, template: _ }) => {
-                                eprintln!("  Skill plugin '{}' (trigger: '{}') loaded", plugin.manifest.name, trigger);
+                                eprintln!("  Skill plugin '{}' (trigger: '{}') — use /{}", plugin.manifest.name, trigger, trigger);
                             }
                             Err(e) => {
                                 eprintln!("  Warning: Plugin '{}' has invalid config: {e}", plugin.manifest.name);
