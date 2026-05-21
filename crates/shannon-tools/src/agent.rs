@@ -48,6 +48,11 @@ pub struct AgentSpawnInput {
     /// Optional model override (e.g., "claude-sonnet-4-6", "gpt-4o").
     /// When set, the sub-agent uses this model instead of the parent's model.
     pub model: Option<String>,
+
+    /// Optional tool allowlist. When set, only these tools are available to the
+    /// sub-agent. Names must match tool registry names (e.g., "Read", "Bash",
+    /// "Grep"). If empty or unset, all sub-agent tools are available.
+    pub allowed_tools: Option<Vec<String>>,
 }
 
 /// Output from agent spawn
@@ -267,7 +272,7 @@ impl AgentTool {
                 system_prompt: format!(
                     "You are a sub-agent of type '{agent_type}'. Focus on completing the assigned task concisely."
                 ),
-                tools: Vec::new(),
+                tools: input.allowed_tools.clone().unwrap_or_default(),
                 working_directory: std::path::PathBuf::from("."),
                 max_turns: 50,
                 team,
@@ -351,6 +356,13 @@ impl AgentTool {
         let mut sub_tools = shannon_core::ToolRegistry::new();
         Self::register_subagent_tools(&mut sub_tools)
             .map_err(|e| ToolError::ExecutionFailed(format!("sub-agent tool setup failed: {e}")))?;
+
+        // Apply tool allowlist if specified
+        if let Some(ref allowed) = input.allowed_tools {
+            if !allowed.is_empty() {
+                sub_tools.set_allowed_tools(Some(allowed.clone()));
+            }
+        }
 
         // Create sub-agent engine with FullAuto permissions
         let model_name = client_config.model.clone();
@@ -687,6 +699,11 @@ impl Tool for AgentTool {
                     "type": "string",
                     "description": "Optional model override for the sub-agent (e.g. 'claude-sonnet-4-6', 'gpt-4o')"
                 },
+                "allowed_tools": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional tool allowlist. Only these tools will be available to the sub-agent (e.g. ['Read', 'Bash', 'Grep'])"
+                },
                 "agent_id": {
                     "type": "string",
                     "description": "Agent ID or name for operations"
@@ -736,6 +753,7 @@ mod tests {
             context: Some(json!({"team": "alpha"})),
             priority: Some("high".into()),
             model: None,
+            allowed_tools: None,
         };
         let ser = serde_json::to_string(&input).unwrap();
         let de: AgentSpawnInput = serde_json::from_str(&ser).unwrap();
@@ -753,11 +771,30 @@ mod tests {
             context: None,
             priority: None,
             model: None,
+            allowed_tools: None,
         };
         let ser = serde_json::to_string(&input).unwrap();
         let de: AgentSpawnInput = serde_json::from_str(&ser).unwrap();
         assert!(de.context.is_none());
         assert!(de.priority.is_none());
+    }
+
+    #[test]
+    fn test_agent_spawn_input_with_allowed_tools() {
+        let input = AgentSpawnInput {
+            agent_type: "coder".into(),
+            task: "Fix bug".into(),
+            context: None,
+            priority: None,
+            model: Some("claude-sonnet-4-6".into()),
+            allowed_tools: Some(vec!["Read".into(), "Edit".into(), "Bash".into()]),
+        };
+        let ser = serde_json::to_string(&input).unwrap();
+        let de: AgentSpawnInput = serde_json::from_str(&ser).unwrap();
+        assert_eq!(de.model.as_deref(), Some("claude-sonnet-4-6"));
+        let tools = de.allowed_tools.unwrap();
+        assert_eq!(tools.len(), 3);
+        assert!(tools.contains(&"Read".to_string()));
     }
 
     #[test]
