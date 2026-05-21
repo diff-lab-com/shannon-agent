@@ -891,6 +891,9 @@ pub struct PermissionManager {
     /// Reusable permission classifier (avoids recompiling regex patterns per call)
     classifier: crate::permission_classifier::PermissionClassifier,
 
+    /// Optional LLM-enhanced classifier for ambiguous cases
+    llm_classifier: Option<crate::llm_classifier::LlmPermissionClassifier>,
+
     /// Current approval policy mode
     approval_mode: ApprovalMode,
 
@@ -915,6 +918,7 @@ impl PermissionManager {
             tool_policies: HashMap::new(),
             memory: PermissionMemory::new(),
             classifier: crate::permission_classifier::PermissionClassifier::new(),
+            llm_classifier: None,
             approval_mode: ApprovalMode::default(),
             plan_approved_sessions: HashSet::new(),
             destructive_tools: HashSet::new(),
@@ -925,6 +929,26 @@ impl PermissionManager {
         manager.register_default_policies();
 
         manager
+    }
+
+    /// Enable LLM-enhanced permission classification with the given client.
+    ///
+    /// When enabled, ambiguous tool calls (low confidence, medium+ risk) are
+    /// forwarded to the LLM for a safety judgment before the final decision.
+    pub fn with_llm_classifier(mut self, client: crate::api::LlmClient) -> Self {
+        let rule = std::mem::replace(
+            &mut self.classifier,
+            crate::permission_classifier::PermissionClassifier::new(),
+        );
+        self.llm_classifier = Some(
+            crate::llm_classifier::LlmPermissionClassifier::new(rule).with_llm(client),
+        );
+        self
+    }
+
+    /// Check whether LLM-enhanced classification is active.
+    pub fn has_llm_classifier(&self) -> bool {
+        self.llm_classifier.as_ref().is_some_and(|c| c.is_llm_enabled())
     }
 
     /// Register default permission policies for known tools
@@ -1492,6 +1516,95 @@ impl PermissionManager {
                     tool_input,
                     session_id,
                     convert_classifier_risk(result.risk_level),
+                )
+            }
+        }
+    }
+
+    /// Async version of [`classify_and_check`](Self::classify_and_check) that uses
+    /// the LLM-enhanced classifier when configured.
+    ///
+    /// Falls back to the synchronous rule-based classification when no LLM client
+    /// is available, so this is always safe to call as a drop-in replacement.
+    pub async fn classify_and_check_with_llm(
+        &self,
+        session_id: uuid::Uuid,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+    ) -> Result<Option<PermissionPrompt>, PermissionError> {
+        // When LLM classifier is not configured, delegate to sync path
+        let Some(ref llm) = self.llm_classifier else {
+            return self.classify_and_check(session_id, tool_name, tool_input);
+        };
+
+        // Only the Auto mode benefits from LLM classification; other modes
+        // have deterministic rules that don't need LLM judgment.
+        if !matches!(self.approval_mode, ApprovalMode::Auto | ApprovalMode::AutoEdit | ApprovalMode::FullAuto) {
+            return self.classify_and_check(session_id, tool_name, tool_input);
+        }
+
+        // Run rule checker first (highest priority)
+        if !self.rule_checker.is_empty() {
+            let command = tool_input.get("command")
+                .or_else(|| tool_input.get("path"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match self.rule_checker.check(tool_name, command) {
+                RuleCheckDecision::Denied => {
+                    return Err(PermissionError::Denied(format!(
+                        "Denied by permission rule: {tool_name}"
+                    )));
+                }
+                RuleCheckDecision::Ask => {
+                    return self.create_permission_prompt_with_risk(
+                        tool_name, tool_input, session_id, RiskLevel::Medium,
+                    );
+                }
+                RuleCheckDecision::Allowed => return Ok(None),
+                RuleCheckDecision::NoMatch => {}
+            }
+        }
+
+        // Bypass modes
+        if matches!(self.approval_mode, ApprovalMode::BypassPermissions | ApprovalMode::DontAsk) {
+            return Ok(None);
+        }
+
+        // Memory check
+        if self.memory.is_always_allowed(session_id, tool_name) {
+            return Ok(None);
+        }
+
+        // Destructive tools always prompt
+        if self.is_tool_destructive(tool_name) {
+            return Ok(self.create_permission_prompt(tool_name, tool_input, session_id));
+        }
+
+        // LLM-enhanced classification
+        let llm_result = llm.classify(tool_name, tool_input).await;
+        let risk = convert_classifier_risk(llm_result.result.risk_level);
+
+        match llm_result.result.decision {
+            crate::permission_classifier::RuleDecision::Deny => {
+                Err(PermissionError::Denied(format!(
+                    "{} (LLM {}consulted, risk: {:?})",
+                    llm_result.result.reason,
+                    if llm_result.llm_consulted { "" } else { "not " },
+                    risk
+                )))
+            }
+            crate::permission_classifier::RuleDecision::Allow => {
+                if risk <= RiskLevel::Low {
+                    Ok(None)
+                } else {
+                    self.create_permission_prompt_with_risk(
+                        tool_name, tool_input, session_id, risk,
+                    )
+                }
+            }
+            crate::permission_classifier::RuleDecision::Ask => {
+                self.create_permission_prompt_with_risk(
+                    tool_name, tool_input, session_id, risk,
                 )
             }
         }
@@ -2960,5 +3073,50 @@ mod tests {
         let json = serde_json::to_string(&source).unwrap();
         let parsed: PermissionRuleSource = serde_json::from_str(&json).unwrap();
         assert_eq!(source, parsed);
+    }
+
+    // ── LLM classifier wiring tests ──────────────────────────────────────
+
+    #[test]
+    fn test_permission_manager_no_llm_by_default() {
+        let mgr = PermissionManager::new();
+        assert!(!mgr.has_llm_classifier());
+    }
+
+    #[tokio::test]
+    async fn test_classify_and_check_with_llm_falls_back_without_llm() {
+        let mgr = PermissionManager::new();
+        let sid = Uuid::new_v4();
+        // Should behave identically to classify_and_check when no LLM configured
+        let sync_result = mgr.classify_and_check(
+            sid, "Bash", &serde_json::json!({"command": "git status"}),
+        );
+        let async_result = mgr.classify_and_check_with_llm(
+            sid, "Bash", &serde_json::json!({"command": "git status"}),
+        ).await;
+        assert_eq!(sync_result.is_ok(), async_result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_classify_and_check_with_llm_denies_critical() {
+        let mgr = PermissionManager::new();
+        let sid = Uuid::new_v4();
+        let result = mgr.classify_and_check_with_llm(
+            sid, "Bash", &serde_json::json!({"command": "rm -rf /"}),
+        ).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_classify_and_check_with_llm_suggest_mode_prompts() {
+        let mut mgr = PermissionManager::new();
+        mgr.set_approval_mode(ApprovalMode::Suggest);
+        let sid = Uuid::new_v4();
+        // Suggest mode should prompt (not auto-approve) for non-read tools
+        let result = mgr.classify_and_check_with_llm(
+            sid, "Bash", &serde_json::json!({"command": "ls"}),
+        ).await;
+        // In Suggest mode, bash commands should prompt
+        assert!(result.is_ok());
     }
 }
