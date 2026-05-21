@@ -398,3 +398,258 @@ impl HooksFile {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── HookDecision serialization ────────────────────────────────────────
+
+    #[test]
+    fn test_decision_allow_serialization() {
+        let json = serde_json::to_string(&HookDecision::Allow).unwrap();
+        assert!(json.contains("Allow"));
+        let de: HookDecision = serde_json::from_str(&json).unwrap();
+        assert_eq!(de, HookDecision::Allow);
+    }
+
+    #[test]
+    fn test_decision_deny_serialization() {
+        let d = HookDecision::Deny { reason: "bad".into() };
+        let json = serde_json::to_string(&d).unwrap();
+        assert!(json.contains("Deny"));
+        assert!(json.contains("bad"));
+    }
+
+    #[test]
+    fn test_decision_modify_serialization() {
+        let d = HookDecision::Modify {
+            modified_input: Some(serde_json::json!({"key": "val"})),
+            modified_output: None,
+        };
+        let json = serde_json::to_string(&d).unwrap();
+        assert!(json.contains("Modify"));
+        assert!(json.contains("modified_input"));
+    }
+
+    #[test]
+    fn test_decision_default_is_allow() {
+        assert_eq!(HookDecision::default(), HookDecision::Allow);
+    }
+
+    // ── HookResult::parse_decision ─────────────────────────────────────────
+
+    #[test]
+    fn test_parse_decision_allow_json() {
+        let d = HookResult::parse_decision(r#"{"decision":"allow"}"#);
+        assert_eq!(d, HookDecision::Allow);
+    }
+
+    #[test]
+    fn test_parse_decision_deny_json() {
+        let d = HookResult::parse_decision(r#"{"decision":"deny","reason":"nope"}"#);
+        assert!(matches!(d, HookDecision::Deny { .. }));
+    }
+
+    #[test]
+    fn test_parse_decision_modify_json() {
+        let d = HookResult::parse_decision(
+            r#"{"decision":"modify","modified_input":{"x":1}}"#,
+        );
+        assert!(matches!(d, HookDecision::Modify { .. }));
+    }
+
+    #[test]
+    fn test_parse_decision_empty_returns_allow() {
+        assert_eq!(HookResult::parse_decision(""), HookDecision::Allow);
+    }
+
+    #[test]
+    fn test_parse_decision_non_json_returns_allow() {
+        assert_eq!(HookResult::parse_decision("just some text"), HookDecision::Allow);
+    }
+
+    #[test]
+    fn test_parse_decision_invalid_json_returns_allow() {
+        assert_eq!(HookResult::parse_decision("{not valid}"), HookDecision::Allow);
+    }
+
+    // ── HookResult helpers ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_is_denied() {
+        let r = HookResult {
+            exit_code: 2, stdout: String::new(), stderr: "blocked".into(),
+            decision: HookDecision::Deny { reason: "nope".into() },
+            command: "test".into(),
+        };
+        assert!(r.is_denied());
+    }
+
+    #[test]
+    fn test_has_modifications() {
+        let r = HookResult {
+            exit_code: 0, stdout: String::new(), stderr: String::new(),
+            decision: HookDecision::Modify { modified_input: None, modified_output: None },
+            command: "test".into(),
+        };
+        assert!(r.has_modifications());
+    }
+
+    #[test]
+    fn test_allow_result_not_denied_no_mods() {
+        let r = HookResult {
+            exit_code: 0, stdout: String::new(), stderr: String::new(),
+            decision: HookDecision::Allow,
+            command: "test".into(),
+        };
+        assert!(!r.is_denied());
+        assert!(!r.has_modifications());
+    }
+
+    // ── HookType serialization ──────────────────────────────────────────────
+
+    #[test]
+    fn test_hook_type_serialization() {
+        assert_eq!(serde_json::to_string(&HookType::Command).unwrap(), "\"command\"");
+        assert_eq!(serde_json::to_string(&HookType::Http).unwrap(), "\"http\"");
+        assert_eq!(serde_json::to_string(&HookType::Llm).unwrap(), "\"llm\"");
+        assert_eq!(serde_json::to_string(&HookType::Prompt).unwrap(), "\"prompt\"");
+        assert_eq!(serde_json::to_string(&HookType::McpTool).unwrap(), "\"mcptool\"");
+        assert_eq!(serde_json::to_string(&HookType::Agent).unwrap(), "\"agent\"");
+    }
+
+    #[test]
+    fn test_hook_type_default() {
+        assert_eq!(HookType::default(), HookType::Command);
+    }
+
+    // ── HookDef construction ────────────────────────────────────────────────
+
+    #[test]
+    fn test_hook_def_new_command() {
+        let def = HookDef::new("echo hello");
+        assert_eq!(def.command, "echo hello");
+        assert_eq!(def.r#type, HookType::Command);
+        assert!(def.blocking);
+        assert_eq!(def.timeout, 30);
+    }
+
+    #[test]
+    fn test_hook_def_new_http() {
+        let def = HookDef::new_http("https://example.com/hook");
+        assert_eq!(def.r#type, HookType::Http);
+        assert_eq!(def.url.unwrap(), "https://example.com/hook");
+    }
+
+    #[test]
+    fn test_hook_def_new_prompt() {
+        let def = HookDef::new_prompt("evaluate-event");
+        assert_eq!(def.r#type, HookType::Prompt);
+        assert_eq!(def.command, "evaluate-event");
+    }
+
+    #[test]
+    fn test_hook_def_new_llm() {
+        let def = HookDef::new_llm("Check if {{tool_name}} is safe");
+        assert_eq!(def.r#type, HookType::Llm);
+        assert_eq!(def.prompt_template.unwrap(), "Check if {{tool_name}} is safe");
+    }
+
+    #[test]
+    fn test_hook_def_builder_methods() {
+        let def = HookDef::new("test")
+            .with_timeout(60)
+            .with_blocking(false)
+            .with_header("Authorization", "Bearer token");
+        assert_eq!(def.timeout, 60);
+        assert!(!def.blocking);
+        assert_eq!(def.headers.get("Authorization").unwrap(), "Bearer token");
+        assert_eq!(def.timeout_duration(), Duration::from_secs(60));
+    }
+
+    // ── HookConfig::matches ────────────────────────────────────────────────
+
+    #[test]
+    fn test_matches_wildcard() {
+        let cfg = HookConfig::new("*");
+        assert!(cfg.matches("anything"));
+        assert!(cfg.matches("Bash"));
+    }
+
+    #[test]
+    fn test_matches_exact() {
+        let cfg = HookConfig::new("Bash");
+        assert!(cfg.matches("Bash"));
+        assert!(!cfg.matches("Read"));
+    }
+
+    #[test]
+    fn test_matches_pipe_separated() {
+        let cfg = HookConfig::new("Edit|Write");
+        assert!(cfg.matches("Edit"));
+        assert!(cfg.matches("Write"));
+        assert!(!cfg.matches("Bash"));
+    }
+
+    #[test]
+    fn test_matches_regex() {
+        let cfg = HookConfig::new("Ba.*");
+        assert!(cfg.matches("Bash"));
+        assert!(!cfg.matches("Read"));
+    }
+
+    #[test]
+    fn test_matches_substring_fallback() {
+        // Pattern "[unclosed" is not valid regex, so falls through to substring
+        let cfg = HookConfig::new("[unclosed");
+        assert!(cfg.matches("test [unclosed bracket"));
+        assert!(!cfg.matches("no match here"));
+    }
+
+    // ── HooksFile ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_hooks_file_new_empty() {
+        let hf = HooksFile::new();
+        assert!(hf.hooks.is_empty());
+    }
+
+    #[test]
+    fn test_hooks_file_from_json() {
+        let json = r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"command":"echo"}]}]}}"#;
+        let hf = HooksFile::from_json(json).unwrap();
+        assert!(hf.hooks.contains_key("PreToolUse"));
+    }
+
+    #[test]
+    fn test_hooks_file_merge() {
+        let mut hf1 = HooksFile::new();
+        let mut hf2 = HooksFile::new();
+        hf2.hooks.insert("PreToolUse".into(), vec![HookConfig::new("Bash")]);
+        hf1.merge(hf2);
+        assert!(hf1.hooks.contains_key("PreToolUse"));
+    }
+
+    #[test]
+    fn test_hooks_file_to_json_roundtrip() {
+        let mut hf = HooksFile::new();
+        hf.hooks.insert("PostToolUse".into(), vec![HookConfig::new("Write")]);
+        let json = hf.to_json().unwrap();
+        let hf2 = HooksFile::from_json(&json).unwrap();
+        assert!(hf2.hooks.contains_key("PostToolUse"));
+    }
+
+    // ── Send + Sync ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<HookDecision>();
+        assert_send_sync::<HookResult>();
+        assert_send_sync::<HookType>();
+        assert_send_sync::<HookDef>();
+        assert_send_sync::<HookConfig>();
+        assert_send_sync::<HooksFile>();
+    }
+}
