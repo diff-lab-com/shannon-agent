@@ -68,7 +68,7 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **LSP integration**: 6 LSP tools + `DiagnosticRegistry` + two client implementations. `DiagnosticStore.mark_stale()` called on source file changes. Background `cargo check` diagnostics auto-run via `DiagnosticWatcher` when source files change — debounce, parse, display in UI.
 - **Plugin system**: `PluginRegistry` with manifest parsing. Tool plugins fully wired (MCP discovery). Command plugins register as `PromptCommand` in `CommandRegistry` (source: `Plugin`). Skill plugins register as `PromptCommand` with trigger as slash command name and entry file as template. Loading in both REPL (`new()`) and CLI headless mode.
 - **Desktop app**: Scaffolded Tauri app with TODO stubs.
-- **Agent creation flow**: `AgentTool` spawns sub-processes with optional model override via `AgentSpawnInput.model`. No per-agent tool restriction yet.
+- **Agent creation flow**: `AgentTool` spawns sub-processes with optional model override via `AgentSpawnInput.model` and tool restriction via `AgentSpawnInput.allowed_tools`. No `/batch` or agent view dashboard yet.
 
 ### MEDIUM — Quality-of-life gaps
 
@@ -97,7 +97,7 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 Multi-provider LLM, tool use, file read/write/edit, bash execution, MCP extensions, streaming output, session persistence, context compaction, config files, i18n, skills/commands system.
 
 ### Tier 2 — Differentiators (Shannon partially has)
-- **Subagent system**: Claude Code has 4 agent mechanisms. Shannon has teammate coordination but no per-agent config, `/batch`, or agent view.
+- **Subagent system**: Claude Code has 4 agent mechanisms. Shannon has teammate coordination with per-agent model override and tool restriction via `allowed_tools`. No `/batch` or agent view dashboard yet.
 - **Worktree isolation**: Claude Code auto-isolates agents. Not implemented.
 - **OS sandbox**: Codex uses macOS Seatbelt/AppArmor/Docker. Shannon uses project-dir sandboxing only.
 - **Auto-permission classifier**: Claude Code uses LLM-based 4-tier classification. Shannon has rule-based `PermissionClassifier`.
