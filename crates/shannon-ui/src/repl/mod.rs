@@ -8,6 +8,7 @@ mod at_reference;
 mod commands;
 mod custom_commands;
 mod helpers;
+mod source_watcher;
 mod input;
 pub(crate) mod preferences;
 mod query;
@@ -152,6 +153,8 @@ pub struct Repl {
     pub(crate) command_watcher: Option<CustomCommandWatcher>,
     /// Settings file watcher for hot-reloading settings.json / config.toml
     pub(crate) settings_watcher: Option<custom_commands::SettingsWatcher>,
+    /// Source file watcher for detecting project code changes
+    pub(crate) source_watcher: Option<source_watcher::SourceWatcher>,
     /// Background update check result (deferred to avoid blocking startup)
     pub(crate) update_check_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<String>>>,
     /// Crash-safe JSONL session recovery log (appends each turn with fsync)
@@ -342,6 +345,7 @@ impl Repl {
             instruction_watcher: None,
             command_watcher: None,
             settings_watcher: None,
+            source_watcher: None,
             update_check_rx: None,
             session_recovery: shannon_core::SessionRecovery::new().unwrap_or_default(),
             plan_mode_flag: std::sync::Arc::new(std::sync::RwLock::new(false)),
@@ -1192,6 +1196,7 @@ impl Repl {
             },
             command_watcher: Some(CustomCommandWatcher::new()),
             settings_watcher: Some(SettingsWatcher::new()),
+            source_watcher: Some(source_watcher::SourceWatcher::new(std::env::current_dir().unwrap_or_default())),
             update_check_rx: None,
             session_recovery: shannon_core::SessionRecovery::new().unwrap_or_default(),
             plan_mode_flag: plan_mode_flag.clone(),

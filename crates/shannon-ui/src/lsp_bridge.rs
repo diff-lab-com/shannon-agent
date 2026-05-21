@@ -236,6 +236,32 @@ impl Default for DiagnosticStore {
     }
 }
 
+impl DiagnosticStore {
+    /// Sync diagnostics from the tools-layer DiagnosticRegistry into this display store.
+    ///
+    /// Clears existing diagnostics and replaces them with the registry's current data.
+    /// Returns the number of diagnostics synced.
+    pub fn sync_from_registry(&mut self, registry: &shannon_tools::DiagnosticRegistry) -> usize {
+        self.diagnostics.clear();
+        for diag in registry.get_all() {
+            let severity = match diag.severity {
+                shannon_tools::DiagnosticSeverity::Error => DiagnosticSeverity::Error,
+                shannon_tools::DiagnosticSeverity::Warning => DiagnosticSeverity::Warning,
+                shannon_tools::DiagnosticSeverity::Info => DiagnosticSeverity::Info,
+                shannon_tools::DiagnosticSeverity::Hint => DiagnosticSeverity::Hint,
+            };
+            self.diagnostics.push(Diagnostic {
+                severity,
+                message: diag.message.clone(),
+                file_path: diag.file_path.clone(),
+                line: diag.line + 1, // LSP diagnostics are 0-based, display is 1-based
+                source: Some(diag.source.clone()),
+            });
+        }
+        self.diagnostics.len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,5 +401,61 @@ mod tests {
         assert_eq!(LspDisplay::severity_icon(DiagnosticSeverity::Warning), "W");
         assert_eq!(LspDisplay::severity_icon(DiagnosticSeverity::Info), "I");
         assert_eq!(LspDisplay::severity_icon(DiagnosticSeverity::Hint), "H");
+    }
+
+    #[test]
+    fn test_sync_from_registry_empty() {
+        let mut store = DiagnosticStore::new();
+        let registry = shannon_tools::DiagnosticRegistry::new();
+        let count = store.sync_from_registry(&registry);
+        assert_eq!(count, 0);
+        assert!(store.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn test_sync_from_registry_with_diagnostics() {
+        let mut registry = shannon_tools::DiagnosticRegistry::new();
+        registry.update("src/main.rs", vec![
+            shannon_tools::LspDiagnostic::new(
+                "src/main.rs", 9, 4,
+                shannon_tools::DiagnosticSeverity::Error,
+                "mismatched types",
+                "rustc",
+            ),
+            shannon_tools::LspDiagnostic::new(
+                "src/main.rs", 20, 0,
+                shannon_tools::DiagnosticSeverity::Warning,
+                "unused variable",
+                "rustc",
+            ),
+        ]);
+
+        let mut store = DiagnosticStore::new();
+        let count = store.sync_from_registry(&registry);
+        assert_eq!(count, 2);
+        assert_eq!(store.error_count(), 1);
+        assert_eq!(store.warning_count(), 1);
+
+        // Line numbers should be 1-based (LSP 0-based + 1)
+        assert_eq!(store.diagnostics[0].line, 10);
+        assert_eq!(store.diagnostics[0].source, Some("rustc".to_string()));
+    }
+
+    #[test]
+    fn test_sync_from_registry_replaces_existing() {
+        let mut store = DiagnosticStore::new();
+        store.add(Diagnostic {
+            severity: DiagnosticSeverity::Error,
+            message: "old".to_string(),
+            file_path: "old.rs".to_string(),
+            line: 1,
+            source: None,
+        });
+        assert_eq!(store.diagnostics.len(), 1);
+
+        let registry = shannon_tools::DiagnosticRegistry::new();
+        let count = store.sync_from_registry(&registry);
+        assert_eq!(count, 0);
+        assert!(store.diagnostics.is_empty());
     }
 }

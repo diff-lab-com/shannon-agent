@@ -240,6 +240,16 @@ impl super::Repl {
         }
     }
 
+    /// Check if source files have changed since last check.
+    /// Returns changed file paths for display or diagnostic triggering.
+    pub fn check_source_changes(&mut self) -> Vec<String> {
+        if let Some(ref watcher) = self.source_watcher {
+            watcher.check_changes()
+        } else {
+            Vec::new()
+        }
+    }
+
     /// Refresh the git branch name from the working directory.
     /// Throttled to once every 10 seconds to avoid excessive subprocess calls.
     pub fn refresh_git_branch(&mut self) {
