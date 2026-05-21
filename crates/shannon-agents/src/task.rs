@@ -139,3 +139,160 @@ impl AgentTask {
         self.updated_at = chrono::Utc::now();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_new_defaults() {
+        let task = AgentTask::new("Fix bug".to_string(), "Fix the auth bug".to_string(), TaskPriority::High);
+        assert_eq!(task.subject, "Fix bug");
+        assert_eq!(task.description, "Fix the auth bug");
+        assert_eq!(task.status, TaskStatus::Pending);
+        assert_eq!(task.priority, TaskPriority::High);
+        assert!(task.owner.is_none());
+        assert!(task.blocked_by.is_empty());
+        assert!(task.blocks.is_empty());
+        assert!(task.active_form.is_none());
+        assert!(task.required_capabilities.is_empty());
+        assert!(task.metadata.is_null());
+    }
+
+    #[test]
+    fn task_is_ready_when_pending_no_blockers() {
+        let task = AgentTask::new("x".into(), "x".into(), TaskPriority::Medium);
+        assert!(task.is_ready());
+    }
+
+    #[test]
+    fn task_not_ready_when_blocked() {
+        let mut task = AgentTask::new("x".into(), "x".into(), TaskPriority::Medium);
+        task.blocked_by.push(Uuid::new_v4());
+        assert!(!task.is_ready());
+    }
+
+    #[test]
+    fn task_not_ready_when_in_progress() {
+        let mut task = AgentTask::new("x".into(), "x".into(), TaskPriority::Medium);
+        task.status = TaskStatus::InProgress;
+        assert!(!task.is_ready());
+    }
+
+    #[test]
+    fn task_is_blocking() {
+        let mut task = AgentTask::new("x".into(), "x".into(), TaskPriority::Medium);
+        assert!(!task.is_blocking());
+        task.blocks.push(Uuid::new_v4());
+        assert!(task.is_blocking());
+    }
+
+    #[test]
+    fn task_add_dependency_no_duplicates() {
+        let mut task = AgentTask::new("x".into(), "x".into(), TaskPriority::Medium);
+        let dep_id = Uuid::new_v4();
+        task.add_dependency(dep_id);
+        task.add_dependency(dep_id);
+        assert_eq!(task.blocked_by.len(), 1);
+    }
+
+    #[test]
+    fn task_mark_completed() {
+        let mut task = AgentTask::new("x".into(), "x".into(), TaskPriority::Medium);
+        task.mark_completed();
+        assert_eq!(task.status, TaskStatus::Completed);
+    }
+
+    #[test]
+    fn task_mark_failed() {
+        let mut task = AgentTask::new("x".into(), "x".into(), TaskPriority::Medium);
+        task.mark_failed("timeout".to_string());
+        match &task.status {
+            TaskStatus::Failed(reason) => assert_eq!(reason, "timeout"),
+            other => panic!("Expected Failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn task_assign_to() {
+        let mut task = AgentTask::new("x".into(), "x".into(), TaskPriority::Medium);
+        task.assign_to("worker-1".to_string());
+        assert_eq!(task.owner, Some("worker-1".to_string()));
+        assert_eq!(task.status, TaskStatus::InProgress);
+    }
+
+    #[test]
+    fn task_priority_ordering() {
+        assert!(TaskPriority::Critical > TaskPriority::High);
+        assert!(TaskPriority::High > TaskPriority::Medium);
+        assert!(TaskPriority::Medium > TaskPriority::Low);
+    }
+
+    #[test]
+    fn task_status_serde() {
+        let statuses = vec![
+            TaskStatus::Pending,
+            TaskStatus::InProgress,
+            TaskStatus::Completed,
+            TaskStatus::Failed("err".to_string()),
+            TaskStatus::Blocked,
+            TaskStatus::Cancelled,
+        ];
+        let json = serde_json::to_string(&statuses).unwrap();
+        let de: Vec<TaskStatus> = serde_json::from_str(&json).unwrap();
+        assert_eq!(de, statuses);
+    }
+
+    #[test]
+    fn task_status_inprogress_serializes_pascal() {
+        let json = serde_json::to_string(&TaskStatus::InProgress).unwrap();
+        assert!(json.contains("InProgress"), "Expected 'InProgress', got: {json}");
+    }
+
+    #[test]
+    fn task_priority_serde() {
+        let json = serde_json::to_string(&TaskPriority::Critical).unwrap();
+        assert!(json.contains("Critical"));
+        let de: TaskPriority = serde_json::from_str("\"Low\"").unwrap();
+        assert_eq!(de, TaskPriority::Low);
+    }
+
+    #[test]
+    fn dependency_type_serde() {
+        let deps = vec![DependencyType::MustComplete, DependencyType::MustStart, DependencyType::ShouldComplete];
+        let json = serde_json::to_string(&deps).unwrap();
+        let de: Vec<DependencyType> = serde_json::from_str(&json).unwrap();
+        assert_eq!(de, deps);
+    }
+
+    #[test]
+    fn agent_task_roundtrip() {
+        let task = AgentTask::new("Test".into(), "Test task".into(), TaskPriority::High);
+        let json = serde_json::to_string(&task).unwrap();
+        let de: AgentTask = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.subject, "Test");
+        assert_eq!(de.priority, TaskPriority::High);
+    }
+
+    #[test]
+    fn task_dependency_roundtrip() {
+        let dep = TaskDependency {
+            task_id: Uuid::new_v4(),
+            depends_on: Uuid::new_v4(),
+            dependency_type: DependencyType::MustComplete,
+        };
+        let json = serde_json::to_string(&dep).unwrap();
+        let de: TaskDependency = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.dependency_type, DependencyType::MustComplete);
+    }
+
+    #[test]
+    fn send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<AgentTask>();
+        assert_send_sync::<TaskStatus>();
+        assert_send_sync::<TaskPriority>();
+        assert_send_sync::<DependencyType>();
+        assert_send_sync::<TaskDependency>();
+    }
+}

@@ -512,3 +512,132 @@ impl Default for TaskBoard {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn task_board_new_is_empty() {
+        let board = TaskBoard::new();
+        let tasks = board.tasks.read().await;
+        assert!(tasks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn task_board_add_task() {
+        let board = TaskBoard::new();
+        let task = AgentTask::new("Test task".into(), "Do something".into(), TaskPriority::Medium);
+        let task_id = task.id;
+        board.add_task(task).await.unwrap();
+        let tasks = board.tasks.read().await;
+        assert!(tasks.contains_key(&task_id));
+    }
+
+    #[tokio::test]
+    async fn task_board_add_duplicate_fails() {
+        let board = TaskBoard::new();
+        let task = AgentTask::new("T1".into(), "D1".into(), TaskPriority::Medium);
+        board.add_task(task.clone()).await.unwrap();
+        let result = board.add_task(task).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn task_board_fail_task() {
+        let board = TaskBoard::new();
+        let task = AgentTask::new("T1".into(), "D1".into(), TaskPriority::Medium);
+        let task_id = task.id;
+        board.add_task(task).await.unwrap();
+        board.fail_task(task_id, "timeout".to_string()).await.unwrap();
+        let tasks = board.tasks.read().await;
+        match &tasks.get(&task_id).unwrap().status {
+            TaskStatus::Failed(reason) => assert_eq!(reason, "timeout"),
+            other => panic!("Expected Failed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn task_board_remove_task() {
+        let board = TaskBoard::new();
+        let task = AgentTask::new("T1".into(), "D1".into(), TaskPriority::Medium);
+        let task_id = task.id;
+        board.add_task(task).await.unwrap();
+        board.remove_task(task_id).await.unwrap();
+        let tasks = board.tasks.read().await;
+        assert!(!tasks.contains_key(&task_id));
+    }
+
+    #[tokio::test]
+    async fn task_board_get_task() {
+        let board = TaskBoard::new();
+        let task = AgentTask::new("T1".into(), "D1".into(), TaskPriority::Medium);
+        let task_id = task.id;
+        board.add_task(task).await.unwrap();
+        let retrieved = board.get_task(task_id).await.unwrap();
+        assert_eq!(retrieved.subject, "T1");
+        assert!(board.get_task(Uuid::new_v4()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn task_board_events() {
+        let board = TaskBoard::new();
+        let mut rx = board.subscribe_events();
+        let task = AgentTask::new("T1".into(), "D1".into(), TaskPriority::Medium);
+        let task_id = task.id;
+        board.add_task(task).await.unwrap();
+        let event = rx.try_recv().unwrap();
+        assert!(matches!(event, TaskBoardEvent::TaskAdded { task_id: tid } if tid == task_id));
+    }
+
+    #[tokio::test]
+    async fn task_board_summary() {
+        let board = TaskBoard::new();
+        let t1 = AgentTask::new("T1".into(), "D1".into(), TaskPriority::High);
+        let t2 = AgentTask::new("T2".into(), "D2".into(), TaskPriority::Medium);
+        board.add_task(t1).await.unwrap();
+        board.add_task(t2).await.unwrap();
+        let summary = board.summary().await;
+        assert_eq!(summary.total_tasks, 2);
+        assert_eq!(summary.pending_tasks, 2);
+    }
+
+    #[test]
+    fn task_board_summary_serde() {
+        let summary = TaskBoardSummary {
+            total_tasks: 5,
+            pending_tasks: 2,
+            in_progress_tasks: 1,
+            completed_tasks: 1,
+            failed_tasks: 1,
+            blocked_tasks: 0,
+            by_priority: HashMap::from([
+                ("High".to_string(), 2),
+                ("Medium".to_string(), 3),
+            ]),
+            by_agent: HashMap::from([
+                ("worker-1".to_string(), 3),
+            ]),
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        let de: TaskBoardSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.total_tasks, 5);
+        assert_eq!(de.by_agent["worker-1"], 3);
+    }
+
+    #[test]
+    fn task_board_default() {
+        let board = TaskBoard::default();
+        let _ = board;
+    }
+
+    #[tokio::test]
+    async fn task_board_clear() {
+        let board = TaskBoard::new();
+        let task = AgentTask::new("T1".into(), "D1".into(), TaskPriority::Medium);
+        board.add_task(task).await.unwrap();
+        board.clear().await;
+        let tasks = board.tasks.read().await;
+        assert!(tasks.is_empty());
+    }
+}
