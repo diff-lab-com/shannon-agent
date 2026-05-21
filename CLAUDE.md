@@ -58,13 +58,13 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **Permission auto-mode**: Claude Code has AI-based classifier that auto-allows safe operations. Shannon has manual allow/deny only.
 - **Rich subagent system**: Claude Code/Codex support spawning per-task agents with isolated context, tool restrictions, and model overrides. Shannon's `shannon-agents` has orchestration but no per-agent config or isolation.
 - **Non-interactive/CI mode**: `claude -p` and `codex exec` support headless execution. Shannon has `--non-interactive` flag but limited tool approval flow.
-- **Session resume by ID**: Competitors can resume past sessions. Shannon has session files but no `--resume <id>` CLI flag.
+- **Session resume by ID**: `--resume [<UUID>]` now accepts optional UUID argument. `shannon --resume` for most recent, `shannon --resume <uuid>` for specific session. Removed separate `--session` flag.
 - **Worktree isolation**: Claude Code creates git worktrees for isolated agent work. No equivalent in Shannon.
 
 ### HIGH — Shannon has partial support
 
 - **MCP tool search**: `tools/list` works, but no `tools/call` pagination or tool search/filter for large MCP server fleets.
-- **Auto-trigger compaction**: UI sidebar now derives pressure tiers from `CompactConfig.trigger_threshold` (no longer hardcoded). Still no background compaction loop — compaction triggers during active streaming only.
+- **Auto-trigger compaction**: Post-query `check_context_pressure()` uses `CompactConfig.trigger_threshold`. Defers during streaming via `pending_auto_compact`. Toast notification shown when approaching limit. No separate background loop needed for CLI tool.
 - **Project memory (MEMORY.md)**: `MemoryStore` + `AutoDreamService` exist but no `MEMORY.md` index file pattern like Claude Code for cross-session context.
 - **LSP diagnostics integration**: OpenCode has real-time `tsc --noEmit` / `cargo check` integration. Shannon has no LSP client.
 - **Plugin system wiring**: Module structure exists (`crates/shannon-core/src/plugin/`) but marked "scaffolded for future use".
