@@ -88,10 +88,11 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **Per-agent model/tool config**: `AgentSpawnInput.model` for LLM override, `AgentSpawnInput.allowed_tools` for tool restriction.
 - **Worktree isolation for agents**: `context.working_directory` passed to sub-agents with worktree path; system prompt includes isolation instructions.
 - **`/batch` command**: Parallel worktree-isolated PR creation via `/batch` or `/parallel` command. Decomposes tasks, creates worktrees, spawns agents, creates PRs.
+- **LLM permission classifier wiring**: `LlmPermissionClassifier` wired into `PermissionManager` via `with_llm_classifier()`. Async `classify_and_check_with_llm()` uses LLM fallback for ambiguous cases in Auto modes.
 
 ### Test Coverage
 
-7644 total tests across all crates (58 e2e require API access). Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them.
+7688 total tests across all crates (58 e2e require API access). Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them.
 
 ## Competitor Feature Tiers
 
@@ -102,7 +103,7 @@ Multi-provider LLM, tool use, file read/write/edit, bash execution, MCP extensio
 - **Subagent system**: Claude Code has 4 agent mechanisms. Shannon has teammate coordination with per-agent model/tool/worktree config, `/batch` for parallel worktree PRs. No agent view dashboard yet.
 - **Worktree isolation**: `context.working_directory` passes worktree paths to sub-agents. `/batch` creates worktrees automatically. System prompt includes isolation instructions.
 - **OS sandbox**: Codex uses macOS Seatbelt/AppArmor/Docker. Shannon uses project-dir sandboxing only.
-- **Auto-permission classifier**: Claude Code uses LLM-based 4-tier classification. Shannon has rule-based `PermissionClassifier`.
+- **Auto-permission classifier**: Claude Code uses LLM-based 4-tier classification. Shannon has `LlmPermissionClassifier` wired into `PermissionManager` with async `classify_and_check_with_llm()`. Rule-based by default, LLM fallback for ambiguous cases when enabled via `with_llm_classifier()`.
 - **LSP integration**: Shannon has 6 LSP tools plus automatic background `cargo check` diagnostics on source changes. OpenCode runs `gopls`/`tsc` automatically.
 - **Hook system**: Claude Code has 18+ hook events. Shannon has 32 hook events (more coverage).
 - **Non-interactive/CI mode**: Claude Code `claude -p` with structured outputs. Shannon has `--prompt` with NDJSON output.
