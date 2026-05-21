@@ -17,9 +17,9 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 
 | Crate | Responsibility | Tests |
 |-------|---------------|-------|
-| `shannon-core` | API client, query engine, permissions, tools, state management | ~3340 |
-| `shannon-ui` | Terminal UI (ratatui), REPL, vim mode, widgets, rendering | ~1041 |
-| `shannon-tools` | Tool implementations (bash, file ops, search, config manager) | ~1107 |
+| `shannon-core` | API client, query engine, permissions, tools, state management | ~3370 |
+| `shannon-ui` | Terminal UI (ratatui), REPL, vim mode, widgets, rendering | ~1089 |
+| `shannon-tools` | Tool implementations (bash, file ops, search, config manager) | ~1111 |
 | `shannon-commands` | Built-in commands (/help, /config, /pdf, /commit, etc.) | ~335 |
 | `shannon-agents` | Multi-agent orchestration | ~471 |
 | `shannon-cli` | CLI entry point (clap), config loading, non-interactive mode | ~191 |
@@ -75,8 +75,7 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **File watching**: Limited to skill files only; no general project file watching.
 - **Vision/multimodal**: Display only; no vision model integration for image analysis.
 - **Patch application**: Basic diff rendering; no three-way merge or conflict markers.
-- **Multi-agent executor**: `multi_agent.rs` has coordinator/worker split but workers fall back to placeholder text when LLM unavailable.
-- **CLI tool result display**: Tool result for unknown tools returns `"Tool result displayed in UI"` placeholder in non-UI contexts.
+- **Multi-agent executor**: `multi_agent.rs` has coordinator/worker split but workers fall back to placeholder text when LLM unavailable (only in tests/direct API — REPL wires `shared_executor` correctly).
 
 ### Resolved
 
