@@ -78,7 +78,7 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **Tool grouping in UI**: Consecutive same-category tools not visually grouped (plan exists, not implemented).
 - **Streaming thinking display**: Thinking content streams as char count only, no inline preview.
 - **Inline diff stats**: Write/Edit tools don't show `+N -N` line counts in collapsed display.
-- **Test coverage**: 7158 total tests. Zero-test files remain in core (11: api_server, compact/mod, error, hooks/{mod,types}, lsp/{client,mod}, memory/mod, plugin/*), UI (20+ large files), tools (12: worktree, mcp, file/*, etc.), agents (3: coordinator, teammate, remote_tools).
+- **Test coverage**: ~7344 total tests. Recent additions: agents (+92: task/message/task_board, error, teammate, remote_tools, task_tools), tools (+46: mcp, file/mod), UI (+35: a11y, preferences), core (+15: plugin error, LSP mod). Zero-test files remain: core (api_server, compact/mod, error [orphan], lsp/client, memory/mod, plugin/{config,index,index_builder,registry}), UI (20+ widget/command files), tools (lib.rs).
 
 ## Gotchas
 
