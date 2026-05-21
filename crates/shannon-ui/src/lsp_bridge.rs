@@ -178,13 +178,27 @@ impl LspDisplay {
 #[derive(Debug, Clone)]
 pub struct DiagnosticStore {
     pub diagnostics: Vec<Diagnostic>,
+    stale: bool,
 }
 
 impl DiagnosticStore {
     pub fn new() -> Self {
         Self {
             diagnostics: Vec::new(),
+            stale: false,
         }
+    }
+
+    pub fn mark_stale(&mut self) {
+        self.stale = true;
+    }
+
+    pub fn is_stale(&self) -> bool {
+        self.stale
+    }
+
+    pub fn clear_stale(&mut self) {
+        self.stale = false;
     }
 
     pub fn add(&mut self, diag: Diagnostic) {
@@ -243,6 +257,7 @@ impl DiagnosticStore {
     /// Returns the number of diagnostics synced.
     pub fn sync_from_registry(&mut self, registry: &shannon_tools::DiagnosticRegistry) -> usize {
         self.diagnostics.clear();
+        self.stale = false;
         for diag in registry.get_all() {
             let severity = match diag.severity {
                 shannon_tools::DiagnosticSeverity::Error => DiagnosticSeverity::Error,
@@ -439,6 +454,16 @@ mod tests {
         // Line numbers should be 1-based (LSP 0-based + 1)
         assert_eq!(store.diagnostics[0].line, 10);
         assert_eq!(store.diagnostics[0].source, Some("rustc".to_string()));
+    }
+
+    #[test]
+    fn test_diagnostic_store_stale_flag() {
+        let mut store = DiagnosticStore::new();
+        assert!(!store.is_stale());
+        store.mark_stale();
+        assert!(store.is_stale());
+        store.clear_stale();
+        assert!(!store.is_stale());
     }
 
     #[test]

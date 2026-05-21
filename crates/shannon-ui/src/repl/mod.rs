@@ -1437,6 +1437,23 @@ impl Repl {
             // Check settings files for changes
             self.check_reload_settings();
 
+            // Check source file changes (for diagnostic triggering)
+            let source_changes = self.check_source_changes();
+            if !source_changes.is_empty() {
+                let count = source_changes.len();
+                let preview = source_changes.iter()
+                    .take(3)
+                    .map(|p| p.rsplit('/').next().unwrap_or(p))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let suffix = if count > 3 { &format!(" +{} more", count - 3) } else { "" };
+                self.chat.add_message(
+                    crate::widgets::ChatRole::System,
+                    format!("[Source changed: {preview}{suffix}]"),
+                );
+                self.state.diagnostic_store.mark_stale();
+            }
+
             // Check scheduled routines and inject due prompts
             let due = self.state.routine_manager.drain_due();
             for (name, prompt) in due {
