@@ -733,8 +733,11 @@ fn run_noninteractive_query(
                                     }
                                 }
                             }
-                            Ok(_) => {
-                                eprintln!("  Plugin '{}' ({}) loaded", plugin.manifest.name, plugin.manifest.type_display_name());
+                            Ok(shannon_core::plugin::PluginKind::Command { name, description }) => {
+                                eprintln!("  Command plugin '{}' ({}) — use /plugin:{}", plugin.manifest.name, description, name);
+                            }
+                            Ok(shannon_core::plugin::PluginKind::Skill { trigger, template: _ }) => {
+                                eprintln!("  Skill plugin '{}' (trigger: '{}') loaded", plugin.manifest.name, trigger);
                             }
                             Err(e) => {
                                 eprintln!("  Warning: Plugin '{}' has invalid config: {e}", plugin.manifest.name);

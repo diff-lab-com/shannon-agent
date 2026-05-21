@@ -66,7 +66,7 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **MCP tool search**: `tools/list` works with deferred schema loading. Gap: Claude Code has on-demand tool search that scales to thousands of MCP tools. No MCP channel support (push webhooks/alerts into live sessions).
 - **Hook system**: `HookManager` with `HookEvent`/`HookEventType`. Gap: Claude Code has 18+ hook events including `SubagentStart`, `SubagentStop`, `TaskCompleted`, `TeammateIdle`, `PreCompact`, `WorktreeCreate`, `WorktreeRemove`, `ConfigChange`. Shannon has fewer event types.
 - **LSP integration**: 6 LSP tools + `DiagnosticRegistry` + two client implementations. Gap: not wired for automatic background diagnostics — tools must be explicitly invoked (OpenCode runs `gopls`/`tsc` automatically).
-- **Plugin system**: `PluginRegistry` with manifest parsing and tool transport. Gap: non-tool plugin kinds (hooks, skills) are stubbed.
+- **Plugin system**: `PluginRegistry` with manifest parsing. Tool plugins fully wired (MCP discovery). Command plugins register as `PromptCommand` in `CommandRegistry` (source: `Plugin`). Skill plugins loaded and logged. Loading in both REPL (`new()`) and CLI headless mode.
 - **Desktop app**: Scaffolded Tauri app with TODO stubs.
 - **Agent creation flow**: `AgentTool` spawns sub-processes but no model override or tool restriction per agent.
 
@@ -99,7 +99,7 @@ Multi-provider LLM, tool use, file read/write/edit, bash execution, MCP extensio
 - **OS sandbox**: Codex uses macOS Seatbelt/AppArmor/Docker. Shannon uses project-dir sandboxing only.
 - **Auto-permission classifier**: Claude Code uses LLM-based 4-tier classification. Shannon has rule-based `PermissionClassifier`.
 - **LSP integration**: OpenCode runs language servers in background. Shannon has 6 LSP tools but no automatic diagnostics loop.
-- **Hook system**: Claude Code has 18+ hook events. Shannon has fewer.
+- **Hook system**: Claude Code has 18+ hook events. Shannon has 32 hook events (more coverage).
 - **Non-interactive/CI mode**: Claude Code `claude -p` with structured outputs. Shannon has `--prompt` with NDJSON output.
 
 ### Tier 3 — Quality of Life
