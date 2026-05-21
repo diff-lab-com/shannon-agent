@@ -100,6 +100,7 @@ pub use lsp::{
 pub use lsp_diagnostics::{
     LspDiagnostic, DiagnosticSeverity, RelatedInfo,
     DiagnosticRegistry, DiagnosticSummary,
+    CliDiagnosticResult, run_cli_diagnostics,
 };
 pub use grep::GrepTool;
 pub use ask_user::{

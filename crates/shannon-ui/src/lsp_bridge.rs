@@ -275,6 +275,31 @@ impl DiagnosticStore {
         }
         self.diagnostics.len()
     }
+
+    /// Update diagnostics from a CLI diagnostic run result.
+    ///
+    /// Replaces all existing diagnostics with the parsed CLI output.
+    /// Returns the number of diagnostics loaded.
+    pub fn update_from_cli(&mut self, result: &shannon_tools::CliDiagnosticResult) -> usize {
+        self.diagnostics.clear();
+        self.stale = false;
+        for diag in &result.diagnostics {
+            let severity = match diag.severity {
+                shannon_tools::DiagnosticSeverity::Error => DiagnosticSeverity::Error,
+                shannon_tools::DiagnosticSeverity::Warning => DiagnosticSeverity::Warning,
+                shannon_tools::DiagnosticSeverity::Info => DiagnosticSeverity::Info,
+                shannon_tools::DiagnosticSeverity::Hint => DiagnosticSeverity::Hint,
+            };
+            self.diagnostics.push(Diagnostic {
+                severity,
+                message: diag.message.clone(),
+                file_path: diag.file_path.clone(),
+                line: diag.line + 1,
+                source: Some(diag.source.clone()),
+            });
+        }
+        self.diagnostics.len()
+    }
 }
 
 #[cfg(test)]
@@ -482,5 +507,82 @@ mod tests {
         let count = store.sync_from_registry(&registry);
         assert_eq!(count, 0);
         assert!(store.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn test_update_from_cli_with_diagnostics() {
+        let mut store = DiagnosticStore::new();
+        store.mark_stale();
+        assert!(store.is_stale());
+
+        let result = shannon_tools::CliDiagnosticResult {
+            diagnostics: vec![
+                shannon_tools::LspDiagnostic::new(
+                    "src/main.rs", 9, 0,
+                    shannon_tools::DiagnosticSeverity::Error,
+                    "cannot find value `x`", "rustc",
+                ),
+                shannon_tools::LspDiagnostic::new(
+                    "src/lib.rs", 4, 0,
+                    shannon_tools::DiagnosticSeverity::Warning,
+                    "unused variable", "rustc",
+                ),
+            ],
+            success: true,
+            error: None,
+        };
+
+        let count = store.update_from_cli(&result);
+        assert_eq!(count, 2);
+        assert!(!store.is_stale());
+        assert_eq!(store.error_count(), 1);
+        assert_eq!(store.warning_count(), 1);
+        assert_eq!(store.diagnostics[0].line, 10); // 0-based + 1
+    }
+
+    #[test]
+    fn test_update_from_cli_empty() {
+        let mut store = DiagnosticStore::new();
+        store.add(Diagnostic {
+            severity: DiagnosticSeverity::Error,
+            message: "old".to_string(),
+            file_path: "old.rs".to_string(),
+            line: 1,
+            source: None,
+        });
+        assert_eq!(store.diagnostics.len(), 1);
+
+        let result = shannon_tools::CliDiagnosticResult {
+            diagnostics: vec![],
+            success: true,
+            error: None,
+        };
+
+        let count = store.update_from_cli(&result);
+        assert_eq!(count, 0);
+        assert!(store.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn test_update_from_cli_severity_mapping() {
+        let mut store = DiagnosticStore::new();
+
+        let result = shannon_tools::CliDiagnosticResult {
+            diagnostics: vec![
+                shannon_tools::LspDiagnostic::new("a.rs", 0, 0, shannon_tools::DiagnosticSeverity::Error, "e", "rustc"),
+                shannon_tools::LspDiagnostic::new("b.rs", 0, 0, shannon_tools::DiagnosticSeverity::Warning, "w", "rustc"),
+                shannon_tools::LspDiagnostic::new("c.rs", 0, 0, shannon_tools::DiagnosticSeverity::Info, "i", "rustc"),
+                shannon_tools::LspDiagnostic::new("d.rs", 0, 0, shannon_tools::DiagnosticSeverity::Hint, "h", "rustc"),
+            ],
+            success: true,
+            error: None,
+        };
+
+        let count = store.update_from_cli(&result);
+        assert_eq!(count, 4);
+        assert!(matches!(store.diagnostics[0].severity, DiagnosticSeverity::Error));
+        assert!(matches!(store.diagnostics[1].severity, DiagnosticSeverity::Warning));
+        assert!(matches!(store.diagnostics[2].severity, DiagnosticSeverity::Info));
+        assert!(matches!(store.diagnostics[3].severity, DiagnosticSeverity::Hint));
     }
 }

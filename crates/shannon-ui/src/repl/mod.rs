@@ -7,6 +7,7 @@ mod adapter_impl;
 mod at_reference;
 mod commands;
 mod custom_commands;
+mod diagnostic_watcher;
 mod helpers;
 mod source_watcher;
 mod input;
@@ -155,6 +156,10 @@ pub struct Repl {
     pub(crate) settings_watcher: Option<custom_commands::SettingsWatcher>,
     /// Source file watcher for detecting project code changes
     pub(crate) source_watcher: Option<source_watcher::SourceWatcher>,
+    /// Background diagnostic check pending flag (debounce)
+    pub(crate) diagnostic_pending: std::sync::Arc<tokio::sync::Mutex<bool>>,
+    /// Background diagnostic result receiver
+    pub(crate) diagnostic_rx: Option<diagnostic_watcher::DiagnosticReceiver>,
     /// Background update check result (deferred to avoid blocking startup)
     pub(crate) update_check_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<String>>>,
     /// Crash-safe JSONL session recovery log (appends each turn with fsync)
@@ -346,6 +351,8 @@ impl Repl {
             command_watcher: None,
             settings_watcher: None,
             source_watcher: None,
+            diagnostic_pending: std::sync::Arc::new(tokio::sync::Mutex::new(false)),
+            diagnostic_rx: None,
             update_check_rx: None,
             session_recovery: shannon_core::SessionRecovery::new().unwrap_or_default(),
             plan_mode_flag: std::sync::Arc::new(std::sync::RwLock::new(false)),
@@ -1238,6 +1245,8 @@ impl Repl {
             command_watcher: Some(CustomCommandWatcher::new()),
             settings_watcher: Some(SettingsWatcher::new()),
             source_watcher: Some(source_watcher::SourceWatcher::new(std::env::current_dir().unwrap_or_default())),
+            diagnostic_pending: std::sync::Arc::new(tokio::sync::Mutex::new(false)),
+            diagnostic_rx: None,
             update_check_rx: None,
             session_recovery: shannon_core::SessionRecovery::new().unwrap_or_default(),
             plan_mode_flag: plan_mode_flag.clone(),
@@ -1452,6 +1461,37 @@ impl Repl {
                     format!("[Source changed: {preview}{suffix}]"),
                 );
                 self.state.diagnostic_store.mark_stale();
+            }
+
+            // Trigger background diagnostic refresh when stale
+            if self.state.diagnostic_store.is_stale() {
+                if let Some(ref mut rx) = self.diagnostic_rx {
+                    // Check if a previous run completed
+                    if let Some(result) = diagnostic_watcher::try_receive(rx) {
+                        let count = self.state.diagnostic_store.update_from_cli(&result);
+                        if count > 0 {
+                            self.chat.add_message(
+                                ChatRole::System,
+                                format!("[Diagnostics: {} issue(s) found]", count),
+                            );
+                        } else {
+                            self.chat.add_message(
+                                ChatRole::System,
+                                "[Diagnostics: ✓ No issues]".to_string(),
+                            );
+                        }
+                        self.diagnostic_rx = None;
+                    }
+                } else {
+                    // Spawn a new diagnostic run
+                    let project_dir = std::path::PathBuf::from(&self.state.working_directory);
+                    if let Some(rx) = diagnostic_watcher::spawn_diagnostic_run(
+                        project_dir,
+                        self.diagnostic_pending.clone(),
+                    ) {
+                        self.diagnostic_rx = Some(rx);
+                    }
+                }
             }
 
             // Check scheduled routines and inject due prompts
