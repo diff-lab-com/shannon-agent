@@ -259,4 +259,147 @@ template = "Hello {{name}}!"
             _ => panic!("Expected Skill kind"),
         }
     }
+
+    #[test]
+    fn test_command_manifest() {
+        let toml = r#"
+name = "my-cmd"
+version = "1.0.0"
+description = "A custom command"
+type = "command"
+entry = "cmd.md"
+command_name = "review"
+command_description = "Review code"
+"#;
+        let manifest = PluginManifest::from_toml(toml).unwrap();
+        assert_eq!(manifest.type_display_name(), "Command");
+        let kind = manifest.kind().unwrap();
+        match kind {
+            PluginKind::Command { name, description } => {
+                assert_eq!(name, "review");
+                assert_eq!(description, "Review code");
+            }
+            _ => panic!("Expected Command kind"),
+        }
+    }
+
+    #[test]
+    fn test_command_kind_missing_name() {
+        let toml = r#"
+name = "broken"
+version = "1.0.0"
+description = "Missing command_name"
+type = "command"
+entry = "x.md"
+"#;
+        let manifest = PluginManifest::from_toml(toml).unwrap();
+        assert!(manifest.kind().is_err());
+    }
+
+    #[test]
+    fn test_skill_kind_missing_trigger() {
+        let toml = r#"
+name = "broken"
+version = "1.0.0"
+description = "Missing trigger"
+type = "skill"
+entry = "x.md"
+template = "hello"
+"#;
+        let manifest = PluginManifest::from_toml(toml).unwrap();
+        assert!(manifest.kind().is_err());
+    }
+
+    #[test]
+    fn test_unknown_plugin_type() {
+        let toml = r#"
+name = "bad"
+version = "1.0.0"
+description = "Unknown type"
+type = "widget"
+entry = "x.md"
+"#;
+        let manifest = PluginManifest::from_toml(toml).unwrap();
+        let err = manifest.kind().unwrap_err();
+        assert!(err.contains("unknown plugin type"));
+    }
+
+    #[test]
+    fn test_tool_kind_missing_transport() {
+        let toml = r#"
+name = "bad-tool"
+version = "1.0.0"
+description = "Missing transport"
+type = "tool"
+entry = "x.md"
+"#;
+        let manifest = PluginManifest::from_toml(toml).unwrap();
+        let err = manifest.kind().unwrap_err();
+        assert!(err.contains("transport"));
+    }
+
+    #[test]
+    fn test_sse_transport() {
+        let toml = r#"
+name = "remote-tool"
+version = "1.0.0"
+description = "SSE transport"
+type = "tool"
+entry = "x.md"
+
+[transport]
+type = "sse"
+url = "http://localhost:8080/sse"
+"#;
+        let manifest = PluginManifest::from_toml(toml).unwrap();
+        let kind = manifest.kind().unwrap();
+        match kind {
+            PluginKind::Tool { transport } => {
+                assert!(!transport.is_stdio());
+                assert!(transport.command().is_none());
+            }
+            _ => panic!("Expected Tool kind"),
+        }
+    }
+
+    #[test]
+    fn test_from_toml_bytes() {
+        let toml_str = r#"
+name = "bytes-test"
+version = "2.0.0"
+description = "From bytes"
+type = "skill"
+entry = "x.md"
+trigger = "/test"
+template = "ok"
+"#;
+        let manifest = PluginManifest::from_toml_bytes(toml_str.as_bytes()).unwrap();
+        assert_eq!(manifest.name, "bytes-test");
+    }
+
+    #[test]
+    fn test_from_toml_bytes_invalid_utf8() {
+        let bad_bytes: &[u8] = &[0xff, 0xfe, 0x00];
+        assert!(PluginManifest::from_toml_bytes(bad_bytes).is_err());
+    }
+
+    #[test]
+    fn test_command_default_description() {
+        let toml = r#"
+name = "cmd-no-desc"
+version = "1.0.0"
+description = "No desc"
+type = "command"
+entry = "x.md"
+command_name = "build"
+"#;
+        let manifest = PluginManifest::from_toml(toml).unwrap();
+        let kind = manifest.kind().unwrap();
+        match kind {
+            PluginKind::Command { description, .. } => {
+                assert_eq!(description, "");
+            }
+            _ => panic!("Expected Command kind"),
+        }
+    }
 }
