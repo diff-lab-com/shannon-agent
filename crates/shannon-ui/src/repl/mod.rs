@@ -1130,7 +1130,7 @@ impl Repl {
                                             is_sensitive: false,
                                             user_facing_name: Some(trigger.clone()),
                                         },
-                                        progress_message: format!("Running skill /{}…", trigger),
+                                        progress_message: format!("Running skill /{trigger}…"),
                                         content_length: prompt_template.len(),
                                         arg_names: vec!["$ARGUMENTS".to_string()],
                                         allowed_tools: Vec::new(),
