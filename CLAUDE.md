@@ -56,7 +56,7 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 ### CRITICAL — Shannon lacks entirely
 
 - **Agent view dashboard**: Claude Code shows background agent sessions in a dashboard UI. Shannon has no equivalent.
-- **File checkpointing/rewind**: `CheckpointManager` creates git commits before file-modifying tool executions, tracks per-turn file changes, supports `revert_to()` with `git reset --hard` for code restore. Four `RestoreMode` variants (CodeAndConversation, ConversationOnly, CodeOnly). Gap: no interactive UI for browsing checkpoint history and selecting restore points.
+- **File checkpointing/rewind**: `CheckpointManager` creates git commits before file-modifying tool executions, tracks per-turn file changes. `/undo` command (list, revert by index, revert last) and `/rewind` command (conversation rewind, code revert via `git reset`, or both). Four `RestoreMode` variants. Persistent checkpoint storage. 14 REPL tests for undo/rewind. Gap: no visual diff preview before reverting.
 
 ### HIGH — Shannon has partial support
 
