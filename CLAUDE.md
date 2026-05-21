@@ -60,7 +60,7 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 
 ### HIGH — Shannon has partial support
 
-- **Permission auto-mode**: 9 `ApprovalMode` variants (Suggest, Auto, AutoEdit, FullAuto, BypassPermissions, DontAsk, Readonly, Auto, PlanReadonly) with risk-level-based auto-approve. `PermissionClassifier` (2928 lines) has rule engine, glob patterns, bash dangerous-pattern detection — but not wired into `PermissionManager` flow. Headless mode uses `BypassPermissions` for all tools.
+- **Permission auto-mode**: 9 `ApprovalMode` variants with risk-level-based auto-approve. `PermissionClassifier` (2928 lines) wired into `PermissionRuleChecker` — classifies tools by risk, detects dangerous bash patterns, supports allow/deny/ask rules. Gap: no AI-based classification (LLM judging tool safety) like Claude Code. Headless mode uses `BypassPermissions` for all tools.
 - **Non-interactive/CI mode**: `--prompt` flag supports headless execution with exit codes, tool restrictions, NDJSON streaming. All tools bypass permissions in headless mode — should auto-approve read-only tools and only prompt for destructive ones.
 - **MCP tool search**: `tools/list` works, but deferred tool schemas aren't loaded on demand. No `tools/call` pagination for large MCP server fleets.
 - **Auto-trigger compaction**: Post-query `check_context_pressure()` uses `CompactConfig.trigger_threshold`. Defers during streaming via `pending_auto_compact`. No separate background loop needed for CLI tool.
@@ -75,9 +75,6 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **File watching**: Limited to skill files only; no general project file watching.
 - **Vision/multimodal**: Display only; no vision model integration for image analysis.
 - **Patch application**: Basic diff rendering; no three-way merge or conflict markers.
-- **Tool grouping in UI**: Consecutive same-category tools not visually grouped (plan exists at `.claude/plans/proud-stargazing-bumblebee.md`).
-- **Streaming thinking display**: Thinking content streams as char count only, no inline preview.
-- **Inline diff stats**: Write/Edit tools don't show `+N -N` line counts in collapsed display.
 - **Multi-agent executor**: `multi_agent.rs` has coordinator/worker split but workers fall back to placeholder text when LLM unavailable.
 - **CLI tool result display**: Tool result for unknown tools returns `"Tool result displayed in UI"` placeholder in non-UI contexts.
 
@@ -98,7 +95,7 @@ Multi-provider LLM, tool use, file read/write/edit, bash execution, MCP extensio
 - **Subagent system**: Claude Code/Codex spawn isolated agents. Shannon has `shannon-agents` orchestration but no per-agent model/tool config.
 - **Worktree isolation**: Claude Code creates git worktrees for agents. Not implemented.
 - **OS sandbox**: Codex uses macOS Seatbelt/AppArmor. Shannon uses project-dir sandboxing only.
-- **Auto-permission classifier**: Claude Code AI-classifies tool safety. Shannon has 9 approval modes + `PermissionClassifier` with rule engine, but classifier not wired into `PermissionManager`.
+- **Auto-permission classifier**: Claude Code AI-classifies tool safety. Shannon has `PermissionClassifier` with rule engine fully wired into `PermissionRuleChecker`. Gap: no LLM-based classification.
 - **LSP integration**: OpenCode runs `tsc --noEmit` / `cargo check` in background. Shannon has 6 LSP tools + DiagnosticRegistry, but no automatic background diagnostics loop.
 - **Non-interactive/CI mode**: Claude Code `claude -p`, Codex `codex exec`. Shannon has `--prompt` flag with NDJSON output.
 
