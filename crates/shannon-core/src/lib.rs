@@ -79,6 +79,7 @@ pub mod output_format;
 
 pub mod doctor;
 pub mod permission_classifier;
+pub mod llm_classifier;
 pub mod team_memory_sync;
 pub mod auto_dream_consolidation;
 pub mod mcp_server_approval;

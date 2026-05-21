@@ -60,7 +60,7 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 
 ### HIGH — Shannon has partial support
 
-- **Permission auto-mode**: 9 `ApprovalMode` variants with `PermissionClassifier` (2928 lines) wired into `PermissionRuleChecker`. Gap: Claude Code's auto mode uses an LLM to judge each tool call's safety against org policy with 4-tier precedence (hard_deny > soft_deny > allow > explicit intent). Shannon has static rules only.
+- **Permission auto-mode**: 9 `ApprovalMode` variants with `PermissionClassifier` (2928 lines) wired into `PermissionRuleChecker`. `LlmPermissionClassifier` wraps the rule-based classifier with async LLM fallback for ambiguous cases (confidence < 0.7, Medium+ risk). 4-tier precedence: hard_deny > soft_deny > allow > explicit intent. LLM classification disabled by default, enabled via `with_llm()`.
 - **Non-interactive/CI mode**: `--prompt` flag with FullAuto permissions (auto-approve non-critical, deny critical). NDJSON streaming, tool restrictions, exit codes. Gap: no structured outputs (validated JSON return like Claude Code SDK), no deep links (`claude-cli://` URLs).
 - **MCP tool search**: `tools/list` works with deferred schema loading. Gap: Claude Code has on-demand tool search that scales to thousands of MCP tools. No MCP channel support (push webhooks/alerts into live sessions).
 - **Hook system**: `HookManager` with `HookEvent`/`HookEventType`. Gap: Claude Code has 18+ hook events including `SubagentStart`, `SubagentStop`, `TaskCompleted`, `TeammateIdle`, `PreCompact`, `WorktreeCreate`, `WorktreeRemove`, `ConfigChange`. Shannon has fewer event types.
@@ -91,7 +91,7 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 
 ### Test Coverage
 
-7583 total tests across all crates (7525 passing, 58 e2e require API access). Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them.
+7644 total tests across all crates (58 e2e require API access). Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them.
 
 ## Competitor Feature Tiers
 
