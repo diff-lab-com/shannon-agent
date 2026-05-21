@@ -61,7 +61,7 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 ### HIGH — Shannon has partial support
 
 - **Permission auto-mode**: 9 `ApprovalMode` variants with `PermissionClassifier` (2928 lines) wired into `PermissionRuleChecker`. `LlmPermissionClassifier` wraps the rule-based classifier with async LLM fallback for ambiguous cases (confidence < 0.7, Medium+ risk). 4-tier precedence: hard_deny > soft_deny > allow > explicit intent. LLM classification disabled by default, enabled via `with_llm()`.
-- **Non-interactive/CI mode**: `--prompt` flag with FullAuto permissions (auto-approve non-critical, deny critical). NDJSON streaming, tool restrictions, exit codes. Gap: no structured outputs (validated JSON return like Claude Code SDK), no deep links (`claude-cli://` URLs).
+- **Non-interactive/CI mode**: `--prompt` flag with FullAuto permissions (auto-approve non-critical, deny critical). NDJSON streaming, tool restrictions, exit codes. `StructuredOutputConfig` provides JSON schema validation for headless mode — `validate_response()` checks type and required fields. Gap: no deep links (`claude-cli://` URLs).
 - **MCP tool search**: `tools/list` works with deferred schema loading. Gap: Claude Code has on-demand tool search that scales to thousands of MCP tools. No MCP channel support (push webhooks/alerts into live sessions).
 - **Hook system**: `HookManager` with `HookEvent`/`HookEventType`. Gap: Claude Code has 18+ hook events including `SubagentStart`, `SubagentStop`, `TaskCompleted`, `TeammateIdle`, `PreCompact`, `WorktreeCreate`, `WorktreeRemove`, `ConfigChange`. Shannon has fewer event types.
 - **LSP integration**: 6 LSP tools + `DiagnosticRegistry` + two client implementations. `DiagnosticStore.mark_stale()` called on source file changes. Background `cargo check` diagnostics auto-run via `DiagnosticWatcher` when source files change — debounce, parse, display in UI.
@@ -89,10 +89,11 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **Worktree isolation for agents**: `context.working_directory` passed to sub-agents with worktree path; system prompt includes isolation instructions.
 - **`/batch` command**: Parallel worktree-isolated PR creation via `/batch` or `/parallel` command. Decomposes tasks, creates worktrees, spawns agents, creates PRs.
 - **LLM permission classifier wiring**: `LlmPermissionClassifier` wired into `PermissionManager` via `with_llm_classifier()`. Async `classify_and_check_with_llm()` uses LLM fallback for ambiguous cases in Auto modes.
+- **Structured JSON output for CI mode**: `StructuredOutputConfig` validates assistant responses against JSON Schema (type checking, required fields). System prompt generation for schema-aware responses.
 
 ### Test Coverage
 
-7688 total tests across all crates (58 e2e require API access). Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them.
+7698 total tests across all crates (58 e2e require API access). Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them.
 
 ## Competitor Feature Tiers
 
@@ -106,7 +107,7 @@ Multi-provider LLM, tool use, file read/write/edit, bash execution, MCP extensio
 - **Auto-permission classifier**: Claude Code uses LLM-based 4-tier classification. Shannon has `LlmPermissionClassifier` wired into `PermissionManager` with async `classify_and_check_with_llm()`. Rule-based by default, LLM fallback for ambiguous cases when enabled via `with_llm_classifier()`.
 - **LSP integration**: Shannon has 6 LSP tools plus automatic background `cargo check` diagnostics on source changes. OpenCode runs `gopls`/`tsc` automatically.
 - **Hook system**: Claude Code has 18+ hook events. Shannon has 32 hook events (more coverage).
-- **Non-interactive/CI mode**: Claude Code `claude -p` with structured outputs. Shannon has `--prompt` with NDJSON output.
+- **Non-interactive/CI mode**: Claude Code `claude -p` with structured outputs. Shannon has `--prompt` with NDJSON output and `StructuredOutputConfig` for JSON schema validation.
 
 ### Tier 3 — Quality of Life
 Multi-surface (web/desktop/CLI/IDE), computer use, file checkpointing/rewind, agent SDK (library mode), deep links, MCP channels, model switching, prompt caching, token counting UI.
