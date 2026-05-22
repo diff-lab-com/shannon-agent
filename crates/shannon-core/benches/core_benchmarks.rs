@@ -240,6 +240,93 @@ fn bench_system_prompt_construction(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_cache_hit_rate_calculation(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cache_hit_rate");
+
+    for &turn_count in &[100, 500, 1000] {
+        // Build cache usage profiles: (input_tokens, cache_creation, cache_read)
+        let profile: Vec<(u32, u32, u32)> = (0..turn_count)
+            .map(|i| {
+                if i == 0 {
+                    (5000, 10000, 0)
+                } else {
+                    let ratio = (i as f64 / turn_count as f64).min(0.95);
+                    let cache_read = (10000.0 * ratio) as u32;
+                    let cache_creation = 10000 - cache_read;
+                    (5000, cache_creation, cache_read)
+                }
+            })
+            .collect();
+
+        group.bench_with_input(
+            BenchmarkId::new("accumulate_and_calc", turn_count),
+            &profile,
+            |b, p| {
+                b.iter(|| {
+                    let total_read: u32 = p.iter().map(|(_, _, r)| *r).sum();
+                    let total_creation: u32 = p.iter().map(|(_, c, _)| *c).sum();
+                    let total = total_read + total_creation;
+                    if total > 0 {
+                        total_read as f64 / total as f64
+                    } else {
+                        0.0
+                    }
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_cache_token_extraction_from_sse(c: &mut Criterion) {
+    use serde_json::json;
+
+    // Build simulated message_start JSON events with cache tokens
+    let events: Vec<serde_json::Value> = (0..200)
+        .map(|i| {
+            let (creation, read) = if i == 0 {
+                (10000, 0)
+            } else {
+                let ratio = (i as f64 / 200.0).min(0.9);
+                let r = (10000.0 * ratio) as u32;
+                (10000 - r, r)
+            };
+            json!({
+                "type": "message_start",
+                "message": {
+                    "id": format!("msg_{i}"),
+                    "usage": {
+                        "input_tokens": 5000,
+                        "output_tokens": 200,
+                        "cache_creation_input_tokens": creation,
+                        "cache_read_input_tokens": read
+                    }
+                }
+            })
+        })
+        .collect();
+
+    let events_json = serde_json::to_string(&events).unwrap();
+
+    c.bench_function("cache_token_extract_200_events", |b| {
+        b.iter(|| {
+            let parsed: Vec<serde_json::Value> = serde_json::from_str(&events_json).unwrap();
+            let mut total_creation: u64 = 0;
+            let mut total_read: u64 = 0;
+            for event in &parsed {
+                if let Some(usage) = event.get("message").and_then(|m| m.get("usage")) {
+                    total_creation += usage.get("cache_creation_input_tokens")
+                        .and_then(|v| v.as_u64()).unwrap_or(0);
+                    total_read += usage.get("cache_read_input_tokens")
+                        .and_then(|v| v.as_u64()).unwrap_or(0);
+                }
+            }
+            (total_creation, total_read)
+        });
+    });
+}
+
 criterion_group!(
     benches,
     bench_message_serialization,
@@ -247,5 +334,7 @@ criterion_group!(
     bench_compaction_small,
     bench_compaction_large,
     bench_system_prompt_construction,
+    bench_cache_hit_rate_calculation,
+    bench_cache_token_extraction_from_sse,
 );
 criterion_main!(benches);

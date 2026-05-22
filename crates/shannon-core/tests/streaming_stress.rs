@@ -390,3 +390,158 @@ async fn test_sse_backpressure() {
         );
     }
 }
+
+#[tokio::test]
+async fn test_cache_tokens_in_concurrent_streams() {
+    // Simulate 3 concurrent streams with different cache hit profiles and verify
+    // cache tokens are correctly parsed from each SSE stream independently.
+    let mut server1 = Server::new_async().await;
+    let mut server2 = Server::new_async().await;
+    let mut server3 = Server::new_async().await;
+
+    // Stream 1: cache miss (high creation, zero read)
+    let resp1 = cache_miss_response("First turn — no cache", 10000);
+    // Stream 2: cache hit (zero creation, high read)
+    let resp2 = cached_response("Second turn — full cache hit", 8000);
+    // Stream 3: mixed (partial creation + read)
+    let resp3 = mixed_cache_response("Third turn — partial cache", 2000, 5000);
+
+    mock_sse_stream(&mut server1, &anthropic_sse(&resp1));
+    mock_sse_stream(&mut server2, &anthropic_sse(&resp2));
+    mock_sse_stream(&mut server3, &anthropic_sse(&resp3));
+
+    let url1 = server1.url();
+    let url2 = server2.url();
+    let url3 = server3.url();
+
+    let handle1 = tokio::spawn(async move {
+        collect_stream_events(&url1, LlmProvider::Anthropic).await
+    });
+    let handle2 = tokio::spawn(async move {
+        collect_stream_events(&url2, LlmProvider::Anthropic).await
+    });
+    let handle3 = tokio::spawn(async move {
+        collect_stream_events(&url3, LlmProvider::Anthropic).await
+    });
+
+    let events1 = handle1.await.expect("task 1");
+    let events2 = handle2.await.expect("task 2");
+    let events3 = handle3.await.expect("task 3");
+
+    // Extract cache tokens from MessageStart events for each stream
+    let extract_cache = |events: &[StreamEvent]| -> (u32, u32) {
+        events.iter().find_map(|e| match e {
+            StreamEvent::MessageStart { message } => Some((
+                message.usage.cache_creation_input_tokens,
+                message.usage.cache_read_input_tokens,
+            )),
+            _ => None,
+        }).unwrap_or((0, 0))
+    };
+
+    let (creation1, read1) = extract_cache(&events1);
+    let (creation2, read2) = extract_cache(&events2);
+    let (creation3, read3) = extract_cache(&events3);
+
+    // Verify stream 1: cache miss
+    assert_eq!(creation1, 10000, "Stream 1 should have 10000 cache_creation tokens");
+    assert_eq!(read1, 0, "Stream 1 should have 0 cache_read tokens");
+
+    // Verify stream 2: cache hit
+    assert_eq!(creation2, 0, "Stream 2 should have 0 cache_creation tokens");
+    assert_eq!(read2, 8000, "Stream 2 should have 8000 cache_read tokens");
+
+    // Verify stream 3: mixed
+    assert_eq!(creation3, 2000, "Stream 3 should have 2000 cache_creation tokens");
+    assert_eq!(read3, 5000, "Stream 3 should have 5000 cache_read tokens");
+
+    // Verify overall hit rate across streams
+    let total_read = read1 + read2 + read3;
+    let total_creation = creation1 + creation2 + creation3;
+    let total_cacheable = total_read + total_creation;
+    let hit_rate = total_read as f64 / total_cacheable as f64;
+    // 13000 / (13000 + 12000) ≈ 0.52
+    assert!(
+        hit_rate > 0.4,
+        "Overall hit rate should be > 40%, got {hit_rate:.2}",
+    );
+}
+
+#[tokio::test]
+async fn test_cache_tokens_large_stream() {
+    // Build a large SSE stream (1000 chunks) with cache tokens and verify parsing.
+    let mut body = String::new();
+
+    // message_start with cache tokens
+    body.push_str(&format!(
+        "data: {}\n\n",
+        serde_json::json!({
+            "type": "message_start",
+            "message": {
+                "id": "msg_cache_large",
+                "role": "assistant",
+                "content": [],
+                "model": "test-model",
+                "stop_reason": null,
+                "usage": {
+                    "input_tokens": 50000,
+                    "output_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 45000
+                }
+            }
+        })
+    ));
+
+    // content blocks
+    body.push_str(&format!(
+        "data: {}\n\n",
+        serde_json::json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})
+    ));
+
+    let chunks: Vec<String> = (0..1000).map(|i| format!("chunk-{i} ")).collect();
+    for chunk in &chunks {
+        body.push_str(&format!(
+            "data: {}\n\n",
+            serde_json::json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": chunk}})
+        ));
+    }
+
+    body.push_str(&format!(
+        "data: {}\n\n",
+        serde_json::json!({"type": "content_block_stop", "index": 0})
+    ));
+    body.push_str(&format!(
+        "data: {}\n\n",
+        serde_json::json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"input_tokens": 50000, "output_tokens": 2000}})
+    ));
+    body.push_str(&format!(
+        "data: {}\n\n",
+        serde_json::json!({"type": "message_stop"})
+    ));
+
+    let mut server = Server::new_async().await;
+    mock_sse_stream(&mut server, &body);
+    let url = server.url();
+
+    let events = collect_stream_events(&url, LlmProvider::Anthropic).await;
+
+    // Verify cache tokens from MessageStart
+    let cache_info: (u32, u32) = events.iter().find_map(|e| match e {
+        StreamEvent::MessageStart { message } => Some((
+            message.usage.cache_creation_input_tokens,
+            message.usage.cache_read_input_tokens,
+        )),
+        _ => None,
+    }).unwrap_or((0, 0));
+
+    assert_eq!(cache_info.0, 0, "Should have 0 cache_creation tokens");
+    assert_eq!(cache_info.1, 45000, "Should have 45000 cache_read tokens from large stream");
+
+    // Verify all 1000 text chunks arrived
+    let text_count = events.iter().filter(|e| matches!(
+        e,
+        StreamEvent::ContentBlockDelta { delta: ContentDelta::TextDelta { .. }, .. }
+    )).count();
+    assert_eq!(text_count, 1000, "Should have 1000 text deltas");
+}

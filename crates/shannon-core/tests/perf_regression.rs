@@ -341,3 +341,167 @@ fn token_estimation_1000_messages_under_50ms() {
         elapsed
     );
 }
+
+// ---------------------------------------------------------------------------
+// Cache hit rate performance regression tests
+// ---------------------------------------------------------------------------
+
+/// Build a multi-turn cache usage profile simulating a realistic conversation.
+fn build_cache_profile(turns: usize) -> Vec<(u32, u32, u32)> {
+    // (input_tokens, cache_creation, cache_read)
+    // First turn: miss (high creation, zero read)
+    // Subsequent turns: increasing cache hit rate
+    (0..turns)
+        .map(|i| {
+            if i == 0 {
+                (5000, 10000, 0) // First turn: cache miss
+            } else {
+                let ratio = (i as f64 / turns as f64).min(0.95);
+                let cache_read = (10000.0 * ratio) as u32;
+                let cache_creation = 10000 - cache_read;
+                (5000, cache_creation, cache_read)
+            }
+        })
+        .collect()
+}
+
+/// Calculate cache hit rate from a usage profile.
+fn calculate_hit_rate(profile: &[(u32, u32, u32)]) -> f64 {
+    let total_read: u32 = profile.iter().map(|(_, _, r)| *r).sum();
+    let total_creation: u32 = profile.iter().map(|(_, c, _)| *c).sum();
+    let total_cacheable = total_read + total_creation;
+    if total_cacheable == 0 {
+        return 0.0;
+    }
+    total_read as f64 / total_cacheable as f64
+}
+
+#[test]
+fn cache_hit_rate_1000_turns_under_10ms() {
+    let profile = build_cache_profile(1000);
+    assert_eq!(profile.len(), 1000);
+
+    let start = Instant::now();
+    let hit_rate = calculate_hit_rate(&profile);
+    let elapsed = start.elapsed();
+
+    assert!(
+        hit_rate > 0.4,
+        "Hit rate for 1000-turn profile should be > 40%, got {hit_rate:.2}"
+    );
+    assert!(
+        elapsed.as_millis() < 10,
+        "Cache hit rate calculation for 1000 turns took {:?}, expected < 10ms",
+        elapsed
+    );
+}
+
+#[test]
+fn cache_hit_rate_10000_turns_under_50ms() {
+    let profile = build_cache_profile(10000);
+    assert_eq!(profile.len(), 10000);
+
+    let start = Instant::now();
+    let hit_rate = calculate_hit_rate(&profile);
+    let elapsed = start.elapsed();
+
+    assert!(
+        hit_rate > 0.4,
+        "Hit rate for 10000-turn profile should be > 40%, got {hit_rate:.2}"
+    );
+    assert!(
+        elapsed.as_millis() < 50,
+        "Cache hit rate calculation for 10000 turns took {:?}, expected < 50ms",
+        elapsed
+    );
+}
+
+#[test]
+fn cache_accumulation_from_sse_events_under_100ms() {
+    // Simulate parsing cache tokens from 500 SSE message_start events.
+    use serde_json::json;
+
+    let event_count = 500;
+    let events: Vec<serde_json::Value> = (0..event_count)
+        .map(|i| {
+            let (creation, read) = if i == 0 {
+                (10000, 0)
+            } else {
+                let ratio = (i as f64 / event_count as f64).min(0.9);
+                let r = (10000.0 * ratio) as u32;
+                (10000 - r, r)
+            };
+            json!({
+                "type": "message_start",
+                "message": {
+                    "id": format!("msg_{i}"),
+                    "usage": {
+                        "input_tokens": 5000,
+                        "output_tokens": 200,
+                        "cache_creation_input_tokens": creation,
+                        "cache_read_input_tokens": read
+                    }
+                }
+            })
+        })
+        .collect();
+
+    let start = Instant::now();
+
+    // Parse and accumulate cache tokens (simulating what the engine does)
+    let mut total_creation: u64 = 0;
+    let mut total_read: u64 = 0;
+    let mut total_input: u64 = 0;
+
+    for event_json in &events {
+        let msg = event_json.get("message").unwrap();
+        let usage = msg.get("usage").unwrap();
+        total_input += usage.get("input_tokens").unwrap().as_u64().unwrap();
+        total_creation += usage.get("cache_creation_input_tokens").unwrap().as_u64().unwrap();
+        total_read += usage.get("cache_read_input_tokens").unwrap().as_u64().unwrap();
+    }
+
+    let elapsed = start.elapsed();
+
+    assert!(total_creation > 0, "Should have some cache creation tokens");
+    assert!(total_read > 0, "Should have some cache read tokens");
+    assert_eq!(total_input, 5000 * event_count as u64);
+
+    let hit_rate = total_read as f64 / (total_read + total_creation) as f64;
+    assert!(hit_rate > 0.3, "Accumulated hit rate should be > 30%, got {hit_rate:.2}");
+
+    assert!(
+        elapsed.as_millis() < 100,
+        "Cache token accumulation from {} events took {:?}, expected < 100ms",
+        event_count,
+        elapsed
+    );
+}
+
+#[test]
+fn cache_hit_rate_edge_cases() {
+    // All misses
+    let all_misses = vec![(1000, 5000, 0); 10];
+    let rate = calculate_hit_rate(&all_misses);
+    assert_eq!(rate, 0.0, "All misses should give 0% hit rate");
+
+    // All hits
+    let all_hits = vec![(1000, 0, 5000); 10];
+    let rate = calculate_hit_rate(&all_hits);
+    assert!((rate - 1.0).abs() < f64::EPSILON, "All hits should give 100% hit rate");
+
+    // Empty
+    let empty: Vec<(u32, u32, u32)> = vec![];
+    let rate = calculate_hit_rate(&empty);
+    assert_eq!(rate, 0.0, "Empty profile should give 0% hit rate");
+
+    // Single miss
+    let single = vec![(100, 1000, 0)];
+    let rate = calculate_hit_rate(&single);
+    assert_eq!(rate, 0.0);
+
+    // Single hit
+    let single_hit = vec![(100, 0, 1000)];
+    let rate = calculate_hit_rate(&single_hit);
+    assert!((rate - 1.0).abs() < f64::EPSILON);
+}

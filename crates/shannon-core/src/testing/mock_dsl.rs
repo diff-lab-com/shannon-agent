@@ -29,6 +29,8 @@ pub enum MockContentBlock {
 pub struct MockUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,
+    pub cache_creation_input_tokens: u32,
+    pub cache_read_input_tokens: u32,
 }
 
 impl Default for MockUsage {
@@ -36,6 +38,8 @@ impl Default for MockUsage {
         Self {
             input_tokens: 10,
             output_tokens: 8,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
         }
     }
 }
@@ -111,6 +115,48 @@ pub fn text_and_tool_response(text: &str, tool_id: &str, tool_name: &str, tool_i
     ])
 }
 
+/// Create a response simulating a cache hit (high cache_read, zero cache_creation).
+pub fn cached_response(text: &str, cached_tokens: u32) -> MockResponse {
+    MockResponse {
+        content_blocks: vec![MockContentBlock::Text { text: text.to_string() }],
+        usage: MockUsage {
+            input_tokens: 100,
+            output_tokens: 20,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: cached_tokens,
+        },
+        stop_reason: "end_turn".to_string(),
+    }
+}
+
+/// Create a response simulating a cache miss (high cache_creation, zero cache_read).
+pub fn cache_miss_response(text: &str, creation_tokens: u32) -> MockResponse {
+    MockResponse {
+        content_blocks: vec![MockContentBlock::Text { text: text.to_string() }],
+        usage: MockUsage {
+            input_tokens: 100,
+            output_tokens: 20,
+            cache_creation_input_tokens: creation_tokens,
+            cache_read_input_tokens: 0,
+        },
+        stop_reason: "end_turn".to_string(),
+    }
+}
+
+/// Create a response with mixed cache activity (both creation and read).
+pub fn mixed_cache_response(text: &str, creation_tokens: u32, read_tokens: u32) -> MockResponse {
+    MockResponse {
+        content_blocks: vec![MockContentBlock::Text { text: text.to_string() }],
+        usage: MockUsage {
+            input_tokens: 100,
+            output_tokens: 20,
+            cache_creation_input_tokens: creation_tokens,
+            cache_read_input_tokens: read_tokens,
+        },
+        stop_reason: "end_turn".to_string(),
+    }
+}
+
 // ── Provider-specific SSE formatters ───────────────────────────────────
 
 /// Render a MockResponse as Anthropic SSE event stream.
@@ -128,7 +174,12 @@ pub fn anthropic_sse(response: &MockResponse) -> String {
                 "content": [],
                 "model": "test-model",
                 "stop_reason": null,
-                "usage": {"input_tokens": response.usage.input_tokens, "output_tokens": 0}
+                "usage": {
+                    "input_tokens": response.usage.input_tokens,
+                    "output_tokens": 0,
+                    "cache_creation_input_tokens": response.usage.cache_creation_input_tokens,
+                    "cache_read_input_tokens": response.usage.cache_read_input_tokens
+                }
             }
         })
     ));
@@ -496,5 +547,110 @@ mod tests {
         assert!(render_for_provider("anthropic", &r).contains("message_start"));
         assert!(render_for_provider("ollama", &r).contains("done"));
         assert!(render_for_provider("openai", &r).contains("chat.completion.chunk"));
+    }
+
+    // ── Cache hit rate tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_mock_usage_default_zero_cache() {
+        let usage = MockUsage::default();
+        assert_eq!(usage.cache_creation_input_tokens, 0);
+        assert_eq!(usage.cache_read_input_tokens, 0);
+        assert_eq!(usage.input_tokens, 10);
+        assert_eq!(usage.output_tokens, 8);
+    }
+
+    #[test]
+    fn test_cached_response_builder() {
+        let r = cached_response("Cached!", 5000);
+        assert_eq!(r.usage.cache_creation_input_tokens, 0);
+        assert_eq!(r.usage.cache_read_input_tokens, 5000);
+        assert_eq!(r.stop_reason, "end_turn");
+    }
+
+    #[test]
+    fn test_cache_miss_response_builder() {
+        let r = cache_miss_response("Fresh!", 3000);
+        assert_eq!(r.usage.cache_creation_input_tokens, 3000);
+        assert_eq!(r.usage.cache_read_input_tokens, 0);
+    }
+
+    #[test]
+    fn test_mixed_cache_response_builder() {
+        let r = mixed_cache_response("Partial", 1000, 4000);
+        assert_eq!(r.usage.cache_creation_input_tokens, 1000);
+        assert_eq!(r.usage.cache_read_input_tokens, 4000);
+    }
+
+    #[test]
+    fn test_anthropic_sse_includes_cache_tokens_in_message_start() {
+        let r = cached_response("Hello cached", 2000);
+        let sse = anthropic_sse(&r);
+        assert!(
+            sse.contains("\"cache_creation_input_tokens\":0"),
+            "SSE should include cache_creation_input_tokens"
+        );
+        assert!(
+            sse.contains("\"cache_read_input_tokens\":2000"),
+            "SSE should include cache_read_input_tokens"
+        );
+    }
+
+    #[test]
+    fn test_anthropic_sse_cache_miss_tokens() {
+        let r = cache_miss_response("Fresh response", 8000);
+        let sse = anthropic_sse(&r);
+        assert!(
+            sse.contains("\"cache_creation_input_tokens\":8000"),
+            "SSE should include cache_creation tokens for miss"
+        );
+        assert!(
+            sse.contains("\"cache_read_input_tokens\":0"),
+            "SSE should show zero cache_read for miss"
+        );
+    }
+
+    #[test]
+    fn test_anthropic_sse_mixed_cache_tokens() {
+        let r = mixed_cache_response("Partial cache", 1500, 6000);
+        let sse = anthropic_sse(&r);
+        assert!(sse.contains("\"cache_creation_input_tokens\":1500"));
+        assert!(sse.contains("\"cache_read_input_tokens\":6000"));
+    }
+
+    #[test]
+    fn test_cache_hit_rate_calculation() {
+        // Simulate a multi-turn conversation with cache tokens
+        let responses = vec![
+            cache_miss_response("Turn 1", 10000), // First turn: cache miss
+            cached_response("Turn 2", 8000),       // Second turn: cache hit
+            cached_response("Turn 3", 9000),       // Third turn: cache hit
+            mixed_cache_response("Turn 4", 2000, 7000), // Partial hit
+        ];
+
+        let total_cache_read: u32 = responses.iter().map(|r| r.usage.cache_read_input_tokens).sum();
+        let total_cache_creation: u32 = responses.iter().map(|r| r.usage.cache_creation_input_tokens).sum();
+        let total_input: u32 = responses.iter().map(|r| r.usage.input_tokens).sum();
+
+        // cache_read / (cache_read + cache_creation + input_tokens) = hit rate
+        let total_pool = total_cache_read + total_cache_creation + total_input;
+        let hit_rate = total_cache_read as f64 / total_pool as f64;
+
+        assert_eq!(total_cache_read, 24000);
+        assert_eq!(total_cache_creation, 12000);
+        assert!(hit_rate > 0.0, "Hit rate should be positive");
+        assert!(hit_rate <= 1.0, "Hit rate should be <= 1.0");
+        // 24000 / (24000 + 12000 + 400) ≈ 0.66
+        assert!(hit_rate > 0.5, "Hit rate should be > 50% for this scenario, got {hit_rate:.2}");
+    }
+
+    #[test]
+    fn test_cache_hit_rate_zero_when_no_caching() {
+        let responses = vec![
+            text_response("No cache here"),
+            text_response("No cache either"),
+        ];
+        let total_cache_read: u32 = responses.iter().map(|r| r.usage.cache_read_input_tokens).sum();
+        assert_eq!(total_cache_read, 0, "Default responses should have zero cache read");
     }
 }
