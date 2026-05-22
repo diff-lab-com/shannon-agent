@@ -178,6 +178,18 @@ impl ApprovalMode {
         }
     }
 
+    /// Reverse-lookup from short_label string to the primary ApprovalMode variant.
+    pub fn from_label(label: &str) -> Option<Self> {
+        match label {
+            "ASK" => Some(Self::Suggest),
+            "EDIT" => Some(Self::AutoEdit),
+            "PLAN" => Some(Self::Plan),
+            "AUTO" => Some(Self::FullAuto),
+            "FULL" => Some(Self::BypassPermissions),
+            _ => None,
+        }
+    }
+
     /// Description of this mode for help text.
     pub fn description(&self) -> &'static str {
         match self {

@@ -16,7 +16,28 @@ pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
             provider: repl.state.selected_provider.clone(),
             theme: Some(repl.state.theme.name.to_string()),
         });
-        let ctx = shannon_core::model_registry::context_window_for(args);
+
+        // Sync model to query engine and resolve real context window
+        let ctx_from_registry = shannon_core::model_registry::context_window_for(args);
+        let ctx = if let Some(ref mut engine) = repl.query_engine {
+            engine.set_model(args.to_string());
+            // Try async context resolution; fall back to registry on failure
+            let resolved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                repl.runtime.block_on(engine.pre_resolve_context());
+            }));
+            if resolved.is_err() {
+                tracing::warn!("Could not resolve context window for {args}, using registry fallback");
+            }
+            let ctx = engine.resolved_context_window();
+            if ctx == 4096 && ctx_from_registry != 4096 {
+                ctx_from_registry // prefer registry if engine couldn't resolve
+            } else {
+                ctx
+            }
+        } else {
+            ctx_from_registry
+        };
+        repl.state.context_window = ctx;
         let ctx_label = if ctx >= 1_000_000 {
             format!("{}M", ctx / 1_000_000)
         } else if ctx >= 1_000 {

@@ -8,29 +8,33 @@ impl super::Repl {
     /// Cycles through 4 core modes: ASK → EDIT → PLAN → AUTO → ASK.
     /// Other modes (FULL, etc.) are set explicitly via /mode.
     pub fn cycle_approval_mode(&mut self) {
-        if let Some(ref query_engine) = self.query_engine {
-            let current = {
-                let perms = recover_lock(query_engine.permissions().read());
-                perms.approval_mode()
-            };
+        use shannon_core::permissions::ApprovalMode;
 
-            let next = current.cycle_next();
+        let current = if let Some(ref query_engine) = self.query_engine {
+            let perms = recover_lock(query_engine.permissions().read());
+            perms.approval_mode()
+        } else {
+            ApprovalMode::from_label(&self.state.approval_mode_label).unwrap_or_default()
+        };
 
-            if next == shannon_core::permissions::ApprovalMode::BypassPermissions {
-                self.show_confirm_dialog(
-                    "Bypass Permissions",
-                    "This will skip ALL permission checks. Only use in trusted environments.\n\nAre you sure?",
-                    "set_bypass_mode",
-                );
-            } else {
+        let next = current.cycle_next();
+
+        if next == ApprovalMode::BypassPermissions {
+            self.show_confirm_dialog(
+                "Bypass Permissions",
+                "This will skip ALL permission checks. Only use in trusted environments.\n\nAre you sure?",
+                "set_bypass_mode",
+            );
+        } else {
+            if let Some(ref query_engine) = self.query_engine {
                 let mut perms = recover_lock(query_engine.permissions().write());
                 perms.set_approval_mode(next);
-                let label = next.short_label().to_string();
                 drop(perms);
-                self.state.status = format!("Mode: {label}");
-                self.state.toast = Some((format!("  Mode: {label}  "), std::time::Instant::now()));
-                self.state.approval_mode_label = label;
             }
+            let label = next.short_label().to_string();
+            self.state.status = format!("Mode: {label}");
+            self.state.toast = Some((format!("  Mode: {label}  "), std::time::Instant::now()));
+            self.state.approval_mode_label = label;
         }
     }
 

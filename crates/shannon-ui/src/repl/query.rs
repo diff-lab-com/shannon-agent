@@ -1179,6 +1179,20 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             }
             repl.query_engine = Some(engine);
 
+            // Sync approval mode if changed during streaming
+            if let Some(ref engine) = repl.query_engine {
+                let engine_label = {
+                    let perms = shannon_types::recover_lock(engine.permissions().read());
+                    perms.approval_mode().short_label().to_string()
+                };
+                if engine_label != repl.state.approval_mode_label {
+                    if let Some(mode) = shannon_core::permissions::ApprovalMode::from_label(&repl.state.approval_mode_label) {
+                        let mut perms = shannon_types::recover_lock(engine.permissions().write());
+                        perms.set_approval_mode(mode);
+                    }
+                }
+            }
+
             let rendered = repl.output_renderer.render_output(&response, "assistant");
             repl.chat.update_message(assistant_msg_index, rendered);
             if !thinking.is_empty() {
@@ -1367,6 +1381,19 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             if let Some(mut engine) = engine_opt {
                 engine.add_user_message(input.to_string());
                 repl.query_engine = Some(engine);
+                // Sync approval mode if changed during streaming
+                if let Some(ref engine) = repl.query_engine {
+                    let engine_label = {
+                        let perms = shannon_types::recover_lock(engine.permissions().read());
+                        perms.approval_mode().short_label().to_string()
+                    };
+                    if engine_label != repl.state.approval_mode_label {
+                        if let Some(mode) = shannon_core::permissions::ApprovalMode::from_label(&repl.state.approval_mode_label) {
+                            let mut perms = shannon_types::recover_lock(engine.permissions().write());
+                            perms.set_approval_mode(mode);
+                        }
+                    }
+                }
             }
             let is_cancelled = e == "cancelled";
 
