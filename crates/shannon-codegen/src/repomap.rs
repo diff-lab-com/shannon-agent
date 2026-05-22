@@ -159,7 +159,6 @@ pub fn generate_repomap_filtered(
 
 
 /// Format a symbol with indentation
-#[allow(dead_code)]
 fn format_symbol(output: &mut String, symbol: &Symbol, indent: usize) {
     let indent_str = "  ".repeat(indent);
     let icon = symbol.kind.icon();
@@ -192,7 +191,6 @@ fn format_symbol(output: &mut String, symbol: &Symbol, indent: usize) {
 /// # Errors
 ///
 /// Returns error if serialization fails
-#[allow(dead_code)]
 pub fn format_repomap_json(repo_map: &RepoMap) -> Result<String> {
     serde_json::to_string_pretty(repo_map)
         .map_err(|e| CodegenError::Other(e.into()))
@@ -207,7 +205,6 @@ pub fn format_repomap_json(repo_map: &RepoMap) -> Result<String> {
 /// # Returns
 ///
 /// Compact summary string
-#[allow(dead_code)]
 pub fn format_repomap_compact(repo_map: &RepoMap) -> String {
     let mut output = String::new();
 

@@ -1,7 +1,7 @@
 //! Types shared across the process pool module.
 
 use dashmap::DashMap;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
@@ -83,7 +83,6 @@ pub(crate) fn is_tool_allowed_by_patterns(tool_name: &str, patterns: &[String]) 
 /// When a tool result is compressed or truncated, the full content is stored
 /// here with a unique chunk ID. The LLM can then request the full result
 /// or the next chunk if needed.
-#[allow(dead_code)]
 pub(crate) struct ToolResultStore {
     /// Full results keyed by chunk ID.
     results: DashMap<String, StoredResult>,
@@ -92,7 +91,6 @@ pub(crate) struct ToolResultStore {
 }
 
 /// A stored tool result with metadata.
-#[allow(dead_code)]
 struct StoredResult {
     /// The full content.
     full_content: String,
@@ -440,7 +438,7 @@ pub(crate) fn normalize_error_content(content_array: &[serde_json::Value]) -> St
 // ---------------------------------------------------------------------------
 
 /// Lifecycle state of an MCP server process.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ServerState {
     /// Process is being started and initialized.
     Starting,
@@ -480,7 +478,6 @@ pub struct ServerStatus {
 // ---------------------------------------------------------------------------
 
 /// A pending JSON-RPC request waiting for a response.
-#[allow(dead_code)]
 pub(crate) struct PendingRequest {
     /// Oneshot channel to deliver the response.
     pub(crate) tx: oneshot::Sender<Value>,
@@ -490,4 +487,331 @@ pub(crate) struct PendingRequest {
     pub(crate) progress_token: Option<Value>,
     /// Optional callback invoked on `notifications/progress` for this request.
     pub(crate) on_progress: Option<Arc<dyn Fn(f64, Option<f64>) + Send + Sync>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glob_exact_match() {
+        assert!(glob_match("hello", "hello"));
+        assert!(!glob_match("hello", "world"));
+    }
+
+    #[test]
+    fn glob_star_matches_zero_or_more() {
+        assert!(glob_match("mcp__*", "mcp__fetch"));
+        assert!(glob_match("mcp__*", "mcp__"));
+        assert!(glob_match("*", "anything"));
+        assert!(glob_match("prefix*", "prefix_suffix"));
+        assert!(glob_match("*suffix", "some_suffix"));
+    }
+
+    #[test]
+    fn glob_question_mark_single_char() {
+        assert!(glob_match("mcp_?", "mcp_X"));
+        assert!(!glob_match("mcp_?", "mcp_XY"));
+        assert!(!glob_match("mcp_?", "mcp_"));
+    }
+
+    #[test]
+    fn glob_combined_patterns() {
+        assert!(glob_match("mcp__fetch__*", "mcp__fetch__fetch_url"));
+        assert!(glob_match("?cp__*", "mcp__fetch"));
+    }
+
+    #[test]
+    fn glob_no_match() {
+        assert!(!glob_match("abc", "def"));
+        assert!(!glob_match("mcp__internal__*", "mcp__fetch__tool"));
+    }
+
+    #[test]
+    fn allow_all_when_empty_patterns() {
+        assert!(is_tool_allowed_by_patterns("any_tool", &[]));
+    }
+
+    #[test]
+    fn allow_pattern_matches() {
+        let patterns = vec!["mcp__fetch__*".to_string()];
+        assert!(is_tool_allowed_by_patterns("mcp__fetch__fetch_url", &patterns));
+        assert!(!is_tool_allowed_by_patterns("mcp__internal__secret", &patterns));
+    }
+
+    #[test]
+    fn deny_pattern_overrides_allow() {
+        let patterns = vec![
+            "mcp__*".to_string(),
+            "!mcp__internal__*".to_string(),
+        ];
+        assert!(is_tool_allowed_by_patterns("mcp__fetch__tool", &patterns));
+        assert!(!is_tool_allowed_by_patterns("mcp__internal__secret", &patterns));
+    }
+
+    #[test]
+    fn deny_only_patterns_allow_non_denied() {
+        let patterns = vec!["!mcp__internal__*".to_string()];
+        assert!(is_tool_allowed_by_patterns("mcp__fetch__tool", &patterns));
+        assert!(!is_tool_allowed_by_patterns("mcp__internal__secret", &patterns));
+    }
+
+    #[test]
+    fn multiple_allow_patterns() {
+        let patterns = vec![
+            "mcp__fetch__*".to_string(),
+            "mcp__tavily__*".to_string(),
+        ];
+        assert!(is_tool_allowed_by_patterns("mcp__fetch__fetch", &patterns));
+        assert!(is_tool_allowed_by_patterns("mcp__tavily__search", &patterns));
+        assert!(!is_tool_allowed_by_patterns("mcp__internal__tool", &patterns));
+    }
+
+    #[test]
+    fn truncate_within_budget_unchanged() {
+        let content = "short content";
+        assert_eq!(truncate_tool_result(content, 100), content);
+    }
+
+    #[test]
+    fn truncate_exact_budget_unchanged() {
+        let content = "x".repeat(50);
+        assert_eq!(truncate_tool_result(&content, 50), content);
+    }
+
+    #[test]
+    fn truncate_json_array() {
+        let items: Vec<String> = (0..200).map(|i| format!("item_{i}")).collect();
+        let content = serde_json::to_string(&items).unwrap();
+        let result = truncate_tool_result(&content, 200);
+        assert!(result.contains("compressed"));
+        assert!(result.len() < content.len());
+    }
+
+    #[test]
+    fn truncate_json_object() {
+        let mut map = serde_json::Map::new();
+        for i in 0..50 {
+            map.insert(format!("key_{i}"), serde_json::Value::String("x".repeat(100)));
+        }
+        let content = serde_json::to_string(&map).unwrap();
+        let result = truncate_tool_result(&content, 300);
+        assert!(result.contains("compressed"));
+    }
+
+    #[test]
+    fn truncate_line_based_text() {
+        let lines: Vec<String> = (0..100).map(|i| format!("line {i}: some content here")).collect();
+        let content = lines.join("\n");
+        let result = truncate_tool_result(&content, 200);
+        assert!(result.contains("lines omitted"));
+    }
+
+    #[test]
+    fn truncate_prose_text() {
+        let content = "short paragraph\n\n".repeat(50);
+        let result = truncate_tool_result(&content, 100);
+        assert!(result.contains("compressed"));
+    }
+
+    #[test]
+    fn compress_empty_array() {
+        assert_eq!(compress_json(&serde_json::json!([]), 100), "[]");
+    }
+
+    #[test]
+    fn compress_empty_object() {
+        assert_eq!(compress_json(&serde_json::json!({}), 100), "{}");
+    }
+
+    #[test]
+    fn compress_array_fits_items() {
+        let arr = serde_json::json!([1, 2, 3]);
+        let result = compress_json(&arr, 500);
+        assert!(result.contains('1'));
+        assert!(result.contains('3'));
+    }
+
+    #[test]
+    fn compress_array_truncates_large() {
+        let items: Vec<i32> = (0..1000).collect();
+        let arr = serde_json::json!(items);
+        let result = compress_json(&arr, 50);
+        assert!(result.contains("more items"));
+    }
+
+    #[test]
+    fn compress_object_truncates_values() {
+        let obj = serde_json::json!({"key": "a".repeat(500)});
+        let result = compress_json(&obj, 300);
+        assert!(result.contains("key"));
+    }
+
+    #[test]
+    fn compress_primitive_within_budget() {
+        assert_eq!(compress_json(&serde_json::json!("hello"), 100), "\"hello\"");
+    }
+
+    #[test]
+    fn compress_primitive_over_budget() {
+        let result = compress_json(&serde_json::json!("x".repeat(200)), 50);
+        assert!(result.len() <= 53);
+    }
+
+    #[test]
+    fn normalize_text_blocks() {
+        let blocks = vec![
+            serde_json::json!({"type": "text", "text": "Error 1"}),
+            serde_json::json!({"type": "text", "text": "Error 2"}),
+        ];
+        let result = normalize_error_content(&blocks);
+        assert_eq!(result, "Error 1\nError 2");
+    }
+
+    #[test]
+    fn normalize_image_block() {
+        let blocks = vec![serde_json::json!({"type": "image", "mimeType": "image/png"})];
+        let result = normalize_error_content(&blocks);
+        assert!(result.contains("image/png"));
+    }
+
+    #[test]
+    fn normalize_resource_block_with_text() {
+        let blocks = vec![serde_json::json!({
+            "type": "resource",
+            "resource": {"uri": "file:///foo", "text": "content"}
+        })];
+        let result = normalize_error_content(&blocks);
+        assert!(result.contains("file:///foo"));
+        assert!(result.contains("content"));
+    }
+
+    #[test]
+    fn normalize_resource_block_without_text() {
+        let blocks = vec![serde_json::json!({
+            "type": "resource",
+            "resource": {"uri": "file:///bar"}
+        })];
+        let result = normalize_error_content(&blocks);
+        assert!(result.contains("file:///bar"));
+        assert!(!result.contains("\n"));
+    }
+
+    #[test]
+    fn normalize_unknown_block_with_text() {
+        let blocks = vec![serde_json::json!({"type": "custom", "text": "custom content"})];
+        let result = normalize_error_content(&blocks);
+        assert_eq!(result, "custom content");
+    }
+
+    #[test]
+    fn normalize_empty_blocks() {
+        assert_eq!(normalize_error_content(&[]), "");
+    }
+
+    #[test]
+    fn normalize_filters_empty_text() {
+        let blocks = vec![
+            serde_json::json!({"type": "text", "text": ""}),
+            serde_json::json!({"type": "text", "text": "visible"}),
+        ];
+        let result = normalize_error_content(&blocks);
+        assert_eq!(result, "visible");
+    }
+
+    #[test]
+    fn store_and_retrieve_full() {
+        let store = ToolResultStore::new();
+        let id = store.store("test_tool", "full content here".to_string());
+        let (tool_name, content) = store.get_full(&id).unwrap();
+        assert_eq!(tool_name, "test_tool");
+        assert_eq!(content, "full content here");
+    }
+
+    #[test]
+    fn store_missing_id_returns_none() {
+        let store = ToolResultStore::new();
+        assert!(store.get_full("nonexistent").is_none());
+    }
+
+    #[test]
+    fn store_chunk_retrieval() {
+        let store = ToolResultStore::new();
+        let content = "0123456789".repeat(10);
+        let id = store.store("tool", content);
+        let chunk = store.get_chunk(&id, 0, 20).unwrap();
+        assert_eq!(chunk.content.len(), 20);
+        assert!(chunk.has_more);
+        assert_eq!(chunk.tool_name, "tool");
+    }
+
+    #[test]
+    fn store_chunk_beyond_end() {
+        let store = ToolResultStore::new();
+        let id = store.store("tool", "short".to_string());
+        let chunk = store.get_chunk(&id, 100, 10).unwrap();
+        assert!(chunk.content.is_empty());
+        assert!(!chunk.has_more);
+    }
+
+    #[test]
+    fn server_state_serialization() {
+        let states = vec![
+            ServerState::Starting,
+            ServerState::Healthy,
+            ServerState::Unhealthy("timeout".to_string()),
+            ServerState::Stopped,
+        ];
+        let json = serde_json::to_string(&states).unwrap();
+        let de: Vec<ServerState> = serde_json::from_str(&json).unwrap();
+        assert_eq!(de, states);
+    }
+
+    #[test]
+    fn server_state_equality() {
+        assert_eq!(ServerState::Starting, ServerState::Starting);
+        assert_ne!(ServerState::Healthy, ServerState::Stopped);
+        assert_eq!(
+            ServerState::Unhealthy("err".to_string()),
+            ServerState::Unhealthy("err".to_string())
+        );
+    }
+
+    #[test]
+    fn constants_reasonable_values() {
+        assert_eq!(MAX_TOOL_DESCRIPTION_CHARS, 2048);
+        assert_eq!(MAX_TOOL_RESULT_CHARS, 25_000);
+        assert_eq!(DEFAULT_CONNECTION_TIMEOUT_SECS, 30);
+        assert_eq!(DEFAULT_REQUEST_TIMEOUT_SECS, 60);
+        assert_eq!(DEFAULT_TOOL_TIMEOUT_SECS, 600);
+        assert!(DEFAULT_TOOL_TIMEOUT_SECS > DEFAULT_REQUEST_TIMEOUT_SECS);
+    }
+
+    #[test]
+    fn server_status_serialization() {
+        let status = ServerStatus {
+            name: "test_server".to_string(),
+            state: ServerState::Healthy,
+            uptime: Some(Duration::from_secs(60)),
+            request_count: 42,
+            error_count: 2,
+            restart_count: 0,
+            last_health_check: Some(Duration::from_secs(5)),
+            total_result_bytes: 1024,
+            budget_bytes: Some(1_000_000),
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(json.contains("test_server"));
+        assert!(json.contains("Healthy"));
+        assert!(json.contains("42"));
+    }
+
+    #[test]
+    fn send_sync_types() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<ServerState>();
+        assert_send_sync::<ServerStatus>();
+        assert_send_sync::<ToolResultStore>();
+        assert_send_sync::<ChunkResult>();
+    }
 }

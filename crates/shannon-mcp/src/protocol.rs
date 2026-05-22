@@ -158,7 +158,7 @@ impl JsonRpcNotification {
 }
 
 /// MCP-specific request methods
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum RequestMethod {
     Initialize,
@@ -393,7 +393,7 @@ pub struct SamplingCapability {}
 // ---------------------------------------------------------------------------
 
 /// Role of a message author in a sampling conversation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum SamplingMessageRole {
     User,
@@ -476,7 +476,7 @@ pub struct SamplingParams {
 }
 
 /// Reason why sampling stopped.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum StopReason {
     EndTurn,
@@ -613,7 +613,7 @@ pub struct CompletionValue {
 }
 
 /// Set level for logging
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum LoggingLevel {
     Debug,
@@ -721,7 +721,7 @@ pub struct ElicitationResult {
 }
 
 /// User response to an elicitation prompt.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum ElicitationAction {
     /// User accepted and provided input.
@@ -730,4 +730,443 @@ pub enum ElicitationAction {
     Decline,
     /// Request was cancelled (e.g. timeout, dismiss).
     Cancel,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── JsonRpcRequest ─────────────────────────────────────────────────
+
+    #[test]
+    fn jsonrpc_request_new() {
+        let req = JsonRpcRequest::new("tools/list", None);
+        assert_eq!(req.jsonrpc, "2.0");
+        assert_eq!(req.method, "tools/list");
+        assert!(req.params.is_none());
+        assert!(!req.id.is_empty());
+    }
+
+    #[test]
+    fn jsonrpc_request_with_id() {
+        let req = JsonRpcRequest::with_id("42", "tools/call", Some(serde_json::json!({"name": "x"})));
+        assert_eq!(req.id, "42");
+        assert_eq!(req.method, "tools/call");
+        assert!(req.params.is_some());
+    }
+
+    #[test]
+    fn jsonrpc_request_roundtrip() {
+        let req = JsonRpcRequest::with_id("1", "ping", None);
+        let json = serde_json::to_string(&req).unwrap();
+        let de: JsonRpcRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.id, "1");
+        assert_eq!(de.method, "ping");
+    }
+
+    // ── JsonRpcResponse ────────────────────────────────────────────────
+
+    #[test]
+    fn jsonrpc_response_ok() {
+        let res = JsonRpcResponse::ok("1", serde_json::json!({"tools": []}));
+        assert!(!res.is_error());
+        assert!(res.result.is_some());
+        assert!(res.error.is_none());
+    }
+
+    #[test]
+    fn jsonrpc_response_error() {
+        let res = JsonRpcResponse::error("2", JsonRpcError::method_not_found());
+        assert!(res.is_error());
+        assert!(res.error.is_some());
+        assert!(res.result.is_none());
+    }
+
+    #[test]
+    fn jsonrpc_response_roundtrip() {
+        let res = JsonRpcResponse::ok("1", serde_json::json!(true));
+        let json = serde_json::to_string(&res).unwrap();
+        let de: JsonRpcResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.id, "1");
+        assert!(!de.is_error());
+    }
+
+    // ── JsonRpcError ───────────────────────────────────────────────────
+
+    #[test]
+    fn jsonrpc_error_standard_codes() {
+        assert_eq!(JsonRpcError::parse_error().code, -32700);
+        assert_eq!(JsonRpcError::invalid_request().code, -32600);
+        assert_eq!(JsonRpcError::method_not_found().code, -32601);
+        assert_eq!(JsonRpcError::invalid_params().code, -32602);
+        assert_eq!(JsonRpcError::internal_error().code, -32603);
+    }
+
+    #[test]
+    fn jsonrpc_error_with_data() {
+        let err = JsonRpcError::with_data(-32000, "custom", serde_json::json!({"detail": "x"}));
+        assert_eq!(err.code, -32000);
+        assert!(err.data.is_some());
+    }
+
+    #[test]
+    fn jsonrpc_error_roundtrip() {
+        let err = JsonRpcError::new(-1, "test error");
+        let json = serde_json::to_string(&err).unwrap();
+        let de: JsonRpcError = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.code, -1);
+        assert_eq!(de.message, "test error");
+    }
+
+    // ── JsonRpcNotification ────────────────────────────────────────────
+
+    #[test]
+    fn jsonrpc_notification_new() {
+        let n = JsonRpcNotification::new("progress", Some(serde_json::json!({"p": 0.5})));
+        assert_eq!(n.jsonrpc, "2.0");
+        assert_eq!(n.method, "progress");
+        assert!(n.params.is_some());
+    }
+
+    #[test]
+    fn jsonrpc_notification_no_id() {
+        let msg = JsonRpcMessage::Notification(JsonRpcNotification::new("ping", None));
+        assert!(msg.id().is_none());
+    }
+
+    // ── JsonRpcMessage id() ────────────────────────────────────────────
+
+    #[test]
+    fn jsonrpc_message_request_id() {
+        let msg = JsonRpcMessage::Request(JsonRpcRequest::with_id("abc", "test", None));
+        assert_eq!(msg.id(), Some("abc"));
+    }
+
+    #[test]
+    fn jsonrpc_message_response_id() {
+        let msg = JsonRpcMessage::Response(JsonRpcResponse::ok("xyz", serde_json::json!(null)));
+        assert_eq!(msg.id(), Some("xyz"));
+    }
+
+    // ── RequestMethod camelCase serde ──────────────────────────────────
+
+    #[test]
+    fn request_method_serde() {
+        let methods = vec![
+            RequestMethod::Initialize,
+            RequestMethod::ToolsList,
+            RequestMethod::ToolsCall,
+            RequestMethod::ResourcesList,
+            RequestMethod::ResourcesRead,
+        ];
+        let json = serde_json::to_string(&methods).unwrap();
+        assert!(json.contains("toolsList"));
+        assert!(json.contains("toolsCall"));
+        assert!(json.contains("resourcesList"));
+        let de: Vec<RequestMethod> = serde_json::from_str(&json).unwrap();
+        assert_eq!(de, methods);
+    }
+
+    #[test]
+    fn response_method_camelcase() {
+        let json = serde_json::to_string(&ResponseMethod::ToolsList).unwrap();
+        assert_eq!(json, "\"toolsList\"");
+    }
+
+    #[test]
+    fn notification_method_camelcase() {
+        let json = serde_json::to_string(&NotificationMethod::Progress).unwrap();
+        assert_eq!(json, "\"progress\"");
+        let json = serde_json::to_string(&NotificationMethod::NotificationsToolsListChanged).unwrap();
+        assert!(json.contains("ToolsListChanged"));
+    }
+
+    // ── ToolAnnotations ────────────────────────────────────────────────
+
+    #[test]
+    fn tool_annotations_default_all_false() {
+        let ann = ToolAnnotations::default();
+        assert!(!ann.read_only_hint);
+        assert!(!ann.destructive_hint);
+        assert!(!ann.idempotent_hint);
+        assert!(!ann.open_world_hint);
+    }
+
+    #[test]
+    fn tool_annotations_equality() {
+        let a = ToolAnnotations { read_only_hint: true, ..Default::default() };
+        let b = ToolAnnotations { read_only_hint: true, ..Default::default() };
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn tool_annotations_roundtrip() {
+        let ann = ToolAnnotations {
+            read_only_hint: true,
+            destructive_hint: false,
+            idempotent_hint: true,
+            open_world_hint: false,
+        };
+        let json = serde_json::to_string(&ann).unwrap();
+        assert!(json.contains("readOnlyHint"));
+        assert!(json.contains("idempotentHint"));
+        let de: ToolAnnotations = serde_json::from_str(&json).unwrap();
+        assert_eq!(de, ann);
+    }
+
+    // ── Tool / Resource / Prompt ───────────────────────────────────────
+
+    #[test]
+    fn tool_roundtrip() {
+        let tool = Tool {
+            name: "fetch".to_string(),
+            description: "Fetch URL".to_string(),
+            input_schema: Some(serde_json::json!({"type": "object"})),
+            annotations: Some(ToolAnnotations { read_only_hint: true, ..Default::default() }),
+        };
+        let json = serde_json::to_string(&tool).unwrap();
+        let de: Tool = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.name, "fetch");
+        assert!(de.annotations.unwrap().read_only_hint);
+    }
+
+    #[test]
+    fn resource_roundtrip() {
+        let res = Resource {
+            uri: "file:///x".to_string(),
+            name: "x".to_string(),
+            description: "desc".to_string(),
+            mime_type: Some("text/plain".to_string()),
+        };
+        let json = serde_json::to_string(&res).unwrap();
+        let de: Resource = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.uri, "file:///x");
+    }
+
+    #[test]
+    fn prompt_roundtrip() {
+        let prompt = Prompt {
+            name: "review".to_string(),
+            description: "Code review".to_string(),
+            arguments: Some(vec![PromptArgument {
+                name: "file".to_string(),
+                description: "File to review".to_string(),
+                required: Some(true),
+            }]),
+        };
+        let json = serde_json::to_string(&prompt).unwrap();
+        let de: Prompt = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.arguments.unwrap().len(), 1);
+    }
+
+    // ── ContentBlock ───────────────────────────────────────────────────
+
+    #[test]
+    fn content_block_text() {
+        let block = ContentBlock::Text { text: "hello".to_string() };
+        let json = serde_json::to_string(&block).unwrap();
+        assert!(json.contains("\"type\":\"text\""));
+        let de: ContentBlock = serde_json::from_str(&json).unwrap();
+        if let ContentBlock::Text { text } = de {
+            assert_eq!(text, "hello");
+        } else {
+            panic!("Expected Text variant");
+        }
+    }
+
+    #[test]
+    fn content_block_image() {
+        let block = ContentBlock::Image { data: "abc".to_string(), mime_type: "image/png".to_string() };
+        let json = serde_json::to_string(&block).unwrap();
+        assert!(json.contains("\"type\":\"image\""));
+    }
+
+    // ── Capabilities ───────────────────────────────────────────────────
+
+    #[test]
+    fn server_capabilities_default() {
+        let caps = ServerCapabilities::default();
+        assert!(caps.tools.is_none());
+        assert!(caps.resources.is_none());
+    }
+
+    #[test]
+    fn client_capabilities_default() {
+        let caps = ClientCapabilities::default();
+        assert!(caps.experimental.is_none());
+        assert!(caps.sampling.is_none());
+    }
+
+    #[test]
+    fn server_capabilities_with_tools() {
+        let caps = ServerCapabilities {
+            tools: Some(ToolsCapability { list_changed: true }),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&caps).unwrap();
+        assert!(json.contains("listChanged"));
+    }
+
+    // ── InitializeParams / InitializeResult ────────────────────────────
+
+    #[test]
+    fn initialize_params_roundtrip() {
+        let params = InitializeParams {
+            protocol_version: "2024-11-05".to_string(),
+            capabilities: ClientCapabilities::default(),
+            client_info: Some(ClientInfo { name: "shannon".to_string(), version: "0.1".to_string() }),
+        };
+        let json = serde_json::to_string(&params).unwrap();
+        let de: InitializeParams = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.protocol_version, "2024-11-05");
+        assert_eq!(de.client_info.unwrap().name, "shannon");
+    }
+
+    #[test]
+    fn initialize_result_roundtrip() {
+        let result = InitializeResult {
+            protocol_version: "2024-11-05".to_string(),
+            capabilities: ServerCapabilities::default(),
+            server_info: Some(ServerInfo { name: "test-server".to_string(), version: "1.0".to_string() }),
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let de: InitializeResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.server_info.unwrap().name, "test-server");
+    }
+
+    // ── Sampling types ─────────────────────────────────────────────────
+
+    #[test]
+    fn sampling_message_role_lowercase() {
+        let json = serde_json::to_string(&SamplingMessageRole::User).unwrap();
+        assert_eq!(json, "\"user\"");
+        let de: SamplingMessageRole = serde_json::from_str("\"assistant\"").unwrap();
+        assert_eq!(de, SamplingMessageRole::Assistant);
+    }
+
+    #[test]
+    fn sampling_content_text_roundtrip() {
+        let content = SamplingContent::Text { text: "hi".to_string() };
+        let json = serde_json::to_string(&content).unwrap();
+        let de: SamplingContent = serde_json::from_str(&json).unwrap();
+        if let SamplingContent::Text { text } = de {
+            assert_eq!(text, "hi");
+        } else {
+            panic!("Expected Text");
+        }
+    }
+
+    #[test]
+    fn stop_reason_roundtrip() {
+        let reasons = vec![StopReason::EndTurn, StopReason::StopSequence, StopReason::MaxTokens];
+        let json = serde_json::to_string(&reasons).unwrap();
+        let de: Vec<StopReason> = serde_json::from_str(&json).unwrap();
+        assert_eq!(de, reasons);
+    }
+
+    // ── LoggingLevel ───────────────────────────────────────────────────
+
+    #[test]
+    fn logging_level_lowercase() {
+        let json = serde_json::to_string(&LoggingLevel::Error).unwrap();
+        assert_eq!(json, "\"error\"");
+        let de: LoggingLevel = serde_json::from_str("\"debug\"").unwrap();
+        assert_eq!(de, LoggingLevel::Debug);
+    }
+
+    // ── ToolCallParams ─────────────────────────────────────────────────
+
+    #[test]
+    fn tool_call_params_roundtrip() {
+        let params = ToolCallParams {
+            name: "fetch".to_string(),
+            arguments: Some(serde_json::json!({"url": "http://example.com"})),
+        };
+        let json = serde_json::to_string(&params).unwrap();
+        let de: ToolCallParams = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.name, "fetch");
+    }
+
+    // ── Elicitation ────────────────────────────────────────────────────
+
+    #[test]
+    fn elicitation_action_serde() {
+        let json = serde_json::to_string(&ElicitationAction::Accept).unwrap();
+        assert_eq!(json, "\"accept\"");
+        let de: ElicitationAction = serde_json::from_str("\"decline\"").unwrap();
+        assert_eq!(de, ElicitationAction::Decline);
+        let de: ElicitationAction = serde_json::from_str("\"cancel\"").unwrap();
+        assert_eq!(de, ElicitationAction::Cancel);
+    }
+
+    #[test]
+    fn elicitation_result_roundtrip() {
+        let result = ElicitationResult {
+            action: ElicitationAction::Accept,
+            content: Some(serde_json::json!({"name": "value"})),
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let de: ElicitationResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.action, ElicitationAction::Accept);
+    }
+
+    // ── Progress ───────────────────────────────────────────────────────
+
+    #[test]
+    fn progress_notification_roundtrip() {
+        let notif = ProgressNotification {
+            progress_token: serde_json::json!("tok-1"),
+            progress: 0.5,
+            total: Some(1.0),
+        };
+        let json = serde_json::to_string(&notif).unwrap();
+        let de: ProgressNotification = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.progress, 0.5);
+        assert_eq!(de.total, Some(1.0));
+    }
+
+    // ── Roots ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn list_roots_result_roundtrip() {
+        let result = ListRootsResult {
+            roots: vec![Root { uri: "file:///home".to_string(), name: Some("home".to_string()) }],
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let de: ListRootsResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.roots.len(), 1);
+    }
+
+    // ── McpRequest / McpResponse / McpNotification ─────────────────────
+
+    #[test]
+    fn mcp_request_roundtrip() {
+        let req = McpRequest {
+            method: RequestMethod::ToolsList,
+            params: serde_json::json!({}),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let de: McpRequest = serde_json::from_str(&json).unwrap();
+        assert!(matches!(de.method, RequestMethod::ToolsList));
+    }
+
+    // ── Send+Sync ──────────────────────────────────────────────────────
+
+    #[test]
+    fn send_sync_types() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<JsonRpcRequest>();
+        assert_send_sync::<JsonRpcResponse>();
+        assert_send_sync::<JsonRpcError>();
+        assert_send_sync::<JsonRpcNotification>();
+        assert_send_sync::<Tool>();
+        assert_send_sync::<ToolAnnotations>();
+        assert_send_sync::<ContentBlock>();
+        assert_send_sync::<ServerCapabilities>();
+        assert_send_sync::<ClientCapabilities>();
+        assert_send_sync::<InitializeParams>();
+        assert_send_sync::<InitializeResult>();
+        assert_send_sync::<ElicitationAction>();
+        assert_send_sync::<ProgressNotification>();
+    }
 }

@@ -7,7 +7,7 @@
 //! - `SendMessageTool`: Tool to route messages between agents
 //! - `TeamCreateTool`: Tool to create agent teams with shared task boards
 
-use crate::coordinator::AgentCoordinator;
+use crate::coordinator::{AgentCoordinator, CoordinatorEvent};
 use crate::error::{AgentError, CoordinationError};
 use crate::message::{AgentMessage, MessageContent, MessageType};
 use crate::teammate::TeammateConfig;
@@ -181,6 +181,11 @@ impl SubAgentRegistry {
             agents: Arc::new(RwLock::new(HashMap::new())),
             teams: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Subscribe to coordinator events (agent output, status changes, etc.).
+    pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<CoordinatorEvent> {
+        self.coordinator.subscribe_events()
     }
 
     /// Spawn a new sub-agent and register it.

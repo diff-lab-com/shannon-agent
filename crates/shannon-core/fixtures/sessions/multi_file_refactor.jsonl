@@ -1,0 +1,26 @@
+{"type":"SessionStart","session_id":"fixture-multi-file","model":"test-model","timestamp":"2026-05-22T00:00:00Z"}
+{"type":"UserMessage","content":"rename function foo to bar across all files","turn":1}
+{"type":"LlmRequest","turn":1,"request_hash":"ghi789","body":{"model":"test","messages":[{"role":"user","content":"rename function foo to bar across all files"}]}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"I'll read all files first."},{"type":"tool_use","name":"Read","input":{"path":"src/a.rs"}}]}}
+{"type":"QueryEvent","event":{"Started":{"query_id":"00000000-0000-0000-0000-000000000003"}}}
+{"type":"QueryEvent","event":{"Text":{"query_id":"00000000-0000-0000-0000-000000000003","content":"I'll read all files first."}}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000003","tool_use_id":"tu_1","tool_name":"Read","tool_input":{"path":"src/a.rs"}}}}
+{"type":"ToolCall","tool":"Read","input":{"path":"src/a.rs"},"result":"fn foo() {}","is_error":false,"duration_ms":3}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000003","tool_use_id":"tu_1","tool_name":"Read","result":"fn foo() {}","is_error":false}}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000003","tool_use_id":"tu_2","tool_name":"Read","tool_input":{"path":"src/b.rs"}}}}
+{"type":"ToolCall","tool":"Read","input":{"path":"src/b.rs"},"result":"fn foo() {} fn baz() { foo() }","is_error":false,"duration_ms":2}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000003","tool_use_id":"tu_2","tool_name":"Read","result":"fn foo() {} fn baz() { foo() }","is_error":false}}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000003","tool_use_id":"tu_3","tool_name":"Read","tool_input":{"path":"src/c.rs"}}}}
+{"type":"ToolCall","tool":"Read","input":{"path":"src/c.rs"},"result":"mod b; fn qux() { b::foo() }","is_error":false,"duration_ms":2}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000003","tool_use_id":"tu_3","tool_name":"Read","result":"mod b; fn qux() { b::foo() }","is_error":false}}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000003","tool_use_id":"tu_4","tool_name":"Edit","tool_input":{"path":"src/a.rs","old":"fn foo()","new":"fn bar()"}}}}
+{"type":"ToolCall","tool":"Edit","input":{"path":"src/a.rs","old":"fn foo()","new":"fn bar()"},"result":"ok","is_error":false,"duration_ms":2}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000003","tool_use_id":"tu_4","tool_name":"Edit","result":"ok","is_error":false}}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000003","tool_use_id":"tu_5","tool_name":"Edit","tool_input":{"path":"src/b.rs","old":"fn foo() {} fn baz() { foo() }","new":"fn bar() {} fn baz() { bar() }"}}}}
+{"type":"ToolCall","tool":"Edit","input":{"path":"src/b.rs","old":"fn foo() {} fn baz() { foo() }","new":"fn bar() {} fn baz() { bar() }"},"result":"ok","is_error":false,"duration_ms":2}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000003","tool_use_id":"tu_5","tool_name":"Edit","result":"ok","is_error":false}}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000003","tool_use_id":"tu_6","tool_name":"Edit","tool_input":{"path":"src/c.rs","old":"b::foo()","new":"b::bar()"}}}}
+{"type":"ToolCall","tool":"Edit","input":{"path":"src/c.rs","old":"b::foo()","new":"b::bar()"},"result":"ok","is_error":false,"duration_ms":2}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000003","tool_use_id":"tu_6","tool_name":"Edit","result":"ok","is_error":false}}}
+{"type":"QueryEvent","event":{"Completed":{"query_id":"00000000-0000-0000-0000-000000000003"}}}
+{"type":"SessionEnd","session_id":"fixture-multi-file","total_turns":1,"total_tokens":1200}

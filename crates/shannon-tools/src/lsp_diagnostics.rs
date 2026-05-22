@@ -7,6 +7,7 @@
 //! by severity, source, and computing aggregate summaries.
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -333,6 +334,150 @@ impl Default for DiagnosticRegistry {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// ---------------------------------------------------------------------------
+// CLI-based diagnostic runner
+// ---------------------------------------------------------------------------
+
+/// Result of running CLI diagnostics on a project.
+pub struct CliDiagnosticResult {
+    /// Parsed diagnostics.
+    pub diagnostics: Vec<LspDiagnostic>,
+    /// Whether the run succeeded (even if there are diagnostics).
+    pub success: bool,
+    /// Error message if the run itself failed.
+    pub error: Option<String>,
+}
+
+/// Run CLI-based diagnostics for a project directory.
+///
+/// Detects the project type and runs the appropriate checker:
+/// - Rust (`Cargo.toml` present): `cargo check --message-format=json`
+///
+/// Returns parsed diagnostics or an error if the checker couldn't run.
+pub async fn run_cli_diagnostics(project_dir: &Path) -> CliDiagnosticResult {
+    let has_cargo = project_dir.join("Cargo.toml").exists();
+
+    if has_cargo {
+        run_cargo_check(project_dir).await
+    } else {
+        CliDiagnosticResult {
+            diagnostics: Vec::new(),
+            success: true,
+            error: None,
+        }
+    }
+}
+
+/// Run `cargo check --message-format=json` and parse diagnostics.
+async fn run_cargo_check(project_dir: &Path) -> CliDiagnosticResult {
+    let output = match tokio::process::Command::new("cargo")
+        .args(["check", "--message-format=json", "--color=never"])
+        .current_dir(project_dir)
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => {
+            return CliDiagnosticResult {
+                diagnostics: Vec::new(),
+                success: false,
+                error: Some(format!("Failed to run cargo check: {e}")),
+            };
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut diagnostics = Vec::new();
+
+    for line in stdout.lines() {
+        if let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) {
+            if msg.get("reason").and_then(|r| r.as_str()) == Some("compiler-message") {
+                if let Some(diags) = parse_cargo_compiler_message(&msg) {
+                    diagnostics.extend(diags);
+                }
+            }
+        }
+    }
+
+    CliDiagnosticResult {
+        diagnostics,
+        success: true,
+        error: None,
+    }
+}
+
+/// Parse a single `compiler-message` JSON object from `cargo check` output.
+fn parse_cargo_compiler_message(msg: &serde_json::Value) -> Option<Vec<LspDiagnostic>> {
+    let message = msg.get("message")?;
+    let level = message.get("level").and_then(|l| l.as_str()).unwrap_or("");
+    let severity = match level {
+        "error" => DiagnosticSeverity::Error,
+        "warning" => DiagnosticSeverity::Warning,
+        "note" | "failure-note" => DiagnosticSeverity::Info,
+        _ => return None,
+    };
+
+    let code = message
+        .get("code")
+        .and_then(|c| c.get("code"))
+        .and_then(|c| c.as_str())
+        .map(|s| s.to_string());
+
+    let rendered = message
+        .get("rendered")
+        .and_then(|r| r.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let msg_text = if rendered.is_empty() {
+        message
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown error")
+            .to_string()
+    } else {
+        // Use first line of rendered as the message
+        rendered.lines().next().unwrap_or("unknown error").to_string()
+    };
+
+    let mut diagnostics = Vec::new();
+
+    // Parse spans for file/line info
+    if let Some(spans) = message.get("spans").and_then(|s| s.as_array()) {
+        for span in spans {
+            let file = span
+                .get("file_name")
+                .and_then(|f| f.as_str())
+                .unwrap_or("unknown");
+            let line = span
+                .get("line_start")
+                .and_then(|l| l.as_u64())
+                .unwrap_or(0) as usize;
+            let column = span
+                .get("column_start")
+                .and_then(|c| c.as_u64())
+                .unwrap_or(0) as usize;
+
+            let mut diag = LspDiagnostic::new(file, line, column, severity, &msg_text, "rustc");
+            if let Some(code) = &code {
+                diag = diag.with_code(code);
+            }
+            diagnostics.push(diag);
+        }
+    }
+
+    // If no spans, create a single diagnostic with unknown location
+    if diagnostics.is_empty() {
+        let mut diag = LspDiagnostic::new("unknown", 0, 0, severity, &msg_text, "rustc");
+        if let Some(code) = &code {
+            diag = diag.with_code(code);
+        }
+        diagnostics.push(diag);
+    }
+
+    Some(diagnostics)
 }
 
 // ---------------------------------------------------------------------------
@@ -802,5 +947,126 @@ mod tests {
         let mut reg = DiagnosticRegistry::new();
         reg.update("a.rs", vec![make_error("a.rs", 1)]);
         assert!(reg.get_warnings().is_empty());
+    }
+
+    // -- CLI diagnostic runner tests --
+
+    #[test]
+    fn test_parse_cargo_compiler_message_error() {
+        let msg = serde_json::json!({
+            "reason": "compiler-message",
+            "message": {
+                "level": "error",
+                "message": "cannot find value `x` in this scope",
+                "code": { "code": "E0425" },
+                "spans": [
+                    {
+                        "file_name": "src/main.rs",
+                        "line_start": 10,
+                        "column_start": 5
+                    }
+                ],
+                "rendered": "error[E0425]: cannot find value `x` in this scope\n --> src/main.rs:10:5\n"
+            }
+        });
+        let diags = parse_cargo_compiler_message(&msg).unwrap();
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].file_path, "src/main.rs");
+        assert_eq!(diags[0].line, 10);
+        assert_eq!(diags[0].column, 5);
+        assert_eq!(diags[0].severity, DiagnosticSeverity::Error);
+        assert_eq!(diags[0].source, "rustc");
+        assert_eq!(diags[0].code.as_deref(), Some("E0425"));
+    }
+
+    #[test]
+    fn test_parse_cargo_compiler_message_warning() {
+        let msg = serde_json::json!({
+            "reason": "compiler-message",
+            "message": {
+                "level": "warning",
+                "message": "unused variable: `y`",
+                "spans": [
+                    {
+                        "file_name": "src/lib.rs",
+                        "line_start": 5,
+                        "column_start": 9
+                    }
+                ],
+                "rendered": ""
+            }
+        });
+        let diags = parse_cargo_compiler_message(&msg).unwrap();
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].severity, DiagnosticSeverity::Warning);
+        assert_eq!(diags[0].file_path, "src/lib.rs");
+    }
+
+    #[test]
+    fn test_parse_cargo_compiler_message_no_spans() {
+        let msg = serde_json::json!({
+            "reason": "compiler-message",
+            "message": {
+                "level": "error",
+                "message": "build error",
+                "spans": [],
+                "rendered": "error: build error\n"
+            }
+        });
+        let diags = parse_cargo_compiler_message(&msg).unwrap();
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].file_path, "unknown");
+        assert_eq!(diags[0].line, 0);
+    }
+
+    #[test]
+    fn test_parse_cargo_compiler_message_note_is_info() {
+        let msg = serde_json::json!({
+            "reason": "compiler-message",
+            "message": {
+                "level": "note",
+                "message": "some note",
+                "spans": [],
+                "rendered": ""
+            }
+        });
+        let diags = parse_cargo_compiler_message(&msg).unwrap();
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].severity, DiagnosticSeverity::Info);
+    }
+
+    #[test]
+    fn test_parse_cargo_compiler_message_missing_message() {
+        let msg = serde_json::json!({ "reason": "compiler-message" });
+        assert!(parse_cargo_compiler_message(&msg).is_none());
+    }
+
+    #[test]
+    fn test_parse_cargo_compiler_message_multiple_spans() {
+        let msg = serde_json::json!({
+            "reason": "compiler-message",
+            "message": {
+                "level": "error",
+                "message": "mismatched types",
+                "spans": [
+                    { "file_name": "src/a.rs", "line_start": 1, "column_start": 1 },
+                    { "file_name": "src/b.rs", "line_start": 2, "column_start": 3 }
+                ],
+                "rendered": ""
+            }
+        });
+        let diags = parse_cargo_compiler_message(&msg).unwrap();
+        assert_eq!(diags.len(), 2);
+        assert_eq!(diags[0].file_path, "src/a.rs");
+        assert_eq!(diags[1].file_path, "src/b.rs");
+    }
+
+    #[tokio::test]
+    async fn test_run_cli_diagnostics_no_project() {
+        let temp = tempfile::tempdir().unwrap();
+        let result = run_cli_diagnostics(temp.path()).await;
+        assert!(result.success);
+        assert!(result.diagnostics.is_empty());
+        assert!(result.error.is_none());
     }
 }

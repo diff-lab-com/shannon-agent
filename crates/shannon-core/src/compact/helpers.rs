@@ -242,3 +242,239 @@ pub fn tool_result_preview_limit(tool_name: &str) -> usize {
         150
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text_msg(role: &str, text: &str) -> Message {
+        Message { role: role.into(), content: MessageContent::Text(text.into()) }
+    }
+
+    // ── extract_text_content ─────────────────────────────────────────────
+
+    #[test]
+    fn test_extract_text_simple() {
+        let msg = text_msg("user", "hello world");
+        assert_eq!(extract_text_content(&msg), "hello world");
+    }
+
+    #[test]
+    fn test_extract_text_from_blocks() {
+        let msg = Message {
+            role: "assistant".into(),
+            content: MessageContent::Blocks(vec![
+                ContentBlock::Text { text: "Hello".into() },
+                ContentBlock::Text { text: "World".into() },
+            ]),
+        };
+        let text = extract_text_content(&msg);
+        assert!(text.contains("Hello"));
+        assert!(text.contains("World"));
+    }
+
+    // ── truncate_text ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_truncate_short_text_unchanged() {
+        assert_eq!(truncate_text("hello", 100), "hello");
+    }
+
+    #[test]
+    fn test_truncate_long_text_with_space() {
+        let text = "The quick brown fox jumps over the lazy dog";
+        let result = truncate_text(text, 20);
+        assert!(result.len() < text.len());
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn test_truncate_long_text_no_space() {
+        let text = "abcdefghijklmnop";
+        let result = truncate_text(text, 5);
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn test_truncate_empty() {
+        assert_eq!(truncate_text("", 10), "");
+    }
+
+    #[test]
+    fn test_truncate_exact_length() {
+        assert_eq!(truncate_text("12345", 5), "12345");
+    }
+
+    // ── estimate_text_tokens ─────────────────────────────────────────────
+
+    #[test]
+    fn test_estimate_ascii_tokens() {
+        // ~4 chars per token
+        let tokens = estimate_text_tokens("Hello world test string");
+        assert!(tokens > 0);
+        assert!(tokens < 10); // ~24 chars / 4 = ~6 tokens
+    }
+
+    #[test]
+    fn test_estimate_cjk_tokens() {
+        // CJK: ~1.5 tokens per char
+        let tokens = estimate_text_tokens("你好世界");
+        assert!(tokens >= 4); // 4 chars * 1.5 = 6 tokens (min 1)
+    }
+
+    #[test]
+    fn test_estimate_mixed_tokens() {
+        let tokens = estimate_text_tokens("Hello 你好 world");
+        assert!(tokens > 0);
+    }
+
+    #[test]
+    fn test_estimate_empty_min_one() {
+        let tokens = estimate_text_tokens("");
+        assert_eq!(tokens, 1); // .max(1)
+    }
+
+    // ── estimate_message_tokens ──────────────────────────────────────────
+
+    #[test]
+    fn test_estimate_text_message() {
+        let msg = text_msg("user", "Hello, this is a test message with some content.");
+        let tokens = estimate_message_tokens(&msg);
+        assert!(tokens > 0);
+    }
+
+    #[test]
+    fn test_estimate_blocks_message() {
+        let msg = Message {
+            role: "assistant".into(),
+            content: MessageContent::Blocks(vec![
+                ContentBlock::Text { text: "Here's the code:".into() },
+            ]),
+        };
+        let tokens = estimate_message_tokens(&msg);
+        assert!(tokens > 0);
+    }
+
+    #[test]
+    fn test_estimate_image_message() {
+        let msg = Message {
+            role: "assistant".into(),
+            content: MessageContent::Blocks(vec![
+                ContentBlock::Image {
+                    source: crate::api::ImageSource {
+                        source_type: "base64".into(),
+                        media_type: "image/png".into(),
+                        data: "abc".into(),
+                    },
+                },
+            ]),
+        };
+        let tokens = estimate_message_tokens(&msg);
+        assert_eq!(tokens, 100); // Fixed cost for images
+    }
+
+    // ── estimate_tokens (slice) ──────────────────────────────────────────
+
+    #[test]
+    fn test_estimate_tokens_empty() {
+        assert_eq!(estimate_tokens(&[]), 0);
+    }
+
+    #[test]
+    fn test_estimate_tokens_multiple() {
+        let msgs = [
+            text_msg("user", "Hello"),
+            text_msg("assistant", "Hi there"),
+        ];
+        let total = estimate_tokens(&msgs);
+        let sum = estimate_message_tokens(&msgs[0]) + estimate_message_tokens(&msgs[1]);
+        assert_eq!(total, sum);
+    }
+
+    // ── looks_like_code ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_looks_like_code_fence() {
+        let msg = text_msg("assistant", "```rust\nfn main() {}\n```");
+        assert!(looks_like_code(&msg));
+    }
+
+    #[test]
+    fn test_looks_like_code_file_extension() {
+        let msg = text_msg("assistant", "Edit the file src/main.rs");
+        assert!(looks_like_code(&msg));
+    }
+
+    #[test]
+    fn test_looks_like_code_fn_keyword() {
+        let msg = text_msg("assistant", "Use `fn foo()` to define");
+        assert!(looks_like_code(&msg));
+    }
+
+    #[test]
+    fn test_looks_like_plain_text() {
+        let msg = text_msg("assistant", "Sure, I can help with that.");
+        assert!(!looks_like_code(&msg));
+    }
+
+    #[test]
+    fn test_looks_like_code_tool_use() {
+        let msg = Message {
+            role: "assistant".into(),
+            content: MessageContent::Blocks(vec![
+                ContentBlock::ToolUse {
+                    id: "t1".into(),
+                    name: "bash".into(),
+                    input: serde_json::json!({"command": "ls"}),
+                },
+            ]),
+        };
+        assert!(looks_like_code(&msg));
+    }
+
+    // ── is_content_rich_tool ─────────────────────────────────────────────
+
+    #[test]
+    fn test_content_rich_tools() {
+        assert!(is_content_rich_tool("Read"));
+        assert!(is_content_rich_tool("Grep"));
+        assert!(is_content_rich_tool("Glob"));
+        assert!(is_content_rich_tool("Bash"));
+        assert!(is_content_rich_tool("WebSearch"));
+        assert!(is_content_rich_tool("search"));
+    }
+
+    #[test]
+    fn test_non_content_rich_tools() {
+        assert!(!is_content_rich_tool("Edit"));
+        assert!(!is_content_rich_tool("Write"));
+        assert!(!is_content_rich_tool("Unknown"));
+    }
+
+    // ── tool_result_preview_limit ────────────────────────────────────────
+
+    #[test]
+    fn test_preview_limit_rich_tool() {
+        assert_eq!(tool_result_preview_limit("Read"), 400);
+        assert_eq!(tool_result_preview_limit("Bash"), 400);
+    }
+
+    #[test]
+    fn test_preview_limit_other_tool() {
+        assert_eq!(tool_result_preview_limit("Edit"), 150);
+        assert_eq!(tool_result_preview_limit("Write"), 150);
+    }
+
+    // ── original_tokens_from ─────────────────────────────────────────────
+
+    #[test]
+    fn test_original_tokens_from_empty() {
+        assert_eq!(original_tokens_from(&[]), 0);
+    }
+
+    #[test]
+    fn test_original_tokens_from_matches_estimate() {
+        let msgs = [text_msg("user", "test message")];
+        assert_eq!(original_tokens_from(&msgs), estimate_tokens(&msgs));
+    }
+}

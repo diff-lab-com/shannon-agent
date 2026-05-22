@@ -283,3 +283,377 @@ fn content_rich_limit(tool_name: &str) -> usize {
         100
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::{ContentBlock, ImageSource, Message, MessageContent, ToolResultContent};
+    use crate::query_engine::types::CompressionStrategy;
+
+    fn text_msg(role: &str, text: &str) -> Message {
+        Message { role: role.into(), content: MessageContent::Text(text.into()) }
+    }
+
+    fn test_config() -> QueryEngineConfig {
+        QueryEngineConfig {
+            max_context_tokens: Some(1000),
+            compression_threshold: 0.8,
+            keep_recent_messages: 2,
+            compression_strategy: CompressionStrategy::TruncateOldest,
+            system_prompt: None,
+            ..Default::default()
+        }
+    }
+
+    // ── ConversationState::default ──────────────────────────────────────
+
+    #[test]
+    fn test_default_state() {
+        let state = ConversationState::default();
+        assert!(state.messages.is_empty());
+        assert_eq!(state.turn_count, 0);
+        assert_eq!(state.total_tokens, 0);
+        assert_eq!(state.total_cost, 0.0);
+    }
+
+    // ── estimate_tokens ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_estimate_tokens_empty() {
+        let state = ConversationState::default();
+        assert_eq!(state.estimate_tokens(), 0);
+    }
+
+    #[test]
+    fn test_estimate_tokens_text_messages() {
+        let state = ConversationState {
+            messages: vec![
+                text_msg("user", "Hello world"),
+                text_msg("assistant", "Hi there"),
+            ],
+            ..Default::default()
+        };
+        let tokens = state.estimate_tokens();
+        assert!(tokens > 0);
+    }
+
+    #[test]
+    fn test_estimate_tokens_blocks_message() {
+        let state = ConversationState {
+            messages: vec![Message {
+                role: "assistant".into(),
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::Text { text: "Here's the result:".into() },
+                    ContentBlock::ToolUse {
+                        id: "t1".into(),
+                        name: "Read".into(),
+                        input: serde_json::json!({"file": "main.rs"}),
+                    },
+                    ContentBlock::ToolResult {
+                        tool_use_id: "t1".into(),
+                        content: Some(ToolResultContent::Single("fn main() {}".into())),
+                        is_error: None,
+                    },
+                ]),
+            }],
+            ..Default::default()
+        };
+        let tokens = state.estimate_tokens();
+        assert!(tokens > 0);
+    }
+
+    #[test]
+    fn test_estimate_tokens_image() {
+        let state = ConversationState {
+            messages: vec![Message {
+                role: "user".into(),
+                content: MessageContent::Blocks(vec![ContentBlock::Image {
+                    source: ImageSource {
+                        source_type: "base64".into(),
+                        media_type: "image/png".into(),
+                        data: "abc123".into(),
+                    },
+                }]),
+            }],
+            ..Default::default()
+        };
+        assert_eq!(state.estimate_tokens(), 100);
+    }
+
+    #[test]
+    fn test_estimate_tokens_cjk_content() {
+        let state = ConversationState {
+            messages: vec![text_msg("user", "你好世界这是一段中文内容")],
+            ..Default::default()
+        };
+        let tokens = state.estimate_tokens();
+        assert!(tokens > 0);
+    }
+
+    // ── estimate_tokens_with_system_prompt ──────────────────────────────
+
+    #[test]
+    fn test_estimate_tokens_no_system_prompt() {
+        let state = ConversationState {
+            messages: vec![text_msg("user", "Hello")],
+            ..Default::default()
+        };
+        let without = state.estimate_tokens();
+        let with_none = state.estimate_tokens_with_system_prompt(None);
+        assert_eq!(without, with_none);
+    }
+
+    #[test]
+    fn test_estimate_tokens_with_system_prompt() {
+        let state = ConversationState {
+            messages: vec![text_msg("user", "Hello")],
+            ..Default::default()
+        };
+        let without = state.estimate_tokens();
+        let with = state.estimate_tokens_with_system_prompt(Some("You are a helpful assistant"));
+        assert!(with > without);
+    }
+
+    // ── needs_compression ───────────────────────────────────────────────
+
+    #[test]
+    fn test_needs_compression_no_max_tokens() {
+        let mut config = test_config();
+        config.max_context_tokens = None;
+        let state = ConversationState {
+            messages: vec![text_msg("user", &"x".repeat(10000))],
+            ..Default::default()
+        };
+        assert!(!state.needs_compression(&config));
+    }
+
+    #[test]
+    fn test_needs_compression_under_threshold() {
+        let state = ConversationState {
+            messages: vec![text_msg("user", "short")],
+            ..Default::default()
+        };
+        assert!(!state.needs_compression(&test_config()));
+    }
+
+    #[test]
+    fn test_needs_compression_over_threshold() {
+        let config = test_config(); // 1000 tokens * 0.8 = 800 threshold
+        // Need ~3200+ chars to exceed 800 tokens (at ~4 chars/token)
+        let state = ConversationState {
+            messages: vec![text_msg("user", &"x ".repeat(2000))],
+            ..Default::default()
+        };
+        assert!(state.needs_compression(&config));
+    }
+
+    // ── compress (TruncateOldest) ───────────────────────────────────────
+
+    #[test]
+    fn test_compress_truncate_too_few_messages() {
+        let mut config = test_config();
+        config.keep_recent_messages = 5;
+        let mut state = ConversationState {
+            messages: vec![text_msg("user", "hi"), text_msg("assistant", "hello")],
+            ..Default::default()
+        };
+        let original_len = state.messages.len();
+        state.compress(&config);
+        assert_eq!(state.messages.len(), original_len);
+    }
+
+    #[test]
+    fn test_compress_truncate_removes_old_messages() {
+        let config = test_config(); // keep_recent = 2
+        let mut state = ConversationState {
+            messages: (0..6).map(|i| {
+                text_msg(if i % 2 == 0 { "user" } else { "assistant" }, &format!("msg {i}"))
+            }).collect(),
+            ..Default::default()
+        };
+        state.compress(&config);
+        // Should keep first 2 (cache prefix) + last 2 (keep_recent) = 4
+        assert!(state.messages.len() <= 4);
+    }
+
+    #[test]
+    fn test_compress_preserves_cache_prefix() {
+        let config = test_config();
+        let first_msg = text_msg("user", "cache prefix user");
+        let second_msg = text_msg("assistant", "cache prefix assistant");
+        let mut state = ConversationState {
+            messages: vec![
+                first_msg.clone(),
+                second_msg.clone(),
+                text_msg("user", "old msg"),
+                text_msg("assistant", "old reply"),
+                text_msg("user", "recent msg"),
+                text_msg("assistant", "recent reply"),
+            ],
+            ..Default::default()
+        };
+        state.compress(&config);
+        // First two messages should always be preserved
+        let first_text = match &state.messages[0].content {
+            MessageContent::Text(t) => t.clone(),
+            _ => String::new(),
+        };
+        assert!(first_text.contains("cache prefix"));
+    }
+
+    // ── compress (SummarizeOld) ─────────────────────────────────────────
+
+    #[test]
+    fn test_compress_summarize_inserts_summary() {
+        let mut config = test_config();
+        config.compression_strategy = CompressionStrategy::SummarizeOld;
+        let mut state = ConversationState {
+            messages: vec![
+                text_msg("user", "first user"),
+                text_msg("assistant", "first assistant"),
+                text_msg("user", "middle user question"),
+                text_msg("assistant", "middle assistant answer"),
+                text_msg("user", "recent user"),
+                text_msg("assistant", "recent assistant"),
+            ],
+            ..Default::default()
+        };
+        state.compress(&config);
+        // Should have: first pair + summary + recent pair
+        assert!(state.messages.len() >= 3);
+        // Check that a summary message was inserted
+        let has_summary = state.messages.iter().any(|m| {
+            matches!(&m.content, MessageContent::Text(t) if t.contains("summary"))
+        });
+        assert!(has_summary);
+    }
+
+    // ── summarize_messages ──────────────────────────────────────────────
+
+    #[test]
+    fn test_summarize_text_messages() {
+        let msgs = vec![
+            text_msg("user", "How do I read a file?"),
+            text_msg("assistant", "Use the Read tool."),
+        ];
+        let summary = ConversationState::summarize_messages(&msgs);
+        assert!(summary.contains("User"));
+        assert!(summary.contains("Assistant"));
+        assert!(summary.contains("How do I"));
+    }
+
+    #[test]
+    fn test_summarize_tool_use_messages() {
+        let msgs = vec![Message {
+            role: "assistant".into(),
+            content: MessageContent::Blocks(vec![
+                ContentBlock::ToolUse {
+                    id: "t1".into(),
+                    name: "Read".into(),
+                    input: serde_json::json!({"file": "main.rs"}),
+                },
+            ]),
+        }];
+        let summary = ConversationState::summarize_messages(&msgs);
+        assert!(summary.contains("Tool:"));
+        assert!(summary.contains("Read"));
+    }
+
+    #[test]
+    fn test_summarize_tool_result_message() {
+        let msgs = vec![Message {
+            role: "user".into(),
+            content: MessageContent::Blocks(vec![
+                ContentBlock::ToolResult {
+                    tool_use_id: "t1".into(),
+                    content: Some(ToolResultContent::Single("fn main() {}".into())),
+                    is_error: Some(false),
+                },
+            ]),
+        }];
+        let summary = ConversationState::summarize_messages(&msgs);
+        assert!(summary.contains("Result"));
+    }
+
+    #[test]
+    fn test_summarize_error_result() {
+        let msgs = vec![Message {
+            role: "user".into(),
+            content: MessageContent::Blocks(vec![
+                ContentBlock::ToolResult {
+                    tool_use_id: "t1".into(),
+                    content: Some(ToolResultContent::Single("file not found".into())),
+                    is_error: Some(true),
+                },
+            ]),
+        }];
+        let summary = ConversationState::summarize_messages(&msgs);
+        assert!(summary.contains("error"));
+    }
+
+    #[test]
+    fn test_summarize_empty_tool_result() {
+        let msgs = vec![Message {
+            role: "user".into(),
+            content: MessageContent::Blocks(vec![
+                ContentBlock::ToolResult {
+                    tool_use_id: "t1".into(),
+                    content: None,
+                    is_error: None,
+                },
+            ]),
+        }];
+        let summary = ConversationState::summarize_messages(&msgs);
+        assert!(summary.contains("empty"));
+    }
+
+    // ── truncate_summary ────────────────────────────────────────────────
+
+    #[test]
+    fn test_truncate_summary_short_text() {
+        assert_eq!(truncate_summary("hello", 100), "hello");
+    }
+
+    #[test]
+    fn test_truncate_summary_long_text() {
+        let text = "The quick brown fox jumps over the lazy dog and keeps going";
+        let result = truncate_summary(text, 20);
+        assert!(result.len() < text.len());
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn test_truncate_summary_exact_length() {
+        assert_eq!(truncate_summary("12345", 5), "12345");
+    }
+
+    #[test]
+    fn test_truncate_summary_empty() {
+        assert_eq!(truncate_summary("", 10), "");
+    }
+
+    // ── content_rich_limit ──────────────────────────────────────────────
+
+    #[test]
+    fn test_content_rich_limit_for_rich_tools() {
+        assert_eq!(content_rich_limit("Read"), 300);
+        assert_eq!(content_rich_limit("Grep"), 300);
+        assert_eq!(content_rich_limit("Bash"), 300);
+        assert_eq!(content_rich_limit("WebSearch"), 300);
+    }
+
+    #[test]
+    fn test_content_rich_limit_for_other_tools() {
+        assert_eq!(content_rich_limit("Edit"), 100);
+        assert_eq!(content_rich_limit("Write"), 100);
+        assert_eq!(content_rich_limit("Unknown"), 100);
+    }
+
+    // ── Send/Sync ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_types_are_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<ConversationState>();
+    }
+}

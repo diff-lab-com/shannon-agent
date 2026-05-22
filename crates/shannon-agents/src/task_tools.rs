@@ -479,3 +479,16 @@ impl Tool for TeamNotifyIdleTool {
         })))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn success_output_helper() {
+        let output = success_output(json!({"status": "ok"}));
+        assert!(!output.is_error);
+        assert!(output.content.contains("ok"));
+        assert!(output.metadata.is_empty());
+    }
+}

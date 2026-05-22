@@ -398,3 +398,294 @@ impl Summarizer for LlmSummarizer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::{ContentBlock, Message, MessageContent, ToolResultContent};
+    use crate::compact::types::Summarizer;
+
+    fn text_message(role: &str, text: &str) -> Message {
+        Message { role: role.to_string(), content: MessageContent::Text(text.to_string()) }
+    }
+
+    // ── RuleBasedSummarizer::summarize ───────────────────────────────────
+
+    #[test]
+    fn test_summarize_empty_returns_error() {
+        let s = RuleBasedSummarizer::new();
+        let result = s.summarize(&[], 1000);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("No messages"));
+    }
+
+    #[test]
+    fn test_summarize_single_user_text() {
+        let s = RuleBasedSummarizer::new();
+        let msgs = vec![text_message("user", "Hello, how are you?")];
+        let result = s.summarize(&msgs, 1000).unwrap();
+        assert!(result.contains("[Conversation summary"));
+        assert!(result.contains("User: Hello"));
+        assert!(result.contains("1 turns"));
+    }
+
+    #[test]
+    fn test_summarize_multiple_roles() {
+        let s = RuleBasedSummarizer::new();
+        let msgs = vec![
+            text_message("user", "What is Rust?"),
+            text_message("assistant", "Rust is a systems programming language."),
+            text_message("user", "Tell me more."),
+        ];
+        let result = s.summarize(&msgs, 2000).unwrap();
+        assert!(result.contains("User: What is Rust?"));
+        assert!(result.contains("Assistant: Rust is"));
+        assert!(result.contains("3 turns"));
+        assert!(result.contains("3 messages"));
+    }
+
+    #[test]
+    fn test_summarize_system_role_label() {
+        let s = RuleBasedSummarizer::new();
+        let msgs = vec![text_message("system", "You are helpful.")];
+        let result = s.summarize(&msgs, 1000).unwrap();
+        assert!(result.contains("System: You are helpful"));
+    }
+
+    #[test]
+    fn test_summarize_with_tool_use_and_result() {
+        let s = RuleBasedSummarizer::new();
+        let msgs = vec![
+            Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::ToolUse {
+                        id: "tu_1".to_string(),
+                        name: "Read".to_string(),
+                        input: serde_json::json!({"file_path": "/tmp/test.rs"}),
+                    },
+                ]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::ToolResult {
+                        tool_use_id: "tu_1".to_string(),
+                        content: Some(ToolResultContent::Single("fn main() {}".to_string())),
+                        is_error: Some(false),
+                    },
+                ]),
+            },
+        ];
+        let result = s.summarize(&msgs, 2000).unwrap();
+        assert!(result.contains("Tool: Read"));
+        assert!(result.contains("Result [Read]"));
+        assert!(result.contains("fn main()"));
+        assert!(result.contains("Tools used: Read"));
+    }
+
+    #[test]
+    fn test_summarize_tool_error() {
+        let s = RuleBasedSummarizer::new();
+        let msgs = vec![
+            Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::ToolUse {
+                        id: "tu_1".to_string(),
+                        name: "Bash".to_string(),
+                        input: serde_json::json!({"command": "rm -rf /"}),
+                    },
+                ]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::ToolResult {
+                        tool_use_id: "tu_1".to_string(),
+                        content: Some(ToolResultContent::Single("Permission denied".to_string())),
+                        is_error: Some(true),
+                    },
+                ]),
+            },
+        ];
+        let result = s.summarize(&msgs, 2000).unwrap();
+        assert!(result.contains("Result (error)"));
+        assert!(result.contains("Permission denied"));
+        assert!(result.contains("Errors encountered"));
+    }
+
+    #[test]
+    fn test_summarize_file_path_extraction() {
+        let s = RuleBasedSummarizer::new();
+        let msgs = vec![text_message("user", "Read src/main.rs and Cargo.toml for me")];
+        let result = s.summarize(&msgs, 2000).unwrap();
+        assert!(result.contains("Files referenced"));
+        assert!(result.contains("src/main.rs"));
+        assert!(result.contains("Cargo.toml"));
+    }
+
+    #[test]
+    fn test_summarize_truncation_with_small_budget() {
+        let s = RuleBasedSummarizer::new();
+        let long_text: String = "x ".repeat(500);
+        let msgs = vec![text_message("user", &long_text)];
+        let result = s.summarize(&msgs, 10).unwrap();
+        assert!(result.contains("truncated") || result.len() < long_text.len());
+    }
+
+    #[test]
+    fn test_summarize_image_block_omitted() {
+        let s = RuleBasedSummarizer::new();
+        let msgs = vec![Message {
+            role: "user".to_string(),
+            content: MessageContent::Blocks(vec![
+                ContentBlock::Image { source: crate::api::ImageSource::base64("image/png", "abc") },
+            ]),
+        }];
+        let result = s.summarize(&msgs, 1000).unwrap();
+        assert!(result.contains("Image (omitted from summary)"));
+    }
+
+    #[test]
+    fn test_summarize_thinking_block_skipped() {
+        let s = RuleBasedSummarizer::new();
+        let msgs = vec![Message {
+            role: "assistant".to_string(),
+            content: MessageContent::Blocks(vec![
+                ContentBlock::Thinking { thinking: "deep thoughts".to_string() },
+                ContentBlock::Text { text: "Here's my answer.".to_string() },
+            ]),
+        }];
+        let result = s.summarize(&msgs, 1000).unwrap();
+        assert!(!result.contains("deep thoughts"));
+        assert!(result.contains("Here's my answer"));
+    }
+
+    #[test]
+    fn test_summarize_tool_result_multiple_blocks() {
+        let s = RuleBasedSummarizer::new();
+        let msgs = vec![
+            Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::ToolUse {
+                        id: "tu_1".to_string(),
+                        name: "Grep".to_string(),
+                        input: serde_json::json!({"pattern": "fn main"}),
+                    },
+                ]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::ToolResult {
+                        tool_use_id: "tu_1".to_string(),
+                        content: Some(ToolResultContent::Multiple(vec![
+                            ContentBlock::Text { text: "main.rs:1:fn main()".to_string() },
+                            ContentBlock::Text { text: "lib.rs:5:fn main_test()".to_string() },
+                        ])),
+                        is_error: Some(false),
+                    },
+                ]),
+            },
+        ];
+        let result = s.summarize(&msgs, 2000).unwrap();
+        assert!(result.contains("main.rs:1"));
+        assert!(result.contains("lib.rs:5"));
+    }
+
+    #[test]
+    fn test_summarize_tool_result_empty() {
+        let s = RuleBasedSummarizer::new();
+        let msgs = vec![
+            Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::ToolUse {
+                        id: "tu_1".to_string(),
+                        name: "Read".to_string(),
+                        input: serde_json::json!({"file_path": "/tmp/empty"}),
+                    },
+                ]),
+            },
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::ToolResult {
+                        tool_use_id: "tu_1".to_string(),
+                        content: None,
+                        is_error: None,
+                    },
+                ]),
+            },
+        ];
+        let result = s.summarize(&msgs, 1000).unwrap();
+        assert!(result.contains("(empty)"));
+    }
+
+    #[test]
+    fn test_summarize_unknown_tool_result() {
+        let s = RuleBasedSummarizer::new();
+        let msgs = vec![Message {
+            role: "user".to_string(),
+            content: MessageContent::Blocks(vec![
+                ContentBlock::ToolResult {
+                    tool_use_id: "orphan_id".to_string(),
+                    content: Some(ToolResultContent::Single("some output".to_string())),
+                    is_error: Some(false),
+                },
+            ]),
+        }];
+        let result = s.summarize(&msgs, 1000).unwrap();
+        assert!(result.contains("Result [unknown]"));
+    }
+
+    // ── RuleBasedSummarizer::micro_summarize ────────────────────────────
+
+    #[test]
+    fn test_micro_summarize_text() {
+        let s = RuleBasedSummarizer::new();
+        let msg = text_message("assistant", "A long response about Rust programming.");
+        let result = s.micro_summarize(&msg, 1000).unwrap();
+        assert!(result.contains("[Compressed assistant message]"));
+        assert!(result.contains("Rust programming"));
+    }
+
+    #[test]
+    fn test_micro_summarize_blocks() {
+        let s = RuleBasedSummarizer::new();
+        let msg = Message {
+            role: "assistant".to_string(),
+            content: MessageContent::Blocks(vec![
+                ContentBlock::Text { text: "Hello world".to_string() },
+            ]),
+        };
+        let result = s.micro_summarize(&msg, 1000).unwrap();
+        assert!(result.contains("[Compressed assistant message]"));
+        assert!(result.contains("Hello world"));
+    }
+
+    // ── Default / Debug / Send+Sync ──────────────────────────────────────
+
+    #[test]
+    fn test_default() {
+        let s = RuleBasedSummarizer::default();
+        let msgs = vec![text_message("user", "hi")];
+        assert!(s.summarize(&msgs, 100).is_ok());
+    }
+
+    #[test]
+    fn test_debug_impl() {
+        let s = RuleBasedSummarizer::new();
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("RuleBasedSummarizer"));
+    }
+
+    #[test]
+    fn test_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<RuleBasedSummarizer>();
+    }
+}

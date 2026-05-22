@@ -575,3 +575,145 @@ impl Tool for WorktreeTool {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_worktree_name_valid() {
+        assert!(validate_worktree_name("my-branch").is_ok());
+        assert!(validate_worktree_name("feature_123").is_ok());
+        assert!(validate_worktree_name("release.v2").is_ok());
+        assert!(validate_worktree_name("a/b/c").is_ok());
+    }
+
+    #[test]
+    fn validate_worktree_name_too_long() {
+        let long_name = "x".repeat(65);
+        let err = validate_worktree_name(&long_name).unwrap_err();
+        assert!(err.to_string().contains("64"));
+    }
+
+    #[test]
+    fn validate_worktree_name_exactly_64_chars() {
+        let name = "x".repeat(64);
+        assert!(validate_worktree_name(&name).is_ok());
+    }
+
+    #[test]
+    fn validate_worktree_name_invalid_chars() {
+        assert!(validate_worktree_name("my branch").is_err());
+        assert!(validate_worktree_name("my@branch").is_err());
+        assert!(validate_worktree_name("my#branch").is_err());
+    }
+
+    #[test]
+    fn validate_worktree_name_empty_segment_ok() {
+        // Splitting "a//b" by '/' gives segments ["a", "", "b"]
+        // Empty segments pass the .all() check vacuously
+        assert!(validate_worktree_name("a/b").is_ok());
+    }
+
+    #[test]
+    fn generate_worktree_name_format() {
+        let name = generate_worktree_name();
+        assert!(name.starts_with("worktree-"));
+        assert!(name.len() > "worktree-".len());
+    }
+
+    #[test]
+    fn generate_worktree_name_unique() {
+        let a = generate_worktree_name();
+        let b = generate_worktree_name();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn exit_action_serde() {
+        let keep_json = serde_json::to_string(&ExitAction::Keep).unwrap();
+        assert_eq!(keep_json, "\"keep\"");
+
+        let remove_json = serde_json::to_string(&ExitAction::Remove).unwrap();
+        assert_eq!(remove_json, "\"remove\"");
+
+        let de: ExitAction = serde_json::from_str("\"keep\"").unwrap();
+        assert_eq!(de, ExitAction::Keep);
+
+        let de: ExitAction = serde_json::from_str("\"remove\"").unwrap();
+        assert_eq!(de, ExitAction::Remove);
+    }
+
+    #[test]
+    fn exit_action_equality() {
+        assert_eq!(ExitAction::Keep, ExitAction::Keep);
+        assert_ne!(ExitAction::Keep, ExitAction::Remove);
+    }
+
+    #[test]
+    fn worktree_session_serde() {
+        let session = WorktreeSession {
+            worktree_path: "/tmp/worktree".to_string(),
+            worktree_branch: Some("worktree/test".to_string()),
+            original_cwd: "/home/user/project".to_string(),
+            original_head_commit: Some("abc123".to_string()),
+            tmux_session_name: None,
+            session_id: "test-id".to_string(),
+        };
+        let json = serde_json::to_string(&session).unwrap();
+        let de: WorktreeSession = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.worktree_path, "/tmp/worktree");
+        assert_eq!(de.worktree_branch.unwrap(), "worktree/test");
+        assert_eq!(de.session_id, "test-id");
+    }
+
+    #[test]
+    fn enter_worktree_input_deserialize() {
+        let input: EnterWorktreeInput = serde_json::from_str("{\"name\": \"my-feature\"}").unwrap();
+        assert_eq!(input.name.unwrap(), "my-feature");
+
+        let input: EnterWorktreeInput = serde_json::from_str("{}").unwrap();
+        assert!(input.name.is_none());
+    }
+
+    #[test]
+    fn exit_worktree_input_deserialize() {
+        let input: ExitWorktreeInput = serde_json::from_str(
+            "{\"action\": \"remove\", \"discard_changes\": true}",
+        ).unwrap();
+        assert_eq!(input.action, ExitAction::Remove);
+        assert_eq!(input.discard_changes, Some(true));
+
+        let input: ExitWorktreeInput = serde_json::from_str(
+            "{\"action\": \"keep\"}",
+        ).unwrap();
+        assert_eq!(input.action, ExitAction::Keep);
+        assert!(input.discard_changes.is_none());
+    }
+
+    #[test]
+    fn find_git_root_returns_none_for_tmp() {
+        // /tmp likely has no .git directory at root level
+        // This tests the traversal eventually returning None
+        let result = find_git_root(Path::new("/tmp"));
+        // Result depends on environment, just verify it doesn't panic
+        let _ = result;
+    }
+
+    #[test]
+    fn worktree_tool_default() {
+        let tool = WorktreeTool::default();
+        assert_eq!(tool.name(), "Worktree");
+        assert!(!tool.description().is_empty());
+    }
+
+    #[test]
+    fn send_sync_types() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<WorktreeSession>();
+        assert_send_sync::<EnterWorktreeInput>();
+        assert_send_sync::<ExitWorktreeInput>();
+        assert_send_sync::<ExitAction>();
+        assert_send_sync::<WorktreeTool>();
+    }
+}

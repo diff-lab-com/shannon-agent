@@ -140,7 +140,6 @@ impl Drop for AgentHandle {
 }
 
 /// Handle to a running agent process.
-#[allow(dead_code)]
 pub struct AgentHandle {
     /// The spawned child process.
     child: Child,
@@ -1102,5 +1101,148 @@ mod tests {
         let mgr = AgentProcessManager::new();
         let status = mgr.agent_status("nonexistent").await;
         assert!(status.is_none());
+    }
+
+    // ── Config and type tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_agent_process_status_equality() {
+        assert_eq!(AgentProcessStatus::Idle, AgentProcessStatus::Idle);
+        assert_ne!(AgentProcessStatus::Idle, AgentProcessStatus::Busy);
+        assert_ne!(AgentProcessStatus::Starting, AgentProcessStatus::Stopped);
+        assert_ne!(AgentProcessStatus::Crashed, AgentProcessStatus::Stopped);
+    }
+
+    #[test]
+    fn test_agent_process_config_serialization() {
+        let config = AgentProcessConfig {
+            binary_path: PathBuf::from("/usr/bin/shannon"),
+            args: vec!["--team-agent".to_string()],
+            env: HashMap::from([("KEY".to_string(), "value".to_string())]),
+            worktree_path: Some(PathBuf::from("/tmp/worktree")),
+            model: Some("gpt-4".to_string()),
+            system_prompt: Some("You are helpful".to_string()),
+            agent_name: "test-agent".to_string(),
+            permission_mode: Some("auto".to_string()),
+            allowed_tools: Some(vec!["Read".to_string(), "Write".to_string()]),
+            startup_timeout_secs: 30,
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let de: AgentProcessConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.binary_path, PathBuf::from("/usr/bin/shannon"));
+        assert_eq!(de.agent_name, "test-agent");
+        assert_eq!(de.model, Some("gpt-4".to_string()));
+        assert_eq!(de.allowed_tools.as_ref().map(|v| v.len()), Some(2));
+        assert_eq!(de.startup_timeout_secs, 30);
+    }
+
+    #[test]
+    fn test_agent_process_config_minimal() {
+        let json = r#"{"binary_path":"/bin/sh","agent_name":"a"}"#;
+        let config: AgentProcessConfig = serde_json::from_str(json).unwrap();
+        assert!(config.args.is_empty());
+        assert!(config.env.is_empty());
+        assert!(config.worktree_path.is_none());
+        assert!(config.model.is_none());
+        assert!(config.allowed_tools.is_none());
+        assert_eq!(config.startup_timeout_secs, 60); // default
+    }
+
+    #[test]
+    fn test_health_check_config_defaults() {
+        let config = HealthCheckConfig::default();
+        assert_eq!(config.check_interval_secs, 30);
+        assert_eq!(config.ping_timeout_secs, 10);
+        assert_eq!(config.max_restart_attempts, 3);
+        assert_eq!(config.startup_grace_period_secs, 15);
+        assert_eq!(config.graceful_shutdown_timeout_secs, 10);
+    }
+
+    #[test]
+    fn test_health_check_config_serialization() {
+        let config = HealthCheckConfig {
+            check_interval_secs: 60,
+            ping_timeout_secs: 20,
+            max_restart_attempts: 5,
+            startup_grace_period_secs: 30,
+            graceful_shutdown_timeout_secs: 15,
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let de: HealthCheckConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.check_interval_secs, 60);
+        assert_eq!(de.max_restart_attempts, 5);
+    }
+
+    #[test]
+    fn test_agent_process_error_variants() {
+        let cases: Vec<(AgentProcessError, &str)> = vec![
+            (
+                AgentProcessError::AgentNotFound("foo".into()),
+                "Agent not found: foo",
+            ),
+            (
+                AgentProcessError::Protocol("bad msg".into()),
+                "Protocol error: bad msg",
+            ),
+        ];
+        for (err, expected) in cases {
+            assert_eq!(err.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn test_agent_event_variants() {
+        // Verify event variants can be constructed
+        let _ready = AgentEvent::Ready {
+            agent_name: "a".into(),
+            capabilities: vec!["tools".into()],
+        };
+        let _progress = AgentEvent::Progress {
+            agent_name: "a".into(),
+            task_id: "t1".into(),
+            chunk: "data".into(),
+        };
+        let _complete = AgentEvent::TaskComplete {
+            agent_name: "a".into(),
+            task_id: "t1".into(),
+            success: true,
+            output: "done".into(),
+        };
+        let _idle = AgentEvent::Idle {
+            agent_name: "a".into(),
+            available_tasks_count: 3,
+        };
+        let _exited = AgentEvent::ProcessExited {
+            agent_name: "a".into(),
+            exit_code: Some(0),
+        };
+        let _health = AgentEvent::HealthCheckFailed {
+            agent_name: "a".into(),
+            consecutive_failures: 2,
+        };
+        let _restarted = AgentEvent::AgentRestarted {
+            agent_name: "a".into(),
+            restart_count: 1,
+        };
+        let _rpc = AgentEvent::RpcRequest {
+            agent_name: "a".into(),
+            request_id: 42,
+            method: "ping".into(),
+            params: serde_json::Value::Null,
+        };
+    }
+
+    #[tokio::test]
+    async fn test_try_recv_event_empty() {
+        let mut mgr = AgentProcessManager::new();
+        assert!(mgr.try_recv_event().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_take_event_receiver() {
+        let mut mgr = AgentProcessManager::new();
+        let rx = mgr.take_event_receiver();
+        // Receiver should be taken, further calls would return None or panic
+        drop(rx);
     }
 }

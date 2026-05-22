@@ -332,7 +332,6 @@ impl FeatureFlagManager {
 
     /// Remove a runtime override, reverting to the next source in the
     /// resolution chain.
-    #[allow(dead_code)]
     pub fn clear_override(&self, flag: &str) {
         let mut overrides = recover_lock(self.overrides.write());
         overrides.remove(&flag.to_lowercase());

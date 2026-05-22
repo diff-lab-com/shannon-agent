@@ -289,3 +289,214 @@ impl Tool for SkillTool {
     }
     fn is_read_only(&self) -> bool {        true    }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── SkillContext serialization ──────────────────────────────────────
+
+    #[test]
+    fn test_skill_context_serialization() {
+        assert_eq!(
+            serde_json::to_string(&SkillContext::Inline).unwrap(),
+            "\"inline\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SkillContext::Fork).unwrap(),
+            "\"fork\""
+        );
+    }
+
+    #[test]
+    fn test_skill_context_deserialization() {
+        let ctx: SkillContext = serde_json::from_str("\"inline\"").unwrap();
+        assert_eq!(ctx, SkillContext::Inline);
+        let ctx: SkillContext = serde_json::from_str("\"fork\"").unwrap();
+        assert_eq!(ctx, SkillContext::Fork);
+    }
+
+    // ── SkillCommand serialization ──────────────────────────────────────
+
+    #[test]
+    fn test_skill_command_roundtrip() {
+        let cmd = SkillCommand {
+            name: "test-skill".into(),
+            description: "A test skill".into(),
+            command_type: "prompt".into(),
+            context: Some(SkillContext::Inline),
+            allowed_tools: Some(vec!["Read".into(), "Bash".into()]),
+            model: Some("haiku".into()),
+            content: Some("Do something".into()),
+            source: Some("bundled".into()),
+            effort: Some("low".into()),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let parsed: SkillCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.name, cmd.name);
+        assert_eq!(parsed.command_type, cmd.command_type);
+        assert_eq!(parsed.context, cmd.context);
+        assert_eq!(parsed.model, cmd.model);
+    }
+
+    #[test]
+    fn test_skill_command_minimal() {
+        let cmd = SkillCommand {
+            name: "minimal".into(),
+            description: "desc".into(),
+            command_type: "prompt".into(),
+            context: None,
+            allowed_tools: None,
+            model: None,
+            content: None,
+            source: None,
+            effort: None,
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let parsed: SkillCommand = serde_json::from_str(&json).unwrap();
+        assert!(parsed.context.is_none());
+        assert!(parsed.allowed_tools.is_none());
+    }
+
+    // ── SkillInvokeInput ────────────────────────────────────────────────
+
+    #[test]
+    fn test_invoke_input_with_args() {
+        let input = SkillInvokeInput {
+            skill: "commit".into(),
+            args: Some("--amend".into()),
+        };
+        let json = serde_json::to_string(&input).unwrap();
+        let parsed: SkillInvokeInput = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.skill, "commit");
+        assert_eq!(parsed.args, Some("--amend".into()));
+    }
+
+    #[test]
+    fn test_invoke_input_without_args() {
+        let input = SkillInvokeInput {
+            skill: "review-pr".into(),
+            args: None,
+        };
+        let json = serde_json::to_string(&input).unwrap();
+        let parsed: SkillInvokeInput = serde_json::from_str(&json).unwrap();
+        assert!(parsed.args.is_none());
+    }
+
+    // ── Built-in skills ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_registry_has_commit_skill() {
+        let tool = SkillTool::new();
+        let skill = tool.find_skill("commit").unwrap();
+        assert_eq!(skill.name, "commit");
+        assert_eq!(skill.command_type, "prompt");
+        assert_eq!(skill.context, Some(SkillContext::Fork));
+    }
+
+    #[test]
+    fn test_registry_has_review_pr_skill() {
+        let tool = SkillTool::new();
+        let skill = tool.find_skill("review-pr").unwrap();
+        assert_eq!(skill.name, "review-pr");
+    }
+
+    #[test]
+    fn test_find_skill_with_leading_slash() {
+        let tool = SkillTool::new();
+        let skill = tool.find_skill("/commit");
+        assert!(skill.is_some());
+        assert_eq!(skill.unwrap().name, "commit");
+    }
+
+    #[test]
+    fn test_find_unknown_skill() {
+        let tool = SkillTool::new();
+        assert!(tool.find_skill("nonexistent").is_none());
+    }
+
+    // ── Skill execution ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_invoke_commit_skill() {
+        let tool = SkillTool::new();
+        let output = tool.execute(json!({"skill": "commit"})).await.unwrap();
+        assert!(!output.is_error);
+        assert!(output.metadata.get("success").unwrap().as_bool().unwrap());
+        assert_eq!(output.metadata.get("command_name").unwrap(), "commit");
+    }
+
+    #[tokio::test]
+    async fn test_invoke_skill_with_leading_slash() {
+        let tool = SkillTool::new();
+        let output = tool.execute(json!({"skill": "/commit"})).await.unwrap();
+        assert!(!output.is_error);
+    }
+
+    #[tokio::test]
+    async fn test_invoke_unknown_skill_errors() {
+        let tool = SkillTool::new();
+        let result = tool.execute(json!({"skill": "nonexistent"})).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_inline_skill_execution() {
+        let tool = SkillTool::new();
+        // Manually test inline execution by inserting an inline skill
+        {
+            let mut reg = tool.registry.write().unwrap();
+            reg.insert("inline-test".into(), SkillCommand {
+                name: "inline-test".into(),
+                description: "Test".into(),
+                command_type: "prompt".into(),
+                context: Some(SkillContext::Inline),
+                allowed_tools: Some(vec!["Read".into()]),
+                model: None,
+                content: Some("test content".into()),
+                source: None,
+                effort: None,
+            });
+        }
+        let output = tool.execute(json!({"skill": "inline-test"})).await.unwrap();
+        assert!(!output.is_error);
+        assert_eq!(output.metadata.get("status").unwrap(), "inline");
+        assert!(output.metadata.get("allowed_tools").is_some());
+    }
+
+    // ── Tool trait ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_tool_name() {
+        let tool = SkillTool::new();
+        assert_eq!(tool.name(), "Skill");
+    }
+
+    #[test]
+    fn test_tool_description() {
+        let tool = SkillTool::new();
+        assert!(!tool.description().is_empty());
+    }
+
+    #[test]
+    fn test_tool_is_read_only() {
+        let tool = SkillTool::new();
+        assert!(tool.is_read_only());
+    }
+
+    #[test]
+    fn test_tool_input_schema() {
+        let tool = SkillTool::new();
+        let schema = tool.input_schema();
+        assert_eq!(schema["type"], "object");
+        assert!(schema["properties"]["skill"].is_object());
+    }
+
+    #[test]
+    fn test_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<SkillTool>();
+        assert_send_sync::<SkillCommand>();
+        assert_send_sync::<SkillContext>();
+    }
+}

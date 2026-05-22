@@ -220,3 +220,182 @@ fn chrono_timestamp() -> i64 {
         .unwrap_or_default()
         .as_secs() as i64
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_app_state_new() {
+        let state = AppState::new();
+        let messages = state.messages.blocking_lock();
+        assert!(messages.is_empty());
+        assert!(!*state.querying.blocking_lock());
+        assert_eq!(*state.model.blocking_lock(), "claude-sonnet");
+    }
+
+    #[test]
+    fn test_chat_message_serialization() {
+        let msg = ChatMessage {
+            role: "user".to_string(),
+            content: "hello world".to_string(),
+            timestamp: 1700000000,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let deserialized: ChatMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.role, "user");
+        assert_eq!(deserialized.content, "hello world");
+        assert_eq!(deserialized.timestamp, 1700000000);
+    }
+
+    #[test]
+    fn test_chat_message_roles() {
+        for role in &["user", "assistant", "system"] {
+            let msg = ChatMessage {
+                role: role.to_string(),
+                content: "test".to_string(),
+                timestamp: 0,
+            };
+            assert_eq!(msg.role, *role);
+        }
+    }
+
+    #[test]
+    fn test_status_response_serialization() {
+        let resp = StatusResponse {
+            model: "claude-opus".to_string(),
+            querying: true,
+            message_count: 42,
+            working_dir: "/home/user".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let deserialized: StatusResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.model, "claude-opus");
+        assert!(deserialized.querying);
+        assert_eq!(deserialized.message_count, 42);
+    }
+
+    #[test]
+    fn test_model_info_serialization() {
+        let info = ModelInfo {
+            id: "gpt-4".to_string(),
+            name: "GPT-4".to_string(),
+            provider: "openai".to_string(),
+            context_window: 128_000,
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        let deserialized: ModelInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.id, "gpt-4");
+        assert_eq!(deserialized.context_window, 128_000);
+    }
+
+    #[test]
+    fn test_tool_info_serialization() {
+        let info = ToolInfo {
+            name: "bash".to_string(),
+            description: "Execute shell commands".to_string(),
+            enabled: true,
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        let deserialized: ToolInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.name, "bash");
+        assert!(deserialized.enabled);
+    }
+
+    #[test]
+    fn test_config_update_serialization() {
+        let update = ConfigUpdate {
+            key: "model".to_string(),
+            value: "claude-opus".to_string(),
+        };
+        let json = serde_json::to_string(&update).unwrap();
+        let deserialized: ConfigUpdate = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.key, "model");
+        assert_eq!(deserialized.value, "claude-opus");
+    }
+
+    #[test]
+    fn test_chrono_timestamp_reasonable() {
+        let ts = chrono_timestamp();
+        // Should be after 2024-01-01 and before 2030-01-01
+        assert!(ts > 1704067200, "timestamp should be after 2024-01-01");
+        assert!(ts < 1893456000, "timestamp should be before 2030-01-01");
+    }
+
+    #[tokio::test]
+    async fn test_app_state_default_model() {
+        let state = AppState::new();
+        let model = state.model.lock().await;
+        assert_eq!(*model, "claude-sonnet");
+    }
+
+    #[tokio::test]
+    async fn test_app_state_querying_toggle() {
+        let state = AppState::new();
+        {
+            let mut q = state.querying.lock().await;
+            *q = true;
+        }
+        assert!(*state.querying.lock().await);
+        {
+            let mut q = state.querying.lock().await;
+            *q = false;
+        }
+        assert!(!*state.querying.lock().await);
+    }
+
+    #[tokio::test]
+    async fn test_app_state_messages_push() {
+        let state = AppState::new();
+        {
+            let mut msgs = state.messages.lock().await;
+            msgs.push(ChatMessage {
+                role: "user".to_string(),
+                content: "hello".to_string(),
+                timestamp: 100,
+            });
+            msgs.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: "hi".to_string(),
+                timestamp: 101,
+            });
+        }
+        let msgs = state.messages.lock().await;
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].role, "user");
+        assert_eq!(msgs[1].content, "hi");
+    }
+
+    #[test]
+    fn test_status_response_default_fields() {
+        let resp = StatusResponse {
+            model: String::new(),
+            querying: false,
+            message_count: 0,
+            working_dir: String::new(),
+        };
+        assert!(!resp.querying);
+        assert_eq!(resp.message_count, 0);
+    }
+
+    #[test]
+    fn test_all_structs_are_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<AppState>();
+        assert_send_sync::<ChatMessage>();
+        assert_send_sync::<StatusResponse>();
+        assert_send_sync::<ModelInfo>();
+        assert_send_sync::<ToolInfo>();
+        assert_send_sync::<ConfigUpdate>();
+    }
+
+    #[test]
+    fn test_tool_info_disabled() {
+        let info = ToolInfo {
+            name: "dangerous".to_string(),
+            description: "A dangerous tool".to_string(),
+            enabled: false,
+        };
+        assert!(!info.enabled);
+    }
+}

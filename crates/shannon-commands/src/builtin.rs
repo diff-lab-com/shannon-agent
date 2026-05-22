@@ -15,6 +15,7 @@
 use crate::command::Command;
 use crate::registry::CommandRegistry;
 
+mod batch;
 mod commit;
 mod review_pr;
 mod review;
@@ -40,12 +41,12 @@ mod doctor;
 mod mcp;
 mod lsp;
 // Plugin management commands — scaffolded for future use
-#[allow(dead_code)]
 mod plugin;
 mod repl;
 mod image;
 mod repomap;
 mod outline;
+mod context;
 
 /// Register all built-in commands
 pub fn register_all(registry: &CommandRegistry) {
@@ -57,6 +58,7 @@ pub fn register_all(registry: &CommandRegistry) {
 /// Get all built-in commands
 pub fn all_commands() -> Vec<Command> {
     let mut cmds = vec![
+        batch::command(),
         commit::command(),
         review_pr::command(),
         review::command(),
@@ -85,6 +87,7 @@ pub fn all_commands() -> Vec<Command> {
         image::command(),
         repomap::command(),
         outline::command(),
+        context::command(),
     ];
     cmds.extend(repl::all_commands());
     cmds

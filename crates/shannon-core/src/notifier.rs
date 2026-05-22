@@ -403,7 +403,6 @@ impl DesktopNotifier {
         Ok(())
     }
 
-    #[allow(dead_code)]
     fn send_macos(&self, notification: &Notification) -> Result<(), NotifierError> {
         // Escape double quotes in body for AppleScript
         let escaped_body = notification.body.replace('"', "\\\"");
@@ -421,7 +420,6 @@ impl DesktopNotifier {
         Ok(())
     }
 
-    #[allow(dead_code)]
     fn send_windows(&self, notification: &Notification) -> Result<(), NotifierError> {
         // PowerShell toast notification
         let escaped_body = notification.body.replace('\'', "''");

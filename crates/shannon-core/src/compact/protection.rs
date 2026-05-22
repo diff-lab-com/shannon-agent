@@ -246,3 +246,186 @@ pub fn compact_messages_with_protection(
         original_tokens,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── MessageProtector ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_protector_new_is_empty() {
+        let p = MessageProtector::new();
+        assert_eq!(p.protected_count(), 0);
+        assert!(!p.is_protected(0));
+        assert!(p.protected_indices().is_empty());
+    }
+
+    #[test]
+    fn test_protector_protect_and_check() {
+        let mut p = MessageProtector::new();
+        p.protect(3);
+        p.protect(7);
+        assert!(p.is_protected(3));
+        assert!(p.is_protected(7));
+        assert!(!p.is_protected(0));
+        assert!(!p.is_protected(4));
+        assert_eq!(p.protected_count(), 2);
+    }
+
+    #[test]
+    fn test_protector_unprotect() {
+        let mut p = MessageProtector::new();
+        p.protect(1);
+        p.protect(2);
+        assert_eq!(p.protected_count(), 2);
+        p.unprotect(1);
+        assert!(!p.is_protected(1));
+        assert!(p.is_protected(2));
+        assert_eq!(p.protected_count(), 1);
+    }
+
+    #[test]
+    fn test_protector_unprotect_nonexistent_is_noop() {
+        let mut p = MessageProtector::new();
+        p.unprotect(99); // should not panic
+        assert_eq!(p.protected_count(), 0);
+    }
+
+    #[test]
+    fn test_protector_clear() {
+        let mut p = MessageProtector::new();
+        p.protect(1);
+        p.protect(2);
+        p.protect(3);
+        p.clear();
+        assert_eq!(p.protected_count(), 0);
+        assert!(!p.is_protected(1));
+    }
+
+    #[test]
+    fn test_protector_duplicate_protect() {
+        let mut p = MessageProtector::new();
+        p.protect(5);
+        p.protect(5);
+        assert_eq!(p.protected_count(), 1);
+    }
+
+    #[test]
+    fn test_protector_protected_indices() {
+        let mut p = MessageProtector::new();
+        p.protect(1);
+        p.protect(3);
+        p.protect(5);
+        let indices = p.protected_indices();
+        assert!(indices.contains(&1));
+        assert!(indices.contains(&3));
+        assert!(indices.contains(&5));
+        assert!(!indices.contains(&2));
+    }
+
+    // ── classify_message_priority ────────────────────────────────────────
+
+    #[test]
+    fn test_classify_system_critical() {
+        let msg = Message { role: "system".into(), content: MessageContent::Text("instructions".into()) };
+        assert_eq!(classify_message_priority(&msg), crate::context_budget::MessagePriority::Critical);
+    }
+
+    #[test]
+    fn test_classify_short_user_critical() {
+        let msg = Message { role: "user".into(), content: MessageContent::Text("fix the bug".into()) };
+        assert_eq!(classify_message_priority(&msg), crate::context_budget::MessagePriority::Critical);
+    }
+
+    #[test]
+    fn test_classify_long_user_normal() {
+        let long_text = "x".repeat(300);
+        let msg = Message { role: "user".into(), content: MessageContent::Text(long_text) };
+        assert_eq!(classify_message_priority(&msg), crate::context_budget::MessagePriority::Normal);
+    }
+
+    #[test]
+    fn test_classify_assistant_with_code_high() {
+        let msg = Message {
+            role: "assistant".into(),
+            content: MessageContent::Text("```rust\nfn main() {}\n```".into()),
+        };
+        // looks_like_code should detect the code block
+        assert_eq!(classify_message_priority(&msg), crate::context_budget::MessagePriority::High);
+    }
+
+    #[test]
+    fn test_classify_assistant_without_code_normal() {
+        let msg = Message {
+            role: "assistant".into(),
+            content: MessageContent::Text("Sure, I can help with that.".into()),
+        };
+        assert_eq!(classify_message_priority(&msg), crate::context_budget::MessagePriority::Normal);
+    }
+
+    #[test]
+    fn test_classify_tool_result_low() {
+        let msg = Message { role: "tool".into(), content: MessageContent::Text("output".into()) };
+        assert_eq!(classify_message_priority(&msg), crate::context_budget::MessagePriority::Low);
+    }
+
+    #[test]
+    fn test_classify_unknown_role_low() {
+        let msg = Message { role: "other".into(), content: MessageContent::Text("data".into()) };
+        assert_eq!(classify_message_priority(&msg), crate::context_budget::MessagePriority::Low);
+    }
+
+    // ── compact_messages_with_protection ─────────────────────────────────
+
+    #[test]
+    fn test_compact_empty_messages() {
+        let protector = MessageProtector::new();
+        let result = compact_messages_with_protection(
+            &[], &CompactionStrategy::Summarize, 1000, 2, &protector,
+        );
+        assert!(!result.did_compact);
+        assert_eq!(result.original_count, 0);
+    }
+
+    #[test]
+    fn test_compact_under_budget_no_change() {
+        let msgs = vec![Message {
+            role: "user".into(),
+            content: MessageContent::Text("hello".into()),
+        }];
+        let protector = MessageProtector::new();
+        let result = compact_messages_with_protection(
+            &msgs, &CompactionStrategy::Summarize, 10000, 2, &protector,
+        );
+        assert!(!result.did_compact);
+        assert_eq!(result.compacted_count, 1);
+    }
+
+    #[test]
+    fn test_protected_messages_preserved() {
+        // Build a large conversation that exceeds budget
+        let mut msgs = Vec::new();
+        for i in 0..20 {
+            msgs.push(Message {
+                role: if i % 2 == 0 { "user" } else { "tool" }.into(),
+                content: MessageContent::Text("x".repeat(500)),
+            });
+        }
+        let mut protector = MessageProtector::new();
+        protector.protect(5); // protect one specific message
+        let result = compact_messages_with_protection(
+            &msgs, &CompactionStrategy::Summarize, 2000, 2, &protector,
+        );
+        // Protected message should still be in result
+        let protected_content = extract_text_content(&msgs[5]);
+        let result_texts: Vec<String> = result.messages.iter().map(|m| extract_text_content(m)).collect();
+        assert!(result_texts.iter().any(|t| t == &protected_content));
+    }
+
+    #[test]
+    fn test_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<MessageProtector>();
+    }
+}

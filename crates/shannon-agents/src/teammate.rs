@@ -926,3 +926,216 @@ impl Teammate {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn teammate_config_default() {
+        let config = TeammateConfig::default();
+        assert_eq!(config.agent_type, "general-purpose");
+        assert!(config.capabilities.is_empty());
+        assert_eq!(config.max_concurrent_tasks, 3);
+        assert!(!config.plan_mode_required);
+        assert!(config.model.is_none());
+        assert!(!config.is_lead);
+        assert!(config.allowed_tools.is_empty());
+        assert!(config.permission_mode.is_none());
+        assert!(config.isolation.is_none());
+    }
+
+    #[test]
+    fn teammate_config_serde_roundtrip() {
+        let config = TeammateConfig {
+            agent_type: "backend".into(),
+            capabilities: vec!["rust".into(), "sql".into()],
+            max_concurrent_tasks: 5,
+            plan_mode_required: true,
+            model: Some("gpt-4".into()),
+            system_prompt: Some("You are a backend expert".into()),
+            temperature: Some(0.7),
+            is_lead: true,
+            allowed_tools: vec!["bash".into()],
+            permission_mode: Some("auto".into()),
+            isolation: Some("worktree".into()),
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let de: TeammateConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.agent_type, "backend");
+        assert_eq!(de.capabilities.len(), 2);
+        assert!(de.is_lead);
+    }
+
+    #[test]
+    fn teammate_status_serde() {
+        let statuses = vec![
+            TeammateStatus::Idle,
+            TeammateStatus::Busy,
+            TeammateStatus::Planning,
+            TeammateStatus::ShuttingDown,
+            TeammateStatus::Stopped,
+            TeammateStatus::Error,
+        ];
+        let json = serde_json::to_string(&statuses).unwrap();
+        let de: Vec<TeammateStatus> = serde_json::from_str(&json).unwrap();
+        assert_eq!(de, statuses);
+    }
+
+    #[test]
+    fn teammate_state_serde_roundtrip() {
+        let state = TeammateState {
+            status: TeammateStatus::Busy,
+            active_tasks: 2,
+            current_worktree: Some("/tmp/wt".into()),
+            last_activity: chrono::Utc::now(),
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        let de: TeammateState = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.status, TeammateStatus::Busy);
+        assert_eq!(de.active_tasks, 2);
+    }
+
+    #[tokio::test]
+    async fn teammate_new_is_idle() {
+        let agent = Teammate::new("worker-1".into(), TeammateConfig::default());
+        assert_eq!(agent.name, "worker-1");
+        assert_eq!(agent.status().await, TeammateStatus::Idle);
+        assert!(agent.is_available().await);
+    }
+
+    #[tokio::test]
+    async fn teammate_has_capability() {
+        let config = TeammateConfig {
+            capabilities: vec!["rust".into(), "sql".into()],
+            ..Default::default()
+        };
+        let agent = Teammate::new("worker".into(), config);
+        assert!(agent.has_capability("rust"));
+        assert!(agent.has_capability("RUST"));
+        assert!(!agent.has_capability("python"));
+    }
+
+    #[tokio::test]
+    async fn teammate_assign_and_complete_task() {
+        let agent = Teammate::new("w".into(), TeammateConfig::default());
+        let task_id = Uuid::new_v4();
+        agent.assign_task(task_id).await.unwrap();
+        assert_eq!(agent.status().await, TeammateStatus::Busy);
+        agent.complete_task(task_id).await;
+        assert_eq!(agent.status().await, TeammateStatus::Idle);
+    }
+
+    #[tokio::test]
+    async fn teammate_fail_task_returns_idle() {
+        let agent = Teammate::new("w".into(), TeammateConfig::default());
+        let task_id = Uuid::new_v4();
+        agent.assign_task(task_id).await.unwrap();
+        agent.fail_task(task_id, "timeout".into()).await;
+        assert_eq!(agent.status().await, TeammateStatus::Idle);
+    }
+
+    #[tokio::test]
+    async fn teammate_metadata_crud() {
+        let agent = Teammate::new("w".into(), TeammateConfig::default());
+        assert!(agent.get_metadata("key").await.is_none());
+        agent.set_metadata("key".into(), serde_json::json!("value")).await;
+        assert_eq!(agent.get_metadata("key").await.unwrap(), serde_json::json!("value"));
+    }
+
+    #[tokio::test]
+    async fn teammate_merge_metadata() {
+        let agent = Teammate::new("w".into(), TeammateConfig::default());
+        agent.merge_metadata(HashMap::from([
+            ("a".into(), serde_json::json!(1)),
+            ("b".into(), serde_json::json!(2)),
+        ])).await;
+        assert_eq!(agent.get_metadata("a").await.unwrap(), serde_json::json!(1));
+    }
+
+    #[tokio::test]
+    async fn teammate_team_name() {
+        let agent = Teammate::new("w".into(), TeammateConfig::default());
+        assert!(agent.team_name().is_none());
+        agent.set_team_name("alpha".into());
+        assert_eq!(agent.team_name(), Some("alpha".into()));
+    }
+
+    #[tokio::test]
+    async fn teammate_idle_interval() {
+        let agent = Teammate::new("w".into(), TeammateConfig::default());
+        assert_eq!(agent.idle_interval(), 3);
+        agent.set_idle_interval(10);
+        assert_eq!(agent.idle_interval(), 10);
+    }
+
+    #[tokio::test]
+    async fn teammate_plan_mode() {
+        let config = TeammateConfig { plan_mode_required: true, ..Default::default() };
+        let agent = Teammate::new("w".into(), config);
+        agent.enter_plan_mode().await.unwrap();
+        assert_eq!(agent.status().await, TeammateStatus::Planning);
+        agent.exit_plan_mode().await.unwrap();
+        assert_eq!(agent.status().await, TeammateStatus::Idle);
+    }
+
+    #[tokio::test]
+    async fn teammate_send_recv_message() {
+        let agent = Teammate::new("w".into(), TeammateConfig::default());
+        let msg = AgentMessage::new_text("lead".into(), "w".into(), "hello".into());
+        agent.send(msg).await.unwrap();
+        let received = agent.recv().await.unwrap();
+        assert_eq!(received.from, "lead");
+    }
+
+    #[tokio::test]
+    async fn teammate_try_recv_empty() {
+        let agent = Teammate::new("w".into(), TeammateConfig::default());
+        assert!(agent.try_recv().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn teammate_notify_idle_no_tasks() {
+        let agent = Teammate::new("w".into(), TeammateConfig::default());
+        agent.set_team_name("team".into());
+        let notification = agent.notify_idle().await;
+        assert!(notification.is_some());
+        assert_eq!(notification.unwrap().from, "w");
+    }
+
+    #[tokio::test]
+    async fn teammate_notify_idle_with_tasks_is_none() {
+        let agent = Teammate::new("w".into(), TeammateConfig::default());
+        agent.assign_task(Uuid::new_v4()).await.unwrap();
+        assert!(agent.notify_idle().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn teammate_max_concurrent_respected() {
+        let config = TeammateConfig { max_concurrent_tasks: 1, ..Default::default() };
+        let agent = Teammate::new("w".into(), config);
+        agent.assign_task(Uuid::new_v4()).await.unwrap();
+        assert!(!agent.is_available().await);
+        assert!(agent.assign_task(Uuid::new_v4()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn teammate_conversation_history_empty() {
+        let agent = Teammate::new("w".into(), TeammateConfig::default());
+        assert!(agent.conversation_history().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn teammate_created_at() {
+        let agent = Teammate::new("w".into(), TeammateConfig::default());
+        assert!(agent.created_at() <= chrono::Utc::now());
+    }
+
+    #[test]
+    fn send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<TeammateConfig>();
+        assert_send_sync::<TeammateStatus>();
+        assert_send_sync::<TeammateState>();
+    }
+}

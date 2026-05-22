@@ -113,7 +113,6 @@ pub(crate) fn dedup_custom_commands(commands: &mut Vec<CustomCommandEntry>) {
 /// and re-registered in the [`CommandRegistry`].
 pub(crate) struct CustomCommandWatcher {
     dirs: Vec<std::path::PathBuf>,
-    #[allow(dead_code)]
     watcher: Option<notify::RecommendedWatcher>,
     dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
     registered_names: Vec<String>,
@@ -244,7 +243,6 @@ impl CustomCommandWatcher {
 /// `.claude/settings.json`, `.shannon/settings.json`, and `.shannon.toml` / `.shannon/config.toml`.
 /// Uses the `notify` crate for efficient filesystem events.
 pub(crate) struct SettingsWatcher {
-    #[allow(dead_code)]
     watcher: Option<notify::RecommendedWatcher>,
     dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Paths being watched, for diagnostic logging.
@@ -347,5 +345,218 @@ impl SettingsWatcher {
             tracing::info!("Settings files changed: {:?}", changed);
             Some(changed)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write as IoWrite;
+
+    fn make_entry(name: &str, template: &str, path: &str) -> CustomCommandEntry {
+        CustomCommandEntry {
+            name: name.to_string(),
+            template: template.to_string(),
+            path: std::path::PathBuf::from(path),
+            description: None,
+            arguments: Vec::new(),
+            model: None,
+            allowed_tools: Vec::new(),
+            agent: None,
+        }
+    }
+
+    // --- parse_frontmatter_field ---
+
+    #[test]
+    fn frontmatter_simple_field() {
+        let fm = "description: hello world\nmodel: opus";
+        assert_eq!(parse_frontmatter_field(fm, "description"), Some("hello world".into()));
+        assert_eq!(parse_frontmatter_field(fm, "model"), Some("opus".into()));
+    }
+
+    #[test]
+    fn frontmatter_quoted_values() {
+        let fm = "description: \"a quoted desc\"\nmodel: 'single'";
+        assert_eq!(parse_frontmatter_field(fm, "description"), Some("a quoted desc".into()));
+        assert_eq!(parse_frontmatter_field(fm, "model"), Some("single".into()));
+    }
+
+    #[test]
+    fn frontmatter_empty_value_returns_none() {
+        let fm = "description: \nmodel:";
+        assert_eq!(parse_frontmatter_field(fm, "description"), None);
+        assert_eq!(parse_frontmatter_field(fm, "model"), None);
+    }
+
+    #[test]
+    fn frontmatter_missing_field() {
+        let fm = "description: hello";
+        assert_eq!(parse_frontmatter_field(fm, "model"), None);
+    }
+
+    #[test]
+    fn frontmatter_comma_separated_arguments() {
+        let fm = "arguments: arg1, arg2, arg3";
+        assert_eq!(parse_frontmatter_field(fm, "arguments"), Some("arg1, arg2, arg3".into()));
+    }
+
+    #[test]
+    fn frontmatter_leading_whitespace() {
+        let fm = "  description: padded";
+        assert_eq!(parse_frontmatter_field(fm, "description"), Some("padded".into()));
+    }
+
+    #[test]
+    fn frontmatter_field_is_prefix_not_substring() {
+        let fm = "description-extra: nope\ndescription: yes";
+        assert_eq!(parse_frontmatter_field(fm, "description"), Some("yes".into()));
+    }
+
+    #[test]
+    fn frontmatter_allowed_tools_with_hyphen() {
+        let fm = "allowed-tools: Bash, Read, Write";
+        assert_eq!(parse_frontmatter_field(fm, "allowed-tools"), Some("Bash, Read, Write".into()));
+    }
+
+    // --- dedup_custom_commands ---
+
+    #[test]
+    fn dedup_keeps_last_occurrence() {
+        let mut cmds = vec![
+            make_entry("foo", "v1", "/user/foo.md"),
+            make_entry("bar", "v2", "/user/bar.md"),
+            make_entry("foo", "v3", "/project/foo.md"),
+        ];
+        dedup_custom_commands(&mut cmds);
+        assert_eq!(cmds.len(), 2);
+        let foo = cmds.iter().find(|c| c.name == "foo").unwrap();
+        assert_eq!(foo.template, "v3");
+    }
+
+    #[test]
+    fn dedup_no_duplicates_unchanged() {
+        let mut cmds = vec![
+            make_entry("a", "t1", "/a.md"),
+            make_entry("b", "t2", "/b.md"),
+        ];
+        dedup_custom_commands(&mut cmds);
+        assert_eq!(cmds.len(), 2);
+    }
+
+    #[test]
+    fn dedup_empty_input() {
+        let mut cmds: Vec<CustomCommandEntry> = vec![];
+        dedup_custom_commands(&mut cmds);
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn dedup_preserves_order() {
+        let mut cmds = vec![
+            make_entry("a", "1", "/1.md"),
+            make_entry("b", "2", "/2.md"),
+            make_entry("a", "3", "/3.md"),
+            make_entry("c", "4", "/4.md"),
+        ];
+        dedup_custom_commands(&mut cmds);
+        let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, vec!["b", "a", "c"]);
+    }
+
+    // --- collect_custom_commands ---
+
+    #[test]
+    fn collect_finds_md_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("review.md");
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        f.write_all(b"Review the code for $ARGUMENTS").unwrap();
+
+        let mut results = Vec::new();
+        collect_custom_commands(dir.path(), "", &mut results);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "review");
+        assert_eq!(results[0].template, "Review the code for $ARGUMENTS");
+    }
+
+    #[test]
+    fn collect_with_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("fix.md");
+        std::fs::write(&file_path, "Fix $ARGUMENTS").unwrap();
+
+        let mut results = Vec::new();
+        collect_custom_commands(dir.path(), "project:", &mut results);
+        assert_eq!(results[0].name, "project:fix");
+    }
+
+    #[test]
+    fn collect_parses_frontmatter() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test.md");
+        std::fs::write(&file_path, "---\ndescription: My desc\nmodel: opus\n---\nDo stuff").unwrap();
+
+        let mut results = Vec::new();
+        collect_custom_commands(dir.path(), "", &mut results);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].description, Some("My desc".into()));
+        assert_eq!(results[0].model, Some("opus".into()));
+        assert_eq!(results[0].template, "Do stuff");
+    }
+
+    #[test]
+    fn collect_ignores_non_md_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("readme.txt"), "not a command").unwrap();
+        std::fs::write(dir.path().join("cmd.md"), "a command").unwrap();
+
+        let mut results = Vec::new();
+        collect_custom_commands(dir.path(), "", &mut results);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "cmd");
+    }
+
+    #[test]
+    fn collect_skips_hidden_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let hidden = dir.path().join(".hidden");
+        std::fs::create_dir(&hidden).unwrap();
+        std::fs::write(hidden.join("secret.md"), "secret").unwrap();
+        std::fs::write(dir.path().join("visible.md"), "visible").unwrap();
+
+        let mut results = Vec::new();
+        collect_custom_commands(dir.path(), "", &mut results);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "visible");
+    }
+
+    #[test]
+    fn collect_nested_dirs_with_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("project");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("build.md"), "build it").unwrap();
+
+        let mut results = Vec::new();
+        collect_custom_commands(dir.path(), "", &mut results);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "project:build");
+    }
+
+    #[test]
+    fn collect_frontmatter_arguments_and_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("multi.md");
+        std::fs::write(
+            &file_path,
+            "---\narguments: arg1, arg2\nallowed-tools: Bash, Read\n---\nBody",
+        ).unwrap();
+
+        let mut results = Vec::new();
+        collect_custom_commands(dir.path(), "", &mut results);
+        let entry = &results[0];
+        assert_eq!(entry.arguments, vec!["arg1", "arg2"]);
+        assert_eq!(entry.allowed_tools, vec!["Bash", "Read"]);
     }
 }

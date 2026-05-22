@@ -761,3 +761,248 @@ impl LlmClient {
 
 /// Backward-compatible alias
 pub type ClaudeClient = LlmClient;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_config() -> LlmClientConfig {
+        LlmClientConfig {
+            provider: LlmProvider::Anthropic,
+            api_key: "test-key".to_string(),
+            model: "claude-3-5-sonnet-20241022".to_string(),
+            base_url: "https://api.anthropic.com/v1/".to_string(),
+            max_tokens: 4096,
+            api_version: "2023-06-01".to_string(),
+            timeout_seconds: 30,
+            max_stream_reconnects: 0,
+            extra_headers: Default::default(),
+            budget_tokens: None,
+            fallback_provider: None,
+            fallback_base_url: None,
+            retry_config: Default::default(),
+            reasoning_effort: None,
+        }
+    }
+
+    fn ollama_config() -> LlmClientConfig {
+        LlmClientConfig {
+            provider: LlmProvider::Ollama,
+            api_key: String::new(),
+            model: "llama3".to_string(),
+            base_url: "http://localhost:11434/".to_string(),
+            max_tokens: 4096,
+            api_version: String::new(),
+            timeout_seconds: 30,
+            max_stream_reconnects: 0,
+            extra_headers: Default::default(),
+            budget_tokens: None,
+            fallback_provider: None,
+            fallback_base_url: None,
+            retry_config: Default::default(),
+            reasoning_effort: None,
+        }
+    }
+
+    // ── Construction ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_new_creates_client() {
+        let client = LlmClient::new(test_config());
+        assert_eq!(client.model(), "claude-3-5-sonnet-20241022");
+        assert_eq!(client.provider(), &LlmProvider::Anthropic);
+    }
+
+    #[test]
+    fn test_try_new_creates_client() {
+        let client = LlmClient::try_new(test_config()).unwrap();
+        assert_eq!(client.api_key(), "test-key");
+    }
+
+    #[test]
+    fn test_new_unauthenticated() {
+        let client = LlmClient::new_unauthenticated(ollama_config());
+        assert_eq!(client.provider(), &LlmProvider::Ollama);
+        assert_eq!(client.api_key(), "");
+    }
+
+    // ── Accessors ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_model_accessor() {
+        let client = LlmClient::new(test_config());
+        assert_eq!(client.model(), "claude-3-5-sonnet-20241022");
+    }
+
+    #[test]
+    fn test_api_key_accessor() {
+        let client = LlmClient::new(test_config());
+        assert_eq!(client.api_key(), "test-key");
+    }
+
+    #[test]
+    fn test_provider_accessor() {
+        let client = LlmClient::new(test_config());
+        assert_eq!(*client.provider(), LlmProvider::Anthropic);
+    }
+
+    #[test]
+    fn test_base_url_accessor() {
+        let client = LlmClient::new(test_config());
+        assert_eq!(client.base_url(), "https://api.anthropic.com/v1/");
+    }
+
+    #[test]
+    fn test_max_tokens_accessor() {
+        let client = LlmClient::new(test_config());
+        assert_eq!(client.max_tokens(), 4096);
+    }
+
+    #[test]
+    fn test_config_accessor() {
+        let client = LlmClient::new(test_config());
+        assert_eq!(client.config().model, "claude-3-5-sonnet-20241022");
+    }
+
+    // ── Setters ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_set_model() {
+        let mut client = LlmClient::new(test_config());
+        client.set_model("claude-3-opus".to_string());
+        assert_eq!(client.model(), "claude-3-opus");
+    }
+
+    #[test]
+    fn test_set_max_tokens() {
+        let mut client = LlmClient::new(test_config());
+        client.set_max_tokens(8192);
+        assert_eq!(client.max_tokens(), 8192);
+    }
+
+    #[test]
+    fn test_set_base_url_auto_detects_provider() {
+        let mut client = LlmClient::new(test_config());
+        client.set_base_url("http://localhost:11434/".to_string());
+        assert_eq!(client.base_url(), "http://localhost:11434/");
+        assert_eq!(*client.provider(), LlmProvider::Ollama);
+    }
+
+    #[test]
+    fn test_add_header() {
+        let mut client = LlmClient::new(test_config());
+        client.add_header("X-Custom".to_string(), "value".to_string());
+        assert_eq!(client.config().extra_headers.get("X-Custom").unwrap(), "value");
+    }
+
+    #[test]
+    fn test_set_model_for_provider() {
+        let mut client = LlmClient::new(test_config());
+        client.set_model_for_provider("llama3".to_string(), LlmProvider::Ollama);
+        assert_eq!(client.model(), "llama3");
+        assert_eq!(*client.provider(), LlmProvider::Ollama);
+        assert!(client.base_url().contains("localhost:11434"));
+    }
+
+    // ── auth_headers ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_auth_headers_anthropic() {
+        let client = LlmClient::new(test_config());
+        let headers = client.auth_headers();
+        let api_key = headers.iter().find(|(k, _)| k == "x-api-key").unwrap();
+        assert_eq!(api_key.1, "test-key");
+        let version = headers.iter().find(|(k, _)| k == "anthropic-version").unwrap();
+        assert_eq!(version.1, "2023-06-01");
+    }
+
+    #[test]
+    fn test_auth_headers_openai() {
+        let mut cfg = test_config();
+        cfg.provider = LlmProvider::OpenAI;
+        cfg.base_url = "https://api.openai.com/v1/".to_string();
+        let client = LlmClient::new(cfg);
+        let headers = client.auth_headers();
+        let auth = headers.iter().find(|(k, _)| k == "Authorization").unwrap();
+        assert!(auth.1.starts_with("Bearer test-key"));
+    }
+
+    #[test]
+    fn test_auth_headers_ollama_empty() {
+        let client = LlmClient::new_unauthenticated(ollama_config());
+        let headers = client.auth_headers();
+        assert!(headers.is_empty());
+    }
+
+    #[test]
+    fn test_auth_headers_gemini() {
+        let mut cfg = test_config();
+        cfg.provider = LlmProvider::Gemini;
+        let client = LlmClient::new(cfg);
+        let headers = client.auth_headers();
+        let key = headers.iter().find(|(k, _)| k == "x-goog-api-key").unwrap();
+        assert_eq!(key.1, "test-key");
+    }
+
+    #[test]
+    fn test_auth_headers_custom_uses_extra() {
+        let mut cfg = test_config();
+        cfg.provider = LlmProvider::Custom;
+        cfg.extra_headers.insert("X-Api-Key".to_string(), "custom-key".to_string());
+        let client = LlmClient::new(cfg);
+        let headers = client.auth_headers();
+        let key = headers.iter().find(|(k, _)| k == "X-Api-Key").unwrap();
+        assert_eq!(key.1, "custom-key");
+    }
+
+    // ── endpoint_url ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_endpoint_url_anthropic() {
+        let client = LlmClient::new(test_config());
+        let url = client.endpoint_url();
+        assert!(url.contains("anthropic.com"));
+        assert!(url.contains("messages"));
+    }
+
+    #[test]
+    fn test_endpoint_url_ollama() {
+        let client = LlmClient::new_unauthenticated(ollama_config());
+        let url = client.endpoint_url();
+        assert!(url.contains("localhost:11434"));
+    }
+
+    // ── Clone ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_clone() {
+        let client = LlmClient::new(test_config());
+        let cloned = client.clone();
+        assert_eq!(cloned.model(), client.model());
+        assert_eq!(cloned.provider(), client.provider());
+    }
+
+    // ── ClaudeClient alias ──────────────────────────────────────────────
+
+    #[test]
+    fn test_claude_client_alias() {
+        let client = ClaudeClient::new(test_config());
+        assert_eq!(client.model(), "claude-3-5-sonnet-20241022");
+    }
+
+    // ── cached_ollama_info ──────────────────────────────────────────────
+
+    #[test]
+    fn test_cached_ollama_info_initially_none() {
+        let client = LlmClient::new(test_config());
+        assert!(client.cached_ollama_info().is_none());
+    }
+
+    // ── Send + Sync ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<LlmClient>();
+    }
+}

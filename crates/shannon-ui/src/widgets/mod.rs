@@ -17,6 +17,7 @@ pub mod command_palette;
 pub mod agents_panel;
 pub mod renderable;
 pub mod column;
+pub mod agent_bar;
 
 // Re-exports for convenient access
 pub use header::HeaderWidget;

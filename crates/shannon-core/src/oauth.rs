@@ -456,9 +456,7 @@ impl OAuthService {
         }
         let id = client.id.clone();
         self.clients.insert(id.clone(), client);
-        Ok(self.clients.get(&id).unwrap_or_else(|| {
-            unreachable!("client was just inserted with id {id}")
-        }))
+        Ok(self.clients.get(&id).expect("client was just inserted after contains_key check"))
     }
 
     /// List all registered client IDs.

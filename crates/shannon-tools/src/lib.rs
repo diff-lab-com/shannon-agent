@@ -100,6 +100,7 @@ pub use lsp::{
 pub use lsp_diagnostics::{
     LspDiagnostic, DiagnosticSeverity, RelatedInfo,
     DiagnosticRegistry, DiagnosticSummary,
+    CliDiagnosticResult, run_cli_diagnostics,
 };
 pub use grep::GrepTool;
 pub use ask_user::{
@@ -535,4 +536,88 @@ pub fn register_team_tools(
     registry.register(Box::new(shannon_agents::TeamTaskUpdateTool::new(coordinator.clone())))?;
     registry.register(Box::new(shannon_agents::TeamTaskListTool::new(coordinator)))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shannon_core::tools::ToolRegistry;
+
+    #[test]
+    fn register_default_tools_succeeds() {
+        let mut registry = ToolRegistry::new();
+        let result = register_default_tools(&mut registry);
+        assert!(result.is_ok(), "register_default_tools should succeed");
+    }
+
+    #[test]
+    fn register_default_tools_returns_agent_context() {
+        let mut registry = ToolRegistry::new();
+        let handle = register_default_tools(&mut registry).unwrap();
+        let ctx = handle.lock().unwrap();
+        assert!(ctx.is_none(), "Agent context should start as None");
+    }
+
+    #[test]
+    fn register_default_tools_registers_core_tools() {
+        let mut registry = ToolRegistry::new();
+        register_default_tools(&mut registry).unwrap();
+
+        let names: Vec<String> = registry.list_tools_info().iter().map(|t| t.name.clone()).collect();
+        assert!(names.contains(&"Read".to_string()), "Read tool should be registered");
+        assert!(names.contains(&"Write".to_string()), "Write tool should be registered");
+        assert!(names.contains(&"Edit".to_string()), "Edit tool should be registered");
+        assert!(names.contains(&"Bash".to_string()), "Bash tool should be registered");
+        assert!(names.contains(&"Glob".to_string()), "Glob tool should be registered");
+    }
+
+    #[test]
+    fn register_default_tools_registers_lsp_tools() {
+        let mut registry = ToolRegistry::new();
+        register_default_tools(&mut registry).unwrap();
+
+        let names: Vec<String> = registry.list_tools_info().iter().map(|t| t.name.clone()).collect();
+        assert!(names.contains(&"go_to_definition".to_string()));
+        assert!(names.contains(&"find_references".to_string()));
+        assert!(names.contains(&"hover".to_string()));
+        assert!(names.contains(&"document_symbol".to_string()));
+        assert!(names.contains(&"workspace_symbol".to_string()));
+        assert!(names.contains(&"rename_symbol".to_string()));
+        assert!(names.contains(&"code_actions".to_string()));
+    }
+
+    #[test]
+    fn register_default_tools_registers_task_tools() {
+        let mut registry = ToolRegistry::new();
+        register_default_tools(&mut registry).unwrap();
+
+        let names: Vec<String> = registry.list_tools_info().iter().map(|t| t.name.clone()).collect();
+        assert!(names.contains(&"TodoWrite".to_string()));
+        assert!(names.contains(&"TaskCreate".to_string()));
+        assert!(names.contains(&"TaskList".to_string()));
+        assert!(names.contains(&"TaskUpdate".to_string()));
+        assert!(names.contains(&"TaskGet".to_string()));
+    }
+
+    #[test]
+    fn register_tools_no_duplicates() {
+        let mut registry = ToolRegistry::new();
+        register_default_tools(&mut registry).unwrap();
+
+        let names: Vec<String> = registry.list_tools_info().iter().map(|t| t.name.clone()).collect();
+        let mut seen = std::collections::HashSet::new();
+        for name in &names {
+            assert!(seen.insert(name.clone()), "Duplicate tool name: {name}");
+        }
+    }
+
+    #[test]
+    fn register_default_tools_tool_count() {
+        let mut registry = ToolRegistry::new();
+        register_default_tools(&mut registry).unwrap();
+
+        let tools = registry.list_tools_info();
+        // Should have a substantial number of tools registered
+        assert!(tools.len() > 30, "Expected >30 tools, got {}", tools.len());
+    }
 }

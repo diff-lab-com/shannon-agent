@@ -419,9 +419,7 @@ impl BridgeService {
         let id = session.id.clone();
         self.message_history.insert(id.clone(), Vec::new());
         self.sessions.insert(id.clone(), session);
-        Ok(self.sessions.get(&id).unwrap_or_else(|| {
-            unreachable!("session was just inserted with id {id}")
-        }))
+        Ok(self.sessions.get(&id).expect("session was just inserted after capacity check"))
     }
 
     /// Get a session by ID.

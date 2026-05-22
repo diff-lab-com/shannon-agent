@@ -178,13 +178,27 @@ impl LspDisplay {
 #[derive(Debug, Clone)]
 pub struct DiagnosticStore {
     pub diagnostics: Vec<Diagnostic>,
+    stale: bool,
 }
 
 impl DiagnosticStore {
     pub fn new() -> Self {
         Self {
             diagnostics: Vec::new(),
+            stale: false,
         }
+    }
+
+    pub fn mark_stale(&mut self) {
+        self.stale = true;
+    }
+
+    pub fn is_stale(&self) -> bool {
+        self.stale
+    }
+
+    pub fn clear_stale(&mut self) {
+        self.stale = false;
     }
 
     pub fn add(&mut self, diag: Diagnostic) {
@@ -233,6 +247,58 @@ impl DiagnosticStore {
 impl Default for DiagnosticStore {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl DiagnosticStore {
+    /// Sync diagnostics from the tools-layer DiagnosticRegistry into this display store.
+    ///
+    /// Clears existing diagnostics and replaces them with the registry's current data.
+    /// Returns the number of diagnostics synced.
+    pub fn sync_from_registry(&mut self, registry: &shannon_tools::DiagnosticRegistry) -> usize {
+        self.diagnostics.clear();
+        self.stale = false;
+        for diag in registry.get_all() {
+            let severity = match diag.severity {
+                shannon_tools::DiagnosticSeverity::Error => DiagnosticSeverity::Error,
+                shannon_tools::DiagnosticSeverity::Warning => DiagnosticSeverity::Warning,
+                shannon_tools::DiagnosticSeverity::Info => DiagnosticSeverity::Info,
+                shannon_tools::DiagnosticSeverity::Hint => DiagnosticSeverity::Hint,
+            };
+            self.diagnostics.push(Diagnostic {
+                severity,
+                message: diag.message.clone(),
+                file_path: diag.file_path.clone(),
+                line: diag.line + 1, // LSP diagnostics are 0-based, display is 1-based
+                source: Some(diag.source.clone()),
+            });
+        }
+        self.diagnostics.len()
+    }
+
+    /// Update diagnostics from a CLI diagnostic run result.
+    ///
+    /// Replaces all existing diagnostics with the parsed CLI output.
+    /// Returns the number of diagnostics loaded.
+    pub fn update_from_cli(&mut self, result: &shannon_tools::CliDiagnosticResult) -> usize {
+        self.diagnostics.clear();
+        self.stale = false;
+        for diag in &result.diagnostics {
+            let severity = match diag.severity {
+                shannon_tools::DiagnosticSeverity::Error => DiagnosticSeverity::Error,
+                shannon_tools::DiagnosticSeverity::Warning => DiagnosticSeverity::Warning,
+                shannon_tools::DiagnosticSeverity::Info => DiagnosticSeverity::Info,
+                shannon_tools::DiagnosticSeverity::Hint => DiagnosticSeverity::Hint,
+            };
+            self.diagnostics.push(Diagnostic {
+                severity,
+                message: diag.message.clone(),
+                file_path: diag.file_path.clone(),
+                line: diag.line + 1,
+                source: Some(diag.source.clone()),
+            });
+        }
+        self.diagnostics.len()
     }
 }
 
@@ -375,5 +441,148 @@ mod tests {
         assert_eq!(LspDisplay::severity_icon(DiagnosticSeverity::Warning), "W");
         assert_eq!(LspDisplay::severity_icon(DiagnosticSeverity::Info), "I");
         assert_eq!(LspDisplay::severity_icon(DiagnosticSeverity::Hint), "H");
+    }
+
+    #[test]
+    fn test_sync_from_registry_empty() {
+        let mut store = DiagnosticStore::new();
+        let registry = shannon_tools::DiagnosticRegistry::new();
+        let count = store.sync_from_registry(&registry);
+        assert_eq!(count, 0);
+        assert!(store.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn test_sync_from_registry_with_diagnostics() {
+        let mut registry = shannon_tools::DiagnosticRegistry::new();
+        registry.update("src/main.rs", vec![
+            shannon_tools::LspDiagnostic::new(
+                "src/main.rs", 9, 4,
+                shannon_tools::DiagnosticSeverity::Error,
+                "mismatched types",
+                "rustc",
+            ),
+            shannon_tools::LspDiagnostic::new(
+                "src/main.rs", 20, 0,
+                shannon_tools::DiagnosticSeverity::Warning,
+                "unused variable",
+                "rustc",
+            ),
+        ]);
+
+        let mut store = DiagnosticStore::new();
+        let count = store.sync_from_registry(&registry);
+        assert_eq!(count, 2);
+        assert_eq!(store.error_count(), 1);
+        assert_eq!(store.warning_count(), 1);
+
+        // Line numbers should be 1-based (LSP 0-based + 1)
+        assert_eq!(store.diagnostics[0].line, 10);
+        assert_eq!(store.diagnostics[0].source, Some("rustc".to_string()));
+    }
+
+    #[test]
+    fn test_diagnostic_store_stale_flag() {
+        let mut store = DiagnosticStore::new();
+        assert!(!store.is_stale());
+        store.mark_stale();
+        assert!(store.is_stale());
+        store.clear_stale();
+        assert!(!store.is_stale());
+    }
+
+    #[test]
+    fn test_sync_from_registry_replaces_existing() {
+        let mut store = DiagnosticStore::new();
+        store.add(Diagnostic {
+            severity: DiagnosticSeverity::Error,
+            message: "old".to_string(),
+            file_path: "old.rs".to_string(),
+            line: 1,
+            source: None,
+        });
+        assert_eq!(store.diagnostics.len(), 1);
+
+        let registry = shannon_tools::DiagnosticRegistry::new();
+        let count = store.sync_from_registry(&registry);
+        assert_eq!(count, 0);
+        assert!(store.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn test_update_from_cli_with_diagnostics() {
+        let mut store = DiagnosticStore::new();
+        store.mark_stale();
+        assert!(store.is_stale());
+
+        let result = shannon_tools::CliDiagnosticResult {
+            diagnostics: vec![
+                shannon_tools::LspDiagnostic::new(
+                    "src/main.rs", 9, 0,
+                    shannon_tools::DiagnosticSeverity::Error,
+                    "cannot find value `x`", "rustc",
+                ),
+                shannon_tools::LspDiagnostic::new(
+                    "src/lib.rs", 4, 0,
+                    shannon_tools::DiagnosticSeverity::Warning,
+                    "unused variable", "rustc",
+                ),
+            ],
+            success: true,
+            error: None,
+        };
+
+        let count = store.update_from_cli(&result);
+        assert_eq!(count, 2);
+        assert!(!store.is_stale());
+        assert_eq!(store.error_count(), 1);
+        assert_eq!(store.warning_count(), 1);
+        assert_eq!(store.diagnostics[0].line, 10); // 0-based + 1
+    }
+
+    #[test]
+    fn test_update_from_cli_empty() {
+        let mut store = DiagnosticStore::new();
+        store.add(Diagnostic {
+            severity: DiagnosticSeverity::Error,
+            message: "old".to_string(),
+            file_path: "old.rs".to_string(),
+            line: 1,
+            source: None,
+        });
+        assert_eq!(store.diagnostics.len(), 1);
+
+        let result = shannon_tools::CliDiagnosticResult {
+            diagnostics: vec![],
+            success: true,
+            error: None,
+        };
+
+        let count = store.update_from_cli(&result);
+        assert_eq!(count, 0);
+        assert!(store.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn test_update_from_cli_severity_mapping() {
+        let mut store = DiagnosticStore::new();
+
+        let result = shannon_tools::CliDiagnosticResult {
+            diagnostics: vec![
+                shannon_tools::LspDiagnostic::new("a.rs", 0, 0, shannon_tools::DiagnosticSeverity::Error, "e", "rustc"),
+                shannon_tools::LspDiagnostic::new("b.rs", 0, 0, shannon_tools::DiagnosticSeverity::Warning, "w", "rustc"),
+                shannon_tools::LspDiagnostic::new("c.rs", 0, 0, shannon_tools::DiagnosticSeverity::Info, "i", "rustc"),
+                shannon_tools::LspDiagnostic::new("d.rs", 0, 0, shannon_tools::DiagnosticSeverity::Hint, "h", "rustc"),
+            ],
+            success: true,
+            error: None,
+        };
+
+        let count = store.update_from_cli(&result);
+        assert_eq!(count, 4);
+        assert!(matches!(store.diagnostics[0].severity, DiagnosticSeverity::Error));
+        assert!(matches!(store.diagnostics[1].severity, DiagnosticSeverity::Warning));
+        assert!(matches!(store.diagnostics[2].severity, DiagnosticSeverity::Info));
+        assert!(matches!(store.diagnostics[3].severity, DiagnosticSeverity::Hint));
     }
 }

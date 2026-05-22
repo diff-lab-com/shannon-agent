@@ -1277,7 +1277,7 @@ impl BashTool {
         let success = status.success();
 
         let content = if success {
-            format!("{}{}", stdout_buf, command_description)
+            format!("{stdout_buf}{command_description}")
         } else {
             format!("{}Command failed with exit code {}: {}{}",
                 command_description,
@@ -1861,7 +1861,6 @@ mod tests {
 
     // ── BashTool streaming tests ──────────────────────────────────────────
 
-    #[allow(dead_code)]
     struct CollectSender {
         lines: std::sync::Mutex<Vec<String>>,
     }
@@ -1974,4 +1973,52 @@ mod tests {
         // Cursor up/down are stripped
         let movement = "line1\x1b[A\x1b[2Kline2";
         assert_eq!(strip_ansi(movement), "line1line2");
+    }
+
+    // ── SecurityLevel and PathValidation tests ────────────────────────────
+
+    #[test]
+    fn test_security_level_ordering() {
+        assert!(SecurityLevel::Safe < SecurityLevel::Low);
+        assert!(SecurityLevel::Low < SecurityLevel::Medium);
+        assert!(SecurityLevel::Medium < SecurityLevel::High);
+        assert!(SecurityLevel::High < SecurityLevel::Critical);
+        assert_eq!(SecurityLevel::Safe, SecurityLevel::Safe);
+    }
+
+    #[test]
+    fn test_security_level_ord_values() {
+        assert_eq!(SecurityLevel::Safe as u8, 0);
+        assert_eq!(SecurityLevel::Low as u8, 1);
+        assert_eq!(SecurityLevel::Medium as u8, 2);
+        assert_eq!(SecurityLevel::High as u8, 3);
+        assert_eq!(SecurityLevel::Critical as u8, 4);
+    }
+
+    #[test]
+    fn test_path_validation_error_display() {
+        let err = PathValidationError::Traversal("../etc/passwd".into());
+        assert!(err.to_string().contains("../etc/passwd"));
+
+        let err = PathValidationError::NotAllowed("/root".into());
+        assert!(err.to_string().contains("/root"));
+
+        let err = PathValidationError::SystemPath("/etc/shadow".into());
+        assert!(err.to_string().contains("/etc/shadow"));
+    }
+
+    #[test]
+    fn test_security_analysis_default_fields() {
+        let analysis = SecurityAnalysis {
+            risk_level: SecurityLevel::Safe,
+            warnings: vec![],
+            is_destructive: false,
+            is_read_only: true,
+            contains_path_traversal: false,
+            requires_confirmation: false,
+        };
+        assert!(analysis.is_read_only);
+        assert!(!analysis.is_destructive);
+        assert!(!analysis.requires_confirmation);
+        assert!(analysis.warnings.is_empty());
     }

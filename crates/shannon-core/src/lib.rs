@@ -79,6 +79,7 @@ pub mod output_format;
 
 pub mod doctor;
 pub mod permission_classifier;
+pub mod llm_classifier;
 pub mod team_memory_sync;
 pub mod auto_dream_consolidation;
 pub mod mcp_server_approval;
@@ -99,6 +100,7 @@ pub mod session_persist;
 pub mod session_recovery;
 pub mod webhook;
 pub mod scheduled_routines;
+pub mod recording;
 
 pub mod i18n;
 
@@ -199,6 +201,7 @@ pub use session_history::{
 };
 pub use streaming_tool_executor::{StreamingToolExecutor, TrackedTool, ToolStatus};
 pub use tool_execution::{ToolExecutionService, ToolExecutionResult, ToolProgress, ToolProgressStatus};
+pub use output_format::{OutputEvent, StructuredOutputConfig, StructuredOutputError};
 pub use session_recovery::{SessionRecovery, SessionRecoveryError, RecoveryMetadata, SessionLogEntry};
 pub use compact::{CompactEngine, CompactConfig, CompactResult, CompactStrategy, MessageGroup, CompactError, RuleBasedSummarizer, Summarizer};
 pub use context_pressure::{

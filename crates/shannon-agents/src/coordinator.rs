@@ -2699,3 +2699,175 @@ impl AgentCoordinator {
         self.background_tasks.read().await.keys().cloned().collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::TaskError;
+
+    #[test]
+    fn coordinator_config_defaults() {
+        let config = CoordinatorConfig::default();
+        assert_eq!(config.max_team_size, 10);
+        assert_eq!(config.message_buffer_size, 100);
+        assert!(!config.enable_worktree_isolation);
+        assert!(config.worktree_config.is_none());
+        assert_eq!(config.heartbeat_interval_secs, 30);
+        assert_eq!(config.assignment_strategy, AssignmentStrategy::SelfClaim);
+        assert!(!config.delegate_mode);
+        assert_eq!(config.agent_mode, AgentMode::InProcess);
+    }
+
+    #[test]
+    fn assignment_strategy_serde() {
+        let strategies = vec![
+            AssignmentStrategy::RoundRobin,
+            AssignmentStrategy::LeastLoaded,
+            AssignmentStrategy::CapabilityBased,
+            AssignmentStrategy::FirstAvailable,
+            AssignmentStrategy::SelfClaim,
+        ];
+        let json = serde_json::to_string(&strategies).unwrap();
+        let de: Vec<AssignmentStrategy> = serde_json::from_str(&json).unwrap();
+        assert_eq!(de, strategies);
+    }
+
+    #[test]
+    fn agent_mode_serde() {
+        let modes = vec![AgentMode::InProcess, AgentMode::Process];
+        let json = serde_json::to_string(&modes).unwrap();
+        let de: Vec<AgentMode> = serde_json::from_str(&json).unwrap();
+        assert_eq!(de, modes);
+    }
+
+    #[test]
+    fn agent_mode_default_is_inprocess() {
+        assert_eq!(AgentMode::default(), AgentMode::InProcess);
+    }
+
+    #[test]
+    fn agent_info_serde() {
+        let info = AgentInfo {
+            name: "worker-1".to_string(),
+            agent_type: "coder".to_string(),
+            capabilities: vec!["read".to_string(), "write".to_string()],
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        let de: AgentInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.name, "worker-1");
+        assert_eq!(de.capabilities.len(), 2);
+    }
+
+    #[test]
+    fn team_manifest_serde() {
+        let manifest = TeamManifest {
+            name: "alpha".to_string(),
+            description: "test team".to_string(),
+            members: vec![AgentInfo {
+                name: "lead".to_string(),
+                agent_type: "coordinator".to_string(),
+                capabilities: vec![],
+            }],
+        };
+        let json = serde_json::to_string(&manifest).unwrap();
+        let de: TeamManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.name, "alpha");
+        assert_eq!(de.members.len(), 1);
+    }
+
+    #[test]
+    fn inbox_summary_default() {
+        let summary = InboxSummary::default();
+        assert_eq!(summary.total, 0);
+        assert_eq!(summary.unread, 0);
+        assert!(summary.senders.is_empty());
+    }
+
+    #[test]
+    fn inbox_summary_serde() {
+        let summary = InboxSummary {
+            total: 5,
+            unread: 2,
+            senders: vec!["agent-a".to_string()],
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        let de: InboxSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.total, 5);
+        assert_eq!(de.unread, 2);
+    }
+
+    #[test]
+    fn coordinator_config_custom_values() {
+        let config = CoordinatorConfig {
+            max_team_size: 5,
+            message_buffer_size: 50,
+            enable_worktree_isolation: true,
+            worktree_config: None,
+            heartbeat_interval_secs: 10,
+            assignment_strategy: AssignmentStrategy::RoundRobin,
+            delegate_mode: true,
+            agent_mode: AgentMode::Process,
+        };
+        assert_eq!(config.max_team_size, 5);
+        assert!(config.enable_worktree_isolation);
+        assert!(config.delegate_mode);
+        assert_eq!(config.agent_mode, AgentMode::Process);
+    }
+
+    #[test]
+    fn coordination_error_messages() {
+        let err = CoordinationError::TeamNotFound("my-team".to_string());
+        assert!(err.to_string().contains("my-team"));
+
+        let err = CoordinationError::AgentNotFound("agent-1".to_string());
+        assert!(err.to_string().contains("agent-1"));
+
+        let err = CoordinationError::AgentAlreadyMember("a".to_string(), "t".to_string());
+        assert!(err.to_string().contains("a") && err.to_string().contains("t"));
+
+        let err = CoordinationError::MaxTeamSizeExceeded(10);
+        assert!(err.to_string().contains("10"));
+
+        let err = CoordinationError::ShutdownInProgress;
+        assert!(err.to_string().contains("shutdown"));
+    }
+
+    #[test]
+    fn agent_error_from_coordination() {
+        let coord_err = CoordinationError::TeamNotFound("x".to_string());
+        let agent_err: AgentError = coord_err.into();
+        assert!(agent_err.to_string().contains("coordination"));
+    }
+
+    #[test]
+    fn task_error_messages() {
+        let id = uuid::Uuid::new_v4();
+        let err = TaskError::TaskNotFound(id);
+        assert!(err.to_string().contains(&id.to_string()));
+
+        let err = TaskError::TaskBlocked(id);
+        assert!(err.to_string().contains("blocked"));
+
+        let err = TaskError::NoAvailableAgents("search".to_string());
+        assert!(err.to_string().contains("search"));
+    }
+
+    #[test]
+    fn agent_error_from_task() {
+        let id = uuid::Uuid::new_v4();
+        let task_err = TaskError::TaskNotFound(id);
+        let agent_err: AgentError = task_err.into();
+        assert!(agent_err.to_string().contains("task"));
+    }
+
+    #[test]
+    fn send_sync_types() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<CoordinatorConfig>();
+        assert_send_sync::<AgentInfo>();
+        assert_send_sync::<TeamManifest>();
+        assert_send_sync::<InboxSummary>();
+        assert_send_sync::<AssignmentStrategy>();
+        assert_send_sync::<AgentMode>();
+    }
+}

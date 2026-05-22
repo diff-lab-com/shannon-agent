@@ -442,11 +442,11 @@ fn compact_prioritize_code(
                 selected.push(i);
                 selected_tokens += t;
                 // Find the next message with matching tool results and include it too.
-                for j in (i + 1)..older.len() {
-                    if contains_tool_result_for(&older[j], &tool_uses) {
-                        let rt = estimate_message_tokens(&older[j]);
+                for msg in &older[i + 1..] {
+                    if contains_tool_result_for(msg, &tool_uses) {
+                        let rt = estimate_message_tokens(msg);
                         if selected_tokens + rt + recent_tokens <= budget {
-                            selected.push(j);
+                            selected.push(i + 1); // include the matching message
                             selected_tokens += rt;
                         }
                         break;

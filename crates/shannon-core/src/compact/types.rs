@@ -379,3 +379,247 @@ pub trait Summarizer: Send + Sync {
     /// Compress a single message's content
     fn micro_summarize(&self, message: &Message, max_tokens: usize) -> Result<String, CompactError>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── CompactError ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_compact_error_display() {
+        assert_eq!(
+            CompactError::NoMessagesToCompact.to_string(),
+            "No messages to compact"
+        );
+        assert!(CompactError::SummarizationFailed("timeout".into())
+            .to_string()
+            .contains("timeout"));
+        assert!(CompactError::InvalidConfig("bad".into())
+            .to_string()
+            .contains("bad"));
+        assert!(CompactError::TokenEstimationError("overflow".into())
+            .to_string()
+            .contains("overflow"));
+        assert_eq!(
+            CompactError::AlreadyInProgress.to_string(),
+            "Compression already in progress"
+        );
+        assert_eq!(CompactError::Timeout.to_string(), "Compact duration exceeded limit");
+    }
+
+    // ── CompactConfig ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_default_config() {
+        let cfg = CompactConfig::default();
+        assert_eq!(cfg.max_output_tokens, 2000);
+        assert_eq!(cfg.keep_recent_count, 10);
+        assert!((cfg.trigger_threshold - 0.75).abs() < f32::EPSILON);
+        assert!(cfg.enable_micro_compact);
+        assert_eq!(cfg.micro_compact_threshold, 4096);
+        assert!(cfg.enable_session_memory_compact);
+        assert_eq!(cfg.max_context_tokens, 200_000);
+        assert!(cfg.compact_model.is_none());
+    }
+
+    #[test]
+    fn test_config_with_max_context() {
+        let cfg = CompactConfig::with_max_context(100_000);
+        assert_eq!(cfg.max_context_tokens, 100_000);
+        assert_eq!(cfg.max_output_tokens, 2000); // default preserved
+    }
+
+    #[test]
+    fn test_config_validate_ok() {
+        let cfg = CompactConfig::default();
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_config_validate_zero_output_tokens() {
+        let mut cfg = CompactConfig::default();
+        cfg.max_output_tokens = 0;
+        let err = cfg.validate().unwrap_err();
+        assert!(matches!(err, CompactError::InvalidConfig(_)));
+        assert!(err.to_string().contains("max_output_tokens"));
+    }
+
+    #[test]
+    fn test_config_validate_zero_keep_recent() {
+        let mut cfg = CompactConfig::default();
+        cfg.keep_recent_count = 0;
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("keep_recent_count"));
+    }
+
+    #[test]
+    fn test_config_validate_threshold_zero() {
+        let mut cfg = CompactConfig::default();
+        cfg.trigger_threshold = 0.0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_config_validate_threshold_over_one() {
+        let mut cfg = CompactConfig::default();
+        cfg.trigger_threshold = 1.5;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_config_validate_threshold_boundary_one() {
+        let mut cfg = CompactConfig::default();
+        cfg.trigger_threshold = 1.0;
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_config_validate_zero_max_context() {
+        let mut cfg = CompactConfig::default();
+        cfg.max_context_tokens = 0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_config_serialization_roundtrip() {
+        let cfg = CompactConfig::default();
+        let json = serde_json::to_string(&cfg).unwrap();
+        let parsed: CompactConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.max_output_tokens, cfg.max_output_tokens);
+        assert_eq!(parsed.keep_recent_count, cfg.keep_recent_count);
+        assert_eq!(parsed.compact_model, cfg.compact_model);
+    }
+
+    // ── CompactStrategy ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_strategy_display() {
+        assert_eq!(CompactStrategy::TruncateOld.to_string(), "truncate_old");
+        assert_eq!(CompactStrategy::SummarizeOld.to_string(), "summarize_old");
+        assert_eq!(CompactStrategy::MicroCompress.to_string(), "micro_compress");
+        assert_eq!(CompactStrategy::GroupCompress.to_string(), "group_compress");
+        assert_eq!(
+            CompactStrategy::SessionMemoryCompress.to_string(),
+            "session_memory_compress"
+        );
+    }
+
+    #[test]
+    fn test_strategy_serialization_roundtrip() {
+        for strategy in [
+            CompactStrategy::TruncateOld,
+            CompactStrategy::SummarizeOld,
+            CompactStrategy::MicroCompress,
+            CompactStrategy::GroupCompress,
+            CompactStrategy::SessionMemoryCompress,
+        ] {
+            let json = serde_json::to_string(&strategy).unwrap();
+            let parsed: CompactStrategy = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, strategy);
+        }
+    }
+
+    // ── CompactResult ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_compact_result_no_change() {
+        let result = CompactResult::no_change(CompactStrategy::TruncateOld, 5000);
+        assert_eq!(result.original_tokens, 5000);
+        assert_eq!(result.compacted_tokens, 5000);
+        assert_eq!(result.reduction_ratio, 0.0);
+        assert_eq!(result.messages_removed, 0);
+        assert_eq!(result.messages_compacted, 0);
+        assert_eq!(result.duration, Duration::ZERO);
+        assert_eq!(result.strategy, CompactStrategy::TruncateOld);
+    }
+
+    #[test]
+    fn test_compact_result_display() {
+        let result = CompactResult {
+            original_tokens: 10000,
+            compacted_tokens: 3000,
+            reduction_ratio: 0.7,
+            messages_removed: 5,
+            messages_compacted: 3,
+            duration: Duration::from_millis(1500),
+            strategy: CompactStrategy::SummarizeOld,
+        };
+        let display = result.to_string();
+        assert!(display.contains("summarize_old"));
+        assert!(display.contains("10000"));
+        assert!(display.contains("3000"));
+        assert!(display.contains("70.0%"));
+        assert!(display.contains("5"));
+        assert!(display.contains("3"));
+    }
+
+    #[test]
+    fn test_compact_result_serialization_roundtrip() {
+        let result = CompactResult {
+            original_tokens: 8000,
+            compacted_tokens: 2000,
+            reduction_ratio: 0.75,
+            messages_removed: 4,
+            messages_compacted: 2,
+            duration: Duration::from_secs(3),
+            strategy: CompactStrategy::GroupCompress,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let parsed: CompactResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.original_tokens, result.original_tokens);
+        assert_eq!(parsed.compacted_tokens, result.compacted_tokens);
+        assert_eq!(parsed.strategy, result.strategy);
+    }
+
+    // ── ContextAnalysis ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_context_analysis_fields() {
+        let analysis = ContextAnalysis {
+            estimated_tokens: 150_000,
+            should_compact: true,
+            recommended_strategy: CompactStrategy::SummarizeOld,
+            compactable_message_count: 20,
+            micro_compact_candidates: 3,
+            context_usage_ratio: 0.85,
+        };
+        assert!(analysis.should_compact);
+        assert_eq!(analysis.estimated_tokens, 150_000);
+        assert_eq!(analysis.compactable_message_count, 20);
+        assert!((analysis.context_usage_ratio - 0.85).abs() < f32::EPSILON);
+    }
+
+    // ── CompactPrompt ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_system_prompt_contains_key_elements() {
+        let prompt = CompactPrompt::system_prompt(2000);
+        assert!(prompt.contains("2000"));
+        assert!(prompt.contains("goals"));
+        assert!(prompt.contains("summary"));
+    }
+
+    #[test]
+    fn test_micro_compact_prompt() {
+        let msg = Message {
+            role: "user".to_string(),
+            content: crate::api::MessageContent::Text("This is a very long tool output...".to_string()),
+        };
+        let prompt = CompactPrompt::micro_compact_prompt(&msg, 500);
+        assert!(prompt.contains("500"));
+        assert!(prompt.contains("user"));
+        assert!(prompt.contains("tool output"));
+    }
+
+    // ── Send/Sync assertions ─────────────────────────────────────────────
+
+    #[test]
+    fn test_types_are_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<CompactConfig>();
+        assert_send_sync::<CompactStrategy>();
+        assert_send_sync::<CompactResult>();
+        assert_send_sync::<CompactError>();
+    }
+}

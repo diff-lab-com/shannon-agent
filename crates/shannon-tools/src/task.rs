@@ -435,3 +435,289 @@ impl Tool for TaskTool {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_input(subject: &str, desc: &str) -> serde_json::Value {
+        json!({
+            "operation": "Create",
+            "subject": subject,
+            "description": desc
+        })
+    }
+
+    // ── TaskStatus serialization ────────────────────────────────────────
+
+    #[test]
+    fn test_task_status_serialization() {
+        assert_eq!(
+            serde_json::to_string(&TaskStatus::Pending).unwrap(),
+            "\"pending\""
+        );
+        // rename_all = "lowercase" converts InProgress -> inprogress
+        assert_eq!(
+            serde_json::to_string(&TaskStatus::InProgress).unwrap(),
+            "\"inprogress\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TaskStatus::Completed).unwrap(),
+            "\"completed\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TaskStatus::Deleted).unwrap(),
+            "\"deleted\""
+        );
+    }
+
+    #[test]
+    fn test_task_status_deserialization() {
+        let status: TaskStatus = serde_json::from_str("\"pending\"").unwrap();
+        assert_eq!(status, TaskStatus::Pending);
+        let status: TaskStatus = serde_json::from_str("\"inprogress\"").unwrap();
+        assert_eq!(status, TaskStatus::InProgress);
+        let status: TaskStatus = serde_json::from_str("\"completed\"").unwrap();
+        assert_eq!(status, TaskStatus::Completed);
+        let status: TaskStatus = serde_json::from_str("\"deleted\"").unwrap();
+        assert_eq!(status, TaskStatus::Deleted);
+    }
+
+    // ── Task metadata ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_task_serialization_roundtrip() {
+        let task = Task {
+            id: "1".into(),
+            subject: "Test task".into(),
+            description: "A test".into(),
+            status: TaskStatus::InProgress,
+            owner: Some("agent-1".into()),
+            blocks: vec!["2".into()],
+            blocked_by: vec!["3".into()],
+            metadata: Some(HashMap::from([("key".into(), json!("value"))])),
+            active_form: Some("Testing".into()),
+        };
+        let json = serde_json::to_string(&task).unwrap();
+        let parsed: Task = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.id, task.id);
+        assert_eq!(parsed.subject, task.subject);
+        assert_eq!(parsed.status, task.status);
+        assert_eq!(parsed.owner, task.owner);
+        assert_eq!(parsed.blocks, task.blocks);
+        assert_eq!(parsed.blocked_by, task.blocked_by);
+    }
+
+    // ── CRUD operations ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_create_task() {
+        let tool = TaskTool::new();
+        let output = tool.execute(create_input("Fix bug", "Fix the auth bug")).await.unwrap();
+        assert!(!output.is_error);
+        assert!(output.content.contains("Created task"));
+        assert!(output.metadata.contains_key("task"));
+    }
+
+    #[tokio::test]
+    async fn test_create_multiple_tasks_increments_id() {
+        let tool = TaskTool::new();
+        let out1 = tool.execute(create_input("Task 1", "First")).await.unwrap();
+        let out2 = tool.execute(create_input("Task 2", "Second")).await.unwrap();
+        let task1 = out1.metadata.get("task").unwrap().as_object().unwrap();
+        let task2 = out2.metadata.get("task").unwrap().as_object().unwrap();
+        let id1 = task1.get("id").unwrap().as_str().unwrap();
+        let id2 = task2.get("id").unwrap().as_str().unwrap();
+        assert_ne!(id1, id2);
+    }
+
+    #[tokio::test]
+    async fn test_create_task_with_metadata() {
+        let tool = TaskTool::new();
+        let input = json!({
+            "operation": "Create",
+            "subject": "Tagged task",
+            "description": "Has metadata",
+            "metadata": {"priority": "high", "tags": ["urgent"]}
+        });
+        let output = tool.execute(input).await.unwrap();
+        assert!(!output.is_error);
+        let task = output.metadata.get("task").unwrap();
+        let meta = task.get("metadata").unwrap().as_object().unwrap();
+        assert_eq!(meta.get("priority").unwrap(), "high");
+    }
+
+    #[tokio::test]
+    async fn test_get_task_found() {
+        let tool = TaskTool::new();
+        let created = tool.execute(create_input("Find me", "desc")).await.unwrap();
+        let task_id = created.metadata.get("task").unwrap().get("id").unwrap().as_str().unwrap().to_string();
+
+        let output = tool.execute(json!({
+            "operation": "Get",
+            "task_id": task_id
+        })).await.unwrap();
+        assert!(output.metadata.get("found").unwrap().as_bool().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_get_task_not_found() {
+        let tool = TaskTool::new();
+        let output = tool.execute(json!({
+            "operation": "Get",
+            "task_id": "999"
+        })).await.unwrap();
+        assert!(!output.metadata.get("found").unwrap().as_bool().unwrap());
+        assert!(output.is_error);
+    }
+
+    #[tokio::test]
+    async fn test_update_task_status() {
+        let tool = TaskTool::new();
+        let created = tool.execute(create_input("Update me", "desc")).await.unwrap();
+        let task_id = created.metadata.get("task").unwrap().get("id").unwrap().as_str().unwrap().to_string();
+
+        let output = tool.execute(json!({
+            "operation": "Update",
+            "task_id": task_id,
+            "status": "inprogress"
+        })).await.unwrap();
+        assert!(!output.is_error);
+        let task = output.metadata.get("task").unwrap();
+        assert_eq!(task.get("status").unwrap(), "inprogress");
+    }
+
+    #[tokio::test]
+    async fn test_update_task_owner() {
+        let tool = TaskTool::new();
+        let created = tool.execute(create_input("Own me", "desc")).await.unwrap();
+        let task_id = created.metadata.get("task").unwrap().get("id").unwrap().as_str().unwrap().to_string();
+
+        let output = tool.execute(json!({
+            "operation": "Update",
+            "task_id": task_id,
+            "owner": "agent-1"
+        })).await.unwrap();
+        let task = output.metadata.get("task").unwrap();
+        assert_eq!(task.get("owner").unwrap(), "agent-1");
+    }
+
+    #[tokio::test]
+    async fn test_update_task_adds_blocks() {
+        let tool = TaskTool::new();
+        let created = tool.execute(create_input("Block test", "desc")).await.unwrap();
+        let task_id = created.metadata.get("task").unwrap().get("id").unwrap().as_str().unwrap().to_string();
+
+        let output = tool.execute(json!({
+            "operation": "Update",
+            "task_id": task_id,
+            "add_blocks": ["2", "3"]
+        })).await.unwrap();
+        let task = output.metadata.get("task").unwrap();
+        let blocks = task.get("blocks").unwrap().as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_update_task_not_found() {
+        let tool = TaskTool::new();
+        let result = tool.execute(json!({
+            "operation": "Update",
+            "task_id": "999",
+            "status": "completed"
+        })).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_list_tasks_empty() {
+        let tool = TaskTool::new();
+        let output = tool.execute(json!({"operation": "List"})).await.unwrap();
+        assert!(!output.is_error);
+        assert_eq!(output.metadata.get("count").unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_list_tasks_with_filter() {
+        let tool = TaskTool::new();
+        // Create two tasks
+        tool.execute(create_input("Task A", "desc")).await.unwrap();
+        let created = tool.execute(create_input("Task B", "desc")).await.unwrap();
+        let task_id = created.metadata.get("task").unwrap().get("id").unwrap().as_str().unwrap().to_string();
+        // Complete one
+        tool.execute(json!({
+            "operation": "Update",
+            "task_id": task_id,
+            "status": "completed"
+        })).await.unwrap();
+
+        // List only pending
+        let output = tool.execute(json!({
+            "operation": "List",
+            "status_filter": "pending"
+        })).await.unwrap();
+        let count = output.metadata.get("count").unwrap().as_u64().unwrap();
+        assert_eq!(count, 1);
+
+        // List only completed
+        let output = tool.execute(json!({
+            "operation": "List",
+            "status_filter": "completed"
+        })).await.unwrap();
+        let count = output.metadata.get("count").unwrap().as_u64().unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_list_status_counts() {
+        let tool = TaskTool::new();
+        tool.execute(create_input("T1", "d")).await.unwrap();
+        tool.execute(create_input("T2", "d")).await.unwrap();
+        let output = tool.execute(json!({"operation": "List"})).await.unwrap();
+        // status_counts is computed internally; verify tasks are returned
+        let tasks = output.metadata.get("tasks").unwrap().as_array().unwrap();
+        assert_eq!(tasks.len(), 2);
+        // Both should be pending by default
+        for task in tasks {
+            assert_eq!(task.get("status").unwrap(), "pending");
+        }
+    }
+
+    // ── Error cases ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_missing_operation_field() {
+        let tool = TaskTool::new();
+        let result = tool.execute(json!({"subject": "test"})).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_unknown_operation() {
+        let tool = TaskTool::new();
+        let result = tool.execute(json!({"operation": "Delete"})).await;
+        assert!(result.is_err());
+    }
+
+    // ── Tool trait ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_tool_name() {
+        let tool = TaskTool::new();
+        assert_eq!(tool.name(), "Task");
+    }
+
+    #[test]
+    fn test_tool_description() {
+        let tool = TaskTool::new();
+        assert!(!tool.description().is_empty());
+    }
+
+    #[test]
+    fn test_tool_input_schema() {
+        let tool = TaskTool::new();
+        let schema = tool.input_schema();
+        assert_eq!(schema["type"], "object");
+        assert!(schema["properties"]["operation"].is_object());
+    }
+}

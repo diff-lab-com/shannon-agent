@@ -757,17 +757,161 @@ mod tests {
     fn test_http_transport_creation() {
         let transport = HttpTransport::new("http://localhost:3000/mcp");
         assert_eq!(transport.endpoint, "http://localhost:3000/mcp");
+        assert!(transport.session_id.is_none());
+        assert!(transport.pending_response.is_none());
     }
 
     #[test]
     fn test_websocket_transport_creation() {
         let transport = WebSocketTransport::new("ws://localhost:3000/mcp");
         assert_eq!(transport.endpoint, "ws://localhost:3000/mcp");
+        assert!(transport.stream.is_none());
     }
 
     #[test]
     fn test_sse_transport_creation() {
         let transport = SseTransport::new("http://localhost:3000/events");
         assert_eq!(transport.endpoint, "http://localhost:3000/events");
+        assert!(transport.stream.is_none());
+        assert!(transport.buffer.is_empty());
+        assert_eq!(transport.max_reconnects, 3);
+    }
+
+    #[test]
+    fn test_validate_url_valid() {
+        assert!(validate_url("http://example.com/mcp", "http").is_ok());
+        assert!(validate_url("https://example.com/mcp", "http").is_ok());
+        assert!(validate_url("ws://example.com/ws", "ws").is_ok());
+        assert!(validate_url("wss://example.com/ws", "ws").is_ok());
+    }
+
+    #[test]
+    fn test_validate_url_empty() {
+        let err = validate_url("", "http").unwrap_err();
+        assert!(matches!(err, TransportError::Http(ref msg) if msg.contains("empty URL")));
+    }
+
+    #[test]
+    fn test_validate_url_wrong_scheme() {
+        let err = validate_url("ftp://example.com", "http").unwrap_err();
+        assert!(matches!(err, TransportError::Http(ref msg) if msg.contains("expected http")));
+    }
+
+    #[test]
+    fn test_transport_error_variants() {
+        let io_err = TransportError::Io(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "pipe"));
+        assert!(io_err.to_string().contains("pipe"));
+
+        let http_err = TransportError::Http("bad request".into());
+        assert!(http_err.to_string().contains("bad request"));
+
+        let ws_err = TransportError::WebSocket("connection refused".into());
+        assert!(ws_err.to_string().contains("connection refused"));
+
+        let sse_err = TransportError::Sse("stream ended".into());
+        assert!(sse_err.to_string().contains("stream ended"));
+
+        assert!(TransportError::ConnectionClosed.to_string().contains("closed"));
+        assert!(TransportError::Timeout.to_string().contains("timeout"));
+
+        let invalid = TransportError::InvalidMessage("bad json".into());
+        assert!(invalid.to_string().contains("bad json"));
+    }
+
+    #[test]
+    fn test_sse_transport_max_reconnects() {
+        let transport = SseTransport::new("http://localhost/events")
+            .with_max_reconnects(5);
+        assert_eq!(transport.max_reconnects, 5);
+    }
+
+    #[test]
+    fn test_sse_transport_session_id_initially_none() {
+        let transport = SseTransport::new("http://localhost/events");
+        assert!(transport.session_id().is_none());
+    }
+
+    #[test]
+    fn test_http_transport_session_id_initially_none() {
+        let transport = HttpTransport::new("http://localhost/mcp");
+        assert!(transport.session_id().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_http_transport_receive_returns_none_when_empty() {
+        let mut transport = HttpTransport::new("http://localhost/mcp");
+        let result = transport.receive().await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_sse_transport_close_clears_buffer() {
+        let mut transport = SseTransport::new("http://localhost/events");
+        transport.buffer = "some data".to_string();
+        transport.close().await.unwrap();
+        assert!(transport.buffer.is_empty());
+        assert!(transport.stream.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_http_transport_close_clears_state() {
+        let mut transport = HttpTransport::new("http://localhost/mcp");
+        transport.pending_response = Some("response".to_string());
+        transport.close().await.unwrap();
+        assert!(transport.pending_response.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_websocket_transport_close_without_connection() {
+        let mut transport = WebSocketTransport::new("ws://localhost/ws");
+        transport.close().await.unwrap();
+        assert!(transport.stream.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_stdio_transport_from_child_missing_stdin() {
+        // Spawn a process with no piped stdin
+        let child = tokio::process::Command::new("echo")
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let result = StdioTransport::from_child(child);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_stdio_transport_send_without_connection() {
+        // Create a transport with stdin taken
+        let mut child = tokio::process::Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        // Take stdin to simulate closed connection
+        let _ = child.stdin.take();
+        let mut transport = StdioTransport { child: Some(child), stdin: None, stdout_reader: None };
+        let result = transport.send("test").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_stdio_transport_receive_without_connection() {
+        let mut transport = StdioTransport { child: None, stdin: None, stdout_reader: None };
+        let result = transport.receive().await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_websocket_transport_send_without_connection() {
+        let mut transport = WebSocketTransport::new("ws://localhost/ws");
+        let result = transport.send("test").await;
+        assert!(matches!(result, Err(TransportError::ConnectionClosed)));
+    }
+
+    #[tokio::test]
+    async fn test_websocket_transport_receive_without_connection() {
+        let mut transport = WebSocketTransport::new("ws://localhost/ws");
+        let result = transport.receive().await;
+        assert!(matches!(result, Err(TransportError::ConnectionClosed)));
     }
 }

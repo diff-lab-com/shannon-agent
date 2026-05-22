@@ -1479,7 +1479,7 @@ fn merge_punctuation_tokens(words: &[&str]) -> Vec<String> {
     }
     // Identify which tokens are single punctuation chars
     let is_short_punct = |w: &&str| -> bool {
-        w.chars().count() == 1 && w.chars().next().map_or(false, |c| !c.is_alphanumeric())
+        w.chars().count() == 1 && w.chars().next().is_some_and(|c| !c.is_alphanumeric())
     };
 
     let mut result: Vec<String> = Vec::with_capacity(words.len());
@@ -1828,4 +1828,442 @@ pub(super) fn highlight_search_in_text(
     }
 
     spans
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_message(role: ChatRole, content: &str) -> ChatMessage {
+        ChatMessage {
+            role,
+            content: content.to_string(),
+            timestamp: chrono::Utc::now(),
+            image_lines: None,
+            is_error: false,
+            tool_name: None,
+            start_time: None,
+            duration_secs: None,
+            spinner_frame: 0,
+            folded: true,
+            exit_code: None,
+            thinking_content: None,
+            thinking_expanded: false,
+            thinking_duration_secs: None,
+            diff_stats: None,
+        }
+    }
+
+    // ── ChatMessage construction ──────────────────────────────────────────
+
+    #[test]
+    fn test_chat_message_default_fields() {
+        let msg = make_message(ChatRole::User, "hello");
+        assert_eq!(msg.role, ChatRole::User);
+        assert_eq!(msg.content, "hello");
+        assert!(msg.image_lines.is_none());
+        assert!(!msg.is_error);
+        assert!(msg.tool_name.is_none());
+        assert!(msg.start_time.is_none());
+        assert!(msg.duration_secs.is_none());
+        assert_eq!(msg.spinner_frame, 0);
+        assert!(msg.folded);
+        assert!(msg.exit_code.is_none());
+        assert!(msg.thinking_content.is_none());
+        assert!(!msg.thinking_expanded);
+        assert!(msg.thinking_duration_secs.is_none());
+        assert!(msg.diff_stats.is_none());
+    }
+
+    #[test]
+    fn test_chat_message_tool_with_name() {
+        let mut msg = make_message(ChatRole::Tool, "output");
+        msg.tool_name = Some("bash".to_string());
+        msg.duration_secs = Some(1.5);
+        msg.is_error = false;
+        assert_eq!(msg.tool_name.as_deref(), Some("bash"));
+        assert_eq!(msg.duration_secs, Some(1.5));
+        assert!(!msg.is_error);
+    }
+
+    #[test]
+    fn test_chat_message_error_tool() {
+        let mut msg = make_message(ChatRole::Tool, "error output");
+        msg.tool_name = Some("write_file".to_string());
+        msg.is_error = true;
+        msg.exit_code = Some(1);
+        assert!(msg.is_error);
+        assert_eq!(msg.exit_code, Some(1));
+    }
+
+    // ── diff_stats ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_chat_message_diff_stats() {
+        let mut msg = make_message(ChatRole::Tool, "diff output");
+        assert!(msg.diff_stats.is_none());
+        msg.diff_stats = Some((10, 3));
+        assert_eq!(msg.diff_stats, Some((10, 3)));
+    }
+
+    // ── Message ordering via ChatWidget ───────────────────────────────────
+
+    #[test]
+    fn test_chat_widget_add_message_returns_index() {
+        let mut widget = ChatWidget::new(100);
+        let idx0 = widget.add_message(ChatRole::User, "hello".to_string());
+        let idx1 = widget.add_message(ChatRole::Assistant, "hi".to_string());
+        let idx2 = widget.add_message(ChatRole::User, "how are you?".to_string());
+        assert_eq!(idx0, 0);
+        assert_eq!(idx1, 1);
+        assert_eq!(idx2, 2);
+    }
+
+    #[test]
+    fn test_chat_widget_message_ordering() {
+        let mut widget = ChatWidget::new(100);
+        widget.add_message(ChatRole::User, "first".to_string());
+        widget.add_message(ChatRole::Assistant, "second".to_string());
+        widget.add_message(ChatRole::Tool, "third".to_string());
+
+        assert_eq!(widget.get_message(0).unwrap().content, "first");
+        assert_eq!(widget.get_message(1).unwrap().content, "second");
+        assert_eq!(widget.get_message(2).unwrap().content, "third");
+    }
+
+    #[test]
+    fn test_chat_widget_roles_preserved() {
+        let mut widget = ChatWidget::new(100);
+        widget.add_message(ChatRole::User, "u".to_string());
+        widget.add_message(ChatRole::Assistant, "a".to_string());
+        widget.add_message(ChatRole::Tool, "t".to_string());
+        widget.add_message(ChatRole::System, "s".to_string());
+
+        assert_eq!(widget.get_message(0).unwrap().role, ChatRole::User);
+        assert_eq!(widget.get_message(1).unwrap().role, ChatRole::Assistant);
+        assert_eq!(widget.get_message(2).unwrap().role, ChatRole::Tool);
+        assert_eq!(widget.get_message(3).unwrap().role, ChatRole::System);
+    }
+
+    #[test]
+    fn test_chat_widget_auto_scroll_to_latest() {
+        let mut widget = ChatWidget::new(100);
+        widget.add_message(ChatRole::User, "m1".to_string());
+        widget.add_message(ChatRole::Assistant, "m2".to_string());
+        widget.add_message(ChatRole::User, "m3".to_string());
+        // scroll_offset should point to the last message
+        assert_eq!(widget.scroll_offset, 2);
+    }
+
+    #[test]
+    fn test_chat_widget_clear() {
+        let mut widget = ChatWidget::new(100);
+        widget.add_message(ChatRole::User, "msg".to_string());
+        widget.add_message(ChatRole::Assistant, "reply".to_string());
+        assert_eq!(widget.len(), 2);
+
+        widget.clear();
+        assert!(widget.is_empty());
+        assert_eq!(widget.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_chat_widget_scroll_to_top() {
+        let mut widget = ChatWidget::new(100);
+        for i in 0..5 {
+            widget.add_message(ChatRole::User, format!("msg {i}"));
+        }
+        assert_eq!(widget.scroll_offset, 4);
+
+        widget.scroll_to_top();
+        assert_eq!(widget.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_chat_widget_scroll_to_latest_from_top() {
+        let mut widget = ChatWidget::new(100);
+        for i in 0..5 {
+            widget.add_message(ChatRole::User, format!("msg {i}"));
+        }
+        widget.scroll_to_top();
+        assert_eq!(widget.scroll_offset, 0);
+
+        widget.scroll_to_latest();
+        assert_eq!(widget.scroll_offset, 4);
+    }
+
+    // ── add_tool_message ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_add_tool_message_basic() {
+        let mut widget = ChatWidget::new(100);
+        let idx = widget.add_tool_message(
+            "bash".to_string(),
+            "command output".to_string(),
+            false,
+            None,
+        );
+        let msg = widget.get_message(idx).unwrap();
+        assert_eq!(msg.role, ChatRole::Tool);
+        assert_eq!(msg.tool_name.as_deref(), Some("bash"));
+        assert!(!msg.is_error);
+        assert!(msg.duration_secs.is_none());
+    }
+
+    #[test]
+    fn test_add_tool_message_with_start_time() {
+        let mut widget = ChatWidget::new(100);
+        let start = chrono::Utc::now() - chrono::Duration::seconds(2);
+        let idx = widget.add_tool_message(
+            "read_file".to_string(),
+            "file content".to_string(),
+            false,
+            Some(start),
+        );
+        let msg = widget.get_message(idx).unwrap();
+        assert!(msg.duration_secs.is_some());
+        let dur = msg.duration_secs.unwrap();
+        assert!(dur >= 1.9 && dur <= 3.0, "duration should be ~2s, got {dur}");
+    }
+
+    #[test]
+    fn test_add_tool_message_error() {
+        let mut widget = ChatWidget::new(100);
+        let idx = widget.add_tool_message(
+            "write_file".to_string(),
+            "permission denied".to_string(),
+            true,
+            None,
+        );
+        let msg = widget.get_message(idx).unwrap();
+        assert!(msg.is_error);
+    }
+
+    // ── update_message / update_last_message ──────────────────────────────
+
+    #[test]
+    fn test_update_message_content() {
+        let mut widget = ChatWidget::new(100);
+        let idx = widget.add_message(ChatRole::Assistant, "initial".to_string());
+        widget.update_message(idx, "updated".to_string());
+        assert_eq!(widget.get_message(idx).unwrap().content, "updated");
+    }
+
+    #[test]
+    fn test_update_last_message() {
+        let mut widget = ChatWidget::new(100);
+        widget.add_message(ChatRole::User, "question".to_string());
+        widget.add_message(ChatRole::Assistant, "streaming...".to_string());
+        widget.update_last_message("final answer".to_string());
+        assert_eq!(widget.last_message().unwrap().content, "final answer");
+    }
+
+    // ── pop_last ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_pop_last() {
+        let mut widget = ChatWidget::new(100);
+        widget.add_message(ChatRole::User, "q".to_string());
+        widget.add_message(ChatRole::Assistant, "a".to_string());
+        let popped = widget.pop_last();
+        assert_eq!(popped.unwrap().content, "a");
+        assert_eq!(widget.len(), 1);
+    }
+
+    // ── rewind ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_rewind_removes_last_turn() {
+        let mut widget = ChatWidget::new(100);
+        widget.add_message(ChatRole::User, "q1".to_string());
+        widget.add_message(ChatRole::Assistant, "a1".to_string());
+        widget.add_message(ChatRole::User, "q2".to_string());
+        widget.add_message(ChatRole::Assistant, "a2".to_string());
+
+        let removed = widget.rewind(1);
+        assert_eq!(removed, 2); // "q2" + "a2"
+        assert_eq!(widget.len(), 2);
+        assert_eq!(widget.get_message(0).unwrap().content, "q1");
+    }
+
+    #[test]
+    fn test_rewind_zero_changes_nothing() {
+        let mut widget = ChatWidget::new(100);
+        widget.add_message(ChatRole::User, "q".to_string());
+        let removed = widget.rewind(0);
+        assert_eq!(removed, 0);
+        assert_eq!(widget.len(), 1);
+    }
+
+    // ── find_search_matches ───────────────────────────────────────────────
+
+    #[test]
+    fn test_find_search_matches_basic() {
+        let mut widget = ChatWidget::new(100);
+        widget.add_message(ChatRole::User, "hello world".to_string());
+        widget.add_message(ChatRole::Assistant, "hello there".to_string());
+
+        let matches = widget.find_search_matches("hello");
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].0, 0); // first message
+        assert_eq!(matches[1].0, 1); // second message
+    }
+
+    #[test]
+    fn test_find_search_matches_case_insensitive() {
+        let mut widget = ChatWidget::new(100);
+        widget.add_message(ChatRole::User, "Hello World".to_string());
+        let matches = widget.find_search_matches("hello");
+        assert_eq!(matches.len(), 1);
+    }
+
+    #[test]
+    fn test_find_search_matches_empty_query() {
+        let mut widget = ChatWidget::new(100);
+        widget.add_message(ChatRole::User, "content".to_string());
+        let matches = widget.find_search_matches("");
+        assert!(matches.is_empty());
+    }
+
+    // ── thinking content ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_set_thinking_content() {
+        let mut widget = ChatWidget::new(100);
+        let idx = widget.add_message(ChatRole::Assistant, "answer".to_string());
+        widget.set_thinking_content(idx, "I need to think...".to_string(), Some(2.5));
+        let msg = widget.get_message(idx).unwrap();
+        assert_eq!(msg.thinking_content.as_deref(), Some("I need to think..."));
+        assert_eq!(msg.thinking_duration_secs, Some(2.5));
+    }
+
+    #[test]
+    fn test_set_thinking_content_empty_ignored() {
+        let mut widget = ChatWidget::new(100);
+        let idx = widget.add_message(ChatRole::Assistant, "answer".to_string());
+        widget.set_thinking_content(idx, "".to_string(), None);
+        let msg = widget.get_message(idx).unwrap();
+        assert!(msg.thinking_content.is_none());
+    }
+
+    #[test]
+    fn test_toggle_thinking() {
+        let mut widget = ChatWidget::new(100);
+        let idx = widget.add_message(ChatRole::Assistant, "answer".to_string());
+        assert!(!widget.get_message(idx).unwrap().thinking_expanded);
+        widget.toggle_thinking(idx);
+        assert!(widget.get_message(idx).unwrap().thinking_expanded);
+        widget.toggle_thinking(idx);
+        assert!(!widget.get_message(idx).unwrap().thinking_expanded);
+    }
+
+    #[test]
+    fn test_last_assistant_with_thinking() {
+        let mut widget = ChatWidget::new(100);
+        widget.add_message(ChatRole::User, "q".to_string());
+        let idx1 = widget.add_message(ChatRole::Assistant, "a1".to_string());
+        widget.add_message(ChatRole::User, "q2".to_string());
+        widget.add_message(ChatRole::Assistant, "a2".to_string());
+
+        widget.set_thinking_content(idx1, "thoughts".to_string(), None);
+        // idx1 is the most recent assistant with thinking since a2 has none
+        assert_eq!(widget.last_assistant_with_thinking(), Some(1));
+    }
+
+    // ── last_assistant_message ────────────────────────────────────────────
+
+    #[test]
+    fn test_last_assistant_message() {
+        let mut widget = ChatWidget::new(100);
+        widget.add_message(ChatRole::User, "q".to_string());
+        widget.add_message(ChatRole::Assistant, "a1".to_string());
+        widget.add_message(ChatRole::Tool, "tool output".to_string());
+        widget.add_message(ChatRole::Assistant, "a2".to_string());
+
+        let last = widget.last_assistant_message().unwrap();
+        assert_eq!(last.content, "a2");
+    }
+
+    // ── is_at_bottom ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_is_at_bottom_empty() {
+        let widget = ChatWidget::new(100);
+        assert!(widget.is_at_bottom());
+    }
+
+    #[test]
+    fn test_is_at_bottom_after_add() {
+        let mut widget = ChatWidget::new(100);
+        widget.add_message(ChatRole::User, "msg".to_string());
+        assert!(widget.is_at_bottom());
+    }
+
+    #[test]
+    fn test_is_at_bottom_after_scroll_up() {
+        let mut widget = ChatWidget::new(100);
+        for i in 0..5 {
+            widget.add_message(ChatRole::User, format!("msg {i}"));
+        }
+        widget.scroll_to_top();
+        assert!(!widget.is_at_bottom());
+    }
+
+    // ── wrap_line helper ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_wrap_line_short() {
+        let lines = wrap_line("hello", 80);
+        assert_eq!(lines, vec!["hello"]);
+    }
+
+    #[test]
+    fn test_wrap_line_empty() {
+        let lines = wrap_line("", 80);
+        assert_eq!(lines, vec![""]);
+    }
+
+    #[test]
+    fn test_wrap_line_long() {
+        let long = "word ".repeat(20);
+        let lines = wrap_line(&long, 40);
+        assert!(lines.len() > 1, "long line should wrap into multiple lines");
+    }
+
+    // ── truncate_to helper ────────────────────────────────────────────────
+
+    #[test]
+    fn test_truncate_to_short() {
+        assert_eq!(truncate_to("hi", 10), "hi");
+    }
+
+    #[test]
+    fn test_truncate_to_exact() {
+        assert_eq!(truncate_to("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_truncate_to_long() {
+        let result = truncate_to("hello world", 6);
+        assert!(result.ends_with('\u{2026}'), "should end with ellipsis");
+    }
+
+    // ── detect_diff_language helper ───────────────────────────────────────
+
+    #[test]
+    fn test_detect_diff_language_rust() {
+        let diff = "diff --git a/main.rs b/main.rs\n--- a/main.rs\n+++ b/main.rs\n";
+        assert_eq!(detect_diff_language(diff), Some("rust".to_string()));
+    }
+
+    #[test]
+    fn test_detect_diff_language_python() {
+        let diff = "--- a/app.py\n+++ b/app.py\n";
+        assert_eq!(detect_diff_language(diff), Some("python".to_string()));
+    }
+
+    #[test]
+    fn test_detect_diff_language_none() {
+        assert_eq!(detect_diff_language("no diff here"), None);
+    }
 }

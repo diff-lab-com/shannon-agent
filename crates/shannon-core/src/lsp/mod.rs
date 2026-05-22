@@ -167,3 +167,104 @@ impl Drop for LspManager {
 
 /// Result type for LSP operations
 pub type LspResult<T> = Result<T, LspClientError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lsp_manager_new_empty_config() {
+        let manager = LspManager::new(LspConfig::default());
+        // Config has no servers, but system may have rust-analyzer installed
+        // Just verify the manager was created and can be queried
+        let _ = manager.is_available("rust");
+    }
+
+    #[test]
+    fn lsp_manager_install_hint_known_languages() {
+        assert!(LspManager::install_hint("rust").is_some());
+        assert!(LspManager::install_hint("rs").is_some());
+        assert!(LspManager::install_hint("python").is_some());
+        assert!(LspManager::install_hint("py").is_some());
+        assert!(LspManager::install_hint("typescript").is_some());
+        assert!(LspManager::install_hint("ts").is_some());
+        assert!(LspManager::install_hint("javascript").is_some());
+        assert!(LspManager::install_hint("js").is_some());
+        assert!(LspManager::install_hint("go").is_some());
+        assert!(LspManager::install_hint("c").is_some());
+        assert!(LspManager::install_hint("cpp").is_some());
+        assert!(LspManager::install_hint("java").is_some());
+        assert!(LspManager::install_hint("ruby").is_some());
+    }
+
+    #[test]
+    fn lsp_manager_install_hint_unknown_language() {
+        assert!(LspManager::install_hint("brainfuck").is_none());
+        assert!(LspManager::install_hint("cobol").is_none());
+    }
+
+    #[test]
+    fn lsp_manager_install_hint_case_insensitive() {
+        assert!(LspManager::install_hint("Rust").is_some());
+        assert!(LspManager::install_hint("RUST").is_some());
+        assert!(LspManager::install_hint("Python").is_some());
+    }
+
+    #[test]
+    fn lsp_manager_install_hint_content() {
+        let hint = LspManager::install_hint("rust").unwrap();
+        assert!(hint.contains("rust-analyzer"));
+
+        let hint = LspManager::install_hint("go").unwrap();
+        assert!(hint.contains("gopls"));
+    }
+
+    #[test]
+    fn lsp_client_error_display() {
+        use client::LspClientError;
+
+        assert!(LspClientError::JsonRpcError("bad".into()).to_string().contains("bad"));
+        assert!(LspClientError::ProtocolError("fail".into()).to_string().contains("fail"));
+        assert!(LspClientError::ServerNotFound("rust".into()).to_string().contains("rust"));
+        assert!(LspClientError::InvalidUri.to_string().contains("URI"));
+        assert!(LspClientError::ServerError("crash".into()).to_string().contains("crash"));
+        assert!(LspClientError::InvalidResponse.to_string().contains("Invalid"));
+        assert!(LspClientError::Timeout.to_string().contains("timed out"));
+    }
+
+    #[test]
+    fn lsp_client_error_from_io() {
+        use client::LspClientError;
+
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "missing");
+        let err: LspClientError = io_err.into();
+        assert!(err.to_string().contains("missing"));
+        assert!(err.to_string().contains("spawn"));
+    }
+
+    #[test]
+    fn lsp_client_error_from_serde_json() {
+        use client::LspClientError;
+
+        let json_err = serde_json::from_str::<i32>("bad").unwrap_err();
+        let err: LspClientError = json_err.into();
+        assert!(err.to_string().contains("Serialization"));
+    }
+
+    #[test]
+    fn lsp_result_type() {
+        use client::LspClientError;
+
+        let ok: LspResult<i32> = Ok(42);
+        assert_eq!(ok.unwrap(), 42);
+
+        let err: LspResult<i32> = Err(LspClientError::Timeout);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<LspClientError>();
+    }
+}

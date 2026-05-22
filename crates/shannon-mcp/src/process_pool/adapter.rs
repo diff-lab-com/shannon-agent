@@ -270,3 +270,185 @@ impl Tool for PooledMcpToolAdapter {
             .is_some_and(|a| a.destructive_hint)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_adapter(annotations: Option<crate::ToolAnnotations>) -> PooledMcpToolAdapter {
+        let pool = Arc::new(McpProcessPool::new());
+        PooledMcpToolAdapter::new(
+            pool,
+            "test-server".to_string(),
+            "my_tool".to_string(),
+            "A test tool".to_string(),
+            serde_json::json!({"type": "object"}),
+            annotations,
+        )
+    }
+
+    #[test]
+    fn test_tool_name_format() {
+        let adapter = make_adapter(None);
+        assert_eq!(adapter.name(), "mcp__test-server__my_tool");
+    }
+
+    #[test]
+    fn test_description() {
+        let adapter = make_adapter(None);
+        assert_eq!(adapter.description(), "A test tool");
+    }
+
+    #[test]
+    fn test_category() {
+        let adapter = make_adapter(None);
+        assert_eq!(adapter.category(), "mcp");
+    }
+
+    #[test]
+    fn test_requires_auth_is_false() {
+        let adapter = make_adapter(None);
+        assert!(!adapter.requires_auth());
+    }
+
+    #[test]
+    fn test_is_read_only_with_annotations() {
+        let read_only = make_adapter(Some(crate::ToolAnnotations {
+            read_only_hint: true,
+            destructive_hint: false,
+            idempotent_hint: false,
+            open_world_hint: false,
+        }));
+        assert!(read_only.is_read_only());
+
+        let writable = make_adapter(Some(crate::ToolAnnotations {
+            read_only_hint: false,
+            destructive_hint: false,
+            idempotent_hint: false,
+            open_world_hint: false,
+        }));
+        assert!(!writable.is_read_only());
+    }
+
+    #[test]
+    fn test_is_read_only_without_annotations() {
+        let adapter = make_adapter(None);
+        assert!(!adapter.is_read_only());
+    }
+
+    #[test]
+    fn test_is_destructive() {
+        let destructive = make_adapter(Some(crate::ToolAnnotations {
+            read_only_hint: false,
+            destructive_hint: true,
+            idempotent_hint: false,
+            open_world_hint: false,
+        }));
+        assert!(destructive.is_destructive());
+
+        let safe = make_adapter(Some(crate::ToolAnnotations {
+            read_only_hint: false,
+            destructive_hint: false,
+            idempotent_hint: false,
+            open_world_hint: false,
+        }));
+        assert!(!safe.is_destructive());
+    }
+
+    #[test]
+    fn test_is_concurrency_safe_read_only() {
+        let read_only = make_adapter(Some(crate::ToolAnnotations {
+            read_only_hint: true,
+            destructive_hint: false,
+            idempotent_hint: false,
+            open_world_hint: false,
+        }));
+        assert!(read_only.is_concurrency_safe());
+    }
+
+    #[test]
+    fn test_is_concurrency_safe_idempotent() {
+        let idempotent = make_adapter(Some(crate::ToolAnnotations {
+            read_only_hint: false,
+            destructive_hint: false,
+            idempotent_hint: true,
+            open_world_hint: false,
+        }));
+        assert!(idempotent.is_concurrency_safe());
+    }
+
+    #[test]
+    fn test_is_concurrency_safe_neither() {
+        let neither = make_adapter(Some(crate::ToolAnnotations {
+            read_only_hint: false,
+            destructive_hint: false,
+            idempotent_hint: false,
+            open_world_hint: false,
+        }));
+        assert!(!neither.is_concurrency_safe());
+    }
+
+    #[test]
+    fn test_input_schema_normal() {
+        let adapter = make_adapter(None);
+        let schema = adapter.input_schema();
+        assert_eq!(schema["type"], "object");
+    }
+
+    #[test]
+    fn test_sorted_args_object() {
+        let input = serde_json::json!({"z": 1, "a": 2, "m": 3});
+        let sorted = PooledMcpToolAdapter::sorted_args(&input);
+        assert!(sorted.starts_with("a:"));
+        let z_pos = sorted.find("z:").unwrap();
+        let a_pos = sorted.find("a:").unwrap();
+        assert!(a_pos < z_pos);
+    }
+
+    #[test]
+    fn test_sorted_args_non_object() {
+        let input = serde_json::json!("hello");
+        let sorted = PooledMcpToolAdapter::sorted_args(&input);
+        assert_eq!(sorted, "\"hello\"");
+    }
+
+    #[test]
+    fn test_description_truncation() {
+        let pool = Arc::new(McpProcessPool::new());
+        let long_desc = "x".repeat(3000);
+        let adapter = PooledMcpToolAdapter::new(
+            pool,
+            "srv".to_string(),
+            "tool".to_string(),
+            long_desc.clone(),
+            serde_json::json!({"type": "object"}),
+            None,
+        );
+        assert!(adapter.description().len() < long_desc.len());
+        assert!(adapter.description().ends_with('…'));
+    }
+
+    #[test]
+    fn test_debug_format() {
+        let adapter = make_adapter(None);
+        let debug = format!("{adapter:?}");
+        assert!(debug.contains("test-server"));
+        assert!(debug.contains("mcp__test-server__my_tool"));
+    }
+
+    #[test]
+    fn test_with_output_limit() {
+        let pool = Arc::new(McpProcessPool::new());
+        let adapter = PooledMcpToolAdapter::with_output_limit(
+            pool,
+            "srv".to_string(),
+            "tool".to_string(),
+            "desc".to_string(),
+            serde_json::json!({"type": "object"}),
+            None,
+            Some(5000),
+            Some(60),
+        );
+        assert_eq!(adapter.name(), "mcp__srv__tool");
+    }
+}

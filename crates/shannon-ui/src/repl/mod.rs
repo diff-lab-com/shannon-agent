@@ -7,7 +7,9 @@ mod adapter_impl;
 mod at_reference;
 mod commands;
 mod custom_commands;
+mod diagnostic_watcher;
 mod helpers;
+mod source_watcher;
 mod input;
 pub(crate) mod preferences;
 mod query;
@@ -55,6 +57,7 @@ use shannon_core::{
     permissions::PermissionManager,
     PromptInfo,
     query_engine::QueryEngine,
+    recording::SessionRecorder,
     state::StateManager,
     tools::ToolRegistry,
 };
@@ -130,6 +133,8 @@ pub struct Repl {
     pub(crate) agent_registry: Option<std::sync::Arc<shannon_agents::SubAgentRegistry>>,
     /// Throttle timestamp for agent refresh (avoids block_on on every tick)
     pub(crate) last_agent_refresh: Option<std::time::Instant>,
+    /// Coordinator event receiver for agent dashboard live updates
+    pub(crate) coordinator_event_rx: Option<tokio::sync::broadcast::Receiver<shannon_agents::CoordinatorEvent>>,
     /// MCP process pool for hot-reload support
     pub(crate) mcp_pool: std::sync::Arc<McpProcessPool>,
     /// Tool registry for MCP hot-reload tool registration
@@ -152,12 +157,20 @@ pub struct Repl {
     pub(crate) command_watcher: Option<CustomCommandWatcher>,
     /// Settings file watcher for hot-reloading settings.json / config.toml
     pub(crate) settings_watcher: Option<custom_commands::SettingsWatcher>,
+    /// Source file watcher for detecting project code changes
+    pub(crate) source_watcher: Option<source_watcher::SourceWatcher>,
+    /// Background diagnostic check pending flag (debounce)
+    pub(crate) diagnostic_pending: std::sync::Arc<tokio::sync::Mutex<bool>>,
+    /// Background diagnostic result receiver
+    pub(crate) diagnostic_rx: Option<diagnostic_watcher::DiagnosticReceiver>,
     /// Background update check result (deferred to avoid blocking startup)
     pub(crate) update_check_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<String>>>,
     /// Crash-safe JSONL session recovery log (appends each turn with fsync)
     pub(crate) session_recovery: shannon_core::SessionRecovery,
     /// Shared plan-mode flag (clone of the one in QueryEngine)
     pub(crate) plan_mode_flag: std::sync::Arc<std::sync::RwLock<bool>>,
+    /// Session recorder for deterministic replay testing
+    pub(crate) session_recorder: Option<SessionRecorder>,
 }
 
 /// State for tab completion cycling
@@ -331,6 +344,7 @@ impl Repl {
             team_coordinator: None,
             agent_registry: None,
             last_agent_refresh: None,
+            coordinator_event_rx: None,
             mcp_pool,
             tool_registry,
             mcp_progress_rx: None,
@@ -342,9 +356,13 @@ impl Repl {
             instruction_watcher: None,
             command_watcher: None,
             settings_watcher: None,
+            source_watcher: None,
+            diagnostic_pending: std::sync::Arc::new(tokio::sync::Mutex::new(false)),
+            diagnostic_rx: None,
             update_check_rx: None,
             session_recovery: shannon_core::SessionRecovery::new().unwrap_or_default(),
             plan_mode_flag: std::sync::Arc::new(std::sync::RwLock::new(false)),
+            session_recorder: None,
         };
 
         repl.sync_approval_mode_label();
@@ -652,12 +670,11 @@ impl Repl {
                                     }
                                 }
                             }
-                            Ok(_) => {
-                                tracing::info!(
-                                    "Plugin '{}' ({}) loaded",
-                                    plugin.manifest.name,
-                                    plugin.manifest.type_display_name()
-                                );
+                            Ok(shannon_core::plugin::PluginKind::Command { name, description }) => {
+                                tracing::info!("Command plugin '{}' ({}) loaded", name, description);
+                            }
+                            Ok(shannon_core::plugin::PluginKind::Skill { trigger, template: _ }) => {
+                                tracing::info!("Skill plugin '{}' (trigger: '{}') loaded", plugin.manifest.name, trigger);
                             }
                             Err(e) => {
                                 tracing::warn!("Plugin '{}' has invalid config: {e}", plugin.manifest.name);
@@ -1011,6 +1028,145 @@ impl Repl {
                 }
             }
 
+            // Load plugins from ~/.shannon/plugins/
+            {
+                let plugins_dir = dirs::home_dir()
+                    .unwrap_or_default()
+                    .join(".shannon")
+                    .join("plugins");
+                let mut plugin_registry = shannon_core::plugin::PluginRegistry::new(plugins_dir);
+                if plugin_registry.load_all().await.is_ok() {
+                    let enabled = plugin_registry.list_enabled();
+                    if !enabled.is_empty() {
+                        tracing::info!("Loaded {} plugin(s)", enabled.len());
+                        for plugin in &enabled {
+                            match plugin.manifest.kind() {
+                                Ok(shannon_core::plugin::PluginKind::Tool { transport }) => {
+                                    if let Some(command) = transport.command() {
+                                        let args = transport.args().to_vec();
+                                        match shannon_core::discover_tools(
+                                            &plugin.manifest.name,
+                                            command,
+                                            &args,
+                                            &std::collections::HashMap::new(),
+                                            None,
+                                        ).await {
+                                            Ok(result) => {
+                                                let tool_count = result.tools.len();
+                                                for tool in result.tools {
+                                                    if let Err(e) = tool_registry.register(Box::new(tool)) {
+                                                        tracing::debug!("Plugin tool registration skipped: {}", e);
+                                                    }
+                                                }
+                                                tracing::info!(
+                                                    "Registered {} tool(s) from plugin '{}'",
+                                                    tool_count,
+                                                    plugin.manifest.name
+                                                );
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!("Plugin '{}' tool discovery failed: {e}", plugin.manifest.name);
+                                            }
+                                        }
+                                    }
+                                }
+                                Ok(shannon_core::plugin::PluginKind::Command { name, description }) => {
+                                    let plugin_dir = plugin.path.parent()
+                                        .map(|p| p.to_path_buf())
+                                        .unwrap_or_default();
+                                    let entry_path = plugin_dir.join(&plugin.manifest.entry);
+                                    let template = std::fs::read_to_string(&entry_path)
+                                        .unwrap_or_else(|_| plugin.manifest.entry.clone());
+                                    let cmd = Command::Prompt(Box::new(PromptCommand {
+                                        base: CommandBase {
+                                            name: format!("plugin:{name}"),
+                                            aliases: Vec::new(),
+                                            description: description.clone(),
+                                            has_user_specified_description: !description.is_empty(),
+                                            availability: vec![shannon_commands::CommandAvailability::All],
+                                            source: shannon_commands::CommandSource::Plugin,
+                                            is_enabled: true,
+                                            is_hidden: false,
+                                            argument_hint: Some("$ARGUMENTS".to_string()),
+                                            when_to_use: None,
+                                            version: Some(plugin.manifest.version.clone()),
+                                            disable_model_invocation: false,
+                                            user_invocable: true,
+                                            is_workflow: false,
+                                            immediate: false,
+                                            is_sensitive: false,
+                                            user_facing_name: None,
+                                        },
+                                        progress_message: format!("Running /{name}..."),
+                                        content_length: template.len(),
+                                        arg_names: vec!["$ARGUMENTS".to_string()],
+                                        allowed_tools: Vec::new(),
+                                        model: None,
+                                        hooks: HashMap::new(),
+                                        context: ExecutionContext::Inline,
+                                        agent: None,
+                                        paths: Vec::new(),
+                                        prompt_template: Some(template),
+                                    }));
+                                    registry.register_sync(cmd);
+                                    tracing::info!("Registered command '/plugin:{}' from plugin '{}'", name, plugin.manifest.name);
+                                }
+                                Ok(shannon_core::plugin::PluginKind::Skill { trigger, template }) => {
+                                    let plugin_dir = plugin.path.parent()
+                                        .map(|p| p.to_path_buf())
+                                        .unwrap_or_default();
+                                    let entry_path = plugin_dir.join(&plugin.manifest.entry);
+                                    // Use entry file content if it exists, otherwise use inline template
+                                    let prompt_template = if entry_path.exists() {
+                                        std::fs::read_to_string(&entry_path).unwrap_or(template.clone())
+                                    } else {
+                                        template.clone()
+                                    };
+                                    // Strip leading slash from trigger for command name
+                                    let cmd_name = trigger.trim_start_matches('/');
+                                    let cmd = Command::Prompt(Box::new(PromptCommand {
+                                        base: CommandBase {
+                                            name: format!("plugin:{cmd_name}"),
+                                            aliases: vec![trigger.clone()],
+                                            description: plugin.manifest.description.clone(),
+                                            has_user_specified_description: true,
+                                            availability: vec![shannon_commands::CommandAvailability::All],
+                                            source: shannon_commands::CommandSource::Plugin,
+                                            is_enabled: true,
+                                            is_hidden: false,
+                                            argument_hint: Some("$ARGUMENTS".to_string()),
+                                            when_to_use: None,
+                                            version: Some(plugin.manifest.version.clone()),
+                                            disable_model_invocation: false,
+                                            user_invocable: true,
+                                            is_workflow: false,
+                                            immediate: false,
+                                            is_sensitive: false,
+                                            user_facing_name: Some(trigger.clone()),
+                                        },
+                                        progress_message: format!("Running skill /{trigger}…"),
+                                        content_length: prompt_template.len(),
+                                        arg_names: vec!["$ARGUMENTS".to_string()],
+                                        allowed_tools: Vec::new(),
+                                        model: None,
+                                        hooks: HashMap::new(),
+                                        context: ExecutionContext::Inline,
+                                        agent: None,
+                                        paths: Vec::new(),
+                                        prompt_template: Some(prompt_template),
+                                    }));
+                                    registry.register_sync(cmd);
+                                    tracing::info!("Registered skill '/{}' from plugin '{}'", trigger, plugin.manifest.name);
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Plugin '{}' has invalid config: {e}", plugin.manifest.name);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             registry
         });
 
@@ -1070,6 +1226,7 @@ impl Repl {
             team_coordinator: shared_coordinator,
             agent_registry: None,
             last_agent_refresh: None,
+            coordinator_event_rx: None,
             mcp_pool,
             tool_registry,
             mcp_progress_rx,
@@ -1095,9 +1252,13 @@ impl Repl {
             },
             command_watcher: Some(CustomCommandWatcher::new()),
             settings_watcher: Some(SettingsWatcher::new()),
+            source_watcher: Some(source_watcher::SourceWatcher::new(std::env::current_dir().unwrap_or_default())),
+            diagnostic_pending: std::sync::Arc::new(tokio::sync::Mutex::new(false)),
+            diagnostic_rx: None,
             update_check_rx: None,
             session_recovery: shannon_core::SessionRecovery::new().unwrap_or_default(),
             plan_mode_flag: plan_mode_flag.clone(),
+            session_recorder: None,
         };
 
         // Pre-query Ollama model info so context_window is correct from the start
@@ -1292,11 +1453,87 @@ impl Repl {
                 self.refresh_agents();
             }
 
+            // Drain coordinator events into agent dashboard
+            if let Some(ref mut rx) = self.coordinator_event_rx {
+                while let Ok(event) = rx.try_recv() {
+                    if let Some(ref mut dashboard) = self.state.agent_dashboard {
+                        dashboard.handle_coordinator_event(&event);
+                    }
+                }
+            }
+
+            // Auto-create dashboard when agents appear
+            if !self.state.active_agents.is_empty() && self.state.agent_dashboard.is_none() {
+                let mut dashboard = crate::widgets::agent_bar::AgentDashboardState::new();
+                dashboard.sync_from_agents(&self.state.active_agents);
+                self.state.agent_dashboard = Some(dashboard);
+            }
+            // Sync dashboard entries from current agent state
+            if let Some(ref mut dashboard) = self.state.agent_dashboard {
+                dashboard.sync_from_agents(&self.state.active_agents);
+            }
+            // Auto-remove dashboard when no agents (but keep if expanded)
+            if self.state.active_agents.is_empty() {
+                if let Some(ref dashboard) = self.state.agent_dashboard {
+                    if !dashboard.expanded {
+                        self.state.agent_dashboard = None;
+                    }
+                }
+            }
+
             // Check custom command files for filesystem changes (notify-based)
             self.check_reload_commands();
 
             // Check settings files for changes
             self.check_reload_settings();
+
+            // Check source file changes (for diagnostic triggering)
+            let source_changes = self.check_source_changes();
+            if !source_changes.is_empty() {
+                let count = source_changes.len();
+                let preview = source_changes.iter()
+                    .take(3)
+                    .map(|p| p.rsplit('/').next().unwrap_or(p))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let suffix = if count > 3 { &format!(" +{} more", count - 3) } else { "" };
+                self.chat.add_message(
+                    crate::widgets::ChatRole::System,
+                    format!("[Source changed: {preview}{suffix}]"),
+                );
+                self.state.diagnostic_store.mark_stale();
+            }
+
+            // Trigger background diagnostic refresh when stale
+            if self.state.diagnostic_store.is_stale() {
+                if let Some(ref mut rx) = self.diagnostic_rx {
+                    // Check if a previous run completed
+                    if let Some(result) = diagnostic_watcher::try_receive(rx) {
+                        let count = self.state.diagnostic_store.update_from_cli(&result);
+                        if count > 0 {
+                            self.chat.add_message(
+                                ChatRole::System,
+                                format!("[Diagnostics: {} issue(s) found]", count),
+                            );
+                        } else {
+                            self.chat.add_message(
+                                ChatRole::System,
+                                "[Diagnostics: ✓ No issues]".to_string(),
+                            );
+                        }
+                        self.diagnostic_rx = None;
+                    }
+                } else {
+                    // Spawn a new diagnostic run
+                    let project_dir = std::path::PathBuf::from(&self.state.working_directory);
+                    if let Some(rx) = diagnostic_watcher::spawn_diagnostic_run(
+                        project_dir,
+                        self.diagnostic_pending.clone(),
+                    ) {
+                        self.diagnostic_rx = Some(rx);
+                    }
+                }
+            }
 
             // Check scheduled routines and inject due prompts
             let due = self.state.routine_manager.drain_due();

@@ -228,7 +228,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             timestamp: chrono::Utc::now(),
             tools_allowed: {
                 let is_ollama = repl.state.selected_provider == Some(shannon_core::api::LlmProvider::Ollama)
-                    || repl.query_engine.as_ref().map_or(false, |qe| *qe.client().provider() == shannon_core::api::LlmProvider::Ollama);
+                    || repl.query_engine.as_ref().is_some_and(|qe| *qe.client().provider() == shannon_core::api::LlmProvider::Ollama);
                 if is_ollama { false } else { repl.state.tools_enabled }
             },
             max_tokens: Some(4096),
@@ -417,7 +417,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                                 .map(|f| {
                                     let add = if f.additions > 0 { format!(" +{}", f.additions) } else { String::new() };
                                     let del = if f.deletions > 0 { format!(" -{}", f.deletions) } else { String::new() };
-                                    if add.is_empty() && del.is_empty() { String::new() } else { format!(" {}{}", add, del) }
+                                    if add.is_empty() && del.is_empty() { String::new() } else { format!(" {add}{del}") }
                                 })
                                 .unwrap_or_default()
                         } else {
@@ -1187,6 +1187,15 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             repl.state.tokens_used = pre_stream_tokens + tokens;
             repl.tools_invoked = pre_stream_tools + tools;
 
+            // Record LLM exchange if session recording is active
+            if let Some(ref mut recorder) = repl.session_recorder {
+                use serde_json::json;
+                recorder.record_llm_exchange(
+                    &json!({"message": input}),
+                    &json!({"text": response, "tokens": tokens}),
+                );
+            }
+
             // Record billing for this turn
             let turn_cost = repl.state.total_cost_usd - pre_stream_cost;
             if turn_cost > 0.0 {
@@ -1545,6 +1554,58 @@ fn extract_memory_content(response: &str) -> String {
 /// Escape HTML special characters so pulldown-cmark doesn't interpret them as tags.
 fn escape_html_simple(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+/// Format thinking content for display in the streaming message area.
+///
+/// Shows a collapsible-style header with character count, then the last
+/// few lines of thinking content. Kept brief to avoid flooding the chat
+/// area during extended thinking.
+fn format_thinking_for_streaming(content: &str) -> String {
+    let char_count = content.chars().count();
+    let header = if char_count >= 1000 {
+        t!("ui.thinking_header_k", count => char_count / 1000).to_string()
+    } else {
+        t!("ui.thinking_header", count => char_count).to_string()
+    };
+
+    // Show the tail of thinking content (last ~500 chars, ~10 lines)
+    // so the user sees what the model is currently reasoning about.
+    let tail = if char_count > 500 {
+        let mut start = content.char_indices().nth(char_count - 500).map(|(i, _)| i).unwrap_or(0);
+        // Align to a line boundary for clean display
+        if start > 0 {
+            if let Some(pos) = content[start..].find('\n') {
+                start += pos + 1;
+            }
+        }
+        &content[start..]
+    } else {
+        content
+    };
+
+    // Keep only last 12 lines to avoid flooding the chat area
+    let lines: Vec<&str> = tail.lines().collect();
+    let display_lines = if lines.len() > 12 {
+        &lines[lines.len() - 12..]
+    } else {
+        &lines
+    };
+
+    let mut result = format!("╭ {header} ╮\n");
+    for line in display_lines {
+        // Truncate very long lines for display
+        let truncated = if line.chars().count() > 120 {
+            let mut end = 117;
+            while end > 0 && !line.is_char_boundary(end) { end -= 1; }
+            format!("{}...", &line[..end])
+        } else {
+            line.to_string()
+        };
+        result.push_str(&format!("│ {truncated}\n"));
+    }
+    result.push_str("╰───────────╯");
+    result
 }
 
 #[cfg(test)]

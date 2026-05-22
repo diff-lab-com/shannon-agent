@@ -135,7 +135,6 @@ impl SidebarWidget {
     }
 
     /// Toggle the collapsed state of a section.
-    #[allow(dead_code)]
     pub fn toggle_section(&mut self, section: SidebarSection) {
         if self.collapsed.contains(&section) {
             self.collapsed.remove(&section);
@@ -649,3 +648,210 @@ pub(super) const MIN_SIDEBAR_WIDTH_VAL: u16 = MIN_SIDEBAR_WIDTH;
 pub(super) const COLLAPSE_HEADER_WIDTH_VAL: u16 = COLLAPSE_HEADER_WIDTH;
 pub(super) const MIN_TERMINAL_WIDTH_VAL: u16 = MIN_TERMINAL_WIDTH;
 pub(super) const MIN_TERMINAL_HEIGHT_VAL: u16 = MIN_TERMINAL_HEIGHT;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_sidebar_info() -> SidebarInfo {
+        SidebarInfo {
+            model: Some("test-model".to_string()),
+            tokens_used: 1500,
+            cost_usd: 0.025,
+            tools_invoked: 7,
+            modified_files: vec![
+                ("src/main.rs".to_string(), 20, 5),
+                ("src/lib.rs".to_string(), 10, 2),
+            ],
+            total_additions: 30,
+            total_deletions: 7,
+            error_count: 1,
+            tool_breakdown: vec![
+                ("R".to_string(), 3),
+                ("W".to_string(), 2),
+                ("$".to_string(), 2),
+            ],
+            context_window: 128_000,
+            active_agents: vec![],
+            diagnostics: vec![],
+            session_duration_secs: 120,
+            turn_count: 5,
+            commands_run: 3,
+            tokens_per_sec: Some(45.0),
+            memory_rss_kb: 0,
+        }
+    }
+
+    // ── SidebarInfo construction ──────────────────────────────────────────
+
+    #[test]
+    fn test_sidebar_info_default_fields() {
+        let info = make_sidebar_info();
+        assert_eq!(info.model.as_deref(), Some("test-model"));
+        assert_eq!(info.tokens_used, 1500);
+        assert_eq!(info.cost_usd, 0.025);
+        assert_eq!(info.tools_invoked, 7);
+        assert_eq!(info.error_count, 1);
+        assert_eq!(info.context_window, 128_000);
+        assert_eq!(info.session_duration_secs, 120);
+        assert_eq!(info.turn_count, 5);
+        assert_eq!(info.commands_run, 3);
+        assert_eq!(info.tokens_per_sec, Some(45.0));
+        assert!(info.active_agents.is_empty());
+        assert!(info.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn test_sidebar_info_modified_files() {
+        let info = make_sidebar_info();
+        assert_eq!(info.modified_files.len(), 2);
+        assert_eq!(info.modified_files[0].0, "src/main.rs");
+        assert_eq!(info.modified_files[0].1, 20); // additions
+        assert_eq!(info.modified_files[0].2, 5);  // deletions
+    }
+
+    #[test]
+    fn test_sidebar_info_totals() {
+        let info = make_sidebar_info();
+        assert_eq!(info.total_additions, 30);
+        assert_eq!(info.total_deletions, 7);
+        // 20+5 + 10+2 = 37, totals tracked separately
+        assert_eq!(info.total_additions + info.total_deletions, 37);
+    }
+
+    // ── tool_breakdown ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_sidebar_info_tool_breakdown() {
+        let info = make_sidebar_info();
+        assert_eq!(info.tool_breakdown.len(), 3);
+        assert_eq!(info.tool_breakdown[0], ("R".to_string(), 3));
+        assert_eq!(info.tool_breakdown[1], ("W".to_string(), 2));
+        assert_eq!(info.tool_breakdown[2], ("$".to_string(), 2));
+    }
+
+    #[test]
+    fn test_sidebar_info_tool_breakdown_sums_to_total() {
+        let info = make_sidebar_info();
+        let breakdown_total: usize = info.tool_breakdown.iter().map(|(_, c)| c).sum();
+        assert_eq!(breakdown_total, info.tools_invoked);
+    }
+
+    #[test]
+    fn test_sidebar_info_tool_breakdown_empty() {
+        let info = SidebarInfo {
+            model: None,
+            tokens_used: 0,
+            cost_usd: 0.0,
+            tools_invoked: 0,
+            modified_files: vec![],
+            total_additions: 0,
+            total_deletions: 0,
+            error_count: 0,
+            tool_breakdown: vec![],
+            context_window: 0,
+            active_agents: vec![],
+            diagnostics: vec![],
+            session_duration_secs: 0,
+            turn_count: 0,
+            commands_run: 0,
+            tokens_per_sec: None,
+            memory_rss_kb: 0,
+        };
+        assert!(info.tool_breakdown.is_empty());
+    }
+
+    // ── SidebarWidget section toggling ────────────────────────────────────
+
+    #[test]
+    fn test_sidebar_widget_new_all_expanded() {
+        let widget = SidebarWidget::new();
+        assert!(!widget.is_collapsed(SidebarSection::ContextUsage));
+        assert!(!widget.is_collapsed(SidebarSection::Cost));
+        assert!(!widget.is_collapsed(SidebarSection::Tools));
+        assert!(!widget.is_collapsed(SidebarSection::Memory));
+        assert!(!widget.is_collapsed(SidebarSection::Changes));
+    }
+
+    #[test]
+    fn test_sidebar_widget_toggle_section() {
+        let mut widget = SidebarWidget::new();
+        assert!(!widget.is_collapsed(SidebarSection::ContextUsage));
+
+        widget.toggle_section(SidebarSection::ContextUsage);
+        assert!(widget.is_collapsed(SidebarSection::ContextUsage));
+
+        widget.toggle_section(SidebarSection::ContextUsage);
+        assert!(!widget.is_collapsed(SidebarSection::ContextUsage));
+    }
+
+    #[test]
+    fn test_sidebar_widget_toggle_independent_sections() {
+        let mut widget = SidebarWidget::new();
+        widget.toggle_section(SidebarSection::ContextUsage);
+        widget.toggle_section(SidebarSection::Cost);
+
+        assert!(widget.is_collapsed(SidebarSection::ContextUsage));
+        assert!(widget.is_collapsed(SidebarSection::Cost));
+        assert!(!widget.is_collapsed(SidebarSection::Tools));
+    }
+
+    // ── SidebarWidget layout constants ────────────────────────────────────
+
+    #[test]
+    fn test_sidebar_fits_wide_terminal() {
+        assert!(SidebarWidget::fits(80));
+        assert!(SidebarWidget::fits(120));
+    }
+
+    #[test]
+    fn test_sidebar_does_not_fit_narrow_terminal() {
+        assert!(!SidebarWidget::fits(60));
+        assert!(!SidebarWidget::fits(50));
+    }
+
+    #[test]
+    fn test_sidebar_width() {
+        assert_eq!(SidebarWidget::width(), SIDEBAR_WIDTH);
+    }
+
+    // ── format_tokens helper ──────────────────────────────────────────────
+
+    #[test]
+    fn test_format_tokens_small() {
+        assert_eq!(format_tokens(42), "42");
+    }
+
+    #[test]
+    fn test_format_tokens_thousands() {
+        assert_eq!(format_tokens(1500), "1.5k");
+    }
+
+    #[test]
+    fn test_format_tokens_millions() {
+        assert_eq!(format_tokens(2_500_000), "2.5M");
+    }
+
+    #[test]
+    fn test_format_tokens_zero() {
+        assert_eq!(format_tokens(0), "0");
+    }
+
+    // ── truncate_to helper ────────────────────────────────────────────────
+
+    #[test]
+    fn test_sidebar_truncate_to_short() {
+        assert_eq!(truncate_to("hi", 10), "hi");
+    }
+
+    #[test]
+    fn test_sidebar_truncate_to_exact() {
+        assert_eq!(truncate_to("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_sidebar_truncate_to_long() {
+        let result = truncate_to("hello world", 6);
+        assert!(result.ends_with('\u{2026}'));
+    }
+}

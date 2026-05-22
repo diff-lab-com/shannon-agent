@@ -59,7 +59,6 @@ struct JsonRpcRequest {
 /// JSON-RPC response received from the language server
 #[derive(Debug, Deserialize)]
 struct JsonRpcResponse {
-    #[allow(dead_code)]
     jsonrpc: String,
     id: Option<serde_json::Value>,
     #[serde(default)]
@@ -71,7 +70,6 @@ struct JsonRpcResponse {
 /// JSON-RPC error
 #[derive(Debug, Deserialize)]
 struct JsonRpcError {
-    #[allow(dead_code)]
     code: i64,
     message: String,
     data: Option<Value>,
@@ -80,7 +78,6 @@ struct JsonRpcError {
 /// LSP client that communicates over stdio with a language server
 pub struct LspClient {
     /// The child process
-    #[allow(dead_code)]
     process: tokio::process::Child,
     /// Writer for sending requests
     writer: BufWriter<tokio::process::ChildStdin>,
@@ -430,5 +427,73 @@ impl Drop for LspClient {
         // Kill the child process to prevent leaked file descriptors.
         // We can't do async shutdown in Drop, so we send SIGKILL directly.
         let _ = self.process.start_kill();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lsp_client_error_display_messages() {
+        assert!(LspClientError::SpawnError(std::io::Error::new(std::io::ErrorKind::NotFound, "missing")).to_string().contains("Failed to spawn"));
+        assert!(LspClientError::JsonRpcError("bad request".into()).to_string().contains("bad request"));
+        assert!(LspClientError::ProtocolError("handshake failed".into()).to_string().contains("handshake failed"));
+        assert!(LspClientError::ServerNotFound("brainfuck".into()).to_string().contains("brainfuck"));
+        assert!(LspClientError::InvalidUri.to_string().contains("Invalid URI"));
+        assert!(LspClientError::ServerError("crash".into()).to_string().contains("crash"));
+        assert!(LspClientError::InvalidResponse.to_string().contains("Invalid response"));
+        assert!(LspClientError::Timeout.to_string().contains("timed out"));
+    }
+
+    #[test]
+    fn lsp_client_error_from_io() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::BrokenPipe, "pipe broke");
+        let err: LspClientError = io_err.into();
+        assert!(matches!(err, LspClientError::SpawnError(_)));
+    }
+
+    #[test]
+    fn lsp_client_error_from_serde_json() {
+        let json_err = serde_json::from_str::<i32>("not json").unwrap_err();
+        let err: LspClientError = json_err.into();
+        assert!(matches!(err, LspClientError::SerializationError(_)));
+    }
+
+    #[test]
+    fn json_rpc_request_serialization() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(1)),
+            method: "initialize".to_string(),
+            params: json!({"capabilities": {}}),
+        };
+        let serialized = serde_json::to_string(&req).unwrap();
+        assert!(serialized.contains("\"jsonrpc\":\"2.0\""));
+        assert!(serialized.contains("\"method\":\"initialize\""));
+        assert!(serialized.contains("\"id\":1"));
+    }
+
+    #[test]
+    fn json_rpc_response_deserialization() {
+        let json = r#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}}"#;
+        let resp: JsonRpcResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.jsonrpc, "2.0");
+        assert!(resp.error.is_none());
+    }
+
+    #[test]
+    fn json_rpc_response_with_error() {
+        let json = r#"{"jsonrpc":"2.0","id":2,"error":{"code":-32600,"message":"Invalid Request"}}"#;
+        let resp: JsonRpcResponse = serde_json::from_str(json).unwrap();
+        let err = resp.error.unwrap();
+        assert_eq!(err.code, -32600);
+        assert_eq!(err.message, "Invalid Request");
+    }
+
+    #[test]
+    fn send_sync_bounds() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<LspClientError>();
     }
 }

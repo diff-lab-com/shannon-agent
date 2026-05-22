@@ -49,13 +49,11 @@ impl ColumnRenderable {
     }
 
     /// Number of cells.
-    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.cells.len()
     }
 
     /// Whether there are no cells.
-    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.cells.is_empty()
     }
@@ -211,7 +209,6 @@ impl ColumnRenderable {
     }
 
     /// Compute total height of all cells at the given width.
-    #[allow(dead_code)]
     fn total_height(&self, width: u16) -> u16 {
         self.compute_heights(width, 0);
         self.heights_buf.lock().iter().copied().sum()

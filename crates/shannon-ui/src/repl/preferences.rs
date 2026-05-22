@@ -46,3 +46,69 @@ pub fn save_preferences(prefs: &Preferences) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preferences_default() {
+        let prefs = Preferences::default();
+        assert!(prefs.model.is_none());
+        assert!(prefs.provider.is_none());
+        assert!(prefs.theme.is_none());
+    }
+
+    #[test]
+    fn preferences_serde_roundtrip() {
+        let prefs = Preferences {
+            model: Some("claude-3-opus".to_string()),
+            provider: Some(LlmProvider::Anthropic),
+            theme: Some("dracula".to_string()),
+        };
+        let json = serde_json::to_string(&prefs).unwrap();
+        let back: Preferences = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.model, Some("claude-3-opus".to_string()));
+        assert_eq!(back.provider, Some(LlmProvider::Anthropic));
+        assert_eq!(back.theme, Some("dracula".to_string()));
+    }
+
+    #[test]
+    fn preferences_partial_serde() {
+        let json = r#"{"model":"gpt-4"}"#;
+        let prefs: Preferences = serde_json::from_str(json).unwrap();
+        assert_eq!(prefs.model, Some("gpt-4".to_string()));
+        assert!(prefs.provider.is_none());
+        assert!(prefs.theme.is_none());
+    }
+
+    #[test]
+    fn preferences_empty_json() {
+        let prefs: Preferences = serde_json::from_str("{}").unwrap();
+        assert!(prefs.model.is_none());
+        assert!(prefs.provider.is_none());
+    }
+
+    #[test]
+    fn preferences_debug_format() {
+        let prefs = Preferences {
+            model: Some("test".to_string()),
+            provider: None,
+            theme: None,
+        };
+        let debug = format!("{prefs:?}");
+        assert!(debug.contains("test"));
+    }
+
+    #[test]
+    fn preferences_clone() {
+        let prefs = Preferences {
+            model: Some("claude-3".to_string()),
+            provider: Some(LlmProvider::OpenAI),
+            theme: None,
+        };
+        let cloned = prefs.clone();
+        assert_eq!(cloned.model, prefs.model);
+        assert_eq!(cloned.provider, prefs.provider);
+    }
+}
