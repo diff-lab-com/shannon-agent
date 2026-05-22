@@ -1,5 +1,9 @@
 //! /plugin command - Plugin management
 
+// Scaffolded plugin subsystem — all items below are unused until wired into the REPL.
+// Suppress dead_code for the entire file to avoid per-item annotations.
+#![allow(dead_code)]
+
 use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
 use shannon_core::plugin::{PluginRegistry, PluginIndex};
 use std::path::{Path, PathBuf};

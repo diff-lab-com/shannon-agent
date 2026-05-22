@@ -128,6 +128,7 @@ pub struct MemoryFile {
 
 impl MemoryFile {
     /// Get the memory directory path
+    #[allow(dead_code)]
     pub fn memory_dir() -> std::path::PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("~"))
@@ -136,12 +137,14 @@ impl MemoryFile {
     }
 
     /// Get the project-specific memory file path
+    #[allow(dead_code)]
     pub fn project_path(project_dir: &str) -> std::path::PathBuf {
         let hash = simple_hash(project_dir);
         Self::memory_dir().join(format!("{hash}.json"))
     }
 
     /// Load memories for a project
+    #[allow(dead_code)]
     pub fn load(project_dir: &str) -> Self {
         let path = Self::project_path(project_dir);
         if path.exists() {
@@ -153,6 +156,7 @@ impl MemoryFile {
     }
 
     /// Save memories to disk
+    #[allow(dead_code)]
     pub fn save(&self, project_dir: &str) -> std::io::Result<()> {
         let dir = Self::memory_dir();
         std::fs::create_dir_all(&dir)?;
@@ -165,6 +169,7 @@ impl MemoryFile {
     }
 
     /// Add a new memory entry
+    #[allow(dead_code)]
     pub fn add(&mut self, content: String, category: String, project: String) -> String {
         let id = format!("mem_{}", simple_hash(&format!("{}{}{}", content, category, chrono_like_now())));
         self.entries.push(MemoryEntry {
@@ -179,6 +184,7 @@ impl MemoryFile {
 }
 
 /// Simple hash for project paths (no external dependency)
+#[allow(dead_code)]
 fn simple_hash(s: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -187,6 +193,7 @@ fn simple_hash(s: &str) -> String {
 }
 
 /// Timestamp without chrono dependency
+#[allow(dead_code)]
 fn chrono_like_now() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

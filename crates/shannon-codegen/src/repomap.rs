@@ -158,79 +158,6 @@ pub fn generate_repomap_filtered(
 }
 
 
-/// Format a symbol with indentation
-fn format_symbol(output: &mut String, symbol: &Symbol, indent: usize) {
-    let indent_str = "  ".repeat(indent);
-    let icon = symbol.kind.icon();
-    let kind = symbol.kind.display_name();
-
-    output.push_str(&format!(
-        "{}{} **{}** - {}:{}\n",
-        indent_str,
-        icon,
-        symbol.name,
-        kind,
-        symbol.start_line
-    ));
-
-    for child in &symbol.children {
-        format_symbol(output, child, indent + 1);
-    }
-}
-
-/// Format repository map as JSON
-///
-/// # Arguments
-///
-/// * `repo_map` - Repository map to format
-///
-/// # Returns
-///
-/// JSON formatted string
-///
-/// # Errors
-///
-/// Returns error if serialization fails
-pub fn format_repomap_json(repo_map: &RepoMap) -> Result<String> {
-    serde_json::to_string_pretty(repo_map)
-        .map_err(|e| CodegenError::Other(e.into()))
-}
-
-/// Generate compact repository summary
-///
-/// # Arguments
-///
-/// * `repo_map` - Repository map to summarize
-///
-/// # Returns
-///
-/// Compact summary string
-pub fn format_repomap_compact(repo_map: &RepoMap) -> String {
-    let mut output = String::new();
-
-    output.push_str(&format!(
-        "Repo: {} files, {} symbols, {} lines\n\n",
-        repo_map.files.len(),
-        repo_map.total_symbols,
-        repo_map.total_lines
-    ));
-
-    for file in &repo_map.files {
-        let symbol_names: Vec<&str> = file.symbols.iter()
-            .map(|s| s.name.as_str())
-            .collect();
-
-        output.push_str(&format!(
-            "{}: {} symbols: {}\n",
-            file.path,
-            file.symbols.len(),
-            symbol_names.join(", ")
-        ));
-    }
-
-    output
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,23 +187,5 @@ def hello():
         let repo_map = generate_repomap(root, 10).unwrap();
         assert_eq!(repo_map.files.len(), 2);
         assert_eq!(repo_map.total_symbols, 3); // 2 from Rust, 1 from Python
-    }
-
-    #[test]
-    fn test_format_repomap_compact() {
-        let repo_map = RepoMap {
-            files: vec![FileSummary {
-                path: "test.rs".to_string(),
-                language: "Rust".to_string(),
-                symbols: vec![],
-                lines: 10,
-            }],
-            total_symbols: 0,
-            total_lines: 10,
-        };
-
-        let compact = format_repomap_compact(&repo_map);
-        assert!(compact.contains("1 files"));
-        assert!(compact.contains("test.rs"));
     }
 }

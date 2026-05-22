@@ -1561,6 +1561,7 @@ fn escape_html_simple(s: &str) -> String {
 /// Shows a collapsible-style header with character count, then the last
 /// few lines of thinking content. Kept brief to avoid flooding the chat
 /// area during extended thinking.
+#[allow(dead_code)]
 fn format_thinking_for_streaming(content: &str) -> String {
     let char_count = content.chars().count();
     let header = if char_count >= 1000 {

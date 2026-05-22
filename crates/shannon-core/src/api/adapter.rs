@@ -491,6 +491,7 @@ struct OpenAiResponseMessage {
 struct OpenAiResponseToolCall {
     id: String,
     #[serde(rename = "type")]
+    #[allow(dead_code)]
     call_type: Option<String>,
     function: OpenAiResponseFunction,
 }

@@ -43,6 +43,7 @@ pub(crate) fn spawn_diagnostic_run(
 }
 
 /// Async variant that can be called from async context.
+#[allow(dead_code)]
 pub(crate) async fn spawn_diagnostic_run_async(
     project_dir: PathBuf,
     pending: Arc<Mutex<bool>>,

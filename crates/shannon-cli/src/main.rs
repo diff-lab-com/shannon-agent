@@ -54,6 +54,7 @@ enum HeadlessExitCode {
     /// 2 - maximum turns reached before completion.
     TurnLimit = 2,
     /// 3 - timeout occurred (request took too long).
+    #[allow(dead_code)]
     Timeout = 3,
     /// 4 - rate limited by API provider.
     RateLimited = 4,
@@ -115,9 +116,11 @@ enum CiEvent {
     ToolResult { name: String, output: String, success: bool },
     /// Message/response content.
     #[serde(rename = "message")]
+    #[allow(dead_code)]
     Message { content: String },
     /// File diff (unified format).
     #[serde(rename = "diff")]
+    #[allow(dead_code)]
     Diff { path: String, content: String },
     /// Error occurred.
     #[serde(rename = "error")]

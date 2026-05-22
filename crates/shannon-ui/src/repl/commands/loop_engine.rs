@@ -702,6 +702,7 @@ pub(crate) fn handle_sandbox(repl: &mut Repl, args: &str) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 pub(crate) fn handle_notify(repl: &mut Repl, args: &str) -> Result<()> {
     let trimmed = args.trim();
 

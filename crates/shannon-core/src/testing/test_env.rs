@@ -24,6 +24,7 @@ pub struct TestShannon {
     provider: String,
     model: String,
     permission_mode: ApprovalMode,
+    #[allow(dead_code)]
     extra_tools: Vec<Box<dyn Tool>>,
     mock_responses: Vec<MockResponse>,
 }

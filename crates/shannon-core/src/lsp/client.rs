@@ -59,6 +59,7 @@ struct JsonRpcRequest {
 /// JSON-RPC response received from the language server
 #[derive(Debug, Deserialize)]
 struct JsonRpcResponse {
+    #[allow(dead_code)]
     jsonrpc: String,
     id: Option<serde_json::Value>,
     #[serde(default)]
@@ -70,6 +71,7 @@ struct JsonRpcResponse {
 /// JSON-RPC error
 #[derive(Debug, Deserialize)]
 struct JsonRpcError {
+    #[allow(dead_code)]
     code: i64,
     message: String,
     data: Option<Value>,

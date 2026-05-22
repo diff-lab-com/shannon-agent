@@ -20,9 +20,11 @@ const SKIP_DIRS: &[&str] = &[
 
 /// Watches project source files for changes using filesystem events.
 pub(crate) struct SourceWatcher {
+    #[allow(dead_code)]
     watcher: Option<notify::RecommendedWatcher>,
     dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
     changed_files: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    #[allow(dead_code)]
     project_dir: std::path::PathBuf,
 }
 
@@ -111,6 +113,7 @@ impl SourceWatcher {
     }
 
     /// Returns the project directory being watched.
+    #[allow(dead_code)]
     pub(crate) fn project_dir(&self) -> &std::path::Path {
         &self.project_dir
     }

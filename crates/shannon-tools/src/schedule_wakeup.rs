@@ -70,7 +70,7 @@ const MIN_DELAY_SECS: u64 = 60;
 const MAX_DELAY_SECS: u64 = 3600;
 
 /// Approximate prompt cache TTL (5 minutes, matching Anthropic).
-const CACHE_TTL_SECS: u64 = 300;
+const _CACHE_TTL_SECS: u64 = 300;
 
 /// Return a human-readable cache hint for the given delay.
 fn cache_hint(delay_secs: u64) -> &'static str {

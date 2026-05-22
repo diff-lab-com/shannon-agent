@@ -152,6 +152,7 @@ pub struct AgentHandle {
     /// Pending RPC responses keyed by request ID (shared with read_loop).
     pending_rpcs: Arc<std::sync::Mutex<HashMap<i64, PendingRpc>>>,
     /// Channel for receiving events (notifications) from the agent.
+    #[allow(dead_code)]
     event_tx: mpsc::Sender<AgentEvent>,
     /// Kill handle sender — drop the child on shutdown.
     _kill_tx: oneshot::Sender<()>,
