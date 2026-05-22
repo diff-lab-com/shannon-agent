@@ -48,6 +48,7 @@ use shannon_core::{
     permissions::PermissionManager,
     PromptInfo,
     query_engine::QueryEngine,
+    recording::SessionRecorder,
     state::StateManager,
     tools::ToolRegistry,
     ContentBlock, MessageContent,
@@ -687,6 +688,8 @@ pub struct Repl {
     pub(crate) instruction_watcher: Option<shannon_core::project_instructions::InstructionWatcher>,
     /// Custom command file watcher for hot-reloading .claude/commands/ and .shannon/commands/
     pub(crate) command_watcher: Option<CustomCommandWatcher>,
+    /// Session recorder for deterministic replay testing
+    pub(crate) session_recorder: Option<SessionRecorder>,
 }
 
 /// State for tab completion cycling
@@ -842,6 +845,7 @@ impl Repl {
             webhook_receiver: None,
             instruction_watcher: None,
             command_watcher: None,
+            session_recorder: None,
         };
 
         repl.sync_approval_mode_label();
@@ -1523,6 +1527,7 @@ impl Repl {
                 }
             },
             command_watcher: Some(CustomCommandWatcher::new()),
+            session_recorder: None,
         };
 
         repl.sync_approval_mode_label();

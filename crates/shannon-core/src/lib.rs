@@ -96,6 +96,7 @@ pub mod feature_flags;
 pub mod session_persist;
 pub mod webhook;
 pub mod scheduled_routines;
+pub mod recording;
 
 pub mod i18n;
 

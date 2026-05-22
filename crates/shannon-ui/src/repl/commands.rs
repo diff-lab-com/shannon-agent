@@ -87,6 +87,10 @@ pub fn submit_input(repl: &mut Repl) -> Result<()> {
         repl.commands_run += 1;
         handle_command(repl, &expanded)?;
     } else {
+        // Record user message if session recording is active
+        if let Some(ref mut recorder) = repl.session_recorder {
+            recorder.record_user_message(&expanded);
+        }
         super::query::handle_query(repl, &expanded)?;
     }
 
@@ -116,7 +120,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
         repl.shared_executor.registry().await.contains(cmd_name).await
     });
     // Commands handled in the match block but not in the global registry
-    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "agent", "route", "mcp", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "rewind", "notify", "webhook", "routine", "create-pr", "patch", "sandbox", "find", "grep", "conv-search", "copy", "paste", "add", "watch", "bind", "project", "terminal-setup", "theme", "diff", "commands"];
+    let repl_only_commands = ["browse", "files", "select-tools", "tools", "team", "agents", "agent", "route", "mcp", "compact", "cost", "permissions", "perms", "perm", "plan", "web-search", "websearch", "search-web", "review", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "rewind", "notify", "webhook", "routine", "create-pr", "patch", "sandbox", "find", "grep", "conv-search", "copy", "paste", "add", "watch", "bind", "project", "terminal-setup", "theme", "diff", "commands", "record"];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
     if command_exists || is_repl_command {
@@ -189,6 +193,7 @@ fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
             "accessibility" | "a11y" => handle_accessibility(repl, args)?,
             "diag" => handle_diag(repl, args)?,
             "commands" => handle_commands(repl, args)?,
+            "record" => handle_record(repl, args)?,
             _ => handle_other_command(repl, cmd_name, args)?,
         }
         Ok(())
@@ -1171,6 +1176,77 @@ fn reload_custom_commands(repl: &mut Repl) {
         ChatRole::System,
         format!("Reloaded {count} custom command(s)."),
     );
+}
+
+fn handle_record(repl: &mut Repl, args: &str) -> Result<()> {
+    use shannon_core::recording::SessionRecorder;
+    let subcmd = args.trim();
+
+    match subcmd {
+        "start" => {
+            if repl.session_recorder.is_some() {
+                repl.chat.add_message(ChatRole::System, "Recording already in progress. Use /record stop to end it.".to_string());
+                return Ok(());
+            }
+            let session_id = format!("rec-{}", uuid::Uuid::new_v4().as_simple());
+            let model = repl.state.model.clone().unwrap_or_else(|| "unknown".to_string());
+            let record_dir = dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".shannon")
+                .join("recordings");
+            let recorder = SessionRecorder::new(&session_id, &model, record_dir);
+            repl.session_recorder = Some(recorder);
+            repl.chat.add_message(ChatRole::System, format!("Recording started: {session_id}"));
+            repl.state.status = format!("Recording: {session_id}");
+        }
+        "stop" => {
+            if let Some(mut recorder) = repl.session_recorder.take() {
+                let tokens = repl.state.tokens_used;
+                match recorder.finish(tokens) {
+                    Ok(path) => {
+                        repl.chat.add_message(ChatRole::System, format!("Recording saved: {}", path.display()));
+                    }
+                    Err(e) => {
+                        repl.chat.add_message(ChatRole::System, format!("Failed to save recording: {e}"));
+                    }
+                }
+                repl.state.status = "Recording stopped".to_string();
+            } else {
+                repl.chat.add_message(ChatRole::System, "No recording in progress.".to_string());
+            }
+        }
+        "list" => {
+            let record_dir = dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".shannon")
+                .join("recordings");
+            if !record_dir.exists() {
+                repl.chat.add_message(ChatRole::System, "No recordings found.".to_string());
+                return Ok(());
+            }
+            let mut entries: Vec<String> = std::fs::read_dir(&record_dir)
+                .unwrap_or_else(|_| panic!("Failed to read recordings dir"))
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().map_or(false, |ext| ext == "jsonl"))
+                .filter_map(|e| {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    let size = e.metadata().ok().map(|m| m.len()).unwrap_or(0);
+                    Some(format!("  {} ({} bytes)", name, size))
+                })
+                .collect();
+            if entries.is_empty() {
+                repl.chat.add_message(ChatRole::System, "No recordings found.".to_string());
+            } else {
+                entries.sort();
+                let msg = format!("Recordings ({}):\n{}", entries.len(), entries.join("\n"));
+                repl.chat.add_message(ChatRole::System, msg);
+            }
+        }
+        _ => {
+            repl.chat.add_message(ChatRole::System, "Usage: /record start|stop|list".to_string());
+        }
+    }
+    Ok(())
 }
 
 fn handle_commands(repl: &mut Repl, args: &str) -> Result<()> {
