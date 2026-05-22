@@ -152,7 +152,7 @@ impl SessionReplayer {
             .unwrap_or_else(|| std::path::Path::new("."))
             .join("_vcr_replay");
 
-        let vcr = Vcr::new(VcrConfig::replay_with_dir(&dir));
+        let mut vcr = Vcr::new(VcrConfig::replay_with_dir(&dir));
 
         for (turn, request, response) in self.llm_exchanges() {
             let recording = VcrRecording::new(
@@ -160,10 +160,7 @@ impl SessionReplayer {
                 response,
                 vec![format!("turn-{turn}")],
             );
-            // Vcr doesn't expose a public method to insert directly into index,
-            // so we use record() which won't work in replay mode.
-            // Instead, we write the recording files and load them.
-            let _ = recording; // Placeholder - will wire properly in integration
+            vcr.insert_recording(recording);
         }
 
         vcr
@@ -310,6 +307,50 @@ mod tests {
         ];
         let mismatches = replayer.verify_query_events(&actual);
         assert!(!mismatches.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_replayer_tool_call_extraction() {
+        let dir = std::env::temp_dir().join(format!("shannon_replay_test_{}", Uuid::new_v4()));
+        let path = create_test_recording(&dir);
+
+        let replayer = SessionReplayer::load_from_file(&path).unwrap();
+        let tool_calls = replayer.tool_calls();
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].tool, "Read");
+        assert_eq!(tool_calls[0].result, "fn main() {}");
+        assert!(!tool_calls[0].is_error);
+        assert!(tool_calls[0].duration_ms > 0 || tool_calls[0].duration_ms == 0); // just verify field exists
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_replayer_llm_exchange_pairs() {
+        let dir = std::env::temp_dir().join(format!("shannon_replay_test_{}", Uuid::new_v4()));
+        let path = create_test_recording(&dir);
+
+        let replayer = SessionReplayer::load_from_file(&path).unwrap();
+        let exchanges = replayer.llm_exchanges();
+        assert_eq!(exchanges.len(), 1);
+        let (turn, req, resp) = &exchanges[0];
+        assert_eq!(*turn, 1);
+        assert!(req.get("model").is_some());
+        assert!(resp.get("content").is_some());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_replayer_into_vcr() {
+        let dir = std::env::temp_dir().join(format!("shannon_replay_test_{}", Uuid::new_v4()));
+        let path = create_test_recording(&dir);
+
+        let replayer = SessionReplayer::load_from_file(&path).unwrap();
+        let vcr = replayer.into_vcr();
+        assert!(vcr.len() > 0, "Vcr should contain at least one recording");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

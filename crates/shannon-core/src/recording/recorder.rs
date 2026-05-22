@@ -284,4 +284,94 @@ mod tests {
         assert!(truncated.len() < long.len());
         assert!(truncated.contains("[truncated"));
     }
+
+    #[test]
+    fn test_recorder_multi_turn() {
+        let dir = std::env::temp_dir().join(format!("shannon_test_{}", Uuid::new_v4()));
+        let mut recorder = SessionRecorder::new("multi-turn", "test-model", dir.clone());
+
+        // Turn 1
+        recorder.record_user_message("hello");
+        recorder.record_llm_exchange(&json!({"prompt": "hello"}), &json!({"text": "hi"}));
+
+        // Turn 2
+        recorder.record_user_message("fix the error");
+        recorder.record_llm_exchange(&json!({"prompt": "fix"}), &json!({"text": "checking"}));
+
+        // Turn 3
+        recorder.record_user_message("thanks");
+        recorder.record_llm_exchange(&json!({"prompt": "thanks"}), &json!({"text": "welcome"}));
+
+        assert_eq!(recorder.current_turn(), 3);
+        let meta = recorder.meta();
+        assert_eq!(meta.total_turns, 3);
+
+        let path = recorder.finish(500).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("SessionEnd"));
+        assert_eq!(content.lines().filter(|l| !l.trim().is_empty()).count(), 11); // Start + 3*(User+Req+Resp) + End
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_recorder_tool_timing() {
+        let dir = std::env::temp_dir().join(format!("shannon_test_{}", Uuid::new_v4()));
+        let mut recorder = SessionRecorder::new("timing-test", "test-model", dir.clone());
+
+        recorder.record_user_message("check code");
+        let qid = uuid::Uuid::new_v4();
+        recorder.record_query_event(&QueryEvent::ToolUseRequest {
+            query_id: qid,
+            tool_use_id: "tu_1".to_string(),
+            tool_name: "Bash".to_string(),
+            tool_input: json!({"command": "sleep 0.01 && echo done"}),
+        });
+        // Small delay to ensure duration > 0
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        recorder.record_query_event(&QueryEvent::ToolUseResult {
+            query_id: qid,
+            tool_use_id: "tu_1".to_string(),
+            tool_name: "Bash".to_string(),
+            result: "done".to_string(),
+            is_error: false,
+        });
+
+        let path = recorder.finish(100).unwrap();
+        let replayer = crate::recording::SessionReplayer::load_from_file(&path).unwrap();
+        let tool_calls = replayer.tool_calls();
+        assert_eq!(tool_calls.len(), 1);
+        assert!(tool_calls[0].duration_ms > 0, "duration should be > 0");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_recorder_result_truncation() {
+        let dir = std::env::temp_dir().join(format!("shannon_test_{}", Uuid::new_v4()));
+        let mut recorder = SessionRecorder::new("trunc-test", "test-model", dir.clone());
+
+        recorder.record_user_message("read big file");
+        let qid = uuid::Uuid::new_v4();
+        let big_result = "x".repeat(20_000);
+        recorder.record_query_event(&QueryEvent::ToolUseRequest {
+            query_id: qid,
+            tool_use_id: "tu_1".to_string(),
+            tool_name: "Read".to_string(),
+            tool_input: json!({"path": "big.txt"}),
+        });
+        recorder.record_query_event(&QueryEvent::ToolUseResult {
+            query_id: qid,
+            tool_use_id: "tu_1".to_string(),
+            tool_name: "Read".to_string(),
+            result: big_result,
+            is_error: false,
+        });
+
+        let path = recorder.finish(100).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("[truncated"), "Large tool result should be truncated");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

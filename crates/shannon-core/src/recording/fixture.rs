@@ -239,4 +239,144 @@ mod tests {
         assert_eq!(results[0].0, Some("compilation failed"));
         assert!(results[0].1);
     }
+
+    #[test]
+    fn test_single_turn_edit_fix() {
+        let chain = ToolChainTest::new()
+            .expect_tool("Read", json!({"path": "src/main.rs"}))
+            .respond_with("fn main() { let x = 1 }")
+            .expect_tool("Bash", json!({"command": "cargo check"}))
+            .respond_error("error[E0425]: cannot find value `y`")
+            .expect_tool("Edit", json!({"path": "src/main.rs"}))
+            .respond_with("ok")
+            .expect_tool("Bash", json!({"command": "cargo check"}))
+            .respond_with("ok");
+
+        let r1 = json!({"path": "src/main.rs"});
+        let b1 = json!({"command": "cargo check"});
+        let e1 = json!({"path": "src/main.rs"});
+        let b2 = json!({"command": "cargo check"});
+        let actual = vec![
+            ("Read", &r1, "fn main() { let x = 1 }", false),
+            ("Bash", &b1, "error...", true),
+            ("Edit", &e1, "ok", false),
+            ("Bash", &b2, "ok", false),
+        ];
+        let result = chain.verify_against(&actual);
+        assert!(result.passed);
+        assert_eq!(result.steps_total, 4);
+    }
+
+    #[test]
+    fn test_multi_file_read_edit() {
+        let chain = ToolChainTest::new()
+            .expect_tool("Read", json!({"path": "a.rs"}))
+            .respond_with("fn a() {}")
+            .expect_tool("Read", json!({"path": "b.rs"}))
+            .respond_with("fn b() {}")
+            .expect_tool("Read", json!({"path": "c.rs"}))
+            .respond_with("fn c() {}")
+            .expect_tool("Edit", json!({"path": "a.rs"}))
+            .respond_with("ok")
+            .expect_tool("Edit", json!({"path": "b.rs"}))
+            .respond_with("ok")
+            .expect_tool("Edit", json!({"path": "c.rs"}))
+            .respond_with("ok");
+
+        assert_eq!(chain.len(), 6);
+        let tools = chain.expected_tools();
+        assert_eq!(tools[0].0, "Read");
+        assert_eq!(tools[3].0, "Edit");
+    }
+
+    #[test]
+    fn test_search_driven_fix() {
+        let chain = ToolChainTest::new()
+            .expect_tool("Grep", json!({"pattern": "TODO", "path": "src/"}))
+            .respond_with("src/main.rs:5:TODO fix this")
+            .expect_tool("Read", json!({"path": "src/main.rs"}))
+            .respond_with("fn main() { /* TODO fix this */ }")
+            .expect_tool("Edit", json!({"path": "src/main.rs"}))
+            .respond_with("ok");
+
+        let g1 = json!({"pattern": "TODO", "path": "src/"});
+        let r1 = json!({"path": "src/main.rs"});
+        let e1 = json!({"path": "src/main.rs"});
+        let actual = vec![
+            ("Grep", &g1, "src/main.rs:5:TODO fix this", false),
+            ("Read", &r1, "fn main() { /* TODO fix this */ }", false),
+            ("Edit", &e1, "ok", false),
+        ];
+        let result = chain.verify_against(&actual);
+        assert!(result.passed);
+    }
+
+    #[test]
+    fn test_retry_until_success() {
+        let chain = ToolChainTest::new()
+            .expect_tool("Bash", json!({"command": "cargo test"}))
+            .respond_error("test failed: assertion")
+            .expect_tool("Bash", json!({"command": "cargo test"}))
+            .respond_error("test failed: another assertion")
+            .expect_tool("Edit", json!({"path": "tests/main.rs"}))
+            .respond_with("ok")
+            .expect_tool("Bash", json!({"command": "cargo test"}))
+            .respond_with("all tests passed");
+
+        let b1 = json!({"command": "cargo test"});
+        let b2 = json!({"command": "cargo test"});
+        let e1 = json!({"path": "tests/main.rs"});
+        let b3 = json!({"command": "cargo test"});
+        let actual = vec![
+            ("Bash", &b1, "test failed: assertion", true),
+            ("Bash", &b2, "test failed: another assertion", true),
+            ("Edit", &e1, "ok", false),
+            ("Bash", &b3, "all tests passed", false),
+        ];
+        let result = chain.verify_against(&actual);
+        assert!(result.passed);
+
+        let mock = chain.mock_results();
+        assert!(mock[0].1); // first Bash is error
+        assert!(mock[1].1); // second Bash is error
+        assert!(!mock[2].1); // Edit is success
+        assert!(!mock[3].1); // final Bash is success
+    }
+
+    #[test]
+    fn test_wrong_tool_order_detected() {
+        let chain = ToolChainTest::new()
+            .expect_tool("Read", json!({"path": "a.rs"}))
+            .respond_with("contents")
+            .expect_tool("Edit", json!({"path": "a.rs"}))
+            .respond_with("ok");
+
+        let e1 = json!({"path": "a.rs"});
+        let r1 = json!({"path": "a.rs"});
+        let actual = vec![
+            ("Edit", &e1, "ok", false),
+            ("Read", &r1, "contents", false),
+        ];
+        let result = chain.verify_against(&actual);
+        assert!(!result.passed);
+        assert!(result.errors[0].contains("expected tool 'Read', got 'Edit'"));
+        assert!(result.errors[1].contains("expected tool 'Edit', got 'Read'"));
+    }
+
+    #[test]
+    fn test_error_response_chain() {
+        let chain = ToolChainTest::new()
+            .expect_tool("Bash", json!({"command": "cmd1"}))
+            .respond_error("error 1")
+            .expect_tool("Bash", json!({"command": "cmd2"}))
+            .respond_error("error 2")
+            .expect_tool("Bash", json!({"command": "cmd3"}))
+            .respond_error("error 3");
+
+        let results = chain.mock_results();
+        assert_eq!(results.len(), 3);
+        for r in &results {
+            assert!(r.1, "All should be errors");
+        }
+    }
 }
