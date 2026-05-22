@@ -1,0 +1,27 @@
+---
+source: crates/shannon-ui/tests/ui_snapshot_tests.rs
+assertion_line: 123
+expression: "format!(\"{:#?}\", msg)"
+---
+ChatMessage {
+    role: Tool,
+    content: "running...",
+    timestamp: 2026-05-22T12:19:12.863463931Z,
+    image_lines: None,
+    is_error: false,
+    tool_name: Some(
+        "bash",
+    ),
+    start_time: None,
+    duration_secs: None,
+    spinner_frame: 3,
+    folded: true,
+    exit_code: Some(
+        0,
+    ),
+    thinking_content: None,
+    thinking_expanded: false,
+    thinking_duration_secs: None,
+    diff_stats: None,
+    stats_line: None,
+}

@@ -198,13 +198,15 @@ impl CheckpointManager {
             prompt_preview,
         };
 
-        let mut checkpoints = recover_lock(self.checkpoints.lock());
-        checkpoints.push(tc);
+        {
+            let mut checkpoints = recover_lock(self.checkpoints.lock());
+            checkpoints.push(tc);
 
-        // Trim old checkpoints
-        if checkpoints.len() > MAX_CHECKPOINTS {
-            let drain_count = checkpoints.len() - MAX_CHECKPOINTS;
-            checkpoints.drain(..drain_count);
+            // Trim old checkpoints
+            if checkpoints.len() > MAX_CHECKPOINTS {
+                let drain_count = checkpoints.len() - MAX_CHECKPOINTS;
+                checkpoints.drain(..drain_count);
+            }
         }
 
         log_err!(self.save_to_disk(), "failed to save checkpoints after push");
@@ -302,7 +304,7 @@ impl CheckpointManager {
     }
 
     /// Save checkpoints to disk.
-    fn save_to_disk(&self) -> Result<(), String> {
+    pub fn save_to_disk(&self) -> Result<(), String> {
         let path = match self.session_checkpoint_path() {
             Some(p) => p,
             None => return Ok(()),
@@ -323,7 +325,7 @@ impl CheckpointManager {
     }
 
     /// Load checkpoints from disk.
-    fn load_from_disk(&self) -> Result<(), String> {
+    pub fn load_from_disk(&self) -> Result<(), String> {
         let path = match self.session_checkpoint_path() {
             Some(p) => p,
             None => return Ok(()),

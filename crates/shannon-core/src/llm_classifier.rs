@@ -92,6 +92,11 @@ impl LlmPermissionClassifier {
         self
     }
 
+    /// Get the current confidence threshold
+    pub fn confidence_threshold(&self) -> f32 {
+        self.confidence_threshold
+    }
+
     /// Classify a tool call using rule-based logic first, then LLM if needed
     pub async fn classify(&self, tool_name: &str, input: &Value) -> LlmClassificationResult {
         // Step 1: Rule-based classification (always runs)
