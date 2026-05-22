@@ -300,6 +300,11 @@ impl Vcr {
         self.index.len()
     }
 
+    /// Insert a recording directly into the index (for testing/replay setup).
+    pub(crate) fn insert_recording(&mut self, recording: VcrRecording) {
+        self.index.insert(recording.id.clone(), recording);
+    }
+
     /// Check if there are no recordings in the index.
     pub fn is_empty(&self) -> bool {
         self.index.is_empty()

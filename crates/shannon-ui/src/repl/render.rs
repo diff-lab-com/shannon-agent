@@ -363,6 +363,28 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             f.render_widget(indicator_paragraph, indicator_area);
         }
 
+        // Overlay agent dashboard (bar or expanded)
+        if let Some(ref dashboard) = state.agent_dashboard {
+            if dashboard.expanded {
+                match dashboard.mode {
+                    crate::widgets::agent_bar::DashboardMode::Detail => {
+                        dashboard.render_detail_overlay(f, f.area(), &state.theme);
+                    }
+                    _ => {
+                        dashboard.render_list_overlay(f, f.area(), &state.theme);
+                    }
+                }
+            } else {
+                let bar_area = ratatui::layout::Rect {
+                    x: f.area().x,
+                    y: f.area().bottom().saturating_sub(2),
+                    width: f.area().width,
+                    height: 1,
+                };
+                dashboard.render_bar(f, bar_area, &state.theme);
+            }
+        }
+
         // Overlay history search bar when Ctrl+R active
         if state.incremental_search_active {
             render_history_search_overlay(f, f.area(), state, &state.theme);

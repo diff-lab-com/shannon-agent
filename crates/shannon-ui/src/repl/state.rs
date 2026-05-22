@@ -178,6 +178,8 @@ pub struct ReplState {
     pub approval_mode_label: String,
     /// Active sub-agents for sidebar display (refreshed from agent_registry)
     pub active_agents: Vec<AgentDisplay>,
+    /// Agent dashboard state (auto-created when agents exist, auto-removed when none)
+    pub agent_dashboard: Option<crate::widgets::agent_bar::AgentDashboardState>,
     /// LSP diagnostic store for displaying code diagnostics
     pub diagnostic_store: crate::lsp_bridge::DiagnosticStore,
     /// Whether focus mode is active (header/statusbar hidden)
@@ -477,6 +479,7 @@ impl Default for ReplState {
             sidebar_tab: SidebarTab::default(),
             approval_mode_label: "EDIT".to_string(),
             active_agents: Vec::new(),
+            agent_dashboard: None,
             diagnostic_store: crate::lsp_bridge::DiagnosticStore::new(),
             focus_mode: false,
             view_mode: ViewMode::Default,

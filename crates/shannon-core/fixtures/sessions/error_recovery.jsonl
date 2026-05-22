@@ -1,0 +1,17 @@
+{"type":"SessionStart","session_id":"fixture-error-recovery","model":"test-model","timestamp":"2026-05-22T00:00:00Z"}
+{"type":"UserMessage","content":"the build is broken, fix it","turn":1}
+{"type":"LlmRequest","turn":1,"request_hash":"def456","body":{"model":"test","messages":[{"role":"user","content":"the build is broken, fix it"}]}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Let me check the build error."},{"type":"tool_use","name":"Bash","input":{"command":"cargo check"}}]}}
+{"type":"QueryEvent","event":{"Started":{"query_id":"00000000-0000-0000-0000-000000000002"}}}
+{"type":"QueryEvent","event":{"Text":{"query_id":"00000000-0000-0000-0000-000000000002","content":"Let me check the build error."}}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000002","tool_use_id":"tu_1","tool_name":"Bash","tool_input":{"command":"cargo check"}}}}
+{"type":"ToolCall","tool":"Bash","input":{"command":"cargo check"},"result":"error[E0425]: cannot find value `y` in src/main.rs:2","is_error":true,"duration_ms":2500}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000002","tool_use_id":"tu_1","tool_name":"Bash","result":"error[E0425]: cannot find value `y` in src/main.rs:2","is_error":true}}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000002","tool_use_id":"tu_2","tool_name":"Read","tool_input":{"path":"src/main.rs"}}}}
+{"type":"ToolCall","tool":"Read","input":{"path":"src/main.rs"},"result":"fn main() { let x = 1 }","is_error":false,"duration_ms":4}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000002","tool_use_id":"tu_2","tool_name":"Read","result":"fn main() { let x = 1 }","is_error":false}}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000002","tool_use_id":"tu_3","tool_name":"Edit","tool_input":{"path":"src/main.rs","old":"let x = 1","new":"let y = 1"}}}}
+{"type":"ToolCall","tool":"Edit","input":{"path":"src/main.rs","old":"let x = 1","new":"let y = 1"},"result":"ok","is_error":false,"duration_ms":3}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000002","tool_use_id":"tu_3","tool_name":"Edit","result":"ok","is_error":false}}}
+{"type":"QueryEvent","event":{"Completed":{"query_id":"00000000-0000-0000-0000-000000000002"}}}
+{"type":"SessionEnd","session_id":"fixture-error-recovery","total_turns":1,"total_tokens":800}

@@ -38,6 +38,8 @@ pub struct KeyBindings {
     pub transcript: KeyBinding,
     /// Toggle chat search (highlight matches)
     pub chat_search: KeyBinding,
+    /// Toggle agent dashboard (bottom bar / expanded overlay)
+    pub toggle_agent_dashboard: KeyBinding,
 }
 
 impl Default for KeyBindings {
@@ -58,6 +60,7 @@ impl Default for KeyBindings {
             },
             transcript: KeyBinding::ctrl('g'),
             chat_search: KeyBinding::ctrl('h'),
+            toggle_agent_dashboard: KeyBinding::ctrl('a'),
         }
     }
 }
@@ -92,6 +95,7 @@ struct KeyBindingsFile {
     fullscreen: Option<String>,
     transcript: Option<String>,
     chat_search: Option<String>,
+    toggle_agent_dashboard: Option<String>,
 }
 
 /// Parse a key string like "ctrl+q", "ctrl+s", "escape", "f1" into a KeyBinding.
@@ -154,6 +158,7 @@ pub fn load_keybindings() -> KeyBindings {
         fullscreen: file.fullscreen.as_deref().and_then(parse_key).unwrap_or(defaults.fullscreen),
         transcript: file.transcript.as_deref().and_then(parse_key).unwrap_or(defaults.transcript),
         chat_search: file.chat_search.as_deref().and_then(parse_key).unwrap_or(defaults.chat_search),
+        toggle_agent_dashboard: file.toggle_agent_dashboard.as_deref().and_then(parse_key).unwrap_or(defaults.toggle_agent_dashboard),
     }
 }
 
@@ -202,6 +207,7 @@ mod tests {
         let kb = KeyBindings::default();
         assert_eq!(kb.quit.code, KeyCode::Char('q'));
         assert_eq!(kb.toggle_sidebar.code, KeyCode::Char('s'));
+        assert_eq!(kb.toggle_agent_dashboard.code, KeyCode::Char('a'));
     }
 
     #[test]

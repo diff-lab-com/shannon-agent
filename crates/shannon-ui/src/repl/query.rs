@@ -994,6 +994,15 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             repl.state.tokens_used = pre_stream_tokens + tokens;
             repl.tools_invoked = pre_stream_tools + tools;
 
+            // Record LLM exchange if session recording is active
+            if let Some(ref mut recorder) = repl.session_recorder {
+                use serde_json::json;
+                recorder.record_llm_exchange(
+                    &json!({"message": input}),
+                    &json!({"text": response, "tokens": tokens}),
+                );
+            }
+
             // Record billing for this turn
             let turn_cost = repl.state.total_cost_usd - pre_stream_cost;
             if turn_cost > 0.0 {

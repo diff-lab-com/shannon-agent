@@ -163,6 +163,11 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
         return Ok(());
     }
 
+    // If agent dashboard overlay is expanded, handle dashboard keys
+    if repl.state.agent_dashboard.as_ref().is_some_and(|d| d.expanded) {
+        return handle_dashboard_input(repl, key);
+    }
+
     // If transcript pager is active, handle pager keys
     if repl.state.pager_active {
         return handle_pager_input(repl, key);
@@ -355,6 +360,13 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
         // Ctrl+L: clear screen / force full redraw
         KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::Clear(crossterm::terminal::ClearType::All));
+            Ok(())
+        }
+        // Ctrl+A: toggle agent dashboard
+        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if let Some(ref mut dashboard) = repl.state.agent_dashboard {
+                dashboard.toggle_expand();
+            }
             Ok(())
         }
         // Alt+F: toggle all tool messages collapsed/expanded
@@ -2276,5 +2288,52 @@ mod tests {
         let perm = complete_command_args("permissions", "");
         let perm_alias = complete_command_args("perms", "");
         assert_eq!(perm, perm_alias, "permissions and perms should have same completions");
+    }
+}
+
+/// Handle input when agent dashboard overlay is expanded.
+fn handle_dashboard_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
+    use crate::widgets::agent_bar::DashboardMode;
+
+    // If in detail mode, handle scrolling and exit
+    if repl.state.agent_dashboard.as_ref().is_some_and(|d| d.mode == DashboardMode::Detail) {
+        let dashboard = repl.state.agent_dashboard.as_mut().unwrap();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                dashboard.exit_detail();
+                Ok(())
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                dashboard.scroll_up();
+                Ok(())
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                dashboard.scroll_down();
+                Ok(())
+            }
+            _ => Ok(())
+        }
+    } else {
+        // List mode: navigate agents, enter detail, or close
+        let dashboard = repl.state.agent_dashboard.as_mut().unwrap();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                dashboard.close();
+                Ok(())
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                dashboard.select_prev();
+                Ok(())
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                dashboard.select_next();
+                Ok(())
+            }
+            KeyCode::Enter => {
+                dashboard.enter_detail();
+                Ok(())
+            }
+            _ => Ok(())
+        }
     }
 }

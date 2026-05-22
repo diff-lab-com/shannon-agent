@@ -57,6 +57,7 @@ use shannon_core::{
     permissions::PermissionManager,
     PromptInfo,
     query_engine::QueryEngine,
+    recording::SessionRecorder,
     state::StateManager,
     tools::ToolRegistry,
 };
@@ -132,6 +133,8 @@ pub struct Repl {
     pub(crate) agent_registry: Option<std::sync::Arc<shannon_agents::SubAgentRegistry>>,
     /// Throttle timestamp for agent refresh (avoids block_on on every tick)
     pub(crate) last_agent_refresh: Option<std::time::Instant>,
+    /// Coordinator event receiver for agent dashboard live updates
+    pub(crate) coordinator_event_rx: Option<tokio::sync::broadcast::Receiver<shannon_agents::CoordinatorEvent>>,
     /// MCP process pool for hot-reload support
     pub(crate) mcp_pool: std::sync::Arc<McpProcessPool>,
     /// Tool registry for MCP hot-reload tool registration
@@ -166,6 +169,8 @@ pub struct Repl {
     pub(crate) session_recovery: shannon_core::SessionRecovery,
     /// Shared plan-mode flag (clone of the one in QueryEngine)
     pub(crate) plan_mode_flag: std::sync::Arc<std::sync::RwLock<bool>>,
+    /// Session recorder for deterministic replay testing
+    pub(crate) session_recorder: Option<SessionRecorder>,
 }
 
 /// State for tab completion cycling
@@ -339,6 +344,7 @@ impl Repl {
             team_coordinator: None,
             agent_registry: None,
             last_agent_refresh: None,
+            coordinator_event_rx: None,
             mcp_pool,
             tool_registry,
             mcp_progress_rx: None,
@@ -356,6 +362,7 @@ impl Repl {
             update_check_rx: None,
             session_recovery: shannon_core::SessionRecovery::new().unwrap_or_default(),
             plan_mode_flag: std::sync::Arc::new(std::sync::RwLock::new(false)),
+            session_recorder: None,
         };
 
         repl.sync_approval_mode_label();
@@ -1219,6 +1226,7 @@ impl Repl {
             team_coordinator: shared_coordinator,
             agent_registry: None,
             last_agent_refresh: None,
+            coordinator_event_rx: None,
             mcp_pool,
             tool_registry,
             mcp_progress_rx,
@@ -1250,6 +1258,7 @@ impl Repl {
             update_check_rx: None,
             session_recovery: shannon_core::SessionRecovery::new().unwrap_or_default(),
             plan_mode_flag: plan_mode_flag.clone(),
+            session_recorder: None,
         };
 
         // Sync context window from engine (handles Ollama models with custom num_ctx)
@@ -1438,6 +1447,34 @@ impl Repl {
             // Refresh agent states for sidebar display
             if self.agent_registry.is_some() {
                 self.refresh_agents();
+            }
+
+            // Drain coordinator events into agent dashboard
+            if let Some(ref mut rx) = self.coordinator_event_rx {
+                while let Ok(event) = rx.try_recv() {
+                    if let Some(ref mut dashboard) = self.state.agent_dashboard {
+                        dashboard.handle_coordinator_event(&event);
+                    }
+                }
+            }
+
+            // Auto-create dashboard when agents appear
+            if !self.state.active_agents.is_empty() && self.state.agent_dashboard.is_none() {
+                let mut dashboard = crate::widgets::agent_bar::AgentDashboardState::new();
+                dashboard.sync_from_agents(&self.state.active_agents);
+                self.state.agent_dashboard = Some(dashboard);
+            }
+            // Sync dashboard entries from current agent state
+            if let Some(ref mut dashboard) = self.state.agent_dashboard {
+                dashboard.sync_from_agents(&self.state.active_agents);
+            }
+            // Auto-remove dashboard when no agents (but keep if expanded)
+            if self.state.active_agents.is_empty() {
+                if let Some(ref dashboard) = self.state.agent_dashboard {
+                    if !dashboard.expanded {
+                        self.state.agent_dashboard = None;
+                    }
+                }
             }
 
             // Check custom command files for filesystem changes (notify-based)
