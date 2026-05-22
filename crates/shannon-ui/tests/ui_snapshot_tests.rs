@@ -176,3 +176,90 @@ fn test_stats_line_snapshot() {
         format!("{:#?}", msg)
     );
 }
+
+#[test]
+fn test_cache_hit_rate_snapshot() {
+    // Snapshot the status bar when cache tokens are present (hit rate should display).
+    let mut terminal = test_terminal(120, 2);
+    let theme = Theme::default_dark();
+
+    terminal.draw(|f| {
+        let area = Rect::new(0, 0, 120, 2);
+        StatusBarWidget::render_with_spinner(
+            f, area,
+            "Responding",
+            Some("claude-sonnet-4"),
+            None,
+            Some(5000),          // tokens_used
+            Some(200000),        // max_tokens (200k context)
+            Some(0.0234),        // cost_usd
+            None,                // git_branch
+            None,                // spinner
+            None,                // progress_bar
+            &theme,
+            None,                // approval_mode
+            Some((5000, 800)),   // token_breakdown (input, output)
+            Some(4500),          // cache_read_tokens — 4500 read from cache
+            Some(500),           // cache_creation_tokens — 500 written to cache
+            None,                // diag_counts
+            None,                // rate_limit
+            None,                // files_info
+            None,                // tools_invoked
+            None,                // session_duration
+            false,               // thinking_phase
+            0,                   // thinking_chars
+            None,                // turn_count
+            None,                // memory_rss_kb
+        );
+    }).unwrap();
+
+    let buf = terminal.backend().buffer().clone();
+    let text = buffer_text(&buf, Rect::new(0, 0, 120, 2));
+    insta::assert_snapshot!(
+        "cache_hit_rate",
+        text
+    );
+
+    // Verify the rendered output contains a cache hit rate indicator
+    assert!(
+        text.to_lowercase().contains("cache"),
+        "Status bar should show cache hit rate, got: {text}"
+    );
+}
+
+#[test]
+fn test_cache_zero_tokens_snapshot() {
+    // Snapshot the status bar when cache tokens are both zero (no cache indicator).
+    let mut terminal = test_terminal(120, 2);
+    let theme = Theme::default_dark();
+
+    terminal.draw(|f| {
+        let area = Rect::new(0, 0, 120, 2);
+        StatusBarWidget::render_with_spinner(
+            f, area,
+            "Responding",
+            Some("claude-sonnet-4"),
+            None,
+            Some(5000),
+            Some(200000),
+            Some(0.0234),
+            None,                // git_branch
+            None,                // spinner
+            None,                // progress_bar
+            &theme,
+            None,
+            Some((5000, 800)),
+            Some(0),             // cache_read_tokens = 0
+            Some(0),             // cache_creation_tokens = 0
+            None, None, None, None, None,
+            false, 0, None, None,
+        );
+    }).unwrap();
+
+    let buf = terminal.backend().buffer().clone();
+    let text = buffer_text(&buf, Rect::new(0, 0, 120, 2));
+    insta::assert_snapshot!(
+        "cache_zero_tokens",
+        text
+    );
+}

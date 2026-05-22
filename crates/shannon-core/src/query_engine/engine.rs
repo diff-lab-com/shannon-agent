@@ -3253,4 +3253,112 @@ mod tests {
         assert_eq!(merged_cache_read, 800, "merged cache_read should preserve MessageStart value");
         assert_eq!(merged_cache_creation, 500, "merged cache_creation should preserve MessageStart value");
     }
+
+    // ── Context window propagation tests ──────────────────────────────────
+
+    #[test]
+    fn test_resolve_max_context_user_override_takes_priority() {
+        let result = QueryEngine::resolve_max_context_tokens("unknown-model", Some(8000));
+        assert_eq!(result, 8000, "User override should take priority");
+    }
+
+    #[test]
+    fn test_resolve_max_context_known_model_exact_match() {
+        let result = QueryEngine::resolve_max_context_tokens("claude-sonnet-4-20250514", None);
+        assert_eq!(result, 200_000, "Known model should match from registry");
+    }
+
+    #[test]
+    fn test_resolve_max_context_partial_model_id_prefix_match() {
+        // "claude-sonnet-4" should match "claude-sonnet-4-20250514" via prefix
+        let result = QueryEngine::resolve_max_context_tokens("claude-sonnet-4", None);
+        assert!(result > 0, "Partial model ID should resolve via prefix matching");
+    }
+
+    #[test]
+    fn test_resolve_max_context_ollama_model_fallback() {
+        let result = QueryEngine::resolve_max_context_tokens("ollama/llama3:8b", None);
+        assert_eq!(result, 200_000, "Unknown Ollama model should fall back to 200k");
+    }
+
+    #[test]
+    fn test_resolved_context_window_with_user_config() {
+        let client = create_test_client();
+        let tools = ToolRegistry::new();
+        let permissions = PermissionManager::new();
+        let state = StateManager::new();
+        let mut config = QueryEngineConfig::default();
+        config.max_context_tokens = Some(8000);
+
+        let engine = QueryEngine::new(client, tools, permissions, state, config);
+        assert_eq!(engine.resolved_context_window(), 8000);
+    }
+
+    #[test]
+    fn test_resolved_context_window_ollama_fallback_chain() {
+        // Ollama provider with no cached info → falls back to effective_max_context_tokens
+        let config = LlmClientConfig {
+            api_key: "test".to_string(),
+            base_url: "http://localhost:11434".to_string(),
+            model: "llama3:8b".to_string(),
+            provider: crate::api::LlmProvider::Ollama,
+            ..Default::default()
+        };
+        let client = LlmClient::new(config);
+        let tools = ToolRegistry::new();
+        let permissions = PermissionManager::new();
+        let state = StateManager::new();
+
+        let engine = QueryEngine::new(client, tools, permissions, state, QueryEngineConfig::default());
+        // Without pre_resolve_context being called (no Ollama server), it should
+        // fall back to effective_max_context_tokens (which is the model_registry value)
+        let window = engine.resolved_context_window();
+        assert!(window > 0, "Context window should be positive even without Ollama server");
+    }
+
+    #[test]
+    fn test_cache_hit_rate_accumulation_across_usage_events() {
+        use crate::api::{MessageResponse, StreamEvent, Usage};
+
+        // Simulate multiple turns with different cache profiles
+        let turns = vec![
+            (10_000, 0),    // Turn 1: cache miss
+            (0, 9_000),     // Turn 2: cache hit
+            (2_000, 7_000), // Turn 3: partial
+        ];
+
+        let mut total_creation: u64 = 0;
+        let mut total_read: u64 = 0;
+
+        for (creation, read) in &turns {
+            let event = StreamEvent::MessageStart {
+                message: MessageResponse {
+                    id: "msg_test".to_string(),
+                    role: "assistant".to_string(),
+                    content: vec![],
+                    model: "test".to_string(),
+                    stop_reason: None,
+                    usage: Usage {
+                        input_tokens: 5000,
+                        output_tokens: 0,
+                        cache_creation_input_tokens: *creation,
+                        cache_read_input_tokens: *read,
+                    },
+                },
+            };
+
+            if let StreamEvent::MessageStart { message } = &event {
+                total_creation += message.usage.cache_creation_input_tokens as u64;
+                total_read += message.usage.cache_read_input_tokens as u64;
+            }
+        }
+
+        assert_eq!(total_creation, 12_000);
+        assert_eq!(total_read, 16_000);
+
+        let hit_rate = total_read as f64 / (total_read + total_creation) as f64;
+        // 16000 / (16000 + 12000) ≈ 0.571
+        assert!(hit_rate > 0.5, "Hit rate should be > 50%, got {hit_rate:.3}");
+        assert!(hit_rate < 0.6, "Hit rate should be < 60%, got {hit_rate:.3}");
+    }
 }

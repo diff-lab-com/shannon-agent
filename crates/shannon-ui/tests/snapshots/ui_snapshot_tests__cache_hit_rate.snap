@@ -1,0 +1,6 @@
+---
+source: crates/shannon-ui/tests/ui_snapshot_tests.rs
+expression: text
+---
+○ Responding [claude-sonnet-4] · [░░░░░░░░] 5.0k/200k 5.0k↑ 800↓ ↻47%                                            $0.0234
+ · Cache 47%

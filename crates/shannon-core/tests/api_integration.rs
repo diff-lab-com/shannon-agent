@@ -1721,6 +1721,210 @@ mod query_pipeline_tests {
         // Verify session ID is set
         assert_eq!(engine.session_id(), session_id);
     }
+
+    /// Test: cache tokens flow through the query engine pipeline.
+    /// Verifies that cache_creation_tokens and cache_read_tokens from the SSE
+    /// message_start event appear in QueryEvent::Usage output.
+    #[tokio::test]
+    async fn test_query_pipeline_cache_tokens() {
+        let _guard = AnthropicKeyGuard::set();
+        let mut server = Server::new_async().await;
+
+        // SSE with cache tokens in message_start (cache miss: high creation, zero read)
+        let sse_body = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_cache\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":100,\"output_tokens\":0,\"cache_creation_input_tokens\":5000,\"cache_read_input_tokens\":0}}}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Cached response\"}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":100,\"output_tokens\":20}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        );
+
+        server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_header("anthropic-version", "2023-06-01")
+            .with_body(sse_body)
+            .expect(1)
+            .create();
+
+        let client = make_client(&server);
+        let engine = QueryEngine::with_defaults(
+            client,
+            ToolRegistry::new(),
+            PermissionManager::new(),
+            StateManager::new(),
+        );
+
+        let ctx = make_context("Hello");
+        let mut stream = engine.process_query(ctx, None).await;
+
+        let mut events = Vec::new();
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(event) => events.push(event),
+                Err(e) => panic!("Stream error: {e}"),
+            }
+        }
+
+        // Extract cache tokens from Usage events
+        let usage_events: Vec<_> = events.iter()
+            .filter_map(|e| match e {
+                QueryEvent::Usage { cache_creation_tokens, cache_read_tokens, input_tokens, output_tokens, .. } => {
+                    Some((*input_tokens, *output_tokens, *cache_creation_tokens, *cache_read_tokens))
+                }
+                _ => None,
+            })
+            .collect();
+
+        assert!(!usage_events.is_empty(), "Should have at least one Usage event");
+        let (input, output, creation, read) = usage_events[0];
+        assert_eq!(input, 100, "input_tokens should be 100");
+        assert_eq!(output, 20, "output_tokens should be 20");
+        assert_eq!(creation, 5000, "cache_creation_tokens should be 5000, got {creation}");
+        assert_eq!(read, 0, "cache_read_tokens should be 0, got {read}");
+    }
+
+    /// Test: cache hit (read) tokens flow through the pipeline.
+    #[tokio::test]
+    async fn test_query_pipeline_cache_hit_tokens() {
+        let _guard = AnthropicKeyGuard::set();
+        let mut server = Server::new_async().await;
+
+        // SSE with cache hit: zero creation, high read
+        let sse_body = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_hit\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":80,\"output_tokens\":0,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":8000}}}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Cache hit response\"}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":80,\"output_tokens\":15}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        );
+
+        server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_header("anthropic-version", "2023-06-01")
+            .with_body(sse_body)
+            .expect(1)
+            .create();
+
+        let client = make_client(&server);
+        let engine = QueryEngine::with_defaults(
+            client,
+            ToolRegistry::new(),
+            PermissionManager::new(),
+            StateManager::new(),
+        );
+
+        let ctx = make_context("Follow-up question");
+        let mut stream = engine.process_query(ctx, None).await;
+
+        let mut cache_read = 0u64;
+        let mut cache_creation = 0u64;
+        while let Some(result) = stream.next().await {
+            if let Ok(QueryEvent::Usage { cache_read_tokens, cache_creation_tokens, .. }) = result {
+                cache_read = cache_read_tokens;
+                cache_creation = cache_creation_tokens;
+            }
+        }
+
+        assert_eq!(cache_creation, 0, "Cache miss should have 0 creation tokens");
+        assert_eq!(cache_read, 8000, "Cache hit should have 8000 read tokens, got {cache_read}");
+    }
+
+    /// Test: multi-turn cache progression (miss → hit → partial).
+    #[tokio::test]
+    async fn test_query_pipeline_multi_turn_cache_progression() {
+        let _guard = AnthropicKeyGuard::set();
+        let mut server = Server::new_async().await;
+
+        // Turn 1: cache miss
+        let turn1 = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_t1\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":50,\"output_tokens\":0,\"cache_creation_input_tokens\":10000,\"cache_read_input_tokens\":0}}}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Turn 1\"}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":50,\"output_tokens\":5}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        );
+
+        // Turn 2: cache hit
+        let turn2 = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_t2\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":60,\"output_tokens\":0,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":9000}}}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Turn 2\"}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":60,\"output_tokens\":5}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        );
+
+        server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_header("anthropic-version", "2023-06-01")
+            .with_body(turn1)
+            .expect(1)
+            .create();
+
+        server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_header("anthropic-version", "2023-06-01")
+            .with_body(turn2)
+            .expect(1)
+            .create();
+
+        let client = make_client(&server);
+        let mut engine = QueryEngine::with_defaults(
+            client,
+            ToolRegistry::new(),
+            PermissionManager::new(),
+            StateManager::new(),
+        );
+
+        // Turn 1
+        let ctx1 = make_context("First");
+        let mut s1 = engine.process_query(ctx1, None).await;
+        let mut turn1_read = 0u64;
+        let mut turn1_creation = 0u64;
+        while let Some(r) = s1.next().await {
+            if let Ok(QueryEvent::Usage { cache_read_tokens, cache_creation_tokens, .. }) = r {
+                turn1_read = cache_read_tokens;
+                turn1_creation = cache_creation_tokens;
+            }
+        }
+        assert_eq!(turn1_creation, 10000, "Turn 1 should be cache miss");
+        assert_eq!(turn1_read, 0);
+
+        engine.add_user_message("First".to_string());
+        engine.add_assistant_message(vec![shannon_core::api::ContentBlock::Text { text: "Turn 1".to_string() }]);
+
+        // Turn 2
+        let ctx2 = make_context("Second");
+        let mut s2 = engine.process_query(ctx2, None).await;
+        let mut turn2_read = 0u64;
+        let mut turn2_creation = 0u64;
+        while let Some(r) = s2.next().await {
+            if let Ok(QueryEvent::Usage { cache_read_tokens, cache_creation_tokens, .. }) = r {
+                turn2_read = cache_read_tokens;
+                turn2_creation = cache_creation_tokens;
+            }
+        }
+        assert_eq!(turn2_creation, 0, "Turn 2 should have 0 cache creation");
+        assert_eq!(turn2_read, 9000, "Turn 2 should be cache hit with 9000 read tokens");
+
+        // Verify overall hit rate across turns
+        let total_read = turn1_read + turn2_read;
+        let total_creation = turn1_creation + turn2_creation;
+        let hit_rate = total_read as f64 / (total_read + total_creation) as f64;
+        // 9000 / (9000 + 10000) ≈ 0.47
+        assert!(hit_rate > 0.4, "Overall hit rate should be > 40%, got {hit_rate:.2}");
+    }
 }
 
 // ── Conversation Export E2E Tests ─────────────────────────────────────
