@@ -1,0 +1,10 @@
+//! Test infrastructure for Shannon integration and regression testing.
+//!
+//! This module provides:
+//! - **mock_dsl**: Unified mock response builder for Anthropic, OpenAI, Ollama
+//! - **test_env**: TestShannonBuilder for one-call test environment setup
+//! - **snapshot**: Request shape snapshot helpers for regression detection
+
+pub mod mock_dsl;
+pub mod test_env;
+pub mod snapshot;

@@ -89,6 +89,7 @@ tokio-test = "0.4"
 criterion = "0.5"
 mockito = "1.6"
 tower = "0.5"
+insta = "1.42"
 
 [[bench]]
 name = "query_engine"
@@ -96,4 +97,8 @@ harness = false
 
 [[bench]]
 name = "core_benchmarks"
+harness = false
+
+[[bench]]
+name = "recording_benchmarks"
 harness = false

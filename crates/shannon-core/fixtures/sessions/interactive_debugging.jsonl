@@ -1,0 +1,17 @@
+{"type":"SessionStart","session_id":"fixture-interactive-debugging","model":"test-model","timestamp":"2026-05-22T00:00:00Z"}
+{"type":"UserMessage","content":"the server is returning 500 errors, help me debug","turn":1}
+{"type":"LlmRequest","turn":1,"request_hash":"id1","body":{"model":"test","messages":[{"role":"user","content":"the server is returning 500 errors, help me debug"}]}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Let me check the server code."},{"type":"tool_use","name":"Read","input":{"path":"src/server.rs"}}]}}
+{"type":"QueryEvent","event":{"Started":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"ToolCall","tool":"Read","input":{"path":"src/server.rs"},"result":"pub fn handle_request(req: Request) -> Response {\n    let data = parse(req.body)?;\n    Ok(data)\n}","is_error":false,"duration_ms":3}
+{"type":"QueryEvent","event":{"Completed":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"UserMessage","content":"here's the error log: thread 'main' panicked at 'called unwrap on None' at src/parser.rs:15","turn":2}
+{"type":"LlmRequest","turn":2,"request_hash":"id2","body":{"model":"test","messages":[{"role":"user","content":"panicked at unwrap on None at src/parser.rs:15"}]}}
+{"type":"LlmResponse","turn":2,"body":{"content":[{"type":"tool_use","name":"Read","input":{"path":"src/parser.rs"}}]}}
+{"type":"ToolCall","tool":"Read","input":{"path":"src/parser.rs"},"result":"pub fn parse(input: &str) -> Option<Data> {\n    let parts: Vec<&str> = input.split(',').collect();\n    let name = parts.get(0).unwrap().to_string();\n    let value = parts.get(1).unwrap().to_string();\n    Some(Data { name, value })\n}","is_error":false,"duration_ms":2}
+{"type":"LlmResponse","turn":2,"body":{"content":[{"type":"text","text":"The unwrap on line 3 panics when parts is empty. Let me fix it."},{"type":"tool_use","name":"Edit","input":{"path":"src/parser.rs","old":"let name = parts.get(0).unwrap().to_string();\n    let value = parts.get(1).unwrap().to_string();","new":"let name = parts.get(0)?.to_string();\n    let value = parts.get(1)?.to_string();"}}]}}
+{"type":"ToolCall","tool":"Edit","input":{"path":"src/parser.rs"},"result":"edited","is_error":false,"duration_ms":2}
+{"type":"LlmResponse","turn":2,"body":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"cargo test 2>&1"}}]}}
+{"type":"ToolCall","tool":"Bash","input":{"command":"cargo test 2>&1"},"result":"test result: ok. 5 passed","is_error":false,"duration_ms":500}
+{"type":"QueryEvent","event":{"Completed":{"query_id":"00000000-0000-0000-0000-000000000002"}}}
+{"type":"SessionEnd","session_id":"fixture-interactive-debugging","total_turns":2,"total_tokens":1100}

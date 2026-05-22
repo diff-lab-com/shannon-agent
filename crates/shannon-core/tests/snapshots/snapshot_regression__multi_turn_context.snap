@@ -1,0 +1,11 @@
+---
+source: crates/shannon-core/tests/snapshot_regression.rs
+expression: snapshot
+---
+model: test-model
+messages: 5
+  000: user/text Read src/main.rs
+  001: assistant/multi text:Let me read that file., tool_use:Read
+  002: user/tool_result tool_result:tu_1
+  003: assistant/text The file looks good. It prints hello.
+  004: user/text Now add error handling

@@ -1,0 +1,17 @@
+{"type":"SessionStart","session_id":"fixture-error-cascade-recovery","model":"test-model","timestamp":"2026-05-22T00:00:00Z"}
+{"type":"UserMessage","content":"run the full test suite and fix any failures","turn":1}
+{"type":"LlmRequest","turn":1,"request_hash":"ecr1","body":{"model":"test","messages":[{"role":"user","content":"run the full test suite and fix any failures"}]}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"cargo test 2>&1"}}]}}
+{"type":"QueryEvent","event":{"Started":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"ToolCall","tool":"Bash","input":{"command":"cargo test 2>&1"},"result":"test test_add ... FAILED\nassertion failed: 3 != 4\ntest test_sub ... FAILED\nassertion failed: 0 != 1","is_error":true,"duration_ms":1000}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_1","tool_name":"Bash","result":"2 tests FAILED","is_error":true}}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Two tests failed. Let me investigate."},{"type":"tool_use","name":"Read","input":{"path":"tests/math_test.rs"}}]}}
+{"type":"ToolCall","tool":"Read","input":{"path":"tests/math_test.rs"},"result":"#[test]\nfn test_add() { assert_eq!(add(1, 2), 4); }\n#[test]\nfn test_sub() { assert_eq!(sub(2, 1), 1); }","is_error":false,"duration_ms":3}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"test_add expects 4 but add(1,2)=3. test_sub expects 1 but sub(2,1) might return 0. Let me check the source."},{"type":"tool_use","name":"Read","input":{"path":"src/math.rs"}}]}}
+{"type":"ToolCall","tool":"Read","input":{"path":"src/math.rs"},"result":"pub fn add(a: i32, b: i32) -> i32 { a - b }\npub fn sub(a: i32, b: i32) -> i32 { a + b }","is_error":false,"duration_ms":2}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Found it: add and sub have swapped operators!"},{"type":"tool_use","name":"Edit","input":{"path":"src/math.rs","old":"pub fn add(a: i32, b: i32) -> i32 { a - b }\npub fn sub(a: i32, b: i32) -> i32 { a + b }","new":"pub fn add(a: i32, b: i32) -> i32 { a + b }\npub fn sub(a: i32, b: i32) -> i32 { a - b }"}}]}}
+{"type":"ToolCall","tool":"Edit","input":{"path":"src/math.rs","old":"a - b\npub fn sub","new":"a + b\npub fn sub"},"result":"edited","is_error":false,"duration_ms":2}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"cargo test 2>&1"}}]}}
+{"type":"ToolCall","tool":"Bash","input":{"command":"cargo test 2>&1"},"result":"test test_add ... ok\ntest test_sub ... ok\ntest result: ok. 2 passed","is_error":false,"duration_ms":800}
+{"type":"QueryEvent","event":{"Completed":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"SessionEnd","session_id":"fixture-error-cascade-recovery","total_turns":1,"total_tokens":1000}

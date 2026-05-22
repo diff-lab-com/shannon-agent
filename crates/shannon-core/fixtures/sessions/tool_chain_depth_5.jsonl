@@ -1,0 +1,27 @@
+{"type":"SessionStart","session_id":"fixture-tool-chain-depth-5","model":"test-model","timestamp":"2026-05-22T00:00:00Z"}
+{"type":"UserMessage","content":"find where the Config struct is defined, read it, find its usages, update the field name, and verify","turn":1}
+{"type":"LlmRequest","turn":1,"request_hash":"tc5_1","body":{"model":"test","messages":[{"role":"user","content":"find where the Config struct is defined, read it, find its usages, update the field name, and verify"}]}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Step 1: Find the Config struct."},{"type":"tool_use","name":"Grep","input":{"pattern":"struct Config","output_mode":"content"}}]}}
+{"type":"QueryEvent","event":{"Started":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_1","tool_name":"Grep","tool_input":{"pattern":"struct Config","output_mode":"content"}}}}
+{"type":"ToolCall","tool":"Grep","input":{"pattern":"struct Config","output_mode":"content"},"result":"src/config.rs:3:pub struct Config {","is_error":false,"duration_ms":10}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_1","tool_name":"Grep","result":"src/config.rs:3:pub struct Config {","is_error":false}}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Step 2: Read the file."},{"type":"tool_use","name":"Read","input":{"path":"src/config.rs"}}]}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_2","tool_name":"Read","tool_input":{"path":"src/config.rs"}}}}
+{"type":"ToolCall","tool":"Read","input":{"path":"src/config.rs"},"result":"pub struct Config {\n    pub name: String,\n    pub debug: bool,\n}","is_error":false,"duration_ms":3}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_2","tool_name":"Read","result":"src/config.rs","is_error":false}}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Step 3: Find usages of the 'name' field."},{"type":"tool_use","name":"Grep","input":{"pattern":"\\.name","output_mode":"content","glob":"**/*.rs"}}]}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_3","tool_name":"Grep","tool_input":{"pattern":"\\.name","glob":"**/*.rs"}}}}
+{"type":"ToolCall","tool":"Grep","input":{"pattern":"\\.name","glob":"**/*.rs"},"result":"src/main.rs:5:println!(\"{}\", config.name);","is_error":false,"duration_ms":8}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_3","tool_name":"Grep","result":"src/main.rs:5","is_error":false}}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Step 4: Rename 'name' to 'title' in both files."},{"type":"tool_use","name":"Edit","input":{"path":"src/config.rs","old":"pub name: String","new":"pub title: String"}},{"type":"tool_use","name":"Edit","input":{"path":"src/main.rs","old":"config.name","new":"config.title"}}]}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_4a","tool_name":"Edit","tool_input":{"path":"src/config.rs","old":"pub name: String","new":"pub title: String"}}}}
+{"type":"ToolCall","tool":"Edit","input":{"path":"src/config.rs","old":"pub name: String","new":"pub title: String"},"result":"edited","is_error":false,"duration_ms":2}
+{"type":"ToolCall","tool":"Edit","input":{"path":"src/main.rs","old":"config.name","new":"config.title"},"result":"edited","is_error":false,"duration_ms":2}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_4a","tool_name":"Edit","result":"edited","is_error":false}}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Step 5: Verify it compiles."},{"type":"tool_use","name":"Bash","input":{"command":"cargo check"}}]}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_5","tool_name":"Bash","tool_input":{"command":"cargo check"}}}}
+{"type":"ToolCall","tool":"Bash","input":{"command":"cargo check"},"result":"Finished dev [unoptimized]","is_error":false,"duration_ms":300}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_5","tool_name":"Bash","result":"ok","is_error":false}}}
+{"type":"QueryEvent","event":{"Completed":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"SessionEnd","session_id":"fixture-tool-chain-depth-5","total_turns":1,"total_tokens":1000}

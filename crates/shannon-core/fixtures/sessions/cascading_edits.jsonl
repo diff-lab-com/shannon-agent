@@ -1,0 +1,31 @@
+{"type":"SessionStart","session_id":"fixture-cascading-edits","model":"test-model","timestamp":"2026-05-22T00:00:00Z"}
+{"type":"UserMessage","content":"rename the process function to handle and update all callers","turn":1}
+{"type":"LlmRequest","turn":1,"request_hash":"ce1","body":{"model":"test","messages":[{"role":"user","content":"rename the process function to handle and update all callers"}]}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Let me find all usages of the process function."},{"type":"tool_use","name":"Grep","input":{"pattern":"process","output_mode":"content"}}]}}
+{"type":"QueryEvent","event":{"Started":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"QueryEvent","event":{"Text":{"query_id":"00000000-0000-0000-0000-000000000001","content":"Let me find all usages of the process function."}}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_1","tool_name":"Grep","tool_input":{"pattern":"process","output_mode":"content"}}}}
+{"type":"ToolCall","tool":"Grep","input":{"pattern":"process","output_mode":"content"},"result":"src/lib.rs:1:pub fn process(input: &str) -> String\nsrc/main.rs:3:let result = process(\"hello\");\ntests/test.rs:5:assert_eq!(process(\"a\"), \"a\");","is_error":false,"duration_ms":15}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_1","tool_name":"Grep","result":"src/lib.rs:1:pub fn process(input: &str) -> String\nsrc/main.rs:3:let result = process(\"hello\");\ntests/test.rs:5:assert_eq!(process(\"a\"), \"a\");","is_error":false}}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Found 3 locations. Let me read and fix each."},{"type":"tool_use","name":"Read","input":{"path":"src/lib.rs"}}]}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_2","tool_name":"Read","tool_input":{"path":"src/lib.rs"}}}}
+{"type":"ToolCall","tool":"Read","input":{"path":"src/lib.rs"},"result":"pub fn process(input: &str) -> String {\n    input.to_uppercase()\n}","is_error":false,"duration_ms":2}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_2","tool_name":"Read","result":"pub fn process(input: &str) -> String {\n    input.to_uppercase()\n}","is_error":false}}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"tool_use","name":"Edit","input":{"path":"src/lib.rs","old":"pub fn process","new":"pub fn handle"}}]}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_3","tool_name":"Edit","tool_input":{"path":"src/lib.rs","old":"pub fn process","new":"pub fn handle"}}}}
+{"type":"ToolCall","tool":"Edit","input":{"path":"src/lib.rs","old":"pub fn process","new":"pub fn handle"},"result":"edited","is_error":false,"duration_ms":2}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_3","tool_name":"Edit","result":"edited","is_error":false}}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"tool_use","name":"Edit","input":{"path":"src/main.rs","old":"process(\"hello\")","new":"handle(\"hello\")"}}]}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_4","tool_name":"Edit","tool_input":{"path":"src/main.rs","old":"process(\"hello\")","new":"handle(\"hello\")"}}}}
+{"type":"ToolCall","tool":"Edit","input":{"path":"src/main.rs","old":"process(\"hello\")","new":"handle(\"hello\")"},"result":"edited","is_error":false,"duration_ms":2}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_4","tool_name":"Edit","result":"edited","is_error":false}}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"tool_use","name":"Edit","input":{"path":"tests/test.rs","old":"process(\"a\")","new":"handle(\"a\")"}}]}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_5","tool_name":"Edit","tool_input":{"path":"tests/test.rs","old":"process(\"a\")","new":"handle(\"a\")"}}}}
+{"type":"ToolCall","tool":"Edit","input":{"path":"tests/test.rs","old":"process(\"a\")","new":"handle(\"a\")"},"result":"edited","is_error":false,"duration_ms":2}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_5","tool_name":"Edit","result":"edited","is_error":false}}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Let me verify it compiles."},{"type":"tool_use","name":"Bash","input":{"command":"cargo check"}}]}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_6","tool_name":"Bash","tool_input":{"command":"cargo check"}}}}
+{"type":"ToolCall","tool":"Bash","input":{"command":"cargo check"},"result":"Finished dev [unoptimized] target(s) in 0.3s","is_error":false,"duration_ms":300}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_6","tool_name":"Bash","result":"Finished dev [unoptimized] target(s) in 0.3s","is_error":false}}}
+{"type":"QueryEvent","event":{"Completed":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"SessionEnd","session_id":"fixture-cascading-edits","total_turns":1,"total_tokens":1200}

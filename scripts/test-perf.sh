@@ -176,3 +176,51 @@ fi
 if [[ "$FAILED" -gt 0 ]]; then
     exit 1
 fi
+
+# ── Benchmark comparison (optional) ───────────────────────────────────
+# Compares current results against a saved baseline.
+# Usage: ./scripts/test-perf.sh --compare-baseline <baseline-file>
+# The baseline file is typically from a previous run or main branch.
+COMPARE_BASELINE=""
+for arg in "$@"; do
+    case "$arg" in
+        --compare-baseline) shift; COMPARE_BASELINE="${1:-}" ;;
+    esac
+done
+
+if [[ -n "$COMPARE_BASELINE" && -f "$COMPARE_BASELINE" ]]; then
+    echo ""
+    echo "========================================"
+    echo " Benchmark Comparison"
+    echo "========================================"
+    echo "Baseline: $COMPARE_BASELINE"
+    echo "Current:  /tmp/shannon-perf-phase1.log"
+    echo ""
+
+    BASELINE_PASSED=$(grep -c "test .* ok$" "$COMPARE_BASELINE" 2>/dev/null || echo "0")
+    BASELINE_FAILED=$(grep -c "test .* FAILED$" "$COMPARE_BASELINE" 2>/dev/null || echo "0")
+    CURRENT_PASSED=$PASSED
+    CURRENT_FAILED=$FAILED
+
+    echo "  Baseline passed: $BASELINE_PASSED  |  Current passed: $CURRENT_PASSED"
+    echo "  Baseline failed: $BASELINE_FAILED  |  Current failed: $CURRENT_FAILED"
+    echo ""
+
+    # Check for new failures (regressions)
+    if [[ "$CURRENT_FAILED" -gt "$BASELINE_FAILED" ]]; then
+        echo "  WARNING: $((CURRENT_FAILED - BASELINE_FAILED)) new regression(s) detected!"
+        echo ""
+        # Show which tests regressed
+        comm -23 \
+            <(grep "test .* FAILED$" /tmp/shannon-perf-phase1.log 2>/dev/null | sort || true) \
+            <(grep "test .* FAILED$" "$COMPARE_BASELINE" 2>/dev/null | sort || true) \
+            | while read -r line; do
+                echo "    REGRESSED: $line"
+            done
+    elif [[ "$CURRENT_FAILED" -lt "$BASELINE_FAILED" ]]; then
+        echo "  IMPROVEMENT: $((BASELINE_FAILED - CURRENT_FAILED)) fewer failure(s) than baseline."
+    else
+        echo "  No regressions detected."
+    fi
+    echo "========================================"
+fi

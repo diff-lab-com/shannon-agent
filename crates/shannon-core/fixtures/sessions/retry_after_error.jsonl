@@ -1,0 +1,22 @@
+{"type":"SessionStart","session_id":"fixture-retry-after-error","model":"test-model","timestamp":"2026-05-22T00:00:00Z"}
+{"type":"UserMessage","content":"fix the test failures","turn":1}
+{"type":"LlmRequest","turn":1,"request_hash":"rae1","body":{"model":"test","messages":[{"role":"user","content":"fix the test failures"}]}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Let me read the test file."},{"type":"tool_use","name":"Read","input":{"path":"tests/integration.rs"}}]}}
+{"type":"QueryEvent","event":{"Started":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"QueryEvent","event":{"Text":{"query_id":"00000000-0000-0000-0000-000000000001","content":"Let me read the test file."}}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_1","tool_name":"Read","tool_input":{"path":"tests/integration.rs"}}}}
+{"type":"ToolCall","tool":"Read","input":{"path":"tests/integration.rs"},"result":"#[test]\nfn test_add() {\n    assert_eq!(add(1, 2), 4);\n}","is_error":false,"duration_ms":3}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_1","tool_name":"Read","result":"#[test]\nfn test_add() {\n    assert_eq!(add(1, 2), 4);\n}","is_error":false}}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"The assertion expects 4 but add(1,2) should be 3."},{"type":"tool_use","name":"Edit","input":{"path":"tests/integration.rs","old":"assert_eq!(add(1, 2), 4)","new":"assert_eq!(add(1, 2), 3)"}}]}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_2","tool_name":"Edit","tool_input":{"path":"tests/integration.rs","old":"assert_eq!(add(1, 2), 4)","new":"assert_eq!(add(1, 2), 3)"}}}}
+{"type":"ToolCall","tool":"Edit","input":{"path":"tests/integration.rs","old":"assert_eq!(add(1, 2), 4)","new":"assert_eq!(add(1, 2), 3)"},"result":"edited successfully","is_error":false,"duration_ms":2}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_2","tool_name":"Edit","result":"edited successfully","is_error":false}}}
+{"type":"QueryEvent","event":{"Completed":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"UserMessage","content":"the tests are still failing","turn":2}
+{"type":"LlmRequest","turn":2,"request_hash":"rae2","body":{"model":"test","messages":[{"role":"user","content":"fix the test failures"},{"role":"assistant","content":"Fixed."},{"role":"user","content":"the tests are still failing"}]}}
+{"type":"LlmResponse","turn":2,"body":{"content":[{"type":"text","text":"Let me run the tests to see the error."},{"type":"tool_use","name":"Bash","input":{"command":"cargo test test_add"}}]}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000002","tool_use_id":"tu_3","tool_name":"Bash","tool_input":{"command":"cargo test test_add"}}}}
+{"type":"ToolCall","tool":"Bash","input":{"command":"cargo test test_add"},"result":"test test_add ... ok\n1 passed","is_error":false,"duration_ms":200}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000002","tool_use_id":"tu_3","tool_name":"Bash","result":"test test_add ... ok\n1 passed","is_error":false}}}
+{"type":"QueryEvent","event":{"Completed":{"query_id":"00000000-0000-0000-0000-000000000002"}}}
+{"type":"SessionEnd","session_id":"fixture-retry-after-error","total_turns":2,"total_tokens":900}

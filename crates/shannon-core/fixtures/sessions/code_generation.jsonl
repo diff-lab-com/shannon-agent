@@ -1,0 +1,15 @@
+{"type":"SessionStart","session_id":"fixture-code-generation","model":"test-model","timestamp":"2026-05-22T00:00:00Z"}
+{"type":"UserMessage","content":"create a new Calculator module with add, subtract, multiply","turn":1}
+{"type":"LlmRequest","turn":1,"request_hash":"cg1","body":{"model":"test","messages":[{"role":"user","content":"create a new Calculator module with add, subtract, multiply"}]}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"I'll create the calculator module."},{"type":"tool_use","name":"Write","input":{"path":"src/calculator.rs","content":"pub struct Calculator;\n\nimpl Calculator {\n    pub fn add(a: f64, b: f64) -> f64 { a + b }\n    pub fn subtract(a: f64, b: f64) -> f64 { a - b }\n    pub fn multiply(a: f64, b: f64) -> f64 { a * b }\n}"}}]}}
+{"type":"QueryEvent","event":{"Started":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"QueryEvent","event":{"Text":{"query_id":"00000000-0000-0000-0000-000000000001","content":"I'll create the calculator module."}}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_1","tool_name":"Write","tool_input":{"path":"src/calculator.rs","content":"pub struct Calculator;\n\nimpl Calculator {\n    pub fn add(a: f64, b: f64) -> f64 { a + b }\n    pub fn subtract(a: f64, b: f64) -> f64 { a - b }\n    pub fn multiply(a: f64, b: f64) -> f64 { a * b }\n}"}}}}
+{"type":"ToolCall","tool":"Write","input":{"path":"src/calculator.rs","content":"pub struct Calculator;\n\nimpl Calculator {\n    pub fn add(a: f64, b: f64) -> f64 { a + b }\n    pub fn subtract(a: f64, b: f64) -> f64 { a - b }\n    pub fn multiply(a: f64, b: f64) -> f64 { a * b }\n}"},"result":"file created","is_error":false,"duration_ms":5}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_1","tool_name":"Write","result":"file created","is_error":false}}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Now let me verify it compiles."},{"type":"tool_use","name":"Bash","input":{"command":"cargo check"}}]}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_2","tool_name":"Bash","tool_input":{"command":"cargo check"}}}}
+{"type":"ToolCall","tool":"Bash","input":{"command":"cargo check"},"result":"Finished dev [unoptimized] target(s) in 0.5s","is_error":false,"duration_ms":500}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_2","tool_name":"Bash","result":"Finished dev [unoptimized] target(s) in 0.5s","is_error":false}}}
+{"type":"QueryEvent","event":{"Completed":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"SessionEnd","session_id":"fixture-code-generation","total_turns":1,"total_tokens":650}

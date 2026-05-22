@@ -1,0 +1,17 @@
+---
+source: crates/shannon-core/tests/snapshot_regression.rs
+expression: snapshot
+---
+system: present
+model: test-model
+tools: 8
+  tool[0]: Tool0
+  tool[1]: Tool1
+  tool[2]: Tool2
+  tool[3]: Tool3
+  tool[4]: Tool4
+  tool[5]: Tool5
+  tool[6]: Tool6
+  tool[7]: Tool7
+messages: 1
+  000: user/text

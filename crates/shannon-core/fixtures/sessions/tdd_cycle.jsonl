@@ -1,0 +1,15 @@
+{"type":"SessionStart","session_id":"fixture-tdd-cycle","model":"test-model","timestamp":"2026-05-22T00:00:00Z"}
+{"type":"UserMessage","content":"implement a fizzbuzz function using TDD","turn":1}
+{"type":"LlmRequest","turn":1,"request_hash":"tdd1","body":{"model":"test","messages":[{"role":"user","content":"implement a fizzbuzz function using TDD"}]}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"TDD step 1: Write the test first."},{"type":"tool_use","name":"Write","input":{"path":"tests/fizzbuzz_test.rs","content":"use mylib::fizzbuzz::fizzbuzz;\n\n#[test]\nfn test_fizzbuzz() {\n    assert_eq!(fizzbuzz(3), \"Fizz\");\n    assert_eq!(fizzbuzz(5), \"Buzz\");\n    assert_eq!(fizzbuzz(15), \"FizzBuzz\");\n    assert_eq!(fizzbuzz(1), \"1\");\n}"}}]}}
+{"type":"QueryEvent","event":{"Started":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"ToolCall","tool":"Write","input":{"path":"tests/fizzbuzz_test.rs","content":"..."},"result":"file created","is_error":false,"duration_ms":3}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Step 2: Run tests — should fail."},{"type":"tool_use","name":"Bash","input":{"command":"cargo test fizzbuzz 2>&1"}}]}}
+{"type":"ToolCall","tool":"Bash","input":{"command":"cargo test fizzbuzz 2>&1"},"result":"error[E0433]: failed to resolve: module `fizzbuzz` not found\ntest result: FAILED","is_error":true,"duration_ms":500}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_1","tool_name":"Bash","result":"FAILED - module not found","is_error":true}}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Good, test fails as expected. Step 3: Implement."},{"type":"tool_use","name":"Write","input":{"path":"src/fizzbuzz.rs","content":"pub fn fizzbuzz(n: u32) -> String {\n    match (n % 3, n % 5) {\n        (0, 0) => \"FizzBuzz\".to_string(),\n        (0, _) => \"Fizz\".to_string(),\n        (_, 0) => \"Buzz\".to_string(),\n        _ => n.to_string(),\n    }\n}"}}]}}
+{"type":"ToolCall","tool":"Write","input":{"path":"src/fizzbuzz.rs","content":"..."},"result":"file created","is_error":false,"duration_ms":3}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Step 4: Run tests — should pass."},{"type":"tool_use","name":"Bash","input":{"command":"cargo test fizzbuzz 2>&1"}}]}}
+{"type":"ToolCall","tool":"Bash","input":{"command":"cargo test fizzbuzz 2>&1"},"result":"test test_fizzbuzz ... ok\ntest result: ok. 1 passed","is_error":false,"duration_ms":400}
+{"type":"QueryEvent","event":{"Completed":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"SessionEnd","session_id":"fixture-tdd-cycle","total_turns":1,"total_tokens":900}

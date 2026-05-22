@@ -1,0 +1,10 @@
+{"type":"SessionStart","session_id":"fixture-large-file-handling","model":"test-model","timestamp":"2026-05-22T00:00:00Z"}
+{"type":"UserMessage","content":"update the license header in all source files","turn":1}
+{"type":"LlmRequest","turn":1,"request_hash":"lfh1","body":{"model":"test","messages":[{"role":"user","content":"update the license header in all source files"}]}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"tool_use","name":"Read","input":{"path":"src/main.rs"}}]}}
+{"type":"QueryEvent","event":{"Started":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"ToolCall","tool":"Read","input":{"path":"src/main.rs"},"result":"// Copyright 2024 Old Corp\n// All rights reserved\n\nfn main() {\n    println!(\"hello\");\n    // ... 900 lines of code ...\n}","is_error":false,"duration_ms":5}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"tool_use","name":"Edit","input":{"path":"src/main.rs","old":"// Copyright 2024 Old Corp","new":"// Copyright 2026 New Corp"}}]}}
+{"type":"ToolCall","tool":"Edit","input":{"path":"src/main.rs","old":"// Copyright 2024 Old Corp","new":"// Copyright 2026 New Corp"},"result":"edited","is_error":false,"duration_ms":3}
+{"type":"QueryEvent","event":{"Completed":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"SessionEnd","session_id":"fixture-large-file-handling","total_turns":1,"total_tokens":600}

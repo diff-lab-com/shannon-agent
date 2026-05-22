@@ -1,0 +1,8 @@
+---
+source: crates/shannon-core/tests/snapshot_regression.rs
+expression: snapshot
+---
+tool_chain: 3 steps
+  0: Read({"path":"src/main.rs"}) [OK]
+  1: Edit({"new":"fn main() { println!(\"hello\"); }","old":"fn main() {}","path":"src/main.rs"}) [OK]
+  2: Bash({"command":"cargo test"}) [OK]

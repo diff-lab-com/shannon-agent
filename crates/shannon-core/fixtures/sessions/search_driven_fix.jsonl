@@ -1,0 +1,24 @@
+{"type":"SessionStart","session_id":"fixture-search-driven-fix","model":"test-model","timestamp":"2026-05-22T00:00:00Z"}
+{"type":"UserMessage","content":"find and fix the bug in the add function","turn":1}
+{"type":"LlmRequest","turn":1,"request_hash":"sdf1","body":{"model":"test","messages":[{"role":"user","content":"find and fix the bug in the add function"}]}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Let me search for the add function."},{"type":"tool_use","name":"Grep","input":{"pattern":"fn add","output_mode":"files_with_matches"}}]}}
+{"type":"QueryEvent","event":{"Started":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"QueryEvent","event":{"Text":{"query_id":"00000000-0000-0000-0000-000000000001","content":"Let me search for the add function."}}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_1","tool_name":"Grep","tool_input":{"pattern":"fn add","output_mode":"files_with_matches"}}}}
+{"type":"ToolCall","tool":"Grep","input":{"pattern":"fn add","output_mode":"files_with_matches"},"result":"src/math.rs","is_error":false,"duration_ms":10}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_1","tool_name":"Grep","result":"src/math.rs","is_error":false}}}
+{"type":"LlmRequest","turn":1,"request_hash":"sdf2","body":{"model":"test","messages":[{"role":"user","content":"find and fix the bug in the add function"},{"role":"assistant","content":[{"type":"tool_use","name":"Grep","input":{"pattern":"fn add"}}]},{"role":"user","content":"src/math.rs"},{"role":"assistant","content":[{"type":"text","text":"Let me read the file."},{"type":"tool_use","name":"Read","input":{"path":"src/math.rs"}}]}]}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Let me read the file."},{"type":"tool_use","name":"Read","input":{"path":"src/math.rs"}}]}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_2","tool_name":"Read","tool_input":{"path":"src/math.rs"}}}}
+{"type":"ToolCall","tool":"Read","input":{"path":"src/math.rs"},"result":"pub fn add(a: i32, b: i32) -> i32 {\n    a - b\n}","is_error":false,"duration_ms":3}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_2","tool_name":"Read","result":"pub fn add(a: i32, b: i32) -> i32 {\n    a - b\n}","is_error":false}}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Found the bug: it uses subtraction instead of addition."},{"type":"tool_use","name":"Edit","input":{"path":"src/math.rs","old":"a - b","new":"a + b"}}]}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_3","tool_name":"Edit","tool_input":{"path":"src/math.rs","old":"a - b","new":"a + b"}}}}
+{"type":"ToolCall","tool":"Edit","input":{"path":"src/math.rs","old":"a - b","new":"a + b"},"result":"edited successfully","is_error":false,"duration_ms":2}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_3","tool_name":"Edit","result":"edited successfully","is_error":false}}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Now let me verify the fix compiles."},{"type":"tool_use","name":"Bash","input":{"command":"cargo check"}}]}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_4","tool_name":"Bash","tool_input":{"command":"cargo check"}}}}
+{"type":"ToolCall","tool":"Bash","input":{"command":"cargo check"},"result":"Finished dev [unoptimized] target(s) in 0.5s","is_error":false,"duration_ms":500}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_4","tool_name":"Bash","result":"Finished dev [unoptimized] target(s) in 0.5s","is_error":false}}}
+{"type":"QueryEvent","event":{"Completed":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"SessionEnd","session_id":"fixture-search-driven-fix","total_turns":1,"total_tokens":800}

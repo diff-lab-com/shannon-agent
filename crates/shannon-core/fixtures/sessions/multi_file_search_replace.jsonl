@@ -1,0 +1,18 @@
+{"type":"SessionStart","session_id":"fixture-multi-file-search-replace","model":"test-model","timestamp":"2026-05-22T00:00:00Z"}
+{"type":"UserMessage","content":"rename all occurrences of 'Database' to 'Store' across the codebase","turn":1}
+{"type":"LlmRequest","turn":1,"request_hash":"mfsr1","body":{"model":"test","messages":[{"role":"user","content":"rename all occurrences of 'Database' to 'Store' across the codebase"}]}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"Database","output_mode":"content","glob":"**/*.rs"}}]}}
+{"type":"QueryEvent","event":{"Started":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"ToolCall","tool":"Grep","input":{"pattern":"Database","glob":"**/*.rs"},"result":"src/db.rs:1:pub struct Database\nsrc/db.rs:5:impl Database\nsrc/api.rs:3:let db = Database::new()\ntests/db_test.rs:2:let db = Database::new()\nsrc/api.rs:10:db: Database","is_error":false,"duration_ms":15}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"tool_use","name":"Read","input":{"path":"src/db.rs"}},{"type":"tool_use","name":"Read","input":{"path":"src/api.rs"}},{"type":"tool_use","name":"Read","input":{"path":"tests/db_test.rs"}}]}}
+{"type":"ToolCall","tool":"Read","input":{"path":"src/db.rs"},"result":"pub struct Database {\n    data: String,\n}\n\nimpl Database {\n    pub fn new() -> Self { Self { data: String::new() } }\n}","is_error":false,"duration_ms":2}
+{"type":"ToolCall","tool":"Read","input":{"path":"src/api.rs"},"result":"use crate::db::Database;\n\npub fn create() {\n    let db = Database::new();\n}\n\npub fn query(db: Database) {}","is_error":false,"duration_ms":2}
+{"type":"ToolCall","tool":"Read","input":{"path":"tests/db_test.rs"},"result":"use mylib::db::Database;\n\n#[test]\nfn test_db() {\n    let db = Database::new();\n}","is_error":false,"duration_ms":2}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"tool_use","name":"Edit","input":{"path":"src/db.rs","old":"Database","new":"Store"}},{"type":"tool_use","name":"Edit","input":{"path":"src/api.rs","old":"Database","new":"Store"}},{"type":"tool_use","name":"Edit","input":{"path":"tests/db_test.rs","old":"Database","new":"Store"}}]}}
+{"type":"ToolCall","tool":"Edit","input":{"path":"src/db.rs","old":"Database","new":"Store"},"result":"edited","is_error":false,"duration_ms":2}
+{"type":"ToolCall","tool":"Edit","input":{"path":"src/api.rs","old":"Database","new":"Store"},"result":"edited","is_error":false,"duration_ms":2}
+{"type":"ToolCall","tool":"Edit","input":{"path":"tests/db_test.rs","old":"Database","new":"Store"},"result":"edited","is_error":false,"duration_ms":2}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"cargo check"}}]}}
+{"type":"ToolCall","tool":"Bash","input":{"command":"cargo check"},"result":"Finished dev","is_error":false,"duration_ms":300}
+{"type":"QueryEvent","event":{"Completed":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"SessionEnd","session_id":"fixture-multi-file-search-replace","total_turns":1,"total_tokens":1200}

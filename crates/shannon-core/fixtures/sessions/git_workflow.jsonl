@@ -1,0 +1,19 @@
+{"type":"SessionStart","session_id":"fixture-git-workflow","model":"test-model","timestamp":"2026-05-22T00:00:00Z"}
+{"type":"UserMessage","content":"commit my changes with a good message","turn":1}
+{"type":"LlmRequest","turn":1,"request_hash":"gw1","body":{"model":"test","messages":[{"role":"user","content":"commit my changes with a good message"}]}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Let me check the current state."},{"type":"tool_use","name":"Bash","input":{"command":"git status"}}]}}
+{"type":"QueryEvent","event":{"Started":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"QueryEvent","event":{"Text":{"query_id":"00000000-0000-0000-0000-000000000001","content":"Let me check the current state."}}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_1","tool_name":"Bash","tool_input":{"command":"git status"}}}}
+{"type":"ToolCall","tool":"Bash","input":{"command":"git status"},"result":"Changes not staged for commit:\n  modified: src/main.rs","is_error":false,"duration_ms":50}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_1","tool_name":"Bash","result":"Changes not staged for commit:\n  modified: src/main.rs","is_error":false}}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Let me see what changed."},{"type":"tool_use","name":"Bash","input":{"command":"git diff src/main.rs"}}]}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_2","tool_name":"Bash","tool_input":{"command":"git diff src/main.rs"}}}}
+{"type":"ToolCall","tool":"Bash","input":{"command":"git diff src/main.rs"},"result":"-fn main() { }\\n+fn main() { println!(\"hello\"); }","is_error":false,"duration_ms":30}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_2","tool_name":"Bash","result":"-fn main() { }\\n+fn main() { println!(\"hello\"); }","is_error":false}}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Added hello world output. Let me commit."},{"type":"tool_use","name":"Bash","input":{"command":"git add src/main.rs && git commit -m 'feat: add hello world output to main'"}}]}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_3","tool_name":"Bash","tool_input":{"command":"git add src/main.rs && git commit -m \"feat: add hello world output to main\""}}}}
+{"type":"ToolCall","tool":"Bash","input":{"command":"git add src/main.rs && git commit -m \"feat: add hello world output to main\""},"result":"[main abc1234] feat: add hello world output to main\n 1 file changed, 1 insertion(+), 1 deletion(-)","is_error":false,"duration_ms":100}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_3","tool_name":"Bash","result":"[main abc1234] feat: add hello world output to main\n 1 file changed, 1 insertion(+), 1 deletion(-)","is_error":false}}}
+{"type":"QueryEvent","event":{"Completed":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"SessionEnd","session_id":"fixture-git-workflow","total_turns":1,"total_tokens":700}

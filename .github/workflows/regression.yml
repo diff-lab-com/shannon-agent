@@ -1,0 +1,84 @@
+name: Regression Tests
+
+on:
+  pull_request:
+    branches: [main, dev]
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  regression:
+    name: Regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.85"
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run regression tests
+        run: |
+          chmod +x scripts/test-regression.sh
+          ./scripts/test-regression.sh --skip-perf
+
+      - name: Upload timing log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regression-timing
+          path: /tmp/shannon-regression-timing.log
+          retention-days: 7
+
+  benchmark-comparison:
+    name: Benchmark Comparison
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.85"
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Checkout base branch for baseline
+        run: |
+          BASE_SHA=$(git merge-base origin/main HEAD)
+          echo "Base commit: $BASE_SHA"
+          git checkout $BASE_SHA
+          cargo bench --workspace 2>&1 | tee /tmp/bench-base.txt || true
+          git checkout -
+
+      - name: Run PR benchmarks
+        run: |
+          cargo bench --workspace 2>&1 | tee /tmp/bench-pr.txt || true
+
+      - name: Compare benchmarks
+        run: |
+          echo "=== Benchmark Comparison ==="
+          echo ""
+          echo "--- Base benchmarks ---"
+          tail -20 /tmp/bench-base.txt || true
+          echo ""
+          echo "--- PR benchmarks ---"
+          tail -20 /tmp/bench-pr.txt || true
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-comparison
+          path: |
+            /tmp/bench-base.txt
+            /tmp/bench-pr.txt
+          retention-days: 7

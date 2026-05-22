@@ -1,0 +1,8 @@
+---
+source: crates/shannon-core/tests/snapshot_regression.rs
+expression: snapshot
+---
+system: "Previous context summary: User asked to fix a bug in parser.rs. Read the file, found the issue was a missing null check. Applied the fix and verified tests pass."
+model: test-model
+messages: 1
+  000: user/text now do the same for serializer.rs

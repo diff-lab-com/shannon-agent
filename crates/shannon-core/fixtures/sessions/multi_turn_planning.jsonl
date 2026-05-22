@@ -1,0 +1,33 @@
+{"type":"SessionStart","session_id":"fixture-multi-turn-planning","model":"test-model","timestamp":"2026-05-22T00:00:00Z"}
+{"type":"UserMessage","content":"I need to add error handling to the parser module","turn":1}
+{"type":"LlmRequest","turn":1,"request_hash":"mtp1","body":{"model":"test","messages":[{"role":"user","content":"I need to add error handling to the parser module"}]}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Let me first understand the current structure."},{"type":"tool_use","name":"Read","input":{"path":"src/parser.rs"}}]}}
+{"type":"QueryEvent","event":{"Started":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"QueryEvent","event":{"Text":{"query_id":"00000000-0000-0000-0000-000000000001","content":"Let me first understand the current structure."}}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_1","tool_name":"Read","tool_input":{"path":"src/parser.rs"}}}}
+{"type":"ToolCall","tool":"Read","input":{"path":"src/parser.rs"},"result":"pub fn parse(input: &str) -> Vec<&str> {\n    input.split(',').collect()\n}","is_error":false,"duration_ms":3}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_1","tool_name":"Read","result":"pub fn parse(input: &str) -> Vec<&str> {\n    input.split(',').collect()\n}","is_error":false}}}
+{"type":"QueryEvent","event":{"Completed":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"UserMessage","content":"yes that's the one. I want it to return Result instead of panicking on empty input","turn":2}
+{"type":"LlmRequest","turn":2,"request_hash":"mtp2","body":{"model":"test","messages":[{"role":"user","content":"I need to add error handling"},{"role":"assistant","content":"Let me read parser.rs"},{"role":"user","content":"I want it to return Result instead of panicking on empty input"}]}}
+{"type":"LlmResponse","turn":2,"body":{"content":[{"type":"text","text":"Here's my plan: change return type to Result<Vec<&str>, ParseError>, add empty input check."},{"type":"tool_use","name":"Edit","input":{"path":"src/parser.rs","old":"pub fn parse(input: &str) -> Vec<&str> {\n    input.split(',').collect()\n}","new":"#[derive(Debug)]\npub struct ParseError(String);\n\npub fn parse(input: &str) -> Result<Vec<&str>, ParseError> {\n    if input.is_empty() {\n        return Err(ParseError(\"empty input\".into()));\n    }\n    Ok(input.split(',').collect())\n}"}}]}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000002","tool_use_id":"tu_2","tool_name":"Edit","tool_input":{"path":"src/parser.rs"}}}}
+{"type":"ToolCall","tool":"Edit","input":{"path":"src/parser.rs","old":"pub fn parse","new":"#[derive(Debug)]\npub struct ParseError(String);\n\npub fn parse"},"result":"edited","is_error":false,"duration_ms":3}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000002","tool_use_id":"tu_2","tool_name":"Edit","result":"edited","is_error":false}}}
+{"type":"QueryEvent","event":{"Completed":{"query_id":"00000000-0000-0000-0000-000000000002"}}}
+{"type":"UserMessage","content":"looks good. now update the tests too","turn":3}
+{"type":"LlmRequest","turn":3,"request_hash":"mtp3","body":{"model":"test","messages":[{"role":"user","content":"update the tests"}]}}
+{"type":"LlmResponse","turn":3,"body":{"content":[{"type":"tool_use","name":"Read","input":{"path":"tests/parser_test.rs"}}]}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000003","tool_use_id":"tu_3","tool_name":"Read","tool_input":{"path":"tests/parser_test.rs"}}}}
+{"type":"ToolCall","tool":"Read","input":{"path":"tests/parser_test.rs"},"result":"#[test]\nfn test_parse() {\n    assert_eq!(parse(\"a,b\"), vec![\"a\", \"b\"]);\n}","is_error":false,"duration_ms":2}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000003","tool_use_id":"tu_3","tool_name":"Read","result":"#[test]\nfn test_parse() {\n    assert_eq!(parse(\"a,b\"), vec![\"a\", \"b\"]);\n}","is_error":false}}}
+{"type":"LlmResponse","turn":3,"body":{"content":[{"type":"tool_use","name":"Edit","input":{"path":"tests/parser_test.rs","old":"assert_eq!(parse(\"a,b\"), vec![\"a\", \"b\"]);","new":"assert_eq!(parse(\"a,b\").unwrap(), vec![\"a\", \"b\"]);\nassert!(parse(\"\").is_err());"}}]}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000003","tool_use_id":"tu_4","tool_name":"Edit","tool_input":{"path":"tests/parser_test.rs"}}}}
+{"type":"ToolCall","tool":"Edit","input":{"path":"tests/parser_test.rs","old":"assert_eq!(parse","new":"assert_eq!(parse(\"a,b\").unwrap(), vec![\"a\", \"b\"]);\nassert!(parse(\"\").is_err());"},"result":"edited","is_error":false,"duration_ms":2}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000003","tool_use_id":"tu_4","tool_name":"Edit","result":"edited","is_error":false}}}
+{"type":"LlmResponse","turn":3,"body":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"cargo test"}}]}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000003","tool_use_id":"tu_5","tool_name":"Bash","tool_input":{"command":"cargo test"}}}}
+{"type":"ToolCall","tool":"Bash","input":{"command":"cargo test"},"result":"test test_parse ... ok\ntest result: ok. 1 passed","is_error":false,"duration_ms":500}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000003","tool_use_id":"tu_5","tool_name":"Bash","result":"test test_parse ... ok\ntest result: ok. 1 passed","is_error":false}}}
+{"type":"QueryEvent","event":{"Completed":{"query_id":"00000000-0000-0000-0000-000000000003"}}}
+{"type":"SessionEnd","session_id":"fixture-multi-turn-planning","total_turns":3,"total_tokens":1500}

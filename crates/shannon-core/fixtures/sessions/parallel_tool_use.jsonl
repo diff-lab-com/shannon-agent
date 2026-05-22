@@ -1,0 +1,18 @@
+{"type":"SessionStart","session_id":"fixture-parallel-tool-use","model":"test-model","timestamp":"2026-05-22T00:00:00Z"}
+{"type":"UserMessage","content":"read all three source files and fix the imports","turn":1}
+{"type":"LlmRequest","turn":1,"request_hash":"ptu1","body":{"model":"test","messages":[{"role":"user","content":"read all three source files and fix the imports"}]}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"I'll read all three files in parallel."},{"type":"tool_use","name":"Read","input":{"path":"src/main.rs"}},{"type":"tool_use","name":"Read","input":{"path":"src/lib.rs"}},{"type":"tool_use","name":"Read","input":{"path":"src/utils.rs"}}]}}
+{"type":"QueryEvent","event":{"Started":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"QueryEvent","event":{"Text":{"query_id":"00000000-0000-0000-0000-000000000001","content":"I'll read all three files in parallel."}}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_1","tool_name":"Read","tool_input":{"path":"src/main.rs"}}}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_2","tool_name":"Read","tool_input":{"path":"src/lib.rs"}}}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_3","tool_name":"Read","tool_input":{"path":"src/utils.rs"}}}}
+{"type":"ToolCall","tool":"Read","input":{"path":"src/main.rs"},"result":"use crate::utils;\nfn main() {}","is_error":false,"duration_ms":3}
+{"type":"ToolCall","tool":"Read","input":{"path":"src/lib.rs"},"result":"pub mod utils;","is_error":false,"duration_ms":2}
+{"type":"ToolCall","tool":"Read","input":{"path":"src/utils.rs"},"result":"pub fn helper() {}","is_error":false,"duration_ms":2}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_1","tool_name":"Read","result":"use crate::utils;\nfn main() {}","is_error":false}}}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_2","tool_name":"Read","result":"pub mod utils;","is_error":false}}}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_3","tool_name":"Read","result":"pub fn helper() {}","is_error":false}}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"The imports look correct already."}]}}
+{"type":"QueryEvent","event":{"Completed":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"SessionEnd","session_id":"fixture-parallel-tool-use","total_turns":1,"total_tokens":600}

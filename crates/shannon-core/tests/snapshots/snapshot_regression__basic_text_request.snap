@@ -1,0 +1,9 @@
+---
+source: crates/shannon-core/tests/snapshot_regression.rs
+expression: snapshot
+---
+system: "You are a helpful coding assistant."
+model: test-model
+messages: 2
+  000: user/text Hello, how are you?
+  001: assistant/text I'm doing well! How can I help you today?

@@ -1,0 +1,29 @@
+{"type":"SessionStart","session_id":"fixture-context-pressure","model":"test-model","timestamp":"2026-05-22T00:00:00Z"}
+{"type":"UserMessage","content":"analyze all source files in the project","turn":1}
+{"type":"LlmRequest","turn":1,"request_hash":"cwp1","body":{"model":"test","messages":[{"role":"user","content":"analyze all source files in the project"}]}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"text","text":"Let me read the main source files."},{"type":"tool_use","name":"Glob","input":{"pattern":"src/**/*.rs"}}]}}
+{"type":"QueryEvent","event":{"Started":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"QueryEvent","event":{"ToolUseRequest":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_1","tool_name":"Glob","tool_input":{"pattern":"src/**/*.rs"}}}}
+{"type":"ToolCall","tool":"Glob","input":{"pattern":"src/**/*.rs"},"result":"src/main.rs\nsrc/lib.rs\nsrc/parser.rs\nsrc/config.rs\nsrc/handler.rs\nsrc/utils.rs","is_error":false,"duration_ms":10}
+{"type":"QueryEvent","event":{"ToolUseResult":{"query_id":"00000000-0000-0000-0000-000000000001","tool_use_id":"tu_1","tool_name":"Glob","result":"6 files","is_error":false}}}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"tool_use","name":"Read","input":{"path":"src/main.rs"}},{"type":"tool_use","name":"Read","input":{"path":"src/lib.rs"}},{"type":"tool_use","name":"Read","input":{"path":"src/parser.rs"}}]}}
+{"type":"ToolCall","tool":"Read","input":{"path":"src/main.rs"},"result":"fn main() { println!(\"hello\"); }","is_error":false,"duration_ms":2}
+{"type":"ToolCall","tool":"Read","input":{"path":"src/lib.rs"},"result":"pub mod parser;\npub mod config;\npub mod handler;","is_error":false,"duration_ms":2}
+{"type":"ToolCall","tool":"Read","input":{"path":"src/parser.rs"},"result":"pub fn parse(s: &str) -> Vec<&str> { s.split(',').collect() }","is_error":false,"duration_ms":2}
+{"type":"LlmResponse","turn":1,"body":{"content":[{"type":"tool_use","name":"Read","input":{"path":"src/config.rs"}},{"type":"tool_use","name":"Read","input":{"path":"src/handler.rs"}},{"type":"tool_use","name":"Read","input":{"path":"src/utils.rs"}}]}}
+{"type":"ToolCall","tool":"Read","input":{"path":"src/config.rs"},"result":"pub struct Config { pub name: String, pub debug: bool }","is_error":false,"duration_ms":2}
+{"type":"ToolCall","tool":"Read","input":{"path":"src/handler.rs"},"result":"pub fn handle(req: &str) -> String { req.to_string() }","is_error":false,"duration_ms":2}
+{"type":"ToolCall","tool":"Read","input":{"path":"src/utils.rs"},"result":"pub fn helper() {}","is_error":false,"duration_ms":2}
+{"type":"QueryEvent","event":{"Completed":{"query_id":"00000000-0000-0000-0000-000000000001"}}}
+{"type":"UserMessage","content":"now add logging to each function","turn":2}
+{"type":"LlmRequest","turn":2,"request_hash":"cwp2","body":{"model":"test","messages":[{"role":"user","content":"add logging to each function"}]}}
+{"type":"LlmResponse","turn":2,"body":{"content":[{"type":"tool_use","name":"Edit","input":{"path":"src/parser.rs","old":"pub fn parse","new":"pub fn parse(s: &str) -> Vec<&str> { log::info!(\"parsing\"); s.split(',').collect() }"}}]}}
+{"type":"ToolCall","tool":"Edit","input":{"path":"src/parser.rs"},"result":"edited","is_error":false,"duration_ms":2}
+{"type":"LlmResponse","turn":2,"body":{"content":[{"type":"tool_use","name":"Edit","input":{"path":"src/handler.rs","old":"pub fn handle","new":"pub fn handle(req: &str) -> String { log::info!(\"handling\"); req.to_string() }"}}]}}
+{"type":"ToolCall","tool":"Edit","input":{"path":"src/handler.rs"},"result":"edited","is_error":false,"duration_ms":2}
+{"type":"LlmResponse","turn":2,"body":{"content":[{"type":"tool_use","name":"Edit","input":{"path":"src/config.rs","old":"pub struct Config","new":"pub struct Config { pub name: String, pub debug: bool }\n\nimpl Config { pub fn load() -> Self { log::info!(\"loading config\"); Self { name: \"default\".into(), debug: false } } }"}}]}}
+{"type":"ToolCall","tool":"Edit","input":{"path":"src/config.rs"},"result":"edited","is_error":false,"duration_ms":2}
+{"type":"LlmResponse","turn":2,"body":{"content":[{"type":"tool_use","name":"Edit","input":{"path":"src/utils.rs","old":"pub fn helper()","new":"pub fn helper() { log::info!(\"helper called\"); }"}}]}}
+{"type":"ToolCall","tool":"Edit","input":{"path":"src/utils.rs"},"result":"edited","is_error":false,"duration_ms":2}
+{"type":"QueryEvent","event":{"Completed":{"query_id":"00000000-0000-0000-0000-000000000002"}}}
+{"type":"SessionEnd","session_id":"fixture-context-pressure","total_turns":2,"total_tokens":2500}

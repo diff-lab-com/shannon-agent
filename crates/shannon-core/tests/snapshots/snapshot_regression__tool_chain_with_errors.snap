@@ -1,0 +1,9 @@
+---
+source: crates/shannon-core/tests/snapshot_regression.rs
+expression: snapshot
+---
+tool_chain: 4 steps
+  0: Bash({"command":"cargo build"}) [ERROR]
+  1: Read({"path":"src/lib.rs"}) [OK]
+  2: Edit({"path":"src/lib.rs"}) [OK]
+  3: Bash({"command":"cargo build"}) [OK]

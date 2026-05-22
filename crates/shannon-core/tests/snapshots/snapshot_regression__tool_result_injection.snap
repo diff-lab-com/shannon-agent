@@ -1,0 +1,9 @@
+---
+source: crates/shannon-core/tests/snapshot_regression.rs
+expression: snapshot
+---
+model: test-model
+messages: 3
+  000: user/text Fix the failing test
+  001: assistant/multi thinking:Let me check the test file fir..., text:Let me check the test file., tool_use:Read
+  002: user/tool_result tool_result:tu_1

@@ -102,6 +102,8 @@ pub mod webhook;
 pub mod scheduled_routines;
 pub mod recording;
 
+pub mod testing;
+
 pub mod i18n;
 
 // Re-export key types for convenience
