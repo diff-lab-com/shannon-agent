@@ -2780,9 +2780,11 @@ fn handle_agents(repl: &mut Repl, args: &str) -> Result<()> {
             let config = CoordinatorConfig::default();
             let coordinator = repl.runtime.block_on(AgentCoordinator::new(config))
                 .expect("failed to create agent coordinator");
-            repl.agent_registry = Some(std::sync::Arc::new(SubAgentRegistry::new(
+            let registry = std::sync::Arc::new(SubAgentRegistry::new(
                 std::sync::Arc::new(coordinator),
-            )));
+            ));
+            repl.coordinator_event_rx = Some(registry.subscribe_events());
+            repl.agent_registry = Some(registry);
         }
     }
 
@@ -7254,9 +7256,11 @@ Agent definitions are loaded from:
                 let config = CoordinatorConfig::default();
                 let coordinator = repl.runtime.block_on(AgentCoordinator::new(config))
                     .expect("failed to create agent coordinator");
-                repl.agent_registry = Some(std::sync::Arc::new(SubAgentRegistry::new(
+                let registry = std::sync::Arc::new(SubAgentRegistry::new(
                     std::sync::Arc::new(coordinator),
-                )));
+                ));
+                repl.coordinator_event_rx = Some(registry.subscribe_events());
+                repl.agent_registry = Some(registry);
             }
 
             let agent_config = AgentConfig {

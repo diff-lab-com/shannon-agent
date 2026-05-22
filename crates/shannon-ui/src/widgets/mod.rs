@@ -15,6 +15,7 @@ pub mod session_tab;
 pub mod tool_approval;
 pub mod attachment_bar;
 pub mod command_palette;
+pub mod agent_bar;
 
 // Re-exports for convenient access
 pub use header::HeaderWidget;

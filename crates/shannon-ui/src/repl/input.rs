@@ -90,6 +90,11 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         return Ok(());
     }
 
+    // If agent dashboard overlay is expanded, handle dashboard keys
+    if repl.state.agent_dashboard.as_ref().is_some_and(|d| d.expanded) {
+        return handle_dashboard_input(repl, key);
+    }
+
     match key.code {
         // F1: show full keyboard shortcuts overlay
         KeyCode::F(1) => {
@@ -154,6 +159,13 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         // Ctrl+F: toggle fold/collapse of last tool message
         KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             repl.chat.toggle_last_tool_fold();
+            Ok(())
+        }
+        // Ctrl+A: toggle agent dashboard
+        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if let Some(ref mut dashboard) = repl.state.agent_dashboard {
+                dashboard.toggle_expand();
+            }
             Ok(())
         }
         // Alt+F: toggle all tool messages collapsed/expanded
@@ -1148,4 +1160,51 @@ fn handle_diff_viewer_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         _ => {}
     }
     Ok(())
+}
+
+/// Handle input when agent dashboard overlay is expanded.
+fn handle_dashboard_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
+    use crate::widgets::agent_bar::DashboardMode;
+
+    // If in detail mode, handle scrolling and exit
+    if repl.state.agent_dashboard.as_ref().is_some_and(|d| d.mode == DashboardMode::Detail) {
+        let dashboard = repl.state.agent_dashboard.as_mut().unwrap();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                dashboard.exit_detail();
+                Ok(())
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                dashboard.scroll_up();
+                Ok(())
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                dashboard.scroll_down();
+                Ok(())
+            }
+            _ => Ok(())
+        }
+    } else {
+        // List mode: navigate agents, enter detail, or close
+        let dashboard = repl.state.agent_dashboard.as_mut().unwrap();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                dashboard.close();
+                Ok(())
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                dashboard.select_prev();
+                Ok(())
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                dashboard.select_next();
+                Ok(())
+            }
+            KeyCode::Enter => {
+                dashboard.enter_detail();
+                Ok(())
+            }
+            _ => Ok(())
+        }
+    }
 }

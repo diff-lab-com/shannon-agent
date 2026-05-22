@@ -174,6 +174,8 @@ pub struct ReplState {
     pub approval_mode_label: String,
     /// Active sub-agents for sidebar display (refreshed from agent_registry)
     pub active_agents: Vec<AgentDisplay>,
+    /// Agent dashboard state (auto-created when agents exist, auto-removed when none)
+    pub agent_dashboard: Option<crate::widgets::agent_bar::AgentDashboardState>,
     /// LSP diagnostic store for displaying code diagnostics
     pub diagnostic_store: crate::lsp_bridge::DiagnosticStore,
     /// Whether focus mode is active (header/statusbar hidden)
@@ -348,6 +350,7 @@ impl Default for ReplState {
             sidebar_tab: SidebarTab::default(),
             approval_mode_label: "AUTO".to_string(),
             active_agents: Vec::new(),
+            agent_dashboard: None,
             diagnostic_store: crate::lsp_bridge::DiagnosticStore::new(),
             focus_mode: false,
             fullscreen_mode: false,
@@ -662,6 +665,8 @@ pub struct Repl {
     pub(crate) team_coordinator: Option<std::sync::Arc<shannon_agents::AgentCoordinator>>,
     /// Sub-agent registry for background agent management
     pub(crate) agent_registry: Option<std::sync::Arc<shannon_agents::SubAgentRegistry>>,
+    /// Coordinator event receiver for agent dashboard live updates
+    pub(crate) coordinator_event_rx: Option<tokio::sync::broadcast::Receiver<shannon_agents::CoordinatorEvent>>,
     /// MCP process pool for hot-reload support
     pub(crate) mcp_pool: std::sync::Arc<McpProcessPool>,
     /// Tool registry for MCP hot-reload tool registration
@@ -826,6 +831,7 @@ impl Repl {
             vim_handler: VimHandler::new(),
             team_coordinator: None,
             agent_registry: None,
+            coordinator_event_rx: None,
             mcp_pool,
             tool_registry,
             mcp_progress_rx: None,
@@ -1492,6 +1498,7 @@ impl Repl {
             vim_handler: VimHandler::new(),
             team_coordinator: shared_coordinator,
             agent_registry: None,
+            coordinator_event_rx: None,
             mcp_pool,
             tool_registry,
             mcp_progress_rx,
@@ -2031,6 +2038,34 @@ impl Repl {
             // Refresh agent states for sidebar display
             if self.agent_registry.is_some() {
                 self.refresh_agents();
+            }
+
+            // Drain coordinator events into agent dashboard
+            if let Some(ref mut rx) = self.coordinator_event_rx {
+                while let Ok(event) = rx.try_recv() {
+                    if let Some(ref mut dashboard) = self.state.agent_dashboard {
+                        dashboard.handle_coordinator_event(&event);
+                    }
+                }
+            }
+
+            // Auto-create dashboard when agents appear
+            if !self.state.active_agents.is_empty() && self.state.agent_dashboard.is_none() {
+                let mut dashboard = crate::widgets::agent_bar::AgentDashboardState::new();
+                dashboard.sync_from_agents(&self.state.active_agents);
+                self.state.agent_dashboard = Some(dashboard);
+            }
+            // Sync dashboard entries from current agent state
+            if let Some(ref mut dashboard) = self.state.agent_dashboard {
+                dashboard.sync_from_agents(&self.state.active_agents);
+            }
+            // Auto-remove dashboard when no agents (but keep if expanded)
+            if self.state.active_agents.is_empty() {
+                if let Some(ref dashboard) = self.state.agent_dashboard {
+                    if !dashboard.expanded {
+                        self.state.agent_dashboard = None;
+                    }
+                }
             }
 
             // Check custom command files for filesystem changes (notify-based)
