@@ -34,6 +34,7 @@ impl KeyHintWidget {
         let hints = match context {
             HintContext::Normal => vec![
                 ("PgUp/Dn", t!("ui.key_scroll").to_string()),
+                ("Shift+Tab", t!("ui.key_mode").to_string()),
                 ("Ctrl+G", t!("ui.key_pager").to_string()),
                 ("?", t!("ui.key_help").to_string()),
                 ("Ctrl+Q", t!("ui.key_quit").to_string()),
@@ -202,5 +203,42 @@ impl KeyHintWidget {
 
         frame.render_widget(Clear, panel_area);
         frame.render_widget(panel, panel_area);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normal_hints_include_mode_switch() {
+        // Verify the Normal hint context renders without panic (includes Shift+Tab)
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        let theme = Theme::default();
+        terminal.draw(|f| {
+            let area = Rect::new(0, 22, 80, 1);
+            KeyHintWidget::render(f, area, &theme, &HintContext::Normal);
+        }).unwrap();
+    }
+
+    #[test]
+    fn test_normal_hints_cover_key_shortcuts() {
+        // Verify HintContext variants exist and are usable
+        let contexts = [
+            HintContext::Normal,
+            HintContext::VimInsert,
+            HintContext::VimNormal,
+            HintContext::VimVisual,
+        ];
+        for ctx in &contexts {
+            let backend = ratatui::backend::TestBackend::new(120, 24);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            let theme = Theme::default();
+            terminal.draw(|f| {
+                let area = Rect::new(0, 22, 120, 1);
+                KeyHintWidget::render(f, area, &theme, ctx);
+            }).unwrap();
+        }
     }
 }

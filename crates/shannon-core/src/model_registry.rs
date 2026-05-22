@@ -339,12 +339,32 @@ pub fn all_model_ids() -> Vec<&'static str> {
 
 /// Look up a model's context window by its ID. Returns a reasonable default
 /// (200 000) if the model is not found in the catalog.
+///
+/// Tries exact match first, then prefix match (e.g., `"claude-sonnet-4"`
+/// matches `"claude-sonnet-4-20250514"`).
 pub fn context_window_for(model_id: &str) -> usize {
-    MODEL_CATALOG
+    // Exact match
+    if let Some(info) = MODEL_CATALOG.iter().find(|m| m.id == model_id) {
+        return info.context_window;
+    }
+    // Prefix match: catalog entry starts with the given model_id
+    // (handles short names like "claude-sonnet-4" → "claude-sonnet-4-20250514")
+    if let Some(info) = MODEL_CATALOG
         .iter()
-        .find(|m| m.id == model_id)
-        .map(|m| m.context_window)
-        .unwrap_or(200_000)
+        .find(|m| m.id.starts_with(model_id))
+    {
+        return info.context_window;
+    }
+    // Reverse prefix: given model_id starts with a catalog entry
+    // (handles "claude-sonnet-4-20250514-extra" → "claude-sonnet-4-20250514")
+    if let Some(info) = MODEL_CATALOG
+        .iter()
+        .filter(|m| model_id.starts_with(m.id))
+        .max_by_key(|m| m.id.len())
+    {
+        return info.context_window;
+    }
+    200_000
 }
 
 /// Look up model info by ID.
@@ -770,5 +790,39 @@ mod tests {
         assert!(EffortLevel::Low.thinking_budget().is_none());
         assert!(EffortLevel::Medium.thinking_budget().unwrap() > 0);
         assert!(EffortLevel::High.thinking_budget().unwrap() > EffortLevel::Medium.thinking_budget().unwrap());
+    }
+
+    // ── context_window_for with prefix matching ─────────────────────────
+
+    #[test]
+    fn test_context_window_exact_match() {
+        assert_eq!(context_window_for("claude-sonnet-4-20250514"), 200_000);
+        assert_eq!(context_window_for("gpt-4o"), 128_000);
+        assert_eq!(context_window_for("gemini-2.5-pro"), 1_000_000);
+    }
+
+    #[test]
+    fn test_context_window_prefix_match_short_name() {
+        // Short model name should match full catalog entry via prefix
+        assert_eq!(context_window_for("claude-sonnet-4"), 200_000);
+        assert_eq!(context_window_for("claude-opus-4"), 200_000);
+        assert_eq!(context_window_for("claude-haiku-4"), 200_000);
+    }
+
+    #[test]
+    fn test_context_window_reverse_prefix_match() {
+        // Model ID that starts with a catalog entry should match
+        assert_eq!(context_window_for("gpt-4o-2024-08-06"), 128_000);
+    }
+
+    #[test]
+    fn test_context_window_unknown_fallback() {
+        assert_eq!(context_window_for("totally-unknown-model"), 200_000);
+    }
+
+    #[test]
+    fn test_context_window_prefix_prefers_exact() {
+        // Exact match takes priority over prefix match
+        assert_eq!(context_window_for("claude-3-5-sonnet-20241022"), 200_000);
     }
 }

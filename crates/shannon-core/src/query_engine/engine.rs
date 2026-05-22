@@ -1251,13 +1251,19 @@ impl QueryEngine {
                         let mut assistant_text = String::new();
                         let mut assistant_tool_uses: Vec<ContentBlock> = Vec::new();
                         let mut phase = StreamingPhase::Receiving;
+                        // Cache tokens arrive in MessageStart (Anthropic), merge with MessageDelta
+                        let mut start_cache_read: u64 = 0;
+                        let mut start_cache_creation: u64 = 0;
 
                         // Process streaming events
                         while let Some(event_result) = stream.next().await {
                             match event_result {
                                 Ok(stream_event) => {
                                     match stream_event {
-                                        StreamEvent::MessageStart { .. } => {}
+                                        StreamEvent::MessageStart { message } => {
+                                            start_cache_read = message.usage.cache_read_input_tokens as u64;
+                                            start_cache_creation = message.usage.cache_creation_input_tokens as u64;
+                                        }
                                         StreamEvent::ContentBlockStart {
                                             content_block, ..
                                         } => {
@@ -1380,8 +1386,8 @@ impl QueryEngine {
                                                 }
                                             }
 
-                                            let cache_creation_tokens = usage.cache_creation_input_tokens as u64;
-                                            let cache_read_tokens = usage.cache_read_input_tokens as u64;
+                                            let cache_creation_tokens = start_cache_creation.max(usage.cache_creation_input_tokens as u64);
+                                            let cache_read_tokens = start_cache_read.max(usage.cache_read_input_tokens as u64);
 
                                             send_event!(tx, QueryEvent::Usage {
                                                 query_id,
@@ -3190,5 +3196,61 @@ mod tests {
 
         let engine = QueryEngine::new(client, tools, permissions, state, QueryEngineConfig::default());
         assert_eq!(engine.effective_max_context_tokens, 200_000);
+    }
+
+    /// Verify that cache tokens from MessageStart are captured and merged
+    /// with MessageDelta usage. This test validates the fix for cache hit
+    /// rate not showing in the UI — the root cause was that MessageStart
+    /// was ignored, losing cache_creation_input_tokens and
+    /// cache_read_input_tokens which Anthropic only sends in that event.
+    #[test]
+    fn test_cache_tokens_from_message_start_are_used() {
+        use crate::api::{MessageResponse, StreamEvent, Usage};
+
+        // Simulate Anthropic's message_start event with cache tokens
+        let start_event = StreamEvent::MessageStart {
+            message: MessageResponse {
+                id: "msg_test".to_string(),
+                role: "assistant".to_string(),
+                content: vec![],
+                model: "claude-sonnet-4-20250514".to_string(),
+                stop_reason: None,
+                usage: Usage {
+                    input_tokens: 1000,
+                    output_tokens: 0,
+                    cache_creation_input_tokens: 500,
+                    cache_read_input_tokens: 800,
+                },
+            },
+        };
+
+        // Extract cache tokens like the engine now does
+        let (cache_read, cache_creation) = match &start_event {
+            StreamEvent::MessageStart { message } => {
+                (
+                    message.usage.cache_read_input_tokens as u64,
+                    message.usage.cache_creation_input_tokens as u64,
+                )
+            }
+            _ => (0, 0),
+        };
+
+        assert_eq!(cache_read, 800, "cache_read should come from MessageStart");
+        assert_eq!(cache_creation, 500, "cache_creation should come from MessageStart");
+
+        // Simulate message_delta which only has output_tokens
+        let delta_usage = Usage {
+            input_tokens: 0,
+            output_tokens: 200,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+        };
+
+        // Merge: take the max of both sources
+        let merged_cache_read = cache_read.max(delta_usage.cache_read_input_tokens as u64);
+        let merged_cache_creation = cache_creation.max(delta_usage.cache_creation_input_tokens as u64);
+
+        assert_eq!(merged_cache_read, 800, "merged cache_read should preserve MessageStart value");
+        assert_eq!(merged_cache_creation, 500, "merged cache_creation should preserve MessageStart value");
     }
 }

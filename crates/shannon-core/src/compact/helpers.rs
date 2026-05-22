@@ -47,7 +47,9 @@ pub fn extract_text_content(msg: &Message) -> String {
                     ContentBlock::Image { .. } => {
                         parts.push("[Image]".to_string());
                     }
-                    ContentBlock::Thinking { .. } => {}
+                    ContentBlock::Thinking { thinking, .. } => {
+                        parts.push(format!("[Thinking: {}]", truncate_text(thinking, 200)));
+                    }
                 }
             }
             parts.join("\n")
@@ -140,7 +142,9 @@ pub fn estimate_message_tokens(msg: &Message) -> usize {
                         }
                     }
                     ContentBlock::Image { .. } => total += 100,
-                    ContentBlock::Thinking { .. } => {}
+                    ContentBlock::Thinking { thinking, .. } => {
+                        total += estimate_text_tokens(thinking);
+                    }
                 }
             }
             total.max(1)
@@ -476,5 +480,82 @@ mod tests {
     fn test_original_tokens_from_matches_estimate() {
         let msgs = [text_msg("user", "test message")];
         assert_eq!(original_tokens_from(&msgs), estimate_tokens(&msgs));
+    }
+
+    // ── Thinking block token estimation ──────────────────────────────────
+
+    #[test]
+    fn test_estimate_thinking_block_counted() {
+        let msg = Message {
+            role: "assistant".into(),
+            content: MessageContent::Blocks(vec![
+                ContentBlock::Thinking {
+                    thinking: "Let me analyze this step by step carefully.".into(),
+                },
+                ContentBlock::Text { text: "Here is the answer.".into() },
+            ]),
+        };
+        let tokens = estimate_message_tokens(&msg);
+        assert!(tokens > 0, "Thinking block should contribute tokens");
+        // Verify thinking adds tokens beyond just the text block
+        let text_only = Message {
+            role: "assistant".into(),
+            content: MessageContent::Blocks(vec![
+                ContentBlock::Text { text: "Here is the answer.".into() },
+            ]),
+        };
+        assert!(
+            tokens > estimate_message_tokens(&text_only),
+            "Message with thinking should have more tokens than text-only"
+        );
+    }
+
+    #[test]
+    fn test_extract_text_content_includes_thinking() {
+        let msg = Message {
+            role: "assistant".into(),
+            content: MessageContent::Blocks(vec![
+                ContentBlock::Thinking {
+                    thinking: "Deep analysis of the code.".into(),
+                },
+                ContentBlock::Text { text: "Result text".into() },
+            ]),
+        };
+        let extracted = extract_text_content(&msg);
+        assert!(
+            extracted.contains("Thinking"),
+            "Extracted text should include thinking indicator, got: {extracted}"
+        );
+        assert!(
+            extracted.contains("Result text"),
+            "Extracted text should include regular text"
+        );
+    }
+
+    #[test]
+    fn test_estimate_tokens_with_thinking_in_batch() {
+        let msgs = [
+            text_msg("user", "Hello"),
+            Message {
+                role: "assistant".into(),
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::Thinking {
+                        thinking: "A".repeat(1000),
+                    },
+                    ContentBlock::Text { text: "Hi".into() },
+                ]),
+            },
+        ];
+        let total = estimate_tokens(&msgs);
+        assert!(total > 0);
+        // The thinking block with 1000 chars should add significant tokens
+        let without_thinking = [
+            text_msg("user", "Hello"),
+            text_msg("assistant", "Hi"),
+        ];
+        assert!(
+            total > estimate_tokens(&without_thinking),
+            "Batch with thinking should estimate more tokens"
+        );
     }
 }

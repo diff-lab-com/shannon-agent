@@ -185,6 +185,7 @@ ui:
   key_chat_search: "Chat search"
   key_scroll: "Scroll"
   key_pager: "Pager"
+  key_mode: "Mode"
   key_quit: "Quit"
   key_cancel: "Cancel"
   key_yank: "Yank"

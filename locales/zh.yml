@@ -185,6 +185,7 @@ ui:
   key_chat_search: "聊天搜索"
   key_scroll: "滚动"
   key_pager: "分页"
+  key_mode: "模式"
   key_quit: "退出"
   key_cancel: "取消"
   key_yank: "复制"

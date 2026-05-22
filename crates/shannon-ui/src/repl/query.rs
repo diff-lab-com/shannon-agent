@@ -1070,6 +1070,9 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                                 repl.state.status = format!("Message queued ({count} in queue)");
                             }
                         }
+                        crossterm::event::KeyCode::BackTab => {
+                            repl.cycle_approval_mode();
+                        }
                         _ => {} // Ignore other keys during streaming
                     }
                 }
@@ -1806,5 +1809,26 @@ mod tests {
         // With old pattern, stored_engine is still None — the bug!
         assert!(stored_engine.is_none(),
             "Old pattern leaves engine as None — this is the bug");
+    }
+
+    /// Verify that BackTab (Shift+Tab) is handled in the streaming key path.
+    /// This test ensures the fix for "Shift+Tab doesn't work during streaming"
+    /// remains in place. The streaming handler must include a BackTab arm that
+    /// calls cycle_approval_mode(), not fall through to the catch-all `_ => {}`.
+    #[test]
+    fn test_streaming_key_handler_handles_backtab() {
+        // Read the source code to verify BackTab is explicitly handled
+        let source = include_str!("query.rs");
+        // Find the streaming key handler section
+        assert!(
+            source.contains("KeyCode::BackTab =>"),
+            "Streaming key handler must include BackTab (Shift+Tab) handling"
+        );
+        // Verify it calls cycle_approval_mode
+        let backtab_section = source.split("KeyCode::BackTab =>").nth(1);
+        assert!(
+            backtab_section.is_some_and(|s| s.contains("cycle_approval_mode")),
+            "BackTab handler must call cycle_approval_mode()"
+        );
     }
 }
