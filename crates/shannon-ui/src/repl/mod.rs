@@ -1472,6 +1472,14 @@ impl Repl {
             if let Some(ref mut dashboard) = self.state.agent_dashboard {
                 dashboard.sync_from_agents(&self.state.active_agents);
             }
+            // Fetch task board summary for the dashboard (P0-2: task ratio)
+            if let Some(ref coordinator) = self.team_coordinator {
+                if let Some(ref mut dashboard) = self.state.agent_dashboard {
+                    let task_board = coordinator.task_board();
+                    let summary = self.runtime.block_on(task_board.summary());
+                    dashboard.task_summary = Some(summary);
+                }
+            }
             // Auto-remove dashboard when no agents (but keep if expanded)
             if self.state.active_agents.is_empty() {
                 if let Some(ref dashboard) = self.state.agent_dashboard {

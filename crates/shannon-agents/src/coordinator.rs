@@ -128,7 +128,7 @@ pub enum CoordinatorEvent {
     /// Message sent between agents
     MessageSent(AgentMessage),
     /// Task assigned to agent
-    TaskAssigned { task_id: Uuid, agent: String },
+    TaskAssigned { task_id: Uuid, agent: String, subject: String },
     /// Task completed
     TaskCompleted { task_id: Uuid, agent: String },
     /// Task failed
@@ -986,10 +986,12 @@ impl AgentCoordinator {
         };
 
         self.task_board.assign_task(task_id, agent_name.clone()).await?;
+        let assigned_task = self.task_board.get_task(task_id).await?;
 
         if let Err(e) = self.event_sender.send(CoordinatorEvent::TaskAssigned {
             task_id,
             agent: agent_name.clone(),
+            subject: assigned_task.subject.clone(),
         }) {
             tracing::warn!(
                 task_id = %task_id,
@@ -1201,6 +1203,7 @@ impl AgentCoordinator {
             if let Err(e) = self.event_sender.send(CoordinatorEvent::TaskAssigned {
                 task_id,
                 agent: agent_name.to_string(),
+                subject: updated_task.subject.clone(),
             }) {
                 tracing::warn!(
                     task_id = %task_id,
@@ -1276,6 +1279,7 @@ impl AgentCoordinator {
         if let Err(e) = self.event_sender.send(CoordinatorEvent::TaskAssigned {
             task_id,
             agent: agent_name.to_string(),
+            subject: updated_task.subject.clone(),
         }) {
             tracing::warn!(
                 task_id = %task_id,

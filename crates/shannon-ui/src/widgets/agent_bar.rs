@@ -28,6 +28,10 @@ pub struct AgentEntry {
     pub last_action: String,
     /// Ring buffer of recent output lines.
     pub recent_lines: Vec<String>,
+    /// Subject of the currently assigned task (P0-1).
+    pub task_subject: Option<String>,
+    /// Whether the agent is waiting for user input/approval (P1-4).
+    pub needs_input: bool,
 }
 
 /// Dashboard view mode.
@@ -50,6 +54,8 @@ pub struct AgentDashboardState {
     pub selected_index: usize,
     pub mode: DashboardMode,
     pub scroll_offset: u16,
+    /// Global task completion summary (P0-2).
+    pub task_summary: Option<shannon_agents::TaskBoardSummary>,
 }
 
 impl AgentDashboardState {
@@ -60,6 +66,7 @@ impl AgentDashboardState {
             selected_index: 0,
             mode: DashboardMode::Bar,
             scroll_offset: 0,
+            task_summary: None,
         }
     }
 
@@ -83,6 +90,8 @@ impl AgentDashboardState {
                     max_turns: agent.max_turns,
                     last_action: String::new(),
                     recent_lines: Vec::new(),
+                    task_subject: None,
+                    needs_input: false,
                 });
             }
         }
@@ -96,7 +105,7 @@ impl AgentDashboardState {
         }
     }
 
-    /// Handle a coordinator event — append output chunks.
+    /// Handle a coordinator event — append output chunks, track tasks.
     pub fn handle_coordinator_event(&mut self, event: &shannon_agents::CoordinatorEvent) {
         match event {
             shannon_agents::CoordinatorEvent::AgentOutput { agent, chunk, .. } => {
@@ -109,7 +118,6 @@ impl AgentDashboardState {
                             entry.recent_lines.push(line.to_string());
                         }
                     }
-                    // Update last_action from the latest line
                     if let Some(last) = entry.recent_lines.last() {
                         entry.last_action = truncate_str(last, 40).to_string();
                     }
@@ -117,7 +125,23 @@ impl AgentDashboardState {
             }
             shannon_agents::CoordinatorEvent::StatusChanged { agent, status } => {
                 if let Some(entry) = self.entries.iter_mut().find(|e| e.name == *agent) {
-                    entry.status = format!("{status:?}");
+                    let status_str = format!("{status:?}");
+                    entry.needs_input = matches!(status,
+                        shannon_agents::TeammateStatus::Planning
+                    );
+                    entry.status = status_str;
+                }
+            }
+            shannon_agents::CoordinatorEvent::TaskAssigned { agent, subject, .. } => {
+                if let Some(entry) = self.entries.iter_mut().find(|e| e.name == *agent) {
+                    entry.task_subject = Some(subject.clone());
+                    entry.needs_input = false;
+                }
+            }
+            shannon_agents::CoordinatorEvent::TaskCompleted { agent, .. }
+            | shannon_agents::CoordinatorEvent::TaskFailed { agent, .. } => {
+                if let Some(entry) = self.entries.iter_mut().find(|e| e.name == *agent) {
+                    entry.task_subject = None;
                 }
             }
             shannon_agents::CoordinatorEvent::AgentCompleted {
@@ -133,6 +157,8 @@ impl AgentDashboardState {
                     if !output.is_empty() {
                         entry.last_action = truncate_str(output, 60).to_string();
                     }
+                    entry.task_subject = None;
+                    entry.needs_input = false;
                 }
             }
             _ => {}
@@ -151,7 +177,7 @@ impl AgentDashboardState {
             if i > 0 {
                 spans.push(sep.clone());
             }
-            let (icon, color) = status_icon_and_color(&entry.status, theme);
+            let (icon, color) = entry_status_icon_and_color(entry, theme);
             // Highlight selected agent
             let name_style = if i == self.selected_index {
                 Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
@@ -161,15 +187,35 @@ impl AgentDashboardState {
             spans.push(Span::styled(icon.to_string(), Style::default().fg(color)));
             spans.push(Span::styled(" ", Style::default()));
             spans.push(Span::styled(truncate_str(&entry.name, 12).to_string(), name_style));
-            if !entry.last_action.is_empty() {
+            // Show task_subject if available, else last_action
+            let summary = entry.task_subject.as_deref().unwrap_or(&entry.last_action);
+            if !summary.is_empty() {
                 let remaining = (area.width as usize).saturating_sub(spans.iter().map(|s| s.content.chars().count()).sum::<usize>());
                 if remaining > 4 {
                     spans.push(Span::styled(
-                        format!(" {}", truncate_str(&entry.last_action, remaining.min(20))),
+                        format!(" {}", truncate_str(summary, remaining.min(20))),
                         Style::default().fg(theme.text_dim),
                     ));
                 }
             }
+        }
+
+        // Append task ratio on the right side
+        if let Some(ref summary) = self.task_summary {
+            let ratio_text = format!(" {} {}/{}",
+                if summary.completed_tasks == summary.total_tasks { "✓" } else { "Tasks" },
+                summary.completed_tasks, summary.total_tasks);
+            let current_width: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+            let remaining = (area.width as usize).saturating_sub(current_width).saturating_sub(ratio_text.chars().count());
+            if remaining > 0 {
+                spans.push(Span::styled(" ".repeat(remaining), Style::default()));
+            }
+            let ratio_color = if summary.completed_tasks == summary.total_tasks && summary.total_tasks > 0 {
+                theme.success
+            } else {
+                theme.text_dim
+            };
+            spans.push(Span::styled(ratio_text, Style::default().fg(ratio_color)));
         }
 
         let bar = Paragraph::new(Line::from(spans))
@@ -178,7 +224,7 @@ impl AgentDashboardState {
         frame.render_widget(bar, area);
     }
 
-    /// Render the full-screen overlay (list mode).
+    /// Render the full-screen overlay (list mode) with status grouping.
     pub fn render_list_overlay(&self, frame: &mut Frame, _area: Rect, theme: &Theme) {
         let terminal = frame.area();
         let panel_height = terminal.height.saturating_sub(4).min(30).max(10);
@@ -194,7 +240,12 @@ impl AgentDashboardState {
 
         let active_count = self.entries.iter().filter(|e| e.active).count();
         let total = self.entries.len();
-        let title = format!(" Agents ({active_count}/{total} active) ");
+        let title = if let Some(ref summary) = self.task_summary {
+            format!(" Agents ({active_count}/{total} active) · Tasks {}/{} ",
+                summary.completed_tasks, summary.total_tasks)
+        } else {
+            format!(" Agents ({active_count}/{total} active) ")
+        };
 
         let w = (panel_width as usize).saturating_sub(4);
         let mut lines: Vec<Line> = Vec::new();
@@ -205,50 +256,83 @@ impl AgentDashboardState {
                 Style::default().fg(theme.muted),
             )));
         } else {
-            for (i, entry) in self.entries.iter().enumerate() {
-                let (icon, color) = status_icon_and_color(&entry.status, theme);
-                let selected = i == self.selected_index;
+            // Group entries by status
+            let group_order = [EntryGroup::Running, EntryGroup::NeedsInput, EntryGroup::Idle, EntryGroup::Completed, EntryGroup::Failed];
+            for group in &group_order {
+                let group_entries: Vec<(usize, &AgentEntry)> = self.entries.iter().enumerate()
+                    .filter(|(_, e)| classify_entry(e) == *group)
+                    .collect();
+                if group_entries.is_empty() {
+                    continue;
+                }
 
-                // Name + status line
-                let name_style = if selected {
-                    Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(theme.text)
+                // Group header
+                let header_color = match group {
+                    EntryGroup::Running => theme.success,
+                    EntryGroup::NeedsInput => theme.warning,
+                    EntryGroup::Idle => theme.muted,
+                    EntryGroup::Completed => theme.secondary,
+                    EntryGroup::Failed => theme.error,
                 };
-                let prefix = if selected { "▸ " } else { "  " };
-                let turns = if entry.max_turns > 0 {
-                    format!("  turns: {}/{}", entry.turns_used, entry.max_turns)
-                } else {
-                    String::new()
-                };
-                let turns_w = turns.len();
-                let name_w = w.saturating_sub(4 + turns_w);
                 lines.push(Line::from(vec![
-                    Span::styled(prefix.to_string(), Style::default().fg(theme.accent)),
-                    Span::styled(icon.to_string(), Style::default().fg(color)),
-                    Span::styled(" ", Style::default()),
-                    Span::styled(truncate_str(&entry.name, name_w).to_string(), name_style),
-                    Span::styled(turns, Style::default().fg(theme.text_dim)),
+                    Span::styled(format!(" {}", group_label(*group, group_entries.len())),
+                        Style::default().fg(header_color).add_modifier(Modifier::BOLD)),
                 ]));
-
-                // Status + last action
-                let detail = if entry.last_action.is_empty() {
-                    format!("  {}", entry.status)
-                } else {
-                    format!("  {} — {}", entry.status, truncate_str(&entry.last_action, w.saturating_sub(6)))
-                };
                 lines.push(Line::from(Span::styled(
-                    truncate_str(&detail, w).to_string(),
-                    Style::default().fg(theme.text_dim),
+                    format!(" {}", "─".repeat(w.saturating_sub(2).min(60))),
+                    Style::default().fg(theme.border_dim),
                 )));
 
-                // Recent output (last 2 lines)
-                let visible_lines = entry.recent_lines.iter().rev().take(2).collect::<Vec<_>>();
-                for line in visible_lines.into_iter().rev() {
+                for (i, entry) in group_entries {
+                    let (icon, color) = entry_status_icon_and_color(entry, theme);
+                    let selected = i == self.selected_index;
+
+                    let name_style = if selected {
+                        Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(theme.text)
+                    };
+                    let prefix = if selected { "▸ " } else { "  " };
+                    let turns = if entry.max_turns > 0 {
+                        format!("  {}/{}t", entry.turns_used, entry.max_turns)
+                    } else {
+                        String::new()
+                    };
+                    let task_tag = if let Some(ref subj) = entry.task_subject {
+                        format!(" {}", truncate_str(subj, 25))
+                    } else {
+                        String::new()
+                    };
+                    let suffix = format!("{task_tag}{turns}");
+                    let suffix_w = suffix.chars().count();
+                    let name_w = w.saturating_sub(4 + suffix_w);
+                    lines.push(Line::from(vec![
+                        Span::styled(prefix.to_string(), Style::default().fg(theme.accent)),
+                        Span::styled(icon.to_string(), Style::default().fg(color)),
+                        Span::styled(" ", Style::default()),
+                        Span::styled(truncate_str(&entry.name, name_w).to_string(), name_style),
+                        Span::styled(task_tag, Style::default().fg(theme.text_dim)),
+                        Span::styled(turns, Style::default().fg(theme.text_dim)),
+                    ]));
+
+                    // Status + last action
+                    let detail = if entry.last_action.is_empty() {
+                        format!("  {}", entry.status)
+                    } else {
+                        format!("  {} — {}", entry.status, truncate_str(&entry.last_action, w.saturating_sub(6)))
+                    };
                     lines.push(Line::from(Span::styled(
-                        format!("  ▸ {}", truncate_str(line, w.saturating_sub(4))),
+                        truncate_str(&detail, w).to_string(),
                         Style::default().fg(theme.text_dim),
                     )));
+
+                    // Recent output (last 1 line for compactness)
+                    if let Some(last) = entry.recent_lines.last() {
+                        lines.push(Line::from(Span::styled(
+                            format!("  ▸ {}", truncate_str(last, w.saturating_sub(4))),
+                            Style::default().fg(theme.text_dim),
+                        )));
+                    }
                 }
                 lines.push(Line::from(""));
             }
@@ -302,7 +386,7 @@ impl AgentDashboardState {
         let mut lines: Vec<Line> = Vec::new();
 
         // Status header
-        let (icon, color) = status_icon_and_color(&entry.status, theme);
+        let (icon, color) = entry_status_icon_and_color(entry, theme);
         lines.push(Line::from(vec![
             Span::styled(format!("{icon} "), Style::default().fg(color)),
             Span::styled(entry.status.clone(), Style::default().fg(theme.text)),
@@ -324,6 +408,16 @@ impl AgentDashboardState {
                 Span::styled(String::new(), Style::default())
             },
         ]));
+
+        // Task subject line
+        if let Some(ref subj) = entry.task_subject {
+            lines.push(Line::from(vec![
+                Span::styled(" Task: ", Style::default().fg(theme.primary)),
+                Span::styled(truncate_str(subj, w.saturating_sub(7)).to_string(),
+                    Style::default().fg(theme.text)),
+            ]));
+        }
+
         lines.push(Line::from(Span::styled(
             "─".repeat(w.min(60)),
             Style::default().fg(theme.border_dim),
@@ -427,6 +521,48 @@ impl AgentDashboardState {
         self.expanded = false;
         self.mode = DashboardMode::Bar;
         self.scroll_offset = 0;
+    }
+}
+
+/// Get status icon and color for an AgentEntry, considering needs_input flag.
+fn entry_status_icon_and_color(entry: &AgentEntry, theme: &Theme) -> (char, ratatui::style::Color) {
+    if entry.needs_input {
+        return ('\u{26A0}', theme.warning); // ⚠
+    }
+    status_icon_and_color(&entry.status, theme)
+}
+
+/// Classify an entry into a display group for the list overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum EntryGroup {
+    Running,
+    NeedsInput,
+    Idle,
+    Completed,
+    Failed,
+}
+
+fn classify_entry(entry: &AgentEntry) -> EntryGroup {
+    if entry.needs_input {
+        return EntryGroup::NeedsInput;
+    }
+    match entry.status.as_str() {
+        "running" | "Running" | "Busy" => EntryGroup::Running,
+        "spawning" | "Spawning" | "Planning" => EntryGroup::Running,
+        "idle" | "Idle" => if entry.active { EntryGroup::Idle } else { EntryGroup::Idle },
+        "completed" | "Completed" => EntryGroup::Completed,
+        s if s.contains("failed") || s.contains("Failed") || s.contains("Error") => EntryGroup::Failed,
+        _ => if entry.active { EntryGroup::Running } else { EntryGroup::Idle },
+    }
+}
+
+fn group_label(group: EntryGroup, count: usize) -> String {
+    match group {
+        EntryGroup::Running => format!("● Running ({count})"),
+        EntryGroup::NeedsInput => format!("⚠ Needs Input ({count})"),
+        EntryGroup::Idle => format!("○ Idle ({count})"),
+        EntryGroup::Completed => format!("✓ Completed ({count})"),
+        EntryGroup::Failed => format!("✗ Failed ({count})"),
     }
 }
 
@@ -652,6 +788,8 @@ mod tests {
             max_turns: 10,
             last_action: String::new(),
             recent_lines: Vec::new(),
+            task_subject: None,
+            needs_input: false,
         };
         // Fill beyond max
         for i in 0..(MAX_OUTPUT_LINES + 20) {
@@ -727,5 +865,195 @@ mod tests {
         assert_eq!(icon, '✓');
         let (icon, _) = status_icon_and_color("failed", &theme);
         assert_eq!(icon, '✗');
+    }
+
+    #[test]
+    fn test_task_subject_from_coordinator_event() {
+        use shannon_agents::CoordinatorEvent;
+        let mut d = AgentDashboardState::new();
+        let agents = vec![crate::repl::AgentDisplay {
+            name: "researcher".to_string(),
+            status: "running".to_string(),
+            active: true,
+            team: None,
+            turns_used: 1,
+            max_turns: 10,
+        }];
+        d.sync_from_agents(&agents);
+        assert!(d.entries[0].task_subject.is_none());
+
+        let event = CoordinatorEvent::TaskAssigned {
+            task_id: uuid::Uuid::new_v4(),
+            agent: "researcher".to_string(),
+            subject: "Fix authentication bug".to_string(),
+        };
+        d.handle_coordinator_event(&event);
+        assert_eq!(d.entries[0].task_subject.as_deref(), Some("Fix authentication bug"));
+    }
+
+    #[test]
+    fn test_task_cleared_on_completion() {
+        use shannon_agents::CoordinatorEvent;
+        let mut d = AgentDashboardState::new();
+        let agents = vec![crate::repl::AgentDisplay {
+            name: "worker".to_string(),
+            status: "running".to_string(),
+            active: true,
+            team: None,
+            turns_used: 2,
+            max_turns: 10,
+        }];
+        d.sync_from_agents(&agents);
+
+        // Assign task
+        let event = CoordinatorEvent::TaskAssigned {
+            task_id: uuid::Uuid::new_v4(),
+            agent: "worker".to_string(),
+            subject: "Refactor module".to_string(),
+        };
+        d.handle_coordinator_event(&event);
+        assert!(d.entries[0].task_subject.is_some());
+
+        // Complete task
+        let event = CoordinatorEvent::TaskCompleted {
+            task_id: uuid::Uuid::new_v4(),
+            agent: "worker".to_string(),
+        };
+        d.handle_coordinator_event(&event);
+        assert!(d.entries[0].task_subject.is_none());
+    }
+
+    #[test]
+    fn test_task_cleared_on_failure() {
+        use shannon_agents::CoordinatorEvent;
+        let mut d = AgentDashboardState::new();
+        let agents = vec![crate::repl::AgentDisplay {
+            name: "worker".to_string(),
+            status: "running".to_string(),
+            active: true,
+            team: None,
+            turns_used: 2,
+            max_turns: 10,
+        }];
+        d.sync_from_agents(&agents);
+
+        let event = CoordinatorEvent::TaskAssigned {
+            task_id: uuid::Uuid::new_v4(),
+            agent: "worker".to_string(),
+            subject: "Write tests".to_string(),
+        };
+        d.handle_coordinator_event(&event);
+
+        let event = CoordinatorEvent::TaskFailed {
+            task_id: uuid::Uuid::new_v4(),
+            agent: "worker".to_string(),
+            reason: "timeout".to_string(),
+        };
+        d.handle_coordinator_event(&event);
+        assert!(d.entries[0].task_subject.is_none());
+    }
+
+    #[test]
+    fn test_classify_entry_groups() {
+        let running = AgentEntry {
+            name: "a".to_string(), status: "running".to_string(), active: true,
+            team: None, turns_used: 1, max_turns: 10, last_action: String::new(),
+            recent_lines: Vec::new(), task_subject: None, needs_input: false,
+        };
+        assert_eq!(classify_entry(&running), EntryGroup::Running);
+
+        let idle = AgentEntry {
+            name: "b".to_string(), status: "idle".to_string(), active: true,
+            team: None, turns_used: 0, max_turns: 10, last_action: String::new(),
+            recent_lines: Vec::new(), task_subject: None, needs_input: false,
+        };
+        assert_eq!(classify_entry(&idle), EntryGroup::Idle);
+
+        let completed = AgentEntry {
+            name: "c".to_string(), status: "completed".to_string(), active: false,
+            team: None, turns_used: 5, max_turns: 10, last_action: String::new(),
+            recent_lines: Vec::new(), task_subject: None, needs_input: false,
+        };
+        assert_eq!(classify_entry(&completed), EntryGroup::Completed);
+
+        let failed = AgentEntry {
+            name: "d".to_string(), status: "failed".to_string(), active: false,
+            team: None, turns_used: 3, max_turns: 10, last_action: String::new(),
+            recent_lines: Vec::new(), task_subject: None, needs_input: false,
+        };
+        assert_eq!(classify_entry(&failed), EntryGroup::Failed);
+
+        let needs_input = AgentEntry {
+            name: "e".to_string(), status: "running".to_string(), active: true,
+            team: None, turns_used: 2, max_turns: 10, last_action: String::new(),
+            recent_lines: Vec::new(), task_subject: None, needs_input: true,
+        };
+        assert_eq!(classify_entry(&needs_input), EntryGroup::NeedsInput);
+    }
+
+    #[test]
+    fn test_needs_input_detection_from_status() {
+        use shannon_agents::{CoordinatorEvent, TeammateStatus};
+        let mut d = AgentDashboardState::new();
+        let agents = vec![crate::repl::AgentDisplay {
+            name: "planner".to_string(),
+            status: "running".to_string(),
+            active: true,
+            team: None,
+            turns_used: 1,
+            max_turns: 10,
+        }];
+        d.sync_from_agents(&agents);
+        assert!(!d.entries[0].needs_input);
+
+        // Planning status triggers needs_input
+        let event = CoordinatorEvent::StatusChanged {
+            agent: "planner".to_string(),
+            status: TeammateStatus::Planning,
+        };
+        d.handle_coordinator_event(&event);
+        assert!(d.entries[0].needs_input);
+
+        // Busy status clears needs_input
+        let event = CoordinatorEvent::StatusChanged {
+            agent: "planner".to_string(),
+            status: TeammateStatus::Busy,
+        };
+        d.handle_coordinator_event(&event);
+        assert!(!d.entries[0].needs_input);
+    }
+
+    #[test]
+    fn test_entry_status_icon_needs_input() {
+        use crate::theme::Theme;
+        let theme = Theme::default();
+        let entry = AgentEntry {
+            name: "a".to_string(), status: "running".to_string(), active: true,
+            team: None, turns_used: 1, max_turns: 10, last_action: String::new(),
+            recent_lines: Vec::new(), task_subject: None, needs_input: true,
+        };
+        let (icon, _) = entry_status_icon_and_color(&entry, &theme);
+        assert_eq!(icon, '\u{26A0}'); // ⚠
+    }
+
+    #[test]
+    fn test_task_summary_in_dashboard() {
+        use shannon_agents::TaskBoardSummary;
+        let mut d = AgentDashboardState::new();
+        assert!(d.task_summary.is_none());
+
+        d.task_summary = Some(TaskBoardSummary {
+            total_tasks: 5,
+            completed_tasks: 2,
+            pending_tasks: 1,
+            in_progress_tasks: 1,
+            failed_tasks: 1,
+            blocked_tasks: 0,
+            by_priority: Default::default(),
+            by_agent: Default::default(),
+        });
+        let summary = d.task_summary.as_ref().unwrap();
+        assert_eq!(summary.total_tasks, 5);
+        assert_eq!(summary.completed_tasks, 2);
     }
 }
