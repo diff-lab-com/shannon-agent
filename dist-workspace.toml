@@ -23,3 +23,6 @@ hosting = "github"
 unix-archive = ".tar.gz"
 windows-archive = ".zip"
 merge-tasks = true
+
+[dist.homebrew]
+tap = "shannon-agent/homebrew-shannon"
