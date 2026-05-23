@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// A conversation preset with pre-configured settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ConversationPreset {
     /// Custom system prompt addition (appended to base system prompt).
     pub system_prompt: Option<String>,
@@ -42,20 +42,6 @@ pub struct ConversationPreset {
     pub tools: Option<Vec<String>>,
     /// Description shown in /preset list.
     pub description: Option<String>,
-}
-
-impl Default for ConversationPreset {
-    fn default() -> Self {
-        Self {
-            system_prompt: None,
-            initial_message: None,
-            model: None,
-            temperature: None,
-            max_tokens: None,
-            tools: None,
-            description: None,
-        }
-    }
 }
 
 /// Returns all built-in presets.
@@ -211,13 +197,13 @@ pub fn format_preset_list(presets: &HashMap<String, ConversationPreset>) -> Stri
             .description
             .as_deref()
             .unwrap_or("No description");
-        output.push_str(&format!("  {} - {}\n", name, desc));
+        output.push_str(&format!("  {name} - {desc}\n"));
 
         if let Some(ref model) = preset.model {
-            output.push_str(&format!("    model: {}\n", model));
+            output.push_str(&format!("    model: {model}\n"));
         }
         if let Some(temp) = preset.temperature {
-            output.push_str(&format!("    temperature: {}\n", temp));
+            output.push_str(&format!("    temperature: {temp}\n"));
         }
         if let Some(ref tools) = preset.tools {
             output.push_str(&format!("    tools: {}\n", tools.join(", ")));
@@ -234,7 +220,7 @@ pub fn format_preset_list(presets: &HashMap<String, ConversationPreset>) -> Stri
 
 /// Format detailed information about a single preset.
 pub fn format_preset_detail(name: &str, preset: &ConversationPreset) -> String {
-    let mut output = format!("Preset: {}\n", name);
+    let mut output = format!("Preset: {name}\n");
     output.push_str(&format!(
         "  Description: {}\n",
         preset
@@ -244,19 +230,19 @@ pub fn format_preset_detail(name: &str, preset: &ConversationPreset) -> String {
     ));
 
     if let Some(ref sp) = preset.system_prompt {
-        output.push_str(&format!("  System prompt: {}\n", sp));
+        output.push_str(&format!("  System prompt: {sp}\n"));
     }
     if let Some(ref msg) = preset.initial_message {
-        output.push_str(&format!("  Initial message: {}\n", msg));
+        output.push_str(&format!("  Initial message: {msg}\n"));
     }
     if let Some(ref model) = preset.model {
-        output.push_str(&format!("  Model: {}\n", model));
+        output.push_str(&format!("  Model: {model}\n"));
     }
     if let Some(temp) = preset.temperature {
-        output.push_str(&format!("  Temperature: {}\n", temp));
+        output.push_str(&format!("  Temperature: {temp}\n"));
     }
     if let Some(tokens) = preset.max_tokens {
-        output.push_str(&format!("  Max tokens: {}\n", tokens));
+        output.push_str(&format!("  Max tokens: {tokens}\n"));
     }
     if let Some(ref tools) = preset.tools {
         output.push_str(&format!("  Tools: {}\n", tools.join(", ")));

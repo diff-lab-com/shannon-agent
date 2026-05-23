@@ -149,8 +149,7 @@ impl AnalyzeImageTool {
         let size = metadata.len();
         if size > MAX_IMAGE_SIZE {
             return Err(ToolError::ExecutionFailed(format!(
-                "Image file too large: {size} bytes (max {} bytes)",
-                MAX_IMAGE_SIZE
+                "Image file too large: {size} bytes (max {MAX_IMAGE_SIZE} bytes)",
             )));
         }
 
@@ -197,8 +196,7 @@ impl AnalyzeImageTool {
         let content_length = response.content_length().unwrap_or(0);
         if content_length > MAX_IMAGE_SIZE {
             return Err(ToolError::ExecutionFailed(format!(
-                "Image from URL too large: {content_length} bytes (max {} bytes)",
-                MAX_IMAGE_SIZE
+                "Image from URL too large: {content_length} bytes (max {MAX_IMAGE_SIZE} bytes)",
             )));
         }
 
@@ -236,8 +234,7 @@ impl AnalyzeImageTool {
         let size = bytes.len() as u64;
         if size > MAX_IMAGE_SIZE {
             return Err(ToolError::ExecutionFailed(format!(
-                "Image from URL too large: {size} bytes (max {} bytes)",
-                MAX_IMAGE_SIZE
+                "Image from URL too large: {size} bytes (max {MAX_IMAGE_SIZE} bytes)",
             )));
         }
 

@@ -286,6 +286,7 @@ mod tests {
             name: "test".to_string(),
             description: "A test tool".to_string(),
             input_schema: serde_json::json!({"type": "object", "properties": {}}),
+            cache_control: None,
             strict: None,
         }];
         assert!(budget.check_schema_budget(&defs).is_ok());
@@ -304,6 +305,7 @@ mod tests {
                         "input": {"type": "string", "description": "Some long input description here"}
                     }
                 }),
+                cache_control: None,
                 strict: None,
             })
             .collect();
@@ -320,6 +322,7 @@ mod tests {
             name: "small_tool".to_string(),
             description: "Small".to_string(),
             input_schema: serde_json::json!({"type": "object"}),
+            cache_control: None,
             strict: None,
         }];
         let defer = budget.tools_to_defer(&defs);
@@ -334,12 +337,14 @@ mod tests {
                 name: "tiny".to_string(),
                 description: "T".to_string(),
                 input_schema: serde_json::json!({"type": "object"}),
+                cache_control: None,
                 strict: None,
             },
             crate::api::ToolDefinition {
                 name: "huge".to_string(),
                 description: "X".repeat(5_000),
                 input_schema: serde_json::json!({"type": "object", "properties": {"a": {"type": "string"}}}),
+                cache_control: None,
                 strict: None,
             },
         ];

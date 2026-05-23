@@ -18,6 +18,7 @@ mod context_budget_tests {
             name: name.to_string(),
             description,
             input_schema: serde_json::json!({"type": "object"}),
+            cache_control: None,
             strict: None,
         }
     }

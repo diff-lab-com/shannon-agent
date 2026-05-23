@@ -384,6 +384,7 @@ mod tests {
                     "command": {"type": "string"}
                 }
             }),
+            cache_control: None,
             strict: Some(true),
         };
         let json = serde_json::to_string(&tool).unwrap();

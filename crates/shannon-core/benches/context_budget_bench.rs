@@ -47,6 +47,7 @@ fn make_tool_definitions(count: usize) -> Vec<ToolDefinition> {
                 },
                 "required": ["input"]
             }),
+            cache_control: None,
             strict: None,
         })
         .collect()

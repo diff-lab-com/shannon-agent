@@ -228,6 +228,7 @@ fn bench_system_prompt_construction(c: &mut Criterion) {
                     },
                     "required": ["path"]
                 }),
+                cache_control: None,
                 strict: None,
             })
             .collect();

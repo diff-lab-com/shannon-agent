@@ -98,6 +98,7 @@ mod provider_serialization_tests {
                     },
                     "required": ["path"]
                 }),
+                cache_control: None,
                 strict: None,
             }]),
             stream: Some(true),

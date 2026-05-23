@@ -956,7 +956,7 @@ impl AgentCoordinator {
         // Fire TaskCreated hook (Claude Code standard)
         self.fire_hook(HookEvent::TaskCreated {
             task_id: task_id.to_string(),
-            subject: subject,
+            subject,
             priority: format!("{priority:?}"),
         });
 

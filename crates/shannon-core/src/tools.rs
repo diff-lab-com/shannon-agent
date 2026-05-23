@@ -696,6 +696,7 @@ impl ToolRegistry {
                 name: tool.name().to_string(),
                 description: tool.description().to_string(),
                 input_schema: tool.input_schema(),
+                cache_control: None,
                 strict: Some(false),
             })
             .collect();

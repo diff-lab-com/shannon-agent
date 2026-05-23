@@ -66,12 +66,27 @@ pub fn serialize_request(request: &MessageRequest, provider: &LlmProvider) -> Va
             // Inject prompt-caching breakpoints for Anthropic.
             //
             // The system prompt breakpoint is already handled via
-            // SystemContentBlock::cached() at build time.  Here we add a
-            // breakpoint on the last user message's last content block so
-            // that the conversation prefix (system + earlier turns) is cached.
+            // SystemContentBlock::cached() at build time.  Here we add:
+            // 1. A breakpoint on the last tool definition (tools are static)
+            // 2. A breakpoint on the last user message's last content block so
+            //    that the conversation prefix (system + tools + earlier turns) is cached.
             //
-            // Only inject when there are at least 2 user messages -- caching a
-            // single-message conversation provides negligible benefit.
+            // Only inject message breakpoints when there are at least 2 user
+            // messages -- caching a single-message conversation provides negligible benefit.
+
+            // 1. Cache the last tool definition.
+            if let Some(tools) = val.get_mut("tools").and_then(|t| t.as_array_mut()) {
+                if let Some(last_tool) = tools.last_mut() {
+                    if let Some(obj) = last_tool.as_object_mut() {
+                        obj.insert(
+                            "cache_control".to_string(),
+                            serde_json::json!({"type": "ephemeral"}),
+                        );
+                    }
+                }
+            }
+
+            // 2. Cache the last user message's last content block.
             if let Some(messages) = val.get_mut("messages").and_then(|m| m.as_array_mut()) {
                 let user_msg_count = messages
                     .iter()
@@ -1430,6 +1445,7 @@ mod tests {
                 name: "bash".to_string(),
                 description: "Run commands".to_string(),
                 input_schema: json!({"type": "object", "properties": {"command": {"type": "string"}}}),
+                cache_control: None,
                 strict: Some(true),
             }]),
             stream: Some(true),
@@ -3167,5 +3183,149 @@ mod tests {
         let messages = val["messages"].as_array().unwrap();
         let last_content = messages[1]["content"].as_array().unwrap();
         assert_eq!(last_content[0]["cache_control"]["type"], "ephemeral");
+    }
+
+    #[test]
+    fn test_anthropic_cache_control_on_last_tool_definition() {
+        let req = MessageRequest {
+            model: "claude-3".to_string(),
+            max_tokens: 1024,
+            system: Some("System".to_string()),
+            system_blocks: None,
+            messages: vec![
+                Message {
+                    role: "user".to_string(),
+                    content: crate::api::types::MessageContent::Text("First".to_string()),
+                },
+                Message {
+                    role: "assistant".to_string(),
+                    content: crate::api::types::MessageContent::Text("Ok".to_string()),
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: crate::api::types::MessageContent::Text("Second".to_string()),
+                },
+            ],
+            tools: Some(vec![
+                ToolDefinition {
+                    name: "read".to_string(),
+                    description: "Read file".to_string(),
+                    input_schema: json!({"type": "object"}),
+                    cache_control: None,
+                    strict: None,
+                },
+                ToolDefinition {
+                    name: "bash".to_string(),
+                    description: "Run commands".to_string(),
+                    input_schema: json!({"type": "object"}),
+                    cache_control: None,
+                    strict: None,
+                },
+                ToolDefinition {
+                    name: "grep".to_string(),
+                    description: "Search".to_string(),
+                    input_schema: json!({"type": "object"}),
+                    cache_control: None,
+                    strict: None,
+                },
+            ]),
+            stream: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+
+        let val = serialize_request(&req, &LlmProvider::Anthropic);
+        let tools = val["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 3);
+
+        // First two tools should NOT have cache_control
+        assert!(
+            tools[0].get("cache_control").is_none(),
+            "first tool should not have cache_control"
+        );
+        assert!(
+            tools[1].get("cache_control").is_none(),
+            "second tool should not have cache_control"
+        );
+
+        // Last tool should have cache_control
+        assert_eq!(tools[2]["cache_control"]["type"], "ephemeral");
+    }
+
+    #[test]
+    fn test_anthropic_no_tool_cache_when_no_tools() {
+        let req = MessageRequest {
+            model: "claude-3".to_string(),
+            max_tokens: 1024,
+            system: Some("System".to_string()),
+            system_blocks: None,
+            messages: vec![
+                Message {
+                    role: "user".to_string(),
+                    content: crate::api::types::MessageContent::Text("First".to_string()),
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: crate::api::types::MessageContent::Text("Second".to_string()),
+                },
+            ],
+            tools: None,
+            stream: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+
+        let val = serialize_request(&req, &LlmProvider::Anthropic);
+        assert!(
+            val.get("tools").is_none(),
+            "no tools key when tools is None"
+        );
+    }
+
+    #[test]
+    fn test_tool_definition_cache_control_serialized() {
+        let tool = ToolDefinition {
+            name: "cached_tool".to_string(),
+            description: "A cached tool".to_string(),
+            input_schema: json!({"type": "object"}),
+            cache_control: Some(crate::api::types::CacheControl {
+                control_type: "ephemeral".to_string(),
+            }),
+            strict: None,
+        };
+        let json = serde_json::to_string(&tool).unwrap();
+        assert!(json.contains("cache_control"));
+        assert!(json.contains("ephemeral"));
+
+        // Round-trip
+        let restored: ToolDefinition = serde_json::from_str(&json).unwrap();
+        assert!(restored.cache_control.is_some());
+        assert_eq!(restored.cache_control.unwrap().control_type, "ephemeral");
+    }
+
+    #[test]
+    fn test_tool_definition_cache_control_omitted_when_none() {
+        let tool = ToolDefinition {
+            name: "plain_tool".to_string(),
+            description: "A plain tool".to_string(),
+            input_schema: json!({"type": "object"}),
+            cache_control: None,
+            strict: None,
+        };
+        let json = serde_json::to_string(&tool).unwrap();
+        assert!(
+            !json.contains("cache_control"),
+            "cache_control should be omitted when None: {json}"
+        );
     }
 }

@@ -525,8 +525,7 @@ pub fn resolve_conflicts(content: &str, resolutions: &[String]) -> Result<String
                 }
                 _ => {
                     return Err(format!(
-                        "Invalid resolution '{}': must be 'ours' or 'theirs'",
-                        resolution
+                        "Invalid resolution '{resolution}': must be 'ours' or 'theirs'",
                     ));
                 }
             }
@@ -555,7 +554,7 @@ pub async fn get_git_head_version(file_path: &str) -> Option<String> {
 
     // Use git show HEAD:<path> to get the committed version
     let result = Command::new("git")
-        .args(["show", &format!("HEAD:{}", file_path)])
+        .args(["show", &format!("HEAD:{file_path}")])
         .output()
         .await
         .ok()?;
