@@ -345,8 +345,7 @@ pub fn ollama_sse(response: &MockResponse) -> String {
             }
             MockContentBlock::ToolUse { name, input, .. } => {
                 body.push_str(&format!(
-                    "{{\"message\":{{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{{\"function\":{{\"name\":\"{name}\",\"arguments\":{}}}}}]}},\"model\":\"test\",\"done\":false}}\n",
-                    input
+                    "{{\"message\":{{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{{\"function\":{{\"name\":\"{name}\",\"arguments\":{input}}}}}]}},\"model\":\"test\",\"done\":false}}\n",
                 ));
             }
             MockContentBlock::Thinking { text } => {

@@ -57,7 +57,7 @@ impl SessionReplayer {
 
         requests
             .into_iter()
-            .zip(responses.into_iter())
+            .zip(responses)
             .filter_map(|(req, resp)| {
                 if req.0 == resp.0 {
                     Some((req.0, req.1, resp.1))

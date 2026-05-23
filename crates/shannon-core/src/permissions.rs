@@ -974,10 +974,7 @@ impl PermissionManager {
     /// When enabled, ambiguous tool calls (low confidence, medium+ risk) are
     /// forwarded to the LLM for a safety judgment before the final decision.
     pub fn with_llm_classifier(mut self, client: crate::api::LlmClient) -> Self {
-        let rule = std::mem::replace(
-            &mut self.classifier,
-            crate::permission_classifier::PermissionClassifier::new(),
-        );
+        let rule = std::mem::take(&mut self.classifier);
         self.llm_classifier =
             Some(crate::llm_classifier::LlmPermissionClassifier::new(rule).with_llm(client));
         self

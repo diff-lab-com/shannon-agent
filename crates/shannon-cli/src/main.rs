@@ -1015,7 +1015,7 @@ fn load_schema(input: &str) -> Result<shannon_core::StructuredOutputConfig> {
         trimmed.to_string()
     } else {
         std::fs::read_to_string(trimmed)
-            .map_err(|e| anyhow::anyhow!("Failed to read schema file '{}': {e}", trimmed))?
+            .map_err(|e| anyhow::anyhow!("Failed to read schema file '{trimmed}': {e}"))?
     };
     let schema: serde_json::Value = serde_json::from_str(&json_str)
         .map_err(|e| anyhow::anyhow!("Invalid JSON in schema: {e}"))?;
@@ -2033,7 +2033,7 @@ fn main() -> Result<()> {
             .as_deref()
             .map(|s| s.split(',').map(|t| t.trim().to_string()).collect());
         // Parse --schema: load from file or parse inline JSON
-        let schema_config = cli.schema.as_deref().map(|s| load_schema(s)).transpose()?;
+        let schema_config = cli.schema.as_deref().map(load_schema).transpose()?;
 
         return run_headless_query(
             headless_prompt,

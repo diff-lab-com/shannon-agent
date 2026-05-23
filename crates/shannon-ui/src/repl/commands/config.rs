@@ -91,7 +91,7 @@ fn parse_provider_name(name: &str) -> Result<LlmProvider> {
         _ => {
             let msg =
                 format!("Unknown provider: {name}. Use /provider to list available providers.");
-            return Err(msg.into());
+            Err(msg.into())
         }
     }
 }
@@ -113,7 +113,7 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
             } else {
                 ""
             };
-            lines.push(format!("  {} — {}{}", p, key_status, current));
+            lines.push(format!("  {p} — {key_status}{current}"));
         }
         lines.push(String::new());
         lines.push("* = current | Use /provider <name> to switch".to_string());

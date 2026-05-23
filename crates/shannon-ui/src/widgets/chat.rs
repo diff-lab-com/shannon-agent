@@ -27,7 +27,7 @@ static DIFF_SYNTAX: LazyLock<(SyntaxSet, syntect::highlighting::Theme)> = LazyLo
 });
 
 /// Lazy-initialized renderer for code syntax highlighting.
-static CODE_RENDERER: LazyLock<Renderer> = LazyLock::new(|| Renderer::new());
+static CODE_RENDERER: LazyLock<Renderer> = LazyLock::new(Renderer::new);
 
 /// Convert a syntect Color to a ratatui Color.
 fn syntect_to_ratatui(c: syntect::highlighting::Color) -> ratatui::style::Color {

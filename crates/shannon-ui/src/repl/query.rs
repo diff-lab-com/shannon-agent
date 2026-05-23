@@ -37,7 +37,7 @@ fn wrap_line(line: &str, max_width: usize, indent: &str) -> Vec<String> {
     let mut first = true;
     while !remaining.is_empty() {
         let width = if first { max_width } else { content_width };
-        let prefix = if first { indent } else { indent };
+        let prefix = indent;
         if remaining.len() <= width {
             result.push(format!("{prefix}{remaining}"));
             break;
@@ -337,13 +337,13 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                         let size_label = if char_count > 1000 {
                             format!("{:.1}k chars", char_count as f64 / 1000.0)
                         } else {
-                            format!("{} chars", char_count)
+                            format!("{char_count} chars")
                         };
                         let dot = if (elapsed * 2.0) as u64 % 2 == 0 { "●" } else { "○" };
                         let header = if elapsed >= 1.0 {
-                            format!("  ╭─ {dot} thinking ({:.1}s, {}) ─", elapsed, size_label)
+                            format!("  ╭─ {dot} thinking ({elapsed:.1}s, {size_label}) ─")
                         } else {
-                            format!("  ╭─ {dot} thinking ({}) ─", size_label)
+                            format!("  ╭─ {dot} thinking ({size_label}) ─")
                         };
                         s.buffer = format!("{response_text}{header}");
                     }
@@ -542,7 +542,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                             } else {
                                 message.clone()
                             };
-                            let dur = tool_elapsed.map(|e| format!(" ({:.1}s)", e)).unwrap_or_default();
+                            let dur = tool_elapsed.map(|e| format!(" ({e:.1}s)")).unwrap_or_default();
                             s.status = format!("{tool_name}{dur}: {preview}");
 
                             // Append to streaming content and show in buffer
@@ -564,9 +564,9 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                             // Blink indicator: toggle ●/○ every 0.5s
                             let dot = if (elapsed * 2.0) as u64 % 2 == 0 { "●" } else { "○" };
                             let header = if elapsed >= 1.0 {
-                                format!("  ╭─ {dot} streaming ({:.1}s, {} lines){filter_label} ─", elapsed, total_lines)
+                                format!("  ╭─ {dot} streaming ({elapsed:.1}s, {total_lines} lines){filter_label} ─")
                             } else {
-                                format!("  ╭─ {dot} streaming ({} lines){filter_label} ─", total_lines)
+                                format!("  ╭─ {dot} streaming ({total_lines} lines){filter_label} ─")
                             };
                             let display_lines: Vec<&String> = if let Some(ref f) = s.streaming_filter {
                                 all_lines.iter().filter(|l| l.to_lowercase().contains(&f.to_lowercase())).collect()
@@ -581,17 +581,17 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                                 &display_lines
                             };
                             let hidden = display_count.saturating_sub(visible_count);
-                            let above = if hidden > 0 { format!("  ... {} more matches above\n", hidden) } else { String::new() };
+                            let above = if hidden > 0 { format!("  ... {hidden} more matches above\n") } else { String::new() };
                             let term_w = crossterm::terminal::size().map(|(w, _)| w as usize).unwrap_or(100);
                             let body = visible_lines.iter().flat_map(|l| wrap_line(l, term_w, "  ")).collect::<Vec<_>>().join("\n");
                             s.buffer = format!("{response_text}{header}\n{above}{body}\n  ╰─");
                         }
                     } else {
                         let pct = (progress * 100.0) as u32;
-                        let dur = tool_elapsed.map(|e| format!(" ({:.1}s)", e)).unwrap_or_default();
+                        let dur = tool_elapsed.map(|e| format!(" ({e:.1}s)")).unwrap_or_default();
                         // Mini progress bar: [████░░░░] 45%
                         let bar_len = 12usize;
-                        let filled = ((progress.max(0.0).min(1.0)) * bar_len as f32).round() as usize;
+                        let filled = ((progress.clamp(0.0, 1.0)) * bar_len as f32).round() as usize;
                         let bar: String = "█".repeat(filled) + &"░".repeat(bar_len - filled);
                         if let Ok(mut s) = ss.lock() {
                             s.progress = progress as f64;
@@ -779,7 +779,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     let size_label = if char_count >= 1000 {
                         format!("{:.1}k chars", char_count as f64 / 1000.0)
                     } else {
-                        format!("{} chars", char_count)
+                        format!("{char_count} chars")
                     };
                     let dot = if std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)

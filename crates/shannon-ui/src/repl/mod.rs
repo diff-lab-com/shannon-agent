@@ -1600,7 +1600,7 @@ impl Repl {
                         if count > 0 {
                             self.chat.add_message(
                                 ChatRole::System,
-                                format!("[Diagnostics: {} issue(s) found]", count),
+                                format!("[Diagnostics: {count} issue(s) found]"),
                             );
                         } else {
                             self.chat.add_message(

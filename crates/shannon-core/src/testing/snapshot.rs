@@ -66,7 +66,7 @@ pub fn render_request_snapshot(request: &Value, mode: RenderMode) -> String {
             }
             RenderMode::RedactedText => {
                 let hash = simple_hash(&system.to_string());
-                writeln!(output, "system: [hash:{}]", hash).unwrap();
+                writeln!(output, "system: [hash:{hash}]").unwrap();
             }
             RenderMode::FullText => {
                 writeln!(output, "system: {}", truncate(&system.to_string(), 500)).unwrap();
@@ -273,7 +273,7 @@ fn simple_hash(s: &str) -> String {
     for byte in s.bytes() {
         hash = hash.wrapping_mul(33).wrapping_add(byte as u64);
     }
-    format!("{:016x}", hash)
+    format!("{hash:016x}")
 }
 
 #[cfg(test)]

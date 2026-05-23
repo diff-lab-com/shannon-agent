@@ -248,8 +248,8 @@ impl AgentDashboardState {
     /// Render the full-screen overlay (list mode) with status grouping.
     pub fn render_list_overlay(&self, frame: &mut Frame, _area: Rect, theme: &Theme) {
         let terminal = frame.area();
-        let panel_height = terminal.height.saturating_sub(4).min(30).max(10);
-        let panel_width = terminal.width.saturating_sub(4).min(90).max(40);
+        let panel_height = terminal.height.saturating_sub(4).clamp(10, 30);
+        let panel_width = terminal.width.saturating_sub(4).clamp(40, 90);
         let x = terminal.x + (terminal.width.saturating_sub(panel_width)) / 2;
         let y = terminal.y + (terminal.height.saturating_sub(panel_height)) / 2;
         let panel_area = Rect {
@@ -409,8 +409,8 @@ impl AgentDashboardState {
     /// Render the detail view for the selected agent.
     pub fn render_detail_overlay(&self, frame: &mut Frame, _area: Rect, theme: &Theme) {
         let terminal = frame.area();
-        let panel_height = terminal.height.saturating_sub(4).min(40).max(15);
-        let panel_width = terminal.width.saturating_sub(4).min(90).max(40);
+        let panel_height = terminal.height.saturating_sub(4).clamp(15, 40);
+        let panel_width = terminal.width.saturating_sub(4).clamp(40, 90);
         let x = terminal.x + (terminal.width.saturating_sub(panel_width)) / 2;
         let y = terminal.y + (terminal.height.saturating_sub(panel_height)) / 2;
         let panel_area = Rect {
@@ -604,13 +604,7 @@ fn classify_entry(entry: &AgentEntry) -> EntryGroup {
     match entry.status.as_str() {
         "running" | "Running" | "Busy" => EntryGroup::Running,
         "spawning" | "Spawning" | "Planning" => EntryGroup::Running,
-        "idle" | "Idle" => {
-            if entry.active {
-                EntryGroup::Idle
-            } else {
-                EntryGroup::Idle
-            }
-        }
+        "idle" | "Idle" => EntryGroup::Idle,
         "completed" | "Completed" => EntryGroup::Completed,
         s if s.contains("failed") || s.contains("Failed") || s.contains("Error") => {
             EntryGroup::Failed

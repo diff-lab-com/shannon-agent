@@ -334,7 +334,7 @@ pub fn format_tool_result(
             if d >= 60.0 {
                 format!(" ({}m{:.0}s)", d as u64 / 60, d % 60.0)
             } else {
-                format!(" ({:.1}s)", d)
+                format!(" ({d:.1}s)")
             }
         })
         .unwrap_or_default();
