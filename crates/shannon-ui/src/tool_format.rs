@@ -1501,6 +1501,7 @@ pub fn strip_ansi(s: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
 

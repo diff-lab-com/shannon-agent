@@ -90,8 +90,7 @@ fn test_interactive_debugging_multi_turn() {
         .unwrap_or("");
     assert!(
         content.contains("panicked") || content.contains("error") || content.contains("unwrap"),
-        "Second message should reference the error: {}",
-        content
+        "Second message should reference the error: {content}"
     );
 }
 
@@ -108,8 +107,7 @@ fn test_session_resume_context() {
         .unwrap_or("");
     assert!(
         content.contains("continue") || content.contains("left off"),
-        "Resume fixture should reference continuation: {}",
-        content
+        "Resume fixture should reference continuation: {content}"
     );
 }
 
@@ -163,8 +161,7 @@ fn test_multi_turn_request_snapshot() {
         let snapshot = render_request_snapshot(&body, RenderMode::KindOnly);
         assert!(
             !snapshot.is_empty(),
-            "Request {} should render non-empty snapshot",
-            i
+            "Request {i} should render non-empty snapshot"
         );
     }
 }
@@ -214,9 +211,7 @@ fn test_all_multi_turn_fixtures_have_sequential_turns() {
                 assert_eq!(
                     window[1] - window[0],
                     1,
-                    "{}: turns not sequential: {:?}",
-                    name,
-                    turns
+                    "{name}: turns not sequential: {turns:?}"
                 );
             }
         }

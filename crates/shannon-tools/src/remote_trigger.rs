@@ -571,6 +571,7 @@ mod tests {
         listener.local_addr().unwrap().port()
     }
 
+    #[allow(clippy::type_complexity)]
     fn make_server() -> (
         RemoteTriggerServer,
         Arc<StdMutex<Vec<String>>>,

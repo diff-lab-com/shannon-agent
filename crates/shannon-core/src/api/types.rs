@@ -1629,4 +1629,82 @@ mod tests {
             "/compatible-mode/v1/chat/completions"
         );
     }
+
+    // ======================================================================
+    // Property-based tests (proptest)
+    // ======================================================================
+
+    proptest::proptest! {
+        /// Any Message roundtrips through JSON serialization.
+        #[test]
+        fn proptest_message_roundtrip(role in "user|assistant|system", text in ".{0,100}") {
+            let msg = Message {
+                role: role.clone(),
+                content: MessageContent::Text(text.clone()),
+            };
+            let json = serde_json::to_string(&msg).unwrap();
+            let parsed: Message = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed.role, role);
+            match parsed.content {
+                MessageContent::Text(t) => assert_eq!(t, text),
+                _ => panic!("expected Text variant"),
+            }
+        }
+
+        /// ContentDelta::TextDelta roundtrips through JSON.
+        #[test]
+        fn proptest_content_delta_text_roundtrip(text in ".{0,200}") {
+            let delta = ContentDelta::TextDelta { text: text.clone() };
+            let json = serde_json::to_string(&delta).unwrap();
+            let parsed: ContentDelta = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, delta);
+        }
+
+        /// ContentDelta::InputJsonDelta roundtrips through JSON.
+        #[test]
+        fn proptest_content_delta_json_roundtrip(partial in ".{0,200}") {
+            let delta = ContentDelta::InputJsonDelta { partial_json: partial.clone() };
+            let json = serde_json::to_string(&delta).unwrap();
+            let parsed: ContentDelta = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, delta);
+        }
+
+        /// ContentDelta::ThinkingDelta roundtrips through JSON.
+        #[test]
+        fn proptest_content_delta_thinking_roundtrip(thinking in ".{0,200}") {
+            let delta = ContentDelta::ThinkingDelta { thinking: thinking.clone() };
+            let json = serde_json::to_string(&delta).unwrap();
+            let parsed: ContentDelta = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, delta);
+        }
+
+        /// StreamEvent serialization is deterministic: two serializations of the
+        /// same value produce identical bytes.
+        #[test]
+        fn proptest_stream_event_deterministic(text in ".{0,80}") {
+            let event = StreamEvent::ContentBlockDelta {
+                index: 0,
+                delta: ContentDelta::TextDelta { text },
+            };
+            let json1 = serde_json::to_string(&event).unwrap();
+            let json2 = serde_json::to_string(&event).unwrap();
+            assert_eq!(json1, json2);
+        }
+
+        /// ReasoningEffort roundtrips through JSON for all variants.
+        #[test]
+        fn proptest_reasoning_effort_budget_positive(ctx in 1usize..200_000) {
+            for effort in [
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+                ReasoningEffort::XHigh,
+                ReasoningEffort::Max,
+            ] {
+                let budget = effort.to_anthropic_budget(ctx);
+                assert!(budget > 0, "budget must be positive for ctx={ctx}");
+                assert!(budget <= ctx, "budget must not exceed context for ctx={ctx}");
+            }
+        }
+    }
 }

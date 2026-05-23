@@ -352,3 +352,314 @@ pub async fn discover_pooled_remote_tools(
         tools,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        ElicitationAction, ElicitationRequest, ElicitationResult,
+        SamplingContent, SamplingMessageRole,
+    };
+    use std::sync::Arc;
+
+    // -- make_elicitation_provider tests -----------------------------------
+
+    #[tokio::test]
+    async fn elicitation_provider_auto_declines_without_callback() {
+        let provider = make_elicitation_provider(None);
+        let result = provider(ElicitationRequest {
+            message: "Enter credentials".to_string(),
+            requested_schema: None,
+        })
+        .await
+        .unwrap();
+        assert_eq!(result.action, ElicitationAction::Decline);
+        assert!(result.content.is_none());
+    }
+
+    #[tokio::test]
+    async fn elicitation_provider_delegates_to_callback() {
+        let provider = make_elicitation_provider(Some(Arc::new(|msg, schema| {
+            Box::pin(async move {
+                assert_eq!(msg, "Enter API key");
+                assert!(schema.is_some());
+                (
+                    ElicitationAction::Accept,
+                    Some(serde_json::json!({"key": "abc123"})),
+                )
+            })
+        })));
+
+        let result = provider(ElicitationRequest {
+            message: "Enter API key".to_string(),
+            requested_schema: Some(serde_json::json!({"type": "object"})),
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(result.action, ElicitationAction::Accept);
+        assert_eq!(result.content, Some(serde_json::json!({"key": "abc123"})));
+    }
+
+    #[tokio::test]
+    async fn elicitation_provider_cancel_action() {
+        let provider = make_elicitation_provider(Some(Arc::new(|_msg, _schema| {
+            Box::pin(async { (ElicitationAction::Cancel, None) })
+        })));
+
+        let result = provider(ElicitationRequest {
+            message: "Confirm?".to_string(),
+            requested_schema: None,
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(result.action, ElicitationAction::Cancel);
+        assert!(result.content.is_none());
+    }
+
+    #[tokio::test]
+    async fn elicitation_provider_decline_action() {
+        let provider = make_elicitation_provider(Some(Arc::new(|_msg, _schema| {
+            Box::pin(async { (ElicitationAction::Decline, None) })
+        })));
+
+        let result = provider(ElicitationRequest {
+            message: "Share location?".to_string(),
+            requested_schema: None,
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(result.action, ElicitationAction::Decline);
+    }
+
+    // -- make_sampling_provider tests (mock) --------------------------------
+
+    #[tokio::test]
+    async fn sampling_provider_with_mock_client() {
+        // We can't easily construct a real LlmClient for testing, but we can
+        // verify the type structure and callback shape.
+        // Instead, test that a SamplingProvider Arc can be created and called.
+        let provider: SamplingProvider = Arc::new(|req| {
+            Box::pin(async move {
+                Ok(crate::CreateMessageResult {
+                    role: SamplingMessageRole::Assistant,
+                    model: "mock-model".to_string(),
+                    content: SamplingContent::Text {
+                        text: format!("Received {} messages", req.messages.len()),
+                    },
+                    stop_reason: Some(crate::StopReason::EndTurn),
+                })
+            })
+        });
+
+        let req = crate::CreateMessageRequest {
+            messages: vec![crate::SamplingMessage {
+                role: SamplingMessageRole::User,
+                content: SamplingContent::Text {
+                    text: "hello".to_string(),
+                },
+            }],
+            model_preferences: None,
+            system_prompt: None,
+            max_tokens: Some(50),
+            sampling_params: crate::SamplingParams::default(),
+        };
+
+        let result = provider(req).await.unwrap();
+        assert_eq!(result.role, SamplingMessageRole::Assistant);
+        assert_eq!(result.model, "mock-model");
+        if let SamplingContent::Text { text } = &result.content {
+            assert_eq!(text, "Received 1 messages");
+        } else {
+            panic!("Expected text content");
+        }
+    }
+
+    #[tokio::test]
+    async fn sampling_provider_can_return_error() {
+        let provider: SamplingProvider = Arc::new(|_req| {
+            Box::pin(async { Err("LLM unavailable".to_string()) })
+        });
+
+        let req = crate::CreateMessageRequest {
+            messages: vec![],
+            model_preferences: None,
+            system_prompt: None,
+            max_tokens: None,
+            sampling_params: crate::SamplingParams::default(),
+        };
+
+        let result = provider(req).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "LLM unavailable");
+    }
+
+    // -- discover_pooled_tools error tests ---------------------------------
+
+    #[tokio::test]
+    async fn discover_pooled_tools_fails_on_nonexistent_command() {
+        let pool = Arc::new(McpProcessPool::new());
+        let result = discover_pooled_tools(
+            pool,
+            "bad-server",
+            "/nonexistent/binary",
+            &[],
+            &HashMap::new(),
+        )
+        .await;
+        assert!(result.is_err());
+        let err = result.err().unwrap();
+        assert!(err.contains("failed to spawn"));
+    }
+
+    #[tokio::test]
+    async fn discover_pooled_remote_tools_fails_on_unreachable_url() {
+        let mut pool = McpProcessPool::new();
+        pool.set_request_timeout(std::time::Duration::from_millis(50));
+        pool.set_connection_timeout(std::time::Duration::from_millis(50));
+        let pool = Arc::new(pool);
+        let result = discover_pooled_remote_tools(
+            pool,
+            "bad-remote",
+            "http://127.0.0.1:1/mcp",
+            HashMap::new(),
+            None,
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    // -- PooledDiscoveryResult construction test ---------------------------
+
+    #[test]
+    fn pooled_discovery_result_construction() {
+        let result = PooledDiscoveryResult {
+            server_name: "test-server".to_string(),
+            tools: vec![],
+        };
+        assert_eq!(result.server_name, "test-server");
+        assert!(result.tools.is_empty());
+    }
+
+    // -- discover_pooled_tools with empty command --------------------------
+
+    #[tokio::test]
+    async fn discover_pooled_tools_fails_with_empty_command() {
+        let pool = Arc::new(McpProcessPool::new());
+        let result = discover_pooled_tools(
+            pool,
+            "empty-cmd",
+            "",
+            &[],
+            &HashMap::new(),
+        )
+        .await;
+        assert!(result.is_err());
+        let err = result.err().unwrap();
+        assert!(err.contains("empty command") || err.contains("Empty"));
+    }
+
+    // -- elicitation_request serialization roundtrip -----------------------
+
+    #[test]
+    fn elicitation_request_serialization_roundtrip() {
+        let req = ElicitationRequest {
+            message: "Please confirm".to_string(),
+            requested_schema: Some(serde_json::json!({"type": "object"})),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let de: ElicitationRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.message, "Please confirm");
+        assert!(de.requested_schema.is_some());
+    }
+
+    #[test]
+    fn elicitation_request_without_schema_roundtrip() {
+        let req = ElicitationRequest {
+            message: "Simple prompt".to_string(),
+            requested_schema: None,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(!json.contains("requested_schema"));
+        let de: ElicitationRequest = serde_json::from_str(&json).unwrap();
+        assert!(de.requested_schema.is_none());
+    }
+
+    // -- elicitation_result serialization roundtrip ------------------------
+
+    #[test]
+    fn elicitation_result_accept_roundtrip() {
+        let result = ElicitationResult {
+            action: ElicitationAction::Accept,
+            content: Some(serde_json::json!({"answer": "yes"})),
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let de: ElicitationResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.action, ElicitationAction::Accept);
+        assert_eq!(de.content.unwrap()["answer"], "yes");
+    }
+
+    #[test]
+    fn elicitation_result_decline_roundtrip() {
+        let result = ElicitationResult {
+            action: ElicitationAction::Decline,
+            content: None,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let de: ElicitationResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.action, ElicitationAction::Decline);
+        assert!(de.content.is_none());
+    }
+
+    #[test]
+    fn elicitation_result_cancel_roundtrip() {
+        let result = ElicitationResult {
+            action: ElicitationAction::Cancel,
+            content: None,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let de: ElicitationResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.action, ElicitationAction::Cancel);
+    }
+
+    // -- elicitation_action serialization ----------------------------------
+
+    #[test]
+    fn elicitation_action_serialization_values() {
+        let accept = serde_json::to_value(ElicitationAction::Accept).unwrap();
+        assert_eq!(accept, "accept");
+        let decline = serde_json::to_value(ElicitationAction::Decline).unwrap();
+        assert_eq!(decline, "decline");
+        let cancel = serde_json::to_value(ElicitationAction::Cancel).unwrap();
+        assert_eq!(cancel, "cancel");
+    }
+
+    #[test]
+    fn elicitation_action_deserialization_from_json() {
+        let accept: ElicitationAction = serde_json::from_value(serde_json::json!("accept")).unwrap();
+        assert_eq!(accept, ElicitationAction::Accept);
+        let decline: ElicitationAction = serde_json::from_value(serde_json::json!("decline")).unwrap();
+        assert_eq!(decline, ElicitationAction::Decline);
+        let cancel: ElicitationAction = serde_json::from_value(serde_json::json!("cancel")).unwrap();
+        assert_eq!(cancel, ElicitationAction::Cancel);
+    }
+
+    // -- UserPromptCallback type can be constructed -----------------------
+
+    #[tokio::test]
+    async fn user_prompt_callback_type_works() {
+        let callback: UserPromptCallback = Arc::new(|msg, schema| {
+            Box::pin(async move {
+                assert!(!msg.is_empty());
+                let _ = schema;
+                (ElicitationAction::Accept, Some(serde_json::json!({"ok": true})))
+            })
+        });
+
+        let (action, content) = callback("test".to_string(), None).await;
+        assert_eq!(action, ElicitationAction::Accept);
+        assert!(content.is_some());
+    }
+}

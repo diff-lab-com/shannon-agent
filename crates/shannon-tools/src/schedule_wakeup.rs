@@ -361,9 +361,9 @@ mod tests {
             "delay {delay} should be ~120 + jitter"
         );
         assert_eq!(result.metadata.get("is_autonomous").unwrap(), &json!(false));
-        assert!(result.metadata.get("id").is_some());
-        assert!(result.metadata.get("fire_at").is_some());
-        assert!(result.metadata.get("cache_ttl_hint").is_some());
+        assert!(result.metadata.contains_key("id"));
+        assert!(result.metadata.contains_key("fire_at"));
+        assert!(result.metadata.contains_key("cache_ttl_hint"));
     }
 
     #[tokio::test]
@@ -547,7 +547,7 @@ mod tests {
             .await
             .unwrap();
         assert!(result.content.contains("Cache:"));
-        assert!(result.metadata.get("cache_ttl_hint").is_some());
+        assert!(result.metadata.contains_key("cache_ttl_hint"));
     }
 
     #[tokio::test]

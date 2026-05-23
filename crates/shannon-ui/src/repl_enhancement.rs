@@ -1252,6 +1252,7 @@ impl Default for SessionSummary {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::overly_complex_bool_expr)]
 mod tests {
     use super::*;
 

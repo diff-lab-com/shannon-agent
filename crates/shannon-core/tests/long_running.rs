@@ -36,7 +36,7 @@ fn tool_use_msg(id: usize, name: &str, input: serde_json::Value) -> Message {
     Message {
         role: "assistant".to_string(),
         content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
-            id: format!("toolu_{}", id),
+            id: format!("toolu_{id}"),
             name: name.to_string(),
             input,
         }]),
@@ -47,7 +47,7 @@ fn tool_result_msg(tool_use_id: usize, result: &str, is_error: bool) -> Message 
     Message {
         role: "user".to_string(),
         content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
-            tool_use_id: format!("toolu_{}", tool_use_id),
+            tool_use_id: format!("toolu_{tool_use_id}"),
             content: Some(ToolResultContent::Single(result.to_string())),
             is_error: Some(is_error),
         }]),
@@ -181,14 +181,14 @@ fn build_refactoring_responses(n: usize) -> Vec<MockResponse> {
         if i % 3 == 0 {
             // Every 3rd turn: tool call to read a file
             responses.push(tool_call_response(
-                &format!("toolu_{}", i),
+                &format!("toolu_{i}"),
                 "Read",
                 json!({"path": format!("src/module_{}.rs", i / 3)}),
             ));
         } else if i % 3 == 1 {
             // Next turn: tool call to edit
             responses.push(tool_call_response(
-                &format!("toolu_{}", i),
+                &format!("toolu_{i}"),
                 "Edit",
                 json!({"path": format!("src/module_{}.rs", i / 3), "old": "old_code()", "new": "new_code()"}),
             ));
@@ -216,11 +216,11 @@ fn build_debugging_responses(n: usize) -> Vec<MockResponse> {
     for i in 0..n {
         match i % 5 {
             0 => responses.push(tool_call_response(
-                &format!("toolu_{}", i), "Read",
+                &format!("toolu_{i}"), "Read",
                 json!({"path": format!("src/bug_{}.rs", i / 5)}),
             )),
             1 => responses.push(tool_call_response(
-                &format!("toolu_{}", i), "Bash",
+                &format!("toolu_{i}"), "Bash",
                 json!({"command": "cargo test"}),
             )),
             2 => responses.push(text_response(&format!(
@@ -228,7 +228,7 @@ fn build_debugging_responses(n: usize) -> Vec<MockResponse> {
                 i / 5, (i % 20) * 5 + 10,
             ))),
             3 => responses.push(tool_call_response(
-                &format!("toolu_{}", i), "Edit",
+                &format!("toolu_{i}"), "Edit",
                 json!({"path": format!("src/bug_{}.rs", i / 5), "old": "assert!(false)", "new": "assert!(true)"}),
             )),
             _ => responses.push(text_response(&format!(
@@ -262,20 +262,20 @@ fn test_100_turn_refactoring_session() {
 
     for (i, response) in responses.iter().enumerate() {
         // Add user message
-        sim.add_user(&format!("Turn {}: refactor module {}", i, i));
+        sim.add_user(&format!("Turn {i}: refactor module {i}"));
 
         // Add assistant response (text or tool)
         match &response.content_blocks.first() {
             Some(MockContentBlock::ToolUse { name, input, .. }) => {
-                let result = format!("File content for turn {}", i);
+                let result = format!("File content for turn {i}");
                 sim.add_tool_cycle(name, input.clone(), &result, false);
-                sim.add_assistant_after_tool(&format!("Completed tool call on turn {}", i));
+                sim.add_assistant_after_tool(&format!("Completed tool call on turn {i}"));
             }
             Some(MockContentBlock::Text { text }) => {
                 sim.add_assistant(text);
             }
             _ => {
-                sim.add_assistant(&format!("Response {}", i));
+                sim.add_assistant(&format!("Response {i}"));
             }
         }
 
@@ -300,14 +300,12 @@ fn test_100_turn_refactoring_session() {
     // At 100 turns, token count should be less than 2x the count at 50 turns.
     assert!(
         tokens_at_100 < tokens_at_50 * 2,
-        "Context grew too large: turn 50 = {} tokens, turn 100 = {} tokens (ratio > 2x)",
-        tokens_at_50,
-        tokens_at_100,
+        "Context grew too large: turn 50 = {tokens_at_50} tokens, turn 100 = {tokens_at_100} tokens (ratio > 2x)",
     );
 }
 
 #[test]
-#[ignore]
+#[ignore] // Long-running stress test (50+ turns) — run via `scripts/test-release.sh` or `cargo test -- --ignored`
 fn test_50_turn_debugging_session() {
     let config = QueryEngineConfig {
         max_context_tokens: Some(40_000),
@@ -324,27 +322,27 @@ fn test_50_turn_debugging_session() {
     let mut success_count = 0;
 
     for (i, response) in responses.iter().enumerate() {
-        sim.add_user(&format!("Debug issue #{}", i));
+        sim.add_user(&format!("Debug issue #{i}"));
 
         match &response.content_blocks.first() {
             Some(MockContentBlock::ToolUse { name, input, .. }) => {
                 let is_error = (i % 5) == 1; // Bash calls in position 1 produce errors
                 let result = if is_error {
                     error_count += 1;
-                    format!("error[E0425]: cannot find value in scope at turn {}", i)
+                    format!("error[E0425]: cannot find value in scope at turn {i}")
                 } else {
                     success_count += 1;
-                    format!("ok: completed at turn {}", i)
+                    format!("ok: completed at turn {i}")
                 };
                 sim.add_tool_cycle(name, input.clone(), &result, is_error);
-                sim.add_assistant_after_tool(&format!("Debug step {} completed", i));
+                sim.add_assistant_after_tool(&format!("Debug step {i} completed"));
                 tool_chain.push((name.clone(), input.clone(), result, is_error));
             }
             Some(MockContentBlock::Text { text }) => {
                 sim.add_assistant(text);
             }
             _ => {
-                sim.add_assistant(&format!("Response {}", i));
+                sim.add_assistant(&format!("Response {i}"));
             }
         }
 
@@ -381,7 +379,7 @@ fn test_50_turn_debugging_session() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Long-running stress test (80 turns) — run via `scripts/test-release.sh` or `cargo test -- --ignored`
 fn test_80_turn_feature_development() {
     let config = QueryEngineConfig {
         max_context_tokens: Some(60_000),
@@ -482,7 +480,7 @@ fn test_80_turn_feature_development() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Long-running stress test (50 turns, memory stability) — run via `scripts/test-release.sh` or `cargo test -- --ignored`
 fn test_memory_stability_50_turns() {
     // Test that snapshot sizes (as a proxy for memory usage) don't grow linearly
     // over 50 turns with compaction enabled.
@@ -542,7 +540,7 @@ fn test_memory_stability_50_turns() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Long-running stress test (30 turns, compaction quality) — run via `scripts/test-release.sh` or `cargo test -- --ignored`
 fn test_compaction_quality_long_session() {
     // Build a 30-turn session with specific file names and tool results,
     // trigger compaction, then verify key information is preserved.
@@ -557,23 +555,21 @@ fn test_compaction_quality_long_session() {
     let mut sim = ConversationSimulator::new(config);
 
     // Important file names that should survive compaction
-    let critical_files = vec![
-        "src/lib.rs",
+    let critical_files = ["src/lib.rs",
         "src/main.rs",
         "Cargo.toml",
-        "tests/integration.rs",
-    ];
+        "tests/integration.rs"];
 
     for i in 0..30 {
         let file = critical_files[i % critical_files.len()];
-        sim.add_user(&format!("Work on {}", file));
+        sim.add_user(&format!("Work on {file}"));
         sim.add_tool_cycle(
             "Read",
             json!({"path": file}),
-            &format!("// Contents of {} at revision {}", file, i),
+            &format!("// Contents of {file} at revision {i}"),
             false,
         );
-        sim.add_assistant_after_tool(&format!("Reviewed {}", file));
+        sim.add_assistant_after_tool(&format!("Reviewed {file}"));
     }
 
     let pre_compact_tokens = sim.estimate_tokens();
@@ -602,7 +598,7 @@ fn test_compaction_quality_long_session() {
                 for b in blocks {
                     match b {
                         ContentBlock::ToolUse { name, input, .. } => {
-                            recent_parts.push(format!("{}({})", name, input));
+                            recent_parts.push(format!("{name}({input})"));
                         }
                         ContentBlock::ToolResult {
                             content: Some(ToolResultContent::Single(s)),

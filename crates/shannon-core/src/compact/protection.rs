@@ -472,7 +472,7 @@ mod tests {
         let result_texts: Vec<String> = result
             .messages
             .iter()
-            .map(|m| extract_text_content(m))
+            .map(extract_text_content)
             .collect();
         assert!(result_texts.iter().any(|t| t == &protected_content));
     }

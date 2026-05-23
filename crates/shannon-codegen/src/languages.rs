@@ -186,7 +186,6 @@ pub fn supported_languages() -> Vec<LanguageConfig> {
 /// # Arguments
 ///
 /// * `path` - File path to analyze
-
 #[cfg(test)]
 mod tests {
     use super::*;

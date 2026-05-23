@@ -207,10 +207,10 @@ mod tests {
         let mut store = MemoryStore::new(dir.path().to_path_buf());
         for i in 0..4u32 {
             let entry = make_entry_with_timestamps(
-                &format!("p{}", i),
+                &format!("p{i}"),
                 "proj",
                 MemoryCategory::Preference,
-                &format!("preference entry {}", i),
+                &format!("preference entry {i}"),
                 0.8,
                 Utc::now(),
                 Utc::now(),

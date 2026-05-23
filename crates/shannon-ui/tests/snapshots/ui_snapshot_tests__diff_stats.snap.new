@@ -1,13 +1,14 @@
 ---
 source: crates/shannon-ui/tests/ui_snapshot_tests.rs
+assertion_line: 113
 expression: "format!(\"{:#?}\", msg)"
 ---
 ChatMessage {
     role: Tool,
-    content: "Permission denied: /etc/hosts",
-    timestamp: 2026-05-23T14:47:03.287368466Z,
+    content: "src/main.rs written",
+    timestamp: 2026-05-23T15:12:53.653979013Z,
     image_lines: None,
-    is_error: true,
+    is_error: false,
     tool_name: Some(
         "write",
     ),
@@ -18,11 +19,16 @@ ChatMessage {
     spinner_frame: 0,
     folded: true,
     exit_code: Some(
-        1,
+        0,
     ),
     thinking_content: None,
     thinking_expanded: false,
     thinking_duration_secs: None,
-    diff_stats: None,
+    diff_stats: Some(
+        (
+            42,
+            7,
+        ),
+    ),
     stats_line: None,
 }

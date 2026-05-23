@@ -917,3 +917,397 @@ impl McpServerHandle {
         self.state.read().await.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dashmap::DashMap;
+    use std::collections::HashMap;
+    use std::sync::atomic::AtomicU64;
+    use std::time::Duration;
+    use tokio::sync::{Mutex, RwLock};
+
+    /// Helper: create a minimal handle with all fields for unit testing.
+    ///
+    /// The handle starts in `Stopped` state with no child process, no stdin,
+    /// and no reader task. Call-specific fields (pending, state, counters)
+    /// can be manipulated directly in tests.
+    fn make_handle(name: &str) -> McpServerHandle {
+        let (ntx, _) = tokio::sync::mpsc::channel(1024);
+        McpServerHandle {
+            name: name.to_string(),
+            command: "echo".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            stdin: Arc::new(Mutex::new(None)),
+            next_id: AtomicU64::new(1),
+            pending: Arc::new(DashMap::new()),
+            state: Arc::new(RwLock::new(ServerState::Stopped)),
+            child: Arc::new(Mutex::new(None)),
+            reader_task: Arc::new(Mutex::new(None)),
+            restart_count: Arc::new(AtomicU64::new(0)),
+            max_restarts: 3,
+            health_interval: Duration::from_secs(60),
+            request_timeout: Duration::from_secs(30),
+            connection_timeout: Duration::from_secs(30),
+            tool_timeout: Duration::from_secs(120),
+            started_at: Arc::new(RwLock::new(None)),
+            request_count: AtomicU64::new(0),
+            error_count: AtomicU64::new(0),
+            total_result_bytes: AtomicU64::new(0),
+            budget_bytes: Arc::new(RwLock::new(None)),
+            last_health_check: Arc::new(RwLock::new(None)),
+            notification_tx: ntx,
+            roots_provider: Arc::new(Mutex::new(None)),
+            sampling_provider: Arc::new(Mutex::new(None)),
+            elicitation_provider: Arc::new(Mutex::new(None)),
+            capabilities: Arc::new(RwLock::new(None)),
+            protocol_version: Arc::new(RwLock::new(String::new())),
+            concurrency_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
+        }
+    }
+
+    // -- shell_split tests -------------------------------------------------
+
+    #[test]
+    fn shell_split_simple_command() {
+        let parts = shell_split("ls -la /tmp").unwrap();
+        assert_eq!(parts, vec!["ls", "-la", "/tmp"]);
+    }
+
+    #[test]
+    fn shell_split_double_quotes() {
+        let parts = shell_split(r#"echo "hello world""#).unwrap();
+        assert_eq!(parts, vec!["echo", "hello world"]);
+    }
+
+    #[test]
+    fn shell_split_single_quotes() {
+        let parts = shell_split("echo 'hello world'").unwrap();
+        assert_eq!(parts, vec!["echo", "hello world"]);
+    }
+
+    #[test]
+    fn shell_split_mixed_quotes() {
+        let parts = shell_split(r#"cmd "arg one" argtwo 'arg three'"#).unwrap();
+        assert_eq!(parts, vec!["cmd", "arg one", "argtwo", "arg three"]);
+    }
+
+    #[test]
+    fn shell_split_backslash_escape() {
+        let parts = shell_split(r"cmd arg\ with\ space").unwrap();
+        assert_eq!(parts, vec!["cmd", "arg with space"]);
+    }
+
+    #[test]
+    fn shell_split_unterminated_double_quote() {
+        let result = shell_split(r#"echo "unclosed"#);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Unterminated"));
+    }
+
+    #[test]
+    fn shell_split_unterminated_single_quote() {
+        let result = shell_split("echo 'unclosed");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Unterminated"));
+    }
+
+    #[test]
+    fn shell_split_empty_string() {
+        let result = shell_split("");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Empty"));
+    }
+
+    #[test]
+    fn shell_split_only_whitespace() {
+        let result = shell_split("   \t  ");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn shell_split_single_command() {
+        let parts = shell_split("node").unwrap();
+        assert_eq!(parts, vec!["node"]);
+    }
+
+    #[test]
+    fn shell_split_extra_whitespace() {
+        let parts = shell_split("  cmd   arg1   arg2  ").unwrap();
+        assert_eq!(parts, vec!["cmd", "arg1", "arg2"]);
+    }
+
+    #[test]
+    fn shell_split_escaped_char_in_double_quote() {
+        // Inside double quotes, \n is interpreted: backslash + next char → next char.
+        // So \n becomes just 'n'.
+        let parts = shell_split(r#"echo "line1\nline2""#).unwrap();
+        assert_eq!(parts, vec!["echo", "line1nline2"]);
+    }
+
+    #[test]
+    fn shell_split_backslash_outside_quotes() {
+        // Outside quotes, backslash escapes the next character.
+        let parts = shell_split(r"cmd hello\ world").unwrap();
+        assert_eq!(parts, vec!["cmd", "hello world"]);
+    }
+
+    // -- get_state / get_status tests --------------------------------------
+
+    #[tokio::test]
+    async fn get_state_initial_is_stopped() {
+        let handle = make_handle("test-srv");
+        assert_eq!(handle.get_state().await, ServerState::Stopped);
+    }
+
+    #[tokio::test]
+    async fn get_state_transition_to_healthy() {
+        let handle = make_handle("test-srv");
+        *handle.state.write().await = ServerState::Healthy;
+        assert_eq!(handle.get_state().await, ServerState::Healthy);
+    }
+
+    #[tokio::test]
+    async fn get_state_unhealthy_carries_message() {
+        let handle = make_handle("test-srv");
+        *handle.state.write().await = ServerState::Unhealthy("timeout".to_string());
+        assert_eq!(
+            handle.get_state().await,
+            ServerState::Unhealthy("timeout".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn get_status_reflects_state() {
+        let handle = make_handle("status-srv");
+        let status = handle.get_status().await;
+        assert_eq!(status.name, "status-srv");
+        assert_eq!(status.state, ServerState::Stopped);
+        assert!(status.uptime.is_none());
+        assert_eq!(status.request_count, 0);
+        assert_eq!(status.error_count, 0);
+        assert_eq!(status.restart_count, 0);
+    }
+
+    #[tokio::test]
+    async fn get_status_includes_metrics() {
+        let handle = make_handle("metric-srv");
+        handle.request_count.store(42, Ordering::Relaxed);
+        handle.error_count.store(3, Ordering::Relaxed);
+        handle.total_result_bytes.store(1024, Ordering::Relaxed);
+        *handle.budget_bytes.write().await = Some(10_000);
+        *handle.state.write().await = ServerState::Healthy;
+        *handle.started_at.write().await = Some(Instant::now());
+
+        let status = handle.get_status().await;
+        assert_eq!(status.request_count, 42);
+        assert_eq!(status.error_count, 3);
+        assert_eq!(status.total_result_bytes, 1024);
+        assert_eq!(status.budget_bytes, Some(10_000));
+        assert!(status.uptime.is_some());
+    }
+
+    // -- ping tests --------------------------------------------------------
+
+    #[tokio::test]
+    async fn ping_returns_error_when_stopped() {
+        let handle = make_handle("stopped-srv");
+        let result = handle.ping().await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("stopped"));
+    }
+
+    #[tokio::test]
+    async fn ping_returns_error_when_starting() {
+        let handle = make_handle("starting-srv");
+        *handle.state.write().await = ServerState::Starting;
+        // ping sends a request but there is no stdin, so it will fail
+        let result = handle.ping().await;
+        assert!(result.is_err());
+    }
+
+    // -- send_request error tests ------------------------------------------
+
+    #[tokio::test]
+    async fn send_request_fails_when_no_stdin() {
+        let handle = make_handle("no-stdin");
+        *handle.state.write().await = ServerState::Healthy;
+        let result = handle
+            .send_request("tools/list", serde_json::json!({}))
+            .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("stdin not available"));
+    }
+
+    #[tokio::test]
+    async fn send_notification_fails_when_no_stdin() {
+        let handle = make_handle("no-stdin");
+        let result = handle
+            .send_notification("notifications/initialized", serde_json::json!({}))
+            .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("stdin not available"));
+    }
+
+    // -- call_tool state check tests ---------------------------------------
+
+    #[tokio::test]
+    async fn call_tool_rejects_when_not_healthy() {
+        let handle = make_handle("unhealthy-srv");
+        *handle.state.write().await = ServerState::Unhealthy("crashed".to_string());
+        let result = handle
+            .call_tool("some_tool", serde_json::json!({}))
+            .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            shannon_tool_interface::ToolError::ExecutionFailed(msg) => {
+                assert!(msg.contains("not healthy"));
+                assert!(msg.contains("crashed"));
+            }
+            other => panic!("Expected ExecutionFailed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn call_tool_rejects_when_starting() {
+        let handle = make_handle("starting-srv");
+        *handle.state.write().await = ServerState::Starting;
+        let result = handle
+            .call_tool("some_tool", serde_json::json!({}))
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn call_tool_rejects_when_stopped() {
+        let handle = make_handle("stopped-srv");
+        let result = handle
+            .call_tool("some_tool", serde_json::json!({}))
+            .await;
+        assert!(result.is_err());
+    }
+
+    // -- shutdown tests ----------------------------------------------------
+
+    #[tokio::test]
+    async fn shutdown_sets_state_to_stopped() {
+        let handle = make_handle("shutdown-srv");
+        *handle.state.write().await = ServerState::Healthy;
+        handle.shutdown().await;
+        assert_eq!(handle.get_state().await, ServerState::Stopped);
+    }
+
+    #[tokio::test]
+    async fn shutdown_clears_stdin() {
+        let handle = make_handle("shutdown-srv");
+        // stdin starts as None already
+        handle.shutdown().await;
+        assert!(handle.stdin.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn shutdown_clears_pending_requests() {
+        let handle = make_handle("shutdown-srv");
+        let (tx, rx) = oneshot::channel();
+        handle.pending.insert(
+            1,
+            PendingRequest {
+                tx,
+                created_at: Instant::now(),
+                progress_token: None,
+                on_progress: None,
+            },
+        );
+        assert_eq!(handle.pending.len(), 1);
+
+        handle.shutdown().await;
+        assert!(handle.pending.is_empty());
+        // The oneshot receiver should be dropped (sender dropped on clear).
+        drop(rx);
+    }
+
+    #[tokio::test]
+    async fn shutdown_idempotent() {
+        let handle = make_handle("multi-shutdown");
+        *handle.state.write().await = ServerState::Healthy;
+        handle.shutdown().await;
+        handle.shutdown().await;
+        assert_eq!(handle.get_state().await, ServerState::Stopped);
+    }
+
+    // -- start failure tests -----------------------------------------------
+
+    #[tokio::test]
+    async fn start_fails_with_nonexistent_command() {
+        // Create a handle with a nonexistent command directly.
+        // We can't use make_handle() because command is not mutable from outside.
+        let (ntx, _) = tokio::sync::mpsc::channel(1024);
+        let handle = McpServerHandle {
+            name: "bad-cmd".to_string(),
+            command: "/nonexistent/binary".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            stdin: Arc::new(Mutex::new(None)),
+            next_id: AtomicU64::new(1),
+            pending: Arc::new(DashMap::new()),
+            state: Arc::new(RwLock::new(ServerState::Stopped)),
+            child: Arc::new(Mutex::new(None)),
+            reader_task: Arc::new(Mutex::new(None)),
+            restart_count: Arc::new(AtomicU64::new(0)),
+            max_restarts: 3,
+            health_interval: Duration::from_secs(60),
+            request_timeout: Duration::from_secs(30),
+            connection_timeout: Duration::from_secs(30),
+            tool_timeout: Duration::from_secs(120),
+            started_at: Arc::new(RwLock::new(None)),
+            request_count: AtomicU64::new(0),
+            error_count: AtomicU64::new(0),
+            total_result_bytes: AtomicU64::new(0),
+            budget_bytes: Arc::new(RwLock::new(None)),
+            last_health_check: Arc::new(RwLock::new(None)),
+            notification_tx: ntx,
+            roots_provider: Arc::new(Mutex::new(None)),
+            sampling_provider: Arc::new(Mutex::new(None)),
+            elicitation_provider: Arc::new(Mutex::new(None)),
+            capabilities: Arc::new(RwLock::new(None)),
+            protocol_version: Arc::new(RwLock::new(String::new())),
+            concurrency_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
+        };
+        let result = handle.start().await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("failed to spawn"));
+    }
+
+    // -- next_id counter test ----------------------------------------------
+
+    #[test]
+    fn next_id_increments_atomically() {
+        let handle = make_handle("id-test");
+        assert_eq!(handle.next_id.load(Ordering::Relaxed), 1);
+        let id1 = handle.next_id.fetch_add(1, Ordering::Relaxed);
+        let id2 = handle.next_id.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+        assert_eq!(handle.next_id.load(Ordering::Relaxed), 3);
+    }
+
+    // -- request_count / error_count tests ---------------------------------
+
+    #[test]
+    fn counters_increment_correctly() {
+        let handle = make_handle("counter-test");
+        assert_eq!(handle.request_count.load(Ordering::Relaxed), 0);
+        assert_eq!(handle.error_count.load(Ordering::Relaxed), 0);
+        assert_eq!(handle.total_result_bytes.load(Ordering::Relaxed), 0);
+
+        handle.request_count.fetch_add(5, Ordering::Relaxed);
+        handle.error_count.fetch_add(2, Ordering::Relaxed);
+        handle.total_result_bytes.fetch_add(1024, Ordering::Relaxed);
+
+        assert_eq!(handle.request_count.load(Ordering::Relaxed), 5);
+        assert_eq!(handle.error_count.load(Ordering::Relaxed), 2);
+        assert_eq!(handle.total_result_bytes.load(Ordering::Relaxed), 1024);
+    }
+}

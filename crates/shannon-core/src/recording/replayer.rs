@@ -325,7 +325,7 @@ mod tests {
         assert_eq!(tool_calls[0].tool, "Read");
         assert_eq!(tool_calls[0].result, "fn main() {}");
         assert!(!tool_calls[0].is_error);
-        assert!(tool_calls[0].duration_ms > 0 || tool_calls[0].duration_ms == 0); // just verify field exists
+        assert!(tool_calls[0].duration_ms >= 0); // just verify field exists
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -353,7 +353,7 @@ mod tests {
 
         let replayer = SessionReplayer::load_from_file(&path).unwrap();
         let vcr = replayer.into_vcr();
-        assert!(vcr.len() > 0, "Vcr should contain at least one recording");
+        assert!(!vcr.is_empty(), "Vcr should contain at least one recording");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

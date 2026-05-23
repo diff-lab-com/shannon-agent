@@ -24,6 +24,7 @@ mod tests {
     use std::collections::HashMap;
     use uuid::Uuid;
 
+    #[allow(dead_code)]
     struct TestTool {
         name: String,
     }

@@ -178,10 +178,6 @@ mod tool_use_tests {
              data: {{\"type\":\"content_block_stop\",\"index\":1}}\n\n\
              data: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"tool_use\"}},\"usage\":{{\"input_tokens\":20,\"output_tokens\":15}}}}\n\n\
              data: {{\"type\":\"message_stop\"}}\n\n",
-            text = text,
-            tool_id = tool_id,
-            tool_name = tool_name,
-            tool_input = tool_input,
         )
     }
 
@@ -194,7 +190,6 @@ mod tool_use_tests {
              data: {{\"type\":\"content_block_stop\",\"index\":0}}\n\n\
              data: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"end_turn\"}},\"usage\":{{\"input_tokens\":30,\"output_tokens\":10}}}}\n\n\
              data: {{\"type\":\"message_stop\"}}\n\n",
-            text = text,
         )
     }
 
@@ -211,23 +206,16 @@ mod tool_use_tests {
         format!(
             "data: {{\"type\":\"message_start\",\"message\":{{\"id\":\"msg_multi\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{{\"input_tokens\":25,\"output_tokens\":0}}}}}}\n\n\
              data: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"text\",\"text\":\"\"}}}}\n\n\
-             data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{intro}\"}}}}\n\n\
+             data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{intro_text}\"}}}}\n\n\
              data: {{\"type\":\"content_block_stop\",\"index\":0}}\n\n\
-             data: {{\"type\":\"content_block_start\",\"index\":1,\"content_block\":{{\"type\":\"tool_use\",\"id\":\"{t1id}\",\"name\":\"{t1n}\",\"input\":{{}}}}}}\n\n\
-             data: {{\"type\":\"content_block_delta\",\"index\":1,\"delta\":{{\"type\":\"input_json_delta\",\"partial_json\":\"{t1i}\"}}}}\n\n\
+             data: {{\"type\":\"content_block_start\",\"index\":1,\"content_block\":{{\"type\":\"tool_use\",\"id\":\"{tool1_id}\",\"name\":\"{tool1_name}\",\"input\":{{}}}}}}\n\n\
+             data: {{\"type\":\"content_block_delta\",\"index\":1,\"delta\":{{\"type\":\"input_json_delta\",\"partial_json\":\"{tool1_input}\"}}}}\n\n\
              data: {{\"type\":\"content_block_stop\",\"index\":1}}\n\n\
-             data: {{\"type\":\"content_block_start\",\"index\":2,\"content_block\":{{\"type\":\"tool_use\",\"id\":\"{t2id}\",\"name\":\"{t2n}\",\"input\":{{}}}}}}\n\n\
-             data: {{\"type\":\"content_block_delta\",\"index\":2,\"delta\":{{\"type\":\"input_json_delta\",\"partial_json\":\"{t2i}\"}}}}\n\n\
+             data: {{\"type\":\"content_block_start\",\"index\":2,\"content_block\":{{\"type\":\"tool_use\",\"id\":\"{tool2_id}\",\"name\":\"{tool2_name}\",\"input\":{{}}}}}}\n\n\
+             data: {{\"type\":\"content_block_delta\",\"index\":2,\"delta\":{{\"type\":\"input_json_delta\",\"partial_json\":\"{tool2_input}\"}}}}\n\n\
              data: {{\"type\":\"content_block_stop\",\"index\":2}}\n\n\
              data: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"tool_use\"}},\"usage\":{{\"input_tokens\":25,\"output_tokens\":20}}}}\n\n\
              data: {{\"type\":\"message_stop\"}}\n\n",
-            intro = intro_text,
-            t1id = tool1_id,
-            t1n = tool1_name,
-            t1i = tool1_input,
-            t2id = tool2_id,
-            t2n = tool2_name,
-            t2i = tool2_input,
         )
     }
 

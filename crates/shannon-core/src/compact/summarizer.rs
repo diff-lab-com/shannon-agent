@@ -660,7 +660,7 @@ mod tests {
 
     #[test]
     fn test_default() {
-        let s = RuleBasedSummarizer::default();
+        let s = RuleBasedSummarizer;
         let msgs = vec![text_message("user", "hi")];
         assert!(s.summarize(&msgs, 100).is_ok());
     }

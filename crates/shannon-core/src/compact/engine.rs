@@ -856,7 +856,7 @@ mod tests {
             .map(|i| {
                 text_msg(
                     if i % 2 == 0 { "user" } else { "assistant" },
-                    &format!("This is message number {} with some content", i),
+                    &format!("This is message number {i} with some content"),
                 )
             })
             .collect();
@@ -1111,7 +1111,7 @@ mod tests {
     fn test_cleanup_collapses_many_system_messages() {
         let engine = make_engine();
         let mut msgs: Vec<Message> = (0..5)
-            .map(|i| text_msg("system", &format!("System msg {}", i)))
+            .map(|i| text_msg("system", &format!("System msg {i}")))
             .chain(std::iter::once(text_msg("user", "hello")))
             .collect();
         engine.post_compact_cleanup(&mut msgs);

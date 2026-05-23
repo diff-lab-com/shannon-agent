@@ -135,11 +135,10 @@ fn compaction_100_turns_under_2s() {
     let result = engine.compact(&mut msgs);
     let elapsed = start.elapsed();
 
-    assert!(result.is_ok(), "compaction should succeed: {:?}", result);
+    assert!(result.is_ok(), "compaction should succeed: {result:?}");
     assert!(
         elapsed.as_secs() < 2,
-        "compaction took {:?}, expected < 2s",
-        elapsed
+        "compaction took {elapsed:?}, expected < 2s"
     );
 }
 
@@ -172,8 +171,7 @@ fn session_load_200_entries_under_500ms() {
     assert_eq!(parsed.len(), 200, "should parse all 200 entries");
     assert!(
         elapsed.as_millis() < 500,
-        "session load took {:?}, expected < 500ms",
-        elapsed
+        "session load took {elapsed:?}, expected < 500ms"
     );
 }
 
@@ -220,8 +218,7 @@ fn tool_chain_10_steps_under_100ms() {
     assert_eq!(results.len(), 10, "all 10 steps should complete");
     assert!(
         elapsed.as_millis() < 100,
-        "10-step tool chain took {:?}, expected < 100ms",
-        elapsed
+        "10-step tool chain took {elapsed:?}, expected < 100ms"
     );
 }
 
@@ -269,8 +266,7 @@ fn streaming_parse_throughput_over_10mb_s() {
     assert_eq!(parsed_count, event_count, "should parse all events");
     assert!(
         throughput_mbps > 10.0,
-        "SSE parse throughput was {:.1} MB/s, expected > 10 MB/s",
-        throughput_mbps
+        "SSE parse throughput was {throughput_mbps:.1} MB/s, expected > 10 MB/s"
     );
 }
 
@@ -313,8 +309,7 @@ fn snapshot_render_under_1ms() {
 
     assert!(
         per_call.as_micros() < 1000,
-        "snapshot render took {:?} per call, expected < 1ms",
-        per_call
+        "snapshot render took {per_call:?} per call, expected < 1ms"
     );
 }
 
@@ -342,8 +337,7 @@ fn token_estimation_1000_messages_under_50ms() {
     assert!(tokens > 0, "should estimate some tokens");
     assert!(
         elapsed.as_millis() < 50,
-        "token estimation for 1000 messages took {:?}, expected < 50ms",
-        elapsed
+        "token estimation for 1000 messages took {elapsed:?}, expected < 50ms"
     );
 }
 
@@ -396,8 +390,7 @@ fn cache_hit_rate_1000_turns_under_10ms() {
     );
     assert!(
         elapsed.as_millis() < 10,
-        "Cache hit rate calculation for 1000 turns took {:?}, expected < 10ms",
-        elapsed
+        "Cache hit rate calculation for 1000 turns took {elapsed:?}, expected < 10ms"
     );
 }
 
@@ -416,8 +409,7 @@ fn cache_hit_rate_10000_turns_under_50ms() {
     );
     assert!(
         elapsed.as_millis() < 50,
-        "Cache hit rate calculation for 10000 turns took {:?}, expected < 50ms",
-        elapsed
+        "Cache hit rate calculation for 10000 turns took {elapsed:?}, expected < 50ms"
     );
 }
 
@@ -488,9 +480,7 @@ fn cache_accumulation_from_sse_events_under_100ms() {
 
     assert!(
         elapsed.as_millis() < 100,
-        "Cache token accumulation from {} events took {:?}, expected < 100ms",
-        event_count,
-        elapsed
+        "Cache token accumulation from {event_count} events took {elapsed:?}, expected < 100ms"
     );
 }
 

@@ -1578,7 +1578,7 @@ fn find_latest_session_id(home_dir: &std::path::Path) -> Option<String> {
         }
         let modified = entry.metadata().ok()?.modified().ok()?;
         let name = path.file_stem()?.to_str()?.to_string();
-        if latest.as_ref().map_or(true, |(t, _)| modified > *t) {
+        if latest.as_ref().is_none_or(|(t, _)| modified > *t) {
             latest = Some((modified, name));
         }
     }
@@ -1602,6 +1602,7 @@ fn make_turn_messages(n: usize) -> Vec<serde_json::Value> {
     messages
 }
 
+#[ignore] // Requires built `shannon` binary and session persistence — run via `cargo test --test cli_e2e_tests -- --ignored`
 #[tokio::test]
 #[serial]
 async fn test_multiturn_ollama_three_turns_accumulated_context() {
@@ -1733,6 +1734,7 @@ async fn test_multiturn_openai_resume_preserves_context() {
     );
 }
 
+#[ignore] // Requires built `shannon` binary and session persistence — run via `cargo test --test cli_e2e_tests -- --ignored`
 #[tokio::test]
 #[serial]
 async fn test_multiturn_anthropic_resume_context() {
@@ -1782,6 +1784,7 @@ async fn test_multiturn_anthropic_resume_context() {
     );
 }
 
+#[ignore] // Requires built `shannon` binary and session persistence — run via `cargo test --test cli_e2e_tests -- --ignored`
 #[tokio::test]
 #[serial]
 async fn test_multiturn_ollama_story_then_character_count() {
@@ -1849,6 +1852,7 @@ async fn test_multiturn_resume_no_session_fails_gracefully() {
     assert_eq!(json["exit_code"], "success");
 }
 
+#[ignore] // Requires built `shannon` binary and session persistence — run via `cargo test --test cli_e2e_tests -- --ignored`
 #[tokio::test]
 #[serial]
 async fn test_multiturn_deepseek_resume_context() {
@@ -1954,42 +1958,49 @@ async fn run_long_conversation_test(n_turns: usize) {
     );
 }
 
+#[ignore] // Requires built `shannon` binary — long-running conversation stress test
 #[tokio::test]
 #[serial]
 async fn test_long_conversation_5_turns() {
     run_long_conversation_test(5).await;
 }
 
+#[ignore] // Requires built `shannon` binary — long-running conversation stress test
 #[tokio::test]
 #[serial]
 async fn test_long_conversation_10_turns() {
     run_long_conversation_test(10).await;
 }
 
+#[ignore] // Requires built `shannon` binary — long-running conversation stress test
 #[tokio::test]
 #[serial]
 async fn test_long_conversation_20_turns() {
     run_long_conversation_test(20).await;
 }
 
+#[ignore] // Requires built `shannon` binary — long-running conversation stress test
 #[tokio::test]
 #[serial]
 async fn test_long_conversation_50_turns() {
     run_long_conversation_test(50).await;
 }
 
+#[ignore] // Requires built `shannon` binary — long-running conversation stress test
 #[tokio::test]
 #[serial]
 async fn test_long_conversation_100_turns() {
     run_long_conversation_test(100).await;
 }
 
+#[ignore] // Requires built `shannon` binary — long-running conversation stress test
 #[tokio::test]
 #[serial]
 async fn test_long_conversation_200_turns() {
     run_long_conversation_test(200).await;
 }
 
+#[ignore] // Requires built `shannon` binary — long-running conversation stress test
 #[tokio::test]
 #[serial]
 async fn test_long_conversation_500_turns() {

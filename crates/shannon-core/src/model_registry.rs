@@ -1259,8 +1259,7 @@ mod tests {
         for id in &glm_ids {
             assert!(
                 model_info_for(id).is_some(),
-                "GLM model {} should be registered",
-                id
+                "GLM model {id} should be registered"
             );
         }
     }
@@ -1323,8 +1322,7 @@ mod tests {
         for id in &intl_ids {
             assert!(
                 model_info_for(id).is_some(),
-                "Zhipu Intl model {} should be registered",
-                id
+                "Zhipu Intl model {id} should be registered"
             );
         }
     }
@@ -1423,8 +1421,7 @@ mod tests {
             let info = model_info_for(id).unwrap();
             assert!(
                 info.capabilities.has(ModelCapabilities::vision()),
-                "{} should have vision",
-                id
+                "{id} should have vision"
             );
         }
     }
@@ -1505,13 +1502,12 @@ mod tests {
             "qwen3.6-flash",
         ] {
             let ctx = context_window_for(id);
-            assert!(ctx > 0, "{} should have a positive context window", id);
+            assert!(ctx > 0, "{id} should have a positive context window");
             // Verify model is in catalog (not falling back to generic 200K default)
             let in_catalog = model_info_for(id).is_some();
             assert!(
                 in_catalog,
-                "{} resolved to context {ctx} but is not in catalog — check registration",
-                id
+                "{id} resolved to context {ctx} but is not in catalog — check registration"
             );
         }
     }
@@ -1591,8 +1587,7 @@ mod tests {
         for id in &qwen_ids {
             assert!(
                 model_info_for(id).is_some(),
-                "Qwen model {} should be registered",
-                id
+                "Qwen model {id} should be registered"
             );
         }
     }
@@ -1619,8 +1614,7 @@ mod tests {
             assert_eq!(
                 context_window_for(id),
                 1_000_000,
-                "{} should have 1M context",
-                id
+                "{id} should have 1M context"
             );
         }
     }

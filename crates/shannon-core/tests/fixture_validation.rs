@@ -16,7 +16,7 @@ fn fixtures_dir() -> PathBuf {
 /// Parse a JSONL fixture file into a vector of JSON values.
 fn parse_fixture(path: &PathBuf) -> Vec<Value> {
     let content =
-        fs::read_to_string(path).unwrap_or_else(|e| panic!("Failed to read {:?}: {}", path, e));
+        fs::read_to_string(path).unwrap_or_else(|e| panic!("Failed to read {path:?}: {e}"));
     content
         .lines()
         .filter(|l| !l.trim().is_empty())
@@ -34,7 +34,7 @@ fn all_fixtures() -> Vec<String> {
     let mut files: Vec<String> = fs::read_dir(&dir)
         .expect("fixtures/sessions/ directory")
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "jsonl"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "jsonl"))
         .filter_map(|e| e.file_name().to_str().map(|s| s.to_string()))
         .collect();
     files.sort();
@@ -46,7 +46,7 @@ fn validate_fixture(name: &str) {
     let path = fixtures_dir().join(name);
     let entries = parse_fixture(&path);
 
-    assert!(!entries.is_empty(), "{}: fixture is empty", name);
+    assert!(!entries.is_empty(), "{name}: fixture is empty");
 
     // Must start with SessionStart
     let first = &entries[0];
@@ -56,8 +56,7 @@ fn validate_fixture(name: &str) {
         .unwrap_or("missing");
     assert_eq!(
         first_type, "SessionStart",
-        "{}: first entry must be SessionStart, got {}",
-        name, first_type
+        "{name}: first entry must be SessionStart, got {first_type}"
     );
 
     // Must end with SessionEnd
@@ -68,8 +67,7 @@ fn validate_fixture(name: &str) {
         .unwrap_or("missing");
     assert_eq!(
         last_type, "SessionEnd",
-        "{}: last entry must be SessionEnd, got {}",
-        name, last_type
+        "{name}: last entry must be SessionEnd, got {last_type}"
     );
 
     // Session IDs must match
@@ -83,8 +81,7 @@ fn validate_fixture(name: &str) {
         .unwrap_or("");
     assert_eq!(
         start_id, end_id,
-        "{}: SessionStart id {} != SessionEnd id {}",
-        name, start_id, end_id
+        "{name}: SessionStart id {start_id} != SessionEnd id {end_id}"
     );
 
     // Validate turn numbers are contiguous
@@ -103,14 +100,12 @@ fn validate_fixture(name: &str) {
     turns.dedup();
 
     if !turns.is_empty() {
-        assert_eq!(turns[0], 1, "{}: turns should start at 1", name);
+        assert_eq!(turns[0], 1, "{name}: turns should start at 1");
         for window in turns.windows(2) {
             assert_eq!(
                 window[1] - window[0],
                 1,
-                "{}: turns not contiguous: {:?}",
-                name,
-                turns
+                "{name}: turns not contiguous: {turns:?}"
             );
         }
     }
@@ -123,8 +118,7 @@ fn validate_fixture(name: &str) {
     let max_turn = turns.last().copied().unwrap_or(0);
     assert_eq!(
         declared_turns, max_turn,
-        "{}: declared {} turns but found max turn {}",
-        name, declared_turns, max_turn
+        "{name}: declared {declared_turns} turns but found max turn {max_turn}"
     );
 
     // Validate entry types are all recognized

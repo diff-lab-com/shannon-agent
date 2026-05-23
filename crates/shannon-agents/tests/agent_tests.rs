@@ -27,7 +27,7 @@ mod coordinator_tests {
 
     #[tokio::test]
     async fn coordinator_new_with_custom_config() {
-        let config = CoordinatorConfig {
+        let _config = CoordinatorConfig {
             max_team_size: 5,
             message_buffer_size: 50,
             enable_worktree_isolation: false,

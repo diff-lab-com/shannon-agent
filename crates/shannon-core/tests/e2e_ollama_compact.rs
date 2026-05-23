@@ -132,7 +132,7 @@ fn generate_tool_conversation(turns: usize) -> Vec<Message> {
 // ============================================================================
 
 #[test]
-#[ignore]
+#[ignore] // Requires running Ollama instance with OLLAMA_E2E=1 and OLLAMA_MODEL set
 fn e2e_ollama_compact_basic_summarization() {
     let Some(client) = ollama_client() else {
         eprintln!("SKIP: OLLAMA_E2E not set");
@@ -184,7 +184,7 @@ fn e2e_ollama_compact_basic_summarization() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Requires running Ollama instance with OLLAMA_E2E=1 and OLLAMA_MODEL set
 fn e2e_ollama_compact_tool_use_conversation() {
     let Some(client) = ollama_client() else {
         eprintln!("SKIP: OLLAMA_E2E not set");
@@ -219,7 +219,7 @@ fn e2e_ollama_compact_tool_use_conversation() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Requires running Ollama instance with OLLAMA_E2E=1 and OLLAMA_MODEL set
 fn e2e_ollama_micro_compact() {
     let Some(client) = ollama_client() else {
         eprintln!("SKIP: OLLAMA_E2E not set");
@@ -268,7 +268,7 @@ fn e2e_ollama_micro_compact() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Requires running Ollama instance with OLLAMA_E2E=1 and OLLAMA_MODEL set
 fn e2e_ollama_compact_preserves_recent_messages() {
     let Some(client) = ollama_client() else {
         eprintln!("SKIP: OLLAMA_E2E not set");
@@ -309,7 +309,7 @@ fn e2e_ollama_compact_preserves_recent_messages() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Requires running Ollama instance with OLLAMA_E2E=1 and OLLAMA_MODEL set
 fn e2e_ollama_compact_group_based() {
     let Some(client) = ollama_client() else {
         eprintln!("SKIP: OLLAM_E2E not set");
@@ -349,7 +349,7 @@ fn e2e_ollama_compact_group_based() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Requires running Ollama instance with OLLAMA_E2E=1 and OLLAMA_MODEL set
 fn e2e_ollama_compact_large_conversation_stress() {
     let Some(client) = ollama_client() else {
         eprintln!("SKIP: OLLAMA_E2E not set");
@@ -394,7 +394,7 @@ fn e2e_ollama_compact_large_conversation_stress() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Requires running Ollama instance with OLLAMA_E2E=1 and OLLAMA_MODEL set
 fn e2e_ollama_compact_summary_quality() {
     let Some(client) = ollama_client() else {
         eprintln!("SKIP: OLLAMA_E2E not set");

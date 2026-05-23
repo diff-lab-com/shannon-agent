@@ -117,8 +117,7 @@ mod context_budget_tests {
         // The huge tool (index 2) should be among the deferred
         assert!(
             defer.contains(&2),
-            "huge_tool (index 2) should be deferred, got {:?}",
-            defer
+            "huge_tool (index 2) should be deferred, got {defer:?}"
         );
     }
 

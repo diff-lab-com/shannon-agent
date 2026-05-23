@@ -1005,8 +1005,7 @@ mod tests {
         let c = confidence_for_sentence("Some sentence.", "some");
         assert!(
             (0.0..=1.0).contains(&c),
-            "confidence {} should be in [0.0, 1.0]",
-            c
+            "confidence {c} should be in [0.0, 1.0]"
         );
     }
 }

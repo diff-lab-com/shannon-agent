@@ -1618,9 +1618,9 @@ mod tests {
 
         assert!(result.metadata.get("recurring").unwrap().as_bool().unwrap());
         // Should have expires_at (7-day expiry)
-        assert!(result.metadata.get("expires_at").is_some());
+        assert!(result.metadata.contains_key("expires_at"));
         // Should have next_run
-        assert!(result.metadata.get("next_run").is_some());
+        assert!(result.metadata.contains_key("next_run"));
     }
 
     #[tokio::test]
@@ -1639,7 +1639,7 @@ mod tests {
 
         assert!(!result.metadata.get("recurring").unwrap().as_bool().unwrap());
         // Should have expires_at (1-day safety net)
-        assert!(result.metadata.get("expires_at").is_some());
+        assert!(result.metadata.contains_key("expires_at"));
     }
 
     #[tokio::test]

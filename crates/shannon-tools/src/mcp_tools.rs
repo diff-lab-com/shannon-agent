@@ -606,6 +606,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     fn make_manager() -> Arc<McpResourceManager> {
         let manager = Arc::new(McpResourceManager::new());
         let client = MockClient::new("test-server", true, true)

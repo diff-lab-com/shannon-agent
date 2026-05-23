@@ -2792,8 +2792,7 @@ fn test_three_turn_story_characters_scenes_wordcount() {
         assert_ne!(
             conv.messages[i].role,
             conv.messages[i - 1].role,
-            "Role alternation broken at index {}",
-            i
+            "Role alternation broken at index {i}"
         );
     }
 
@@ -2887,8 +2886,7 @@ fn test_five_turn_deep_context_preservation() {
         assert_ne!(
             conv.messages[i].role,
             conv.messages[i - 1].role,
-            "Alternation broken at {}",
-            i
+            "Alternation broken at {i}"
         );
     }
 }
@@ -2967,10 +2965,7 @@ fn test_story_context_survives_tool_interleaving() {
         let curr = &conv.messages[i].role;
         assert!(
             prev != curr || prev == "user",
-            "Alternation broken at {}: '{}' → '{}'",
-            i,
-            prev,
-            curr
+            "Alternation broken at {i}: '{prev}' → '{curr}'"
         );
     }
 
@@ -3129,7 +3124,7 @@ mod integration_tests {
             .mock("POST", "/v1/messages")
             .with_status(200)
             .with_header("content-type", "text/event-stream")
-            .with_body(&sse_stream_with_text(text))
+            .with_body(sse_stream_with_text(text))
             .create()
     }
 
@@ -3251,7 +3246,7 @@ mod integration_tests {
         assert_eq!(update2.len(), 4, "After turn 2: 4 messages total");
 
         // Verify the story from turn 1 is preserved in message history
-        let all_text: String = update2.iter().map(|m| message_text(m)).collect();
+        let all_text: String = update2.iter().map(message_text).collect();
         assert!(
             all_text.contains("1387") || all_text.contains("4.2"),
             "Story details must survive into turn 2 context. Got: {}",
@@ -3264,7 +3259,7 @@ mod integration_tests {
         let history_text: String = engine
             .conversation_history()
             .iter()
-            .map(|m| message_text(m))
+            .map(message_text)
             .collect();
         assert!(history_text.contains("科幻故事"), "User turn 1 preserved");
         assert!(history_text.contains("仙女座"), "Story content preserved");
@@ -3294,9 +3289,7 @@ mod integration_tests {
         assert!(completed_idx.is_some(), "Completed must be emitted");
         assert!(
             update_idx < completed_idx,
-            "ConversationUpdate (idx {:?}) must come before Completed (idx {:?})",
-            update_idx,
-            completed_idx
+            "ConversationUpdate (idx {update_idx:?}) must come before Completed (idx {completed_idx:?})"
         );
     }
 

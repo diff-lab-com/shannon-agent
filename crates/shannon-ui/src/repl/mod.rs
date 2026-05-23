@@ -1863,4 +1863,5 @@ impl Repl {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default, clippy::overly_complex_bool_expr)]
 mod tests;

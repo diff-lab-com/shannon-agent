@@ -279,7 +279,7 @@ mod tests {
 
         // Add a preference manually
         {
-            let mgr = injector.preference_memory.write().unwrap();
+            let _mgr = injector.preference_memory.write().unwrap();
             // PreferenceMemoryManager::new already loaded from disk, which is empty.
             // We can't easily add a preference without the full detect pipeline,
             // so we just verify the reinjection includes the instructions part.

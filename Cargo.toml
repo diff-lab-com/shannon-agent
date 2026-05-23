@@ -82,6 +82,9 @@ urlencoding = "2.1"
 # Image processing
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 
+# Property-based testing
+proptest = "1"
+
 [profile.release]
 opt-level = 3
 lto = true

@@ -2505,4 +2505,51 @@ mod tests {
         assert_eq!(executor.sandbox_type(), SandboxType::Docker);
         assert!(executor.docker_config.is_some());
     }
+
+    // ------------------------------------------------------------------
+    // Error boundary tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_write_allowed_rejects_path_traversal_etc_passwd() {
+        // Path traversal attempt targeting /etc/passwd via .git symlink-like pattern
+        let result = check_write_allowed(Path::new(".git/../../etc/passwd"));
+        assert!(result.is_err(), "Should reject path traversal via .git");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("protected"),
+            "Error should mention protected path, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_write_allowed_rejects_shannon_config() {
+        let result = check_write_allowed(Path::new(".shannon/config.toml"));
+        assert!(result.is_err(), "Should reject write to .shannon config");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("--dangerously-skip-protected"),
+            "Error should mention escape hatch, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_write_allowed_rejects_nested_git_objects() {
+        let result = check_write_allowed(Path::new(".git/objects/pack/abc.pack"));
+        assert!(result.is_err(), "Should reject write to .git/objects");
+    }
+
+    #[test]
+    fn test_write_allowed_with_extras_rejects_custom_protected() {
+        let extras = vec!["secrets/".to_string()];
+        let result = check_write_allowed_with_extras(Path::new("secrets/api_key.pem"), &extras);
+        assert!(result.is_err(), "Should reject write to custom protected dir");
+    }
+
+    #[test]
+    fn test_write_allowed_with_extras_allows_normal_path() {
+        let extras = vec!["secrets/".to_string()];
+        let result = check_write_allowed_with_extras(Path::new("src/main.rs"), &extras);
+        assert!(result.is_ok(), "Should allow write to normal path");
+    }
 }

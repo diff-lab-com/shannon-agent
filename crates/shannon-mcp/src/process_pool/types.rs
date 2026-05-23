@@ -810,7 +810,6 @@ mod tests {
         assert_eq!(DEFAULT_CONNECTION_TIMEOUT_SECS, 30);
         assert_eq!(DEFAULT_REQUEST_TIMEOUT_SECS, 60);
         assert_eq!(DEFAULT_TOOL_TIMEOUT_SECS, 600);
-        assert!(DEFAULT_TOOL_TIMEOUT_SECS > DEFAULT_REQUEST_TIMEOUT_SECS);
     }
 
     #[test]

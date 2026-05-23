@@ -566,4 +566,85 @@ mod tests {
         assert!(files.iter().any(|f| f.ends_with("mod.rs")));
         assert!(files.iter().any(|f| f.ends_with("lib.rs")));
     }
+
+    // ======================================================================
+    // Property-based tests (proptest)
+    // ======================================================================
+
+    proptest::proptest! {
+        /// Any valid glob pattern compiles without panic.
+        /// We restrict to common safe characters to avoid invalid patterns.
+        #[test]
+        fn proptest_glob_pattern_no_panic(pattern in "[a-zA-Z0-9_./*?]{0,30}") {
+            // Should not panic -- errors are returned as Ok ToolOutput with is_error
+            let tmp = TempDir::new().unwrap();
+            let root = tmp.path();
+            fs::create_dir_all(root.join(".git")).unwrap();
+            fs::write(root.join("a.rs"), "").unwrap();
+
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let input = GlobInput {
+                pattern: pattern.clone(),
+                path: Some(root.display().to_string()),
+                exclude_pattern: None,
+            };
+            // Must complete without panic
+            let _ = rt.block_on(execute(input));
+        }
+
+        /// Glob matching is deterministic: same pattern on the same directory
+        /// always produces the same result (both success or both error).
+        #[test]
+        fn proptest_glob_deterministic(pattern in "[a-zA-Z0-9_.*]{0,20}") {
+            let tmp = TempDir::new().unwrap();
+            let root = tmp.path();
+            fs::create_dir_all(root.join(".git")).unwrap();
+            fs::write(root.join("a.rs"), "").unwrap();
+            fs::write(root.join("b.rs"), "").unwrap();
+
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let input1 = GlobInput {
+                pattern: pattern.clone(),
+                path: Some(root.display().to_string()),
+                exclude_pattern: None,
+            };
+            let input2 = GlobInput {
+                pattern: pattern.clone(),
+                path: Some(root.display().to_string()),
+                exclude_pattern: None,
+            };
+
+            let out1 = rt.block_on(execute(input1));
+            let out2 = rt.block_on(execute(input2));
+
+            // Both calls must produce the same kind of result
+            match (out1, out2) {
+                (Ok(o1), Ok(o2)) => {
+                    assert_eq!(o1.is_error, o2.is_error);
+                    assert_eq!(o1.metadata["count"], o2.metadata["count"]);
+                }
+                (Err(e1), Err(e2)) => {
+                    assert_eq!(e1.to_string(), e2.to_string());
+                }
+                _ => panic!("determinism violation: one call succeeded, the other failed"),
+            }
+        }
+
+        /// GlobInput deserialization roundtrips through JSON.
+        #[test]
+        fn proptest_glob_input_roundtrip(
+            pattern in ".{1,30}",
+            path in proptest::option::of(".{0,50}"),
+        ) {
+            let input = GlobInput {
+                pattern: pattern.clone(),
+                path: path.clone(),
+                exclude_pattern: None,
+            };
+            let json = serde_json::to_string(&input).unwrap();
+            let parsed: GlobInput = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed.pattern, pattern);
+            assert_eq!(parsed.path, path);
+        }
+    }
 }

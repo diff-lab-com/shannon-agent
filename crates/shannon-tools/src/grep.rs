@@ -1069,4 +1069,96 @@ mod tests {
             1
         );
     }
+
+    // ======================================================================
+    // Property-based tests (proptest)
+    // ======================================================================
+
+    proptest::proptest! {
+        /// Any valid regex pattern compiles without panic for simple patterns.
+        #[test]
+        fn proptest_regex_compiles(pattern in "[a-zA-Z0-9_. ]{1,30}") {
+            let dir = TempDir::new().unwrap();
+            fs::write(dir.path().join("test.txt"), "hello world\n").unwrap();
+
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let tool = GrepTool::new();
+            let input = json!({
+                "pattern": pattern,
+                "path": dir.path().to_str().unwrap(),
+            });
+
+            // Must not panic; errors are returned as Err
+            let _ = rt.block_on(tool.execute(input));
+        }
+
+        /// Search results are deterministic: same pattern on the same files
+        /// produces the same total_matches count.
+        #[test]
+        fn proptest_search_deterministic(pattern in "[a-zA-Z]{1,10}") {
+            let dir = TempDir::new().unwrap();
+            fs::write(dir.path().join("test.txt"), "hello world foo bar\n").unwrap();
+
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let tool = GrepTool::new();
+
+            let input1 = json!({
+                "pattern": pattern,
+                "path": dir.path().to_str().unwrap(),
+            });
+            let input2 = json!({
+                "pattern": pattern,
+                "path": dir.path().to_str().unwrap(),
+            });
+
+            let r1 = rt.block_on(tool.execute(input1)).unwrap();
+            let r2 = rt.block_on(tool.execute(input2)).unwrap();
+            assert_eq!(
+                r1.metadata["total_matches"],
+                r2.metadata["total_matches"]
+            );
+        }
+
+        /// GrepOutputMode roundtrips through JSON.
+        #[test]
+        fn proptest_output_mode_roundtrip(mode_str in "content|files|count") {
+            let json_str = format!("\"{mode_str}\"");
+            let parsed: GrepOutputMode = serde_json::from_str(&json_str).unwrap();
+            let serialized = serde_json::to_string(&parsed).unwrap();
+            let reparsed: GrepOutputMode = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(parsed, reparsed);
+        }
+
+        /// GrepInput deserialization roundtrips through JSON for basic fields.
+        #[test]
+        fn proptest_grep_input_roundtrip(pattern in ".{1,30}") {
+            let input = GrepInput {
+                pattern: pattern.clone(),
+                path: None,
+                include: None,
+                exclude: None,
+                case_insensitive: None,
+                line_number: None,
+                context_before: None,
+                context_after: None,
+                max_results: None,
+                output_mode: None,
+            };
+            let json = serde_json::to_string(&input).unwrap();
+            let parsed: GrepInput = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed.pattern, pattern);
+        }
+
+        /// path_matches_glob is deterministic for any path/pattern pair.
+        #[test]
+        fn proptest_path_matches_glob_deterministic(
+            path_str in ".{0,50}",
+            pattern in "[a-zA-Z0-9_.*]{0,20}",
+        ) {
+            let path = Path::new(&path_str);
+            let r1 = path_matches_glob(path, &pattern);
+            let r2 = path_matches_glob(path, &pattern);
+            assert_eq!(r1, r2);
+        }
+    }
 }

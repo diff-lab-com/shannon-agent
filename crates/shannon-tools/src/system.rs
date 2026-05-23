@@ -2160,3 +2160,121 @@ fn test_security_analysis_default_fields() {
     assert!(!analysis.requires_confirmation);
     assert!(analysis.warnings.is_empty());
 }
+
+// ── Error boundary: shell command injection and dangerous command blocking ──
+
+#[test]
+fn test_command_injection_via_command_substitution_detected() {
+    let analysis = analyze_command_security("$(rm -rf /)");
+    assert_eq!(analysis.risk_level, SecurityLevel::Critical);
+    assert!(
+        analysis.is_destructive,
+        "Command substitution should be flagged as destructive"
+    );
+    assert!(
+        analysis.warnings.iter().any(|w| w.contains("Command substitution")),
+        "Should warn about command substitution"
+    );
+}
+
+#[test]
+fn test_command_injection_via_backtick_detected() {
+    let analysis = analyze_command_security("`rm -rf /`");
+    assert_eq!(analysis.risk_level, SecurityLevel::Critical);
+    assert!(analysis.is_destructive);
+}
+
+#[test]
+fn test_fork_bomb_pattern_detected() {
+    // Fork bomb uses pipe and background (&) which triggers Medium risk via pipe check.
+    // The function definition syntax `:(){ ... };:` is not directly in DESTRUCTIVE_PATTERNS,
+    // but the pipe detection elevates it to at least Medium risk.
+    let analysis = analyze_command_security(":(){ :|:& };:");
+    assert!(
+        analysis.risk_level >= SecurityLevel::Medium,
+        "Fork bomb should be at least Medium risk, got {:?}",
+        analysis.risk_level
+    );
+    // The command is not read-only and contains a pipe
+    assert!(!analysis.is_read_only, "Fork bomb should not be classified as read-only");
+}
+
+#[test]
+fn test_base64_pipe_to_shell_detected() {
+    let analysis = analyze_command_security("echo 'cm0gLXJmIC8=' | base64 -d | bash");
+    assert_eq!(analysis.risk_level, SecurityLevel::Critical);
+    assert!(
+        analysis.warnings.iter().any(|w| w.contains("Encoded command") || w.contains("pipe-to-shell")),
+        "Should detect encoded command execution"
+    );
+}
+
+#[test]
+fn test_validate_path_rejects_traversal() {
+    let result = validate_path("../../../etc/passwd", &[]);
+    assert!(result.is_err(), "Should reject path traversal");
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("traversal") || err.contains("Traversal"),
+        "Error should mention traversal, got: {err}"
+    );
+}
+
+#[test]
+fn test_validate_path_rejects_system_path() {
+    let result = validate_path("/etc/passwd", &[]);
+    assert!(result.is_err(), "Should reject system path");
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("system") || err.contains("System"),
+        "Error should mention system path, got: {err}"
+    );
+}
+
+#[test]
+fn test_validate_path_rejects_disallowed_path() {
+    let allowed = vec!["/home/user/project".to_string()];
+    let result = validate_path("/opt/secret/data", &allowed);
+    assert!(result.is_err(), "Should reject path not in allowed list");
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("not in allowed") || err.contains("NotAllowed"),
+        "Error should mention not allowed, got: {err}"
+    );
+}
+
+#[test]
+fn test_dd_disk_destruction_detected() {
+    let analysis = analyze_command_security("dd if=/dev/zero of=/dev/sda");
+    assert_eq!(analysis.risk_level, SecurityLevel::Critical);
+    assert!(analysis.is_destructive);
+}
+
+#[test]
+fn test_mkfs_format_detected() {
+    let analysis = analyze_command_security("mkfs.ext4 /dev/sda1");
+    assert_eq!(analysis.risk_level, SecurityLevel::Critical);
+    assert!(analysis.is_destructive);
+}
+
+#[test]
+fn test_rm_rf_root_detected() {
+    let analysis = analyze_command_security("rm -rf /");
+    assert_eq!(analysis.risk_level, SecurityLevel::Critical);
+    assert!(analysis.is_destructive);
+    assert!(
+        analysis.warnings.iter().any(|w| w.contains("rm -rf /")),
+        "Should detect rm -rf / pattern"
+    );
+}
+
+#[test]
+fn test_shell_redirect_to_etc_detected() {
+    let analysis = analyze_command_security("echo data > /etc/passwd");
+    assert_eq!(analysis.risk_level, SecurityLevel::Critical);
+    assert!(analysis.is_destructive);
+    assert!(
+        analysis.warnings.iter().any(|w| w.contains("/etc/passwd")),
+        "Should detect sensitive system path access"
+    );
+}

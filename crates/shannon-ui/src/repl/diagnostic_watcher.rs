@@ -32,7 +32,17 @@ pub(crate) fn spawn_diagnostic_run(
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
-    tokio::spawn(async move {
+    let handle = match tokio::runtime::Handle::try_current() {
+        Ok(h) => h,
+        Err(_) => {
+            // No Tokio runtime available yet — skip diagnostic run.
+            let mut guard = pending.blocking_lock();
+            *guard = false;
+            return None;
+        }
+    };
+
+    handle.spawn(async move {
         let result = shannon_tools::run_cli_diagnostics(&project_dir).await;
         let _ = tx.send(result);
         let mut guard = pending.lock().await;

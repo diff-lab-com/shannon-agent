@@ -2215,7 +2215,7 @@ mod tests {
         assert!(msg.duration_secs.is_some());
         let dur = msg.duration_secs.unwrap();
         assert!(
-            dur >= 1.9 && dur <= 3.0,
+            (1.9..=3.0).contains(&dur),
             "duration should be ~2s, got {dur}"
         );
     }

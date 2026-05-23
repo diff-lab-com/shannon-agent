@@ -90,6 +90,7 @@ criterion = "0.5"
 mockito = "1.6"
 tower = "0.5"
 insta = "1.42"
+proptest = { workspace = true }
 
 [[bench]]
 name = "query_engine"

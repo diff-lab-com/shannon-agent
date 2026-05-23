@@ -2953,4 +2953,85 @@ mod tests {
         assert!(!eval.is_allowed());
         assert!(eval.is_denied());
     }
+
+    // ======================================================================
+    // Property-based tests (proptest)
+    // ======================================================================
+
+    proptest::proptest! {
+        /// Classification is deterministic: classifying the same input twice
+        /// produces the same decision and risk level.
+        #[test]
+        fn proptest_classify_deterministic(tool in ".{1,20}", cmd in ".{0,100}") {
+            let c = PermissionClassifier::new();
+            let input = serde_json::json!({ "command": cmd });
+            let r1 = c.classify(&tool, &input);
+            let r2 = c.classify(&tool, &input);
+            assert_eq!(r1.decision, r2.decision);
+            assert_eq!(r1.risk_level, r2.risk_level);
+            assert_eq!(r1.confidence, r2.confidence);
+        }
+
+        /// classify_bash_command is deterministic for any command string.
+        #[test]
+        fn proptest_bash_classify_deterministic(cmd in ".{0,100}") {
+            let c = PermissionClassifier::new();
+            let r1 = c.classify_bash_command(&cmd);
+            let r2 = c.classify_bash_command(&cmd);
+            assert_eq!(r1.decision, r2.decision);
+            assert_eq!(r1.risk_level, r2.risk_level);
+        }
+
+        /// Dangerous pattern detection is deterministic: the same command always
+        /// produces the same number of hits with the same pattern IDs.
+        #[test]
+        fn proptest_dangerous_patterns_deterministic(cmd in ".{0,100}") {
+            let c = PermissionClassifier::new();
+            let h1 = c.check_dangerous_patterns(&cmd);
+            let h2 = c.check_dangerous_patterns(&cmd);
+            assert_eq!(h1.len(), h2.len());
+            let ids1: Vec<_> = h1.iter().map(|p| p.id.clone()).collect();
+            let ids2: Vec<_> = h2.iter().map(|p| p.id.clone()).collect();
+            assert_eq!(ids1, ids2);
+        }
+
+        /// match_glob is deterministic: matching the same pattern/text pair twice
+        /// always yields the same boolean result.
+        #[test]
+        fn proptest_glob_deterministic(pattern in ".{0,30}", text in ".{0,50}") {
+            let r1 = match_glob(&pattern, &text);
+            let r2 = match_glob(&pattern, &text);
+            assert_eq!(r1, r2);
+        }
+
+        /// match_glob with the "*" pattern always matches any text.
+        #[test]
+        fn proptest_glob_star_matches_everything(text in ".{0,80}") {
+            assert!(match_glob("*", &text));
+        }
+
+        /// An exact-match pattern matches only that exact string.
+        #[test]
+        fn proptest_glob_exact_only(s in ".{1,20}") {
+            assert!(match_glob(&s, &s));
+        }
+
+        /// GlobPattern.matches() is consistent with the free function match_glob.
+        #[test]
+        fn proptest_glob_pattern_consistent(pattern in ".{0,30}", text in ".{0,50}") {
+            let gp = GlobPattern::new(&pattern);
+            assert_eq!(gp.matches(&text), match_glob(&pattern, &text));
+        }
+
+        /// RuleDecision display roundtrip: any decision serializes and the string
+        /// is always lowercase and non-empty.
+        #[test]
+        fn proptest_rule_decision_display_nonempty(d in proptest::sample::select(&[
+            RuleDecision::Allow, RuleDecision::Deny, RuleDecision::Ask,
+        ])) {
+            let s = d.to_string();
+            assert!(!s.is_empty());
+            assert_eq!(s, s.to_lowercase());
+        }
+    }
 }

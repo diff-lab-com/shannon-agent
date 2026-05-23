@@ -59,8 +59,7 @@ fn test_search_driven_fix_tool_chain() {
     let tools = load_tool_names("search_driven_fix.jsonl");
     assert!(
         tools.first().map(|t| t.as_str()) == Some("Grep"),
-        "Expected Grep first, got {:?}",
-        tools
+        "Expected Grep first, got {tools:?}"
     );
     assert!(contains_tool(&tools, "Read"), "Expected Read in chain");
     assert!(contains_tool(&tools, "Edit"), "Expected Edit in chain");
@@ -71,7 +70,7 @@ fn test_search_driven_fix_tool_chain() {
 fn test_search_driven_fix_no_errors() {
     let calls = load_tool_calls("search_driven_fix.jsonl");
     for (tool, _, is_error) in &calls {
-        assert!(!is_error, "Tool {} had unexpected error", tool);
+        assert!(!is_error, "Tool {tool} had unexpected error");
     }
 }
 
@@ -83,8 +82,7 @@ fn test_parallel_tool_use_has_multiple_reads() {
     let read_count = count_tool(&tools, "Read");
     assert!(
         read_count >= 3,
-        "Expected >= 3 parallel reads, got {}",
-        read_count
+        "Expected >= 3 parallel reads, got {read_count}"
     );
 }
 
@@ -92,7 +90,7 @@ fn test_parallel_tool_use_has_multiple_reads() {
 fn test_parallel_tool_use_no_errors() {
     let calls = load_tool_calls("parallel_tool_use.jsonl");
     for (tool, _, is_error) in &calls {
-        assert!(!is_error, "Tool {} had unexpected error", tool);
+        assert!(!is_error, "Tool {tool} had unexpected error");
     }
 }
 
@@ -104,8 +102,7 @@ fn test_cascading_edits_multiple_edits() {
     let edit_count = count_tool(&tools, "Edit");
     assert!(
         edit_count >= 3,
-        "Expected >= 3 cascading edits, got {}",
-        edit_count
+        "Expected >= 3 cascading edits, got {edit_count}"
     );
     assert!(contains_tool(&tools, "Grep"), "Expected Grep in chain");
     assert!(contains_tool(&tools, "Read"), "Expected Read in chain");
@@ -128,8 +125,7 @@ fn test_tdd_cycle_has_write_and_bash() {
     let bash_count = count_tool(&tools, "Bash");
     assert!(
         bash_count >= 2,
-        "Expected >= 2 Bash calls (fail then pass), got {}",
-        bash_count
+        "Expected >= 2 Bash calls (fail then pass), got {bash_count}"
     );
 }
 
@@ -182,8 +178,8 @@ fn test_multi_file_search_replace() {
     let tools = load_tool_names("multi_file_search_replace.jsonl");
     let read_count = count_tool(&tools, "Read");
     let edit_count = count_tool(&tools, "Edit");
-    assert!(read_count >= 2, "Expected >= 2 reads, got {}", read_count);
-    assert!(edit_count >= 2, "Expected >= 2 edits, got {}", edit_count);
+    assert!(read_count >= 2, "Expected >= 2 reads, got {read_count}");
+    assert!(edit_count >= 2, "Expected >= 2 edits, got {edit_count}");
     assert!(contains_tool(&tools, "Grep"), "Expected Grep");
 }
 

@@ -245,7 +245,7 @@ async fn test_large_sse_response() {
 #[tokio::test]
 async fn test_many_small_chunks() {
     // Create 1000 x 100-byte chunks and verify all received in order.
-    let chunks: Vec<String> = (0..1000).map(|i| format!("[{:04}]", i)).collect();
+    let chunks: Vec<String> = (0..1000).map(|i| format!("[{i:04}]")).collect();
 
     let chunk_refs: Vec<&str> = chunks.iter().map(|s| s.as_str()).collect();
     let sse_body = build_chunked_sse(&chunk_refs);
@@ -279,11 +279,10 @@ async fn test_many_small_chunks() {
     // Verify ordering is preserved
     let reassembled: String = deltas.join("");
     for i in 0..1000 {
-        let expected = format!("[{:04}]", i);
+        let expected = format!("[{i:04}]");
         assert!(
             reassembled.contains(&expected),
-            "Chunk {} should be in reassembled output",
-            i,
+            "Chunk {i} should be in reassembled output",
         );
     }
 }
@@ -350,7 +349,7 @@ async fn test_sse_malformed_recovery() {
 async fn test_sse_backpressure() {
     // Simulate backpressure by using a bounded channel and a slow consumer.
     // Verify no data loss under backpressure.
-    let chunks: Vec<String> = (0..200).map(|i| format!("chunk-{} ", i)).collect();
+    let chunks: Vec<String> = (0..200).map(|i| format!("chunk-{i} ")).collect();
 
     let chunk_refs: Vec<&str> = chunks.iter().map(|s| s.as_str()).collect();
     let sse_body = build_chunked_sse(&chunk_refs);
@@ -423,7 +422,7 @@ async fn test_sse_backpressure() {
         .collect();
 
     for i in 0..200 {
-        let expected = format!("chunk-{} ", i);
+        let expected = format!("chunk-{i} ");
         assert!(text.contains(&expected), "Should contain chunk {i}",);
     }
 }

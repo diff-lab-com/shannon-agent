@@ -1470,4 +1470,186 @@ SHANNON_THEME='dark'"#;
                 .contains("settings.local.json")
         );
     }
+
+    // ======================================================================
+    // Property-based tests (proptest)
+    // ======================================================================
+
+    proptest::proptest! {
+        /// Settings JSON roundtrip: any valid Settings serializes to JSON and
+        /// deserializes back to an equal value.
+        #[test]
+        fn proptest_settings_json_roundtrip(
+            model in proptest::option::of(".{0,50}"),
+            temperature in proptest::option::of(0.0f32..=1.0f32),
+            max_tokens in proptest::option::of(1u32..100_000u32),
+            tools_enabled in proptest::bool::ANY,
+            permissions_mode in "ask|auto|readonly",
+            auto_memory in proptest::bool::ANY,
+            theme in "dark|light|auto",
+        ) {
+            let settings = Settings {
+                version: SETTINGS_VERSION.to_string(),
+                model,
+                temperature,
+                max_tokens,
+                tools_enabled,
+                permissions_mode,
+                auto_memory,
+                theme,
+                permissions: PermissionRules::default(),
+            };
+
+            let json = serde_json::to_string(&settings).unwrap();
+            let parsed: Settings = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, settings);
+        }
+
+        /// PermissionRules roundtrip through JSON.
+        #[test]
+        fn proptest_permission_rules_roundtrip(
+            deny in proptest::collection::vec(".{0,30}", 0..5),
+            ask in proptest::collection::vec(".{0,30}", 0..5),
+            allow in proptest::collection::vec(".{0,30}", 0..5),
+        ) {
+            let rules = PermissionRules { deny, ask, allow };
+            let json = serde_json::to_string(&rules).unwrap();
+            let parsed: PermissionRules = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, rules);
+        }
+
+        /// Settings.validate() accepts any temperature in [0, 1].
+        #[test]
+        fn proptest_temperature_valid_range(temp in 0.0f32..=1.0f32) {
+            let mut settings = Settings::new();
+            settings.temperature = Some(temp);
+            assert!(settings.validate().is_ok());
+        }
+
+        /// Settings.validate() rejects any temperature outside [0, 1].
+        #[test]
+        fn proptest_temperature_invalid_range(temp in 1.01f32..100.0f32) {
+            let mut settings = Settings::new();
+            settings.temperature = Some(temp);
+            assert!(settings.validate().is_err());
+        }
+
+        /// ClassificationResult builder always clamps confidence to [0, 1].
+        #[test]
+        fn proptest_confidence_clamp(conf in -10.0f32..10.0f32) {
+            use crate::permission_classifier::ClassificationResult;
+            let r = ClassificationResult::builder().confidence(conf).build();
+            assert!((0.0..=1.0).contains(&r.confidence));
+        }
+    }
+
+    // ── Error boundary tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_validate_rejects_negative_temperature() {
+        let mut settings = Settings::new();
+        settings.temperature = Some(-0.5);
+        let result = settings.validate();
+        assert!(result.is_err(), "Should reject negative temperature");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("temperature"),
+            "Error should mention temperature, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_temperature_above_one() {
+        let mut settings = Settings::new();
+        settings.temperature = Some(2.0);
+        let result = settings.validate();
+        assert!(result.is_err(), "Should reject temperature > 1.0");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("temperature"),
+            "Error should mention temperature, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_zero_max_tokens() {
+        let mut settings = Settings::new();
+        settings.max_tokens = Some(0);
+        let result = settings.validate();
+        assert!(result.is_err(), "Should reject max_tokens of 0");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("max_tokens"),
+            "Error should mention max_tokens, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_invalid_permissions_mode() {
+        let mut settings = Settings::new();
+        settings.permissions_mode = "dangerous".to_string();
+        let result = settings.validate();
+        assert!(result.is_err(), "Should reject invalid permissions_mode");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("permissions_mode"),
+            "Error should mention permissions_mode, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_invalid_theme() {
+        let mut settings = Settings::new();
+        settings.theme = "neon".to_string();
+        let result = settings.validate();
+        assert!(result.is_err(), "Should reject invalid theme");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("theme"),
+            "Error should mention theme, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_load_from_path_rejects_invalid_json() {
+        let (mut manager, temp_dir) = create_temp_manager();
+        let bad_json_path = temp_dir.path().join("bad.json");
+        fs::write(&bad_json_path, "{{not valid json}}").unwrap();
+        let result = manager.load_from_path(&bad_json_path);
+        assert!(result.is_err(), "Should reject invalid JSON");
+    }
+
+    #[test]
+    fn test_load_from_path_rejects_wrong_version() {
+        let (mut manager, temp_dir) = create_temp_manager();
+        let bad_version_path = temp_dir.path().join("bad_version.json");
+        let json = r#"{"version": "0.5", "model": "test"}"#;
+        fs::write(&bad_version_path, json).unwrap();
+        let result = manager.load_from_path(&bad_version_path);
+        assert!(result.is_err(), "Should reject wrong version");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("version"),
+            "Error should mention version, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_set_value_rejects_wrong_type_for_model() {
+        let mut settings = Settings::new();
+        let result = settings.set_value("model", Value::Number(42.into()));
+        assert!(result.is_err(), "Should reject non-string model value");
+    }
+
+    #[test]
+    fn test_set_value_rejects_unknown_key() {
+        let mut settings = Settings::new();
+        let result = settings.set_value("nonexistent_key", Value::String("val".to_string()));
+        assert!(result.is_err(), "Should reject unknown setting key");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("not found"),
+            "Error should mention key not found, got: {err}"
+        );
+    }
 }

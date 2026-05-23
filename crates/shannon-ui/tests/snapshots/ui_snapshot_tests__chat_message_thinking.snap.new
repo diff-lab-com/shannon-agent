@@ -1,11 +1,12 @@
 ---
 source: crates/shannon-ui/tests/ui_snapshot_tests.rs
+assertion_line: 98
 expression: "format!(\"{:#?}\", msg)"
 ---
 ChatMessage {
     role: Assistant,
-    content: "Done!",
-    timestamp: 2026-05-23T14:47:03.481505683Z,
+    content: "Here is the answer:",
+    timestamp: 2026-05-23T15:12:53.597410266Z,
     image_lines: None,
     is_error: false,
     tool_name: None,
@@ -14,16 +15,13 @@ ChatMessage {
     spinner_frame: 0,
     folded: true,
     exit_code: None,
-    thinking_content: None,
+    thinking_content: Some(
+        "Let me analyze the code step by step...",
+    ),
     thinking_expanded: false,
-    thinking_duration_secs: None,
-    diff_stats: Some(
-        (
-            15,
-            3,
-        ),
+    thinking_duration_secs: Some(
+        3.2,
     ),
-    stats_line: Some(
-        "960 tokens · $0.0142",
-    ),
+    diff_stats: None,
+    stats_line: None,
 }

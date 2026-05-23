@@ -1,11 +1,12 @@
 ---
 source: crates/shannon-ui/tests/ui_snapshot_tests.rs
+assertion_line: 166
 expression: "format!(\"{:#?}\", msg)"
 ---
 ChatMessage {
     role: Assistant,
     content: "Done!",
-    timestamp: 2026-05-23T14:47:03.481505683Z,
+    timestamp: 2026-05-23T15:12:53.683898814Z,
     image_lines: None,
     is_error: false,
     tool_name: None,

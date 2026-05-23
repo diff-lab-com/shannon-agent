@@ -61,7 +61,7 @@ fn stdout_string(output: &assert_cmd::assert::Assert) -> String {
 // ════════════════════════════════════════════════════════════════════════
 
 #[test]
-#[ignore]
+#[ignore] // Requires running Ollama instance with SHANNON_RUN_LIVE_TESTS=1
 fn test_live_ollama_simple_query() {
     require_live_tests();
 
@@ -88,7 +88,7 @@ fn test_live_ollama_simple_query() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Requires running Ollama instance with SHANNON_RUN_LIVE_TESTS=1
 fn test_live_ollama_streaming() {
     require_live_tests();
 
@@ -105,7 +105,7 @@ fn test_live_ollama_streaming() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Requires running Ollama instance with SHANNON_RUN_LIVE_TESTS=1
 fn test_live_ollama_exit_code_success() {
     require_live_tests();
 
@@ -121,7 +121,7 @@ fn test_live_ollama_exit_code_success() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Requires running Ollama instance with SHANNON_RUN_LIVE_TESTS=1
 fn test_live_ollama_model_not_found() {
     require_live_tests();
 
@@ -145,7 +145,7 @@ fn test_live_ollama_model_not_found() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Requires running Ollama instance with SHANNON_RUN_LIVE_TESTS=1
 fn test_live_headless_json_structure() {
     require_live_tests();
 
@@ -184,7 +184,7 @@ fn test_live_headless_json_structure() {
 // ════════════════════════════════════════════════════════════════════════
 
 #[test]
-#[ignore]
+#[ignore] // Requires running Ollama instance with SHANNON_RUN_LIVE_TESTS=1
 fn test_live_ollama_prompt_preserved() {
     // Verify the prompt is preserved exactly in the JSON output
     require_live_tests();
@@ -211,7 +211,7 @@ fn test_live_ollama_prompt_preserved() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Requires running Ollama instance with SHANNON_RUN_LIVE_TESTS=1
 fn test_live_ollama_json_stream_events() {
     // Verify json-stream produces valid NDJSON with expected event types
     require_live_tests();
@@ -236,7 +236,7 @@ fn test_live_ollama_json_stream_events() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Requires running Ollama instance with SHANNON_RUN_LIVE_TESTS=1
 fn test_live_ollama_duration_positive() {
     // Verify duration_ms is reported and positive
     require_live_tests();
@@ -255,7 +255,7 @@ fn test_live_ollama_duration_positive() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Requires running Ollama instance with SHANNON_RUN_LIVE_TESTS=1
 fn test_live_ollama_nonempty_response() {
     // Verify response content is non-empty for a simple factual query
     require_live_tests();
@@ -283,7 +283,7 @@ fn test_live_ollama_nonempty_response() {
 // ════════════════════════════════════════════════════════════════════════
 
 #[test]
-#[ignore]
+#[ignore] // Requires SHANNON_DEEPSEEK_API_KEY and SHANNON_RUN_LIVE_TESTS=1
 fn test_live_deepseek_simple_query() {
     require_live_tests();
     let mut cmd = match shannon_live_deepseek() {
@@ -316,7 +316,7 @@ fn test_live_deepseek_simple_query() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Requires SHANNON_DEEPSEEK_API_KEY and SHANNON_RUN_LIVE_TESTS=1
 fn test_live_deepseek_streaming() {
     require_live_tests();
     let mut cmd = match shannon_live_deepseek() {
@@ -334,7 +334,7 @@ fn test_live_deepseek_streaming() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Requires SHANNON_DEEPSEEK_API_KEY and SHANNON_RUN_LIVE_TESTS=1
 fn test_live_deepseek_json_structure() {
     require_live_tests();
     let mut cmd = match shannon_live_deepseek() {
@@ -374,7 +374,7 @@ fn test_live_deepseek_json_structure() {
 // ════════════════════════════════════════════════════════════════════════
 
 #[test]
-#[ignore]
+#[ignore] // Requires running Ollama instance with SHANNON_RUN_LIVE_TESTS=1
 fn test_live_ollama_context_relevance() {
     // Verify the response is topically relevant to the prompt
     require_live_tests();
@@ -402,7 +402,7 @@ fn test_live_ollama_context_relevance() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Requires running Ollama instance with SHANNON_RUN_LIVE_TESTS=1
 fn test_live_ollama_tool_calls_empty_by_default() {
     // Without tools enabled, tool_calls should be an empty array
     require_live_tests();

@@ -894,3 +894,317 @@ impl RemoteMcpServerHandle {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::atomic::AtomicU64;
+    use std::time::Duration;
+    use tokio::sync::{Mutex, RwLock};
+
+    /// Helper: create a minimal remote handle for unit testing.
+    ///
+    /// The handle starts in `Stopped` state with a valid HTTP client
+    /// but no actual server to talk to. Uses a short connect timeout
+    /// to avoid hanging on network-dependent tests.
+    fn make_remote_handle(name: &str) -> RemoteMcpServerHandle {
+        let (ntx, _) = tokio::sync::mpsc::channel(1024);
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(100))
+            .connect_timeout(Duration::from_millis(50))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        RemoteMcpServerHandle {
+            name: name.to_string(),
+            url: "http://127.0.0.1:1".to_string(), // port 1 = unreachable
+            client,
+            headers: HashMap::new(),
+            auth_provider: None,
+            header_commands: HashMap::new(),
+            state: Arc::new(RwLock::new(ServerState::Stopped)),
+            capabilities: Arc::new(RwLock::new(None)),
+            protocol_version: Arc::new(RwLock::new(String::new())),
+            next_id: AtomicU64::new(1),
+            request_count: AtomicU64::new(0),
+            error_count: AtomicU64::new(0),
+            total_result_bytes: AtomicU64::new(0),
+            budget_bytes: Arc::new(RwLock::new(None)),
+            restart_count: Arc::new(AtomicU64::new(0)),
+            max_restarts: 3,
+            started_at: Arc::new(RwLock::new(None)),
+            request_timeout: Duration::from_millis(100),
+            tool_timeout: Duration::from_millis(100),
+            concurrency_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
+            session_id: Arc::new(RwLock::new(None)),
+            ws_transport: None,
+            sampling_provider: Arc::new(Mutex::new(None)),
+            notification_tx: ntx,
+        }
+    }
+
+    // -- State management tests --------------------------------------------
+
+    #[tokio::test]
+    async fn get_state_initial_is_stopped() {
+        let handle = make_remote_handle("test-remote");
+        assert_eq!(handle.get_state().await, ServerState::Stopped);
+    }
+
+    #[tokio::test]
+    async fn get_state_transition() {
+        let handle = make_remote_handle("state-remote");
+        *handle.state.write().await = ServerState::Healthy;
+        assert_eq!(handle.get_state().await, ServerState::Healthy);
+
+        *handle.state.write().await = ServerState::Unhealthy("timeout".to_string());
+        assert_eq!(
+            handle.get_state().await,
+            ServerState::Unhealthy("timeout".to_string())
+        );
+    }
+
+    // -- get_status tests --------------------------------------------------
+
+    #[tokio::test]
+    async fn get_status_reflects_state() {
+        let handle = make_remote_handle("status-remote");
+        let status = handle.get_status().await;
+        assert_eq!(status.name, "status-remote");
+        assert_eq!(status.state, ServerState::Stopped);
+        assert!(status.uptime.is_none());
+        assert!(status.last_health_check.is_none());
+        assert_eq!(status.request_count, 0);
+        assert_eq!(status.error_count, 0);
+    }
+
+    #[tokio::test]
+    async fn get_status_includes_metrics() {
+        let handle = make_remote_handle("metric-remote");
+        handle.request_count.store(10, Ordering::Relaxed);
+        handle.error_count.store(1, Ordering::Relaxed);
+        handle.total_result_bytes.store(2048, Ordering::Relaxed);
+        *handle.budget_bytes.write().await = Some(50_000);
+        *handle.state.write().await = ServerState::Healthy;
+        *handle.started_at.write().await = Some(Instant::now());
+
+        let status = handle.get_status().await;
+        assert_eq!(status.request_count, 10);
+        assert_eq!(status.error_count, 1);
+        assert_eq!(status.total_result_bytes, 2048);
+        assert_eq!(status.budget_bytes, Some(50_000));
+        assert!(status.uptime.is_some());
+    }
+
+    // -- reset tests -------------------------------------------------------
+
+    #[tokio::test]
+    async fn reset_sets_state_to_stopped() {
+        let handle = make_remote_handle("reset-remote");
+        *handle.state.write().await = ServerState::Healthy;
+        *handle.started_at.write().await = Some(Instant::now());
+        *handle.session_id.write().await = Some("sess-123".to_string());
+
+        handle.reset().await;
+
+        assert_eq!(handle.get_state().await, ServerState::Stopped);
+        assert!(handle.started_at.read().await.is_none());
+        assert!(handle.session_id.read().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn reset_idempotent() {
+        let handle = make_remote_handle("reset-idem");
+        handle.reset().await;
+        handle.reset().await;
+        assert_eq!(handle.get_state().await, ServerState::Stopped);
+    }
+
+    // -- call_tool state guard tests ---------------------------------------
+
+    #[tokio::test]
+    async fn call_tool_rejects_when_not_healthy() {
+        let handle = make_remote_handle("reject-remote");
+        *handle.state.write().await = ServerState::Unhealthy("conn refused".to_string());
+        let result = handle
+            .call_tool("some_tool", serde_json::json!({}))
+            .await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            shannon_tool_interface::ToolError::ExecutionFailed(msg) => {
+                assert!(msg.contains("not healthy"));
+                assert!(msg.contains("conn refused"));
+            }
+            other => panic!("Expected ExecutionFailed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn call_tool_rejects_when_starting() {
+        let handle = make_remote_handle("starting-remote");
+        *handle.state.write().await = ServerState::Starting;
+        let result = handle
+            .call_tool("tool", serde_json::json!({}))
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn call_tool_rejects_when_stopped() {
+        let handle = make_remote_handle("stopped-remote");
+        let result = handle
+            .call_tool("tool", serde_json::json!({}))
+            .await;
+        assert!(result.is_err());
+    }
+
+    // -- send_request_with_timeout to unreachable server -------------------
+
+    #[tokio::test]
+    async fn send_request_fails_on_unreachable_server() {
+        let handle = make_remote_handle("unreachable");
+        *handle.state.write().await = ServerState::Healthy;
+        let result = handle
+            .send_request_with_timeout(
+                "tools/list",
+                serde_json::json!({}),
+                Duration::from_millis(50),
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    // -- send_notification to unreachable server ---------------------------
+
+    #[tokio::test]
+    async fn send_notification_fails_on_unreachable_server() {
+        let handle = make_remote_handle("unreachable-notif");
+        let result = handle
+            .send_notification("notifications/initialized", serde_json::json!({}))
+            .await;
+        assert!(result.is_err());
+    }
+
+    // -- start fails on unreachable server ---------------------------------
+
+    #[tokio::test]
+    async fn start_fails_on_unreachable_server() {
+        let handle = make_remote_handle("unreachable-start");
+        let result = handle.start().await;
+        assert!(result.is_err());
+    }
+
+    // -- session_id management tests ---------------------------------------
+
+    #[tokio::test]
+    async fn session_id_initially_none() {
+        let handle = make_remote_handle("session-test");
+        assert!(handle.session_id.read().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn session_id_can_be_set() {
+        let handle = make_remote_handle("session-test");
+        *handle.session_id.write().await = Some("sid-abc".to_string());
+        assert_eq!(
+            handle.session_id.read().await.as_deref(),
+            Some("sid-abc")
+        );
+    }
+
+    // -- next_id counter test ----------------------------------------------
+
+    #[test]
+    fn next_id_increments_atomically() {
+        let handle = make_remote_handle("id-test");
+        assert_eq!(handle.next_id.load(Ordering::Relaxed), 1);
+        let id1 = handle.next_id.fetch_add(1, Ordering::Relaxed);
+        let id2 = handle.next_id.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+    }
+
+    // -- send_batch_request with empty requests ----------------------------
+
+    #[tokio::test]
+    async fn send_batch_request_empty_returns_empty() {
+        let handle = make_remote_handle("batch-empty");
+        let result = handle
+            .send_batch_request(vec![], Duration::from_secs(5))
+            .await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    // -- capabilities storage tests ----------------------------------------
+
+    #[tokio::test]
+    async fn capabilities_initially_none() {
+        let handle = make_remote_handle("cap-test");
+        assert!(handle.capabilities.read().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn protocol_version_initially_empty() {
+        let handle = make_remote_handle("proto-test");
+        assert!(handle.protocol_version.read().await.is_empty());
+    }
+
+    // -- header commands safety check --------------------------------------
+
+    #[test]
+    fn header_commands_with_shell_metacharacters_are_detected() {
+        // The remote handle skips commands containing shell metacharacters.
+        // We verify the detection logic works by checking individual characters.
+        let unsafe_chars = [';', '&', '|', '$', '`', '(', ')', '{', '}', '<', '>', '\\'];
+        for ch in unsafe_chars {
+            let cmd = format!("echo {ch}something");
+            assert!(
+                cmd.contains(ch),
+                "Command should contain '{ch}'"
+            );
+        }
+        // The ".." path traversal should also be caught.
+        let traversal_cmd = "../bin/get-token";
+        assert!(traversal_cmd.contains(".."));
+    }
+
+    // -- concurrency semaphore test ----------------------------------------
+
+    #[tokio::test]
+    async fn concurrency_semaphore_allows_permits() {
+        // The helper creates a Semaphore(1), so only one acquire can succeed.
+        let handle = make_remote_handle("sem-test");
+        let p1 = handle.concurrency_semaphore.try_acquire().unwrap();
+        // Second try_acquire should fail — no permits left.
+        assert!(handle.concurrency_semaphore.try_acquire().is_err());
+        // After dropping, the permit is returned.
+        drop(p1);
+        let _p2 = handle.concurrency_semaphore.try_acquire().unwrap();
+    }
+
+    // -- restart_count tracking test ---------------------------------------
+
+    #[test]
+    fn restart_count_increments() {
+        let handle = make_remote_handle("restart-test");
+        assert_eq!(handle.restart_count.load(Ordering::Relaxed), 0);
+        handle.restart_count.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(handle.restart_count.load(Ordering::Relaxed), 1);
+    }
+
+    // -- budget_bytes tracking test ----------------------------------------
+
+    #[tokio::test]
+    async fn budget_bytes_default_none() {
+        let handle = make_remote_handle("budget-test");
+        assert!(handle.budget_bytes.read().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn budget_bytes_can_be_set() {
+        let handle = make_remote_handle("budget-test");
+        *handle.budget_bytes.write().await = Some(5000);
+        assert_eq!(*handle.budget_bytes.read().await, Some(5000));
+    }
+}

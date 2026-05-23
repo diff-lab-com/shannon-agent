@@ -918,4 +918,102 @@ mod tests {
         assert!(patterns.contains(&"/boot/".to_string()));
         assert!(patterns.contains(&"/usr/bin/".to_string()));
     }
+
+    // --- Error boundary tests ---
+
+    #[tokio::test]
+    async fn test_empty_path_returns_invalid_path_error() {
+        let sandbox = PathSandbox::new();
+        let result = sandbox.validate(Path::new("")).await;
+        assert!(result.is_err(), "Empty path should be rejected");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("empty") || err.contains("Invalid"),
+            "Error should mention empty/invalid path, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_sync_empty_path_returns_invalid_path_error() {
+        let sandbox = PathSandbox::new();
+        let result = sandbox.validate_sync(Path::new(""));
+        assert!(result.is_err(), "Empty path should be rejected (sync)");
+    }
+
+    #[tokio::test]
+    async fn test_path_traversal_escape_root_returns_error() {
+        let td = TestDir::new();
+        let sandbox = PathSandbox::with_config(SandboxConfig {
+            allowed_roots: vec![td.path().to_path_buf()],
+            denied_patterns: vec![],
+            strict_mode: true,
+        });
+        // Attempt traversal that escapes the allowed root
+        let malicious = td.file("../../../etc/passwd");
+        let result = sandbox.validate(&malicious).await;
+        assert!(result.is_err(), "Path traversal should be rejected");
+        let err = result.unwrap_err().to_string();
+        let err_lower = err.to_lowercase();
+        assert!(
+            err_lower.contains("traversal")
+                || err_lower.contains("outside allowed")
+                || err_lower.contains("cannot resolve"),
+            "Expected traversal or escape error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_path_outside_allowed_root_strict_mode() {
+        let td = TestDir::new();
+        let sandbox = PathSandbox::with_config(SandboxConfig {
+            allowed_roots: vec![td.path().to_path_buf()],
+            denied_patterns: vec![],
+            strict_mode: true,
+        });
+        // Use /etc/passwd which exists but is outside the allowed root
+        let result = sandbox.validate(Path::new("/etc/passwd")).await;
+        assert!(
+            result.is_err(),
+            "Path outside allowed root should be rejected in strict mode"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("not within any allowed root") || err.contains("restricted"),
+            "Expected outside-roots error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_denied_pattern_overrides_allowed_root() {
+        let td = TestDir::new();
+        td.create_file("secret.key", "private-key-data");
+
+        let sandbox = PathSandbox::with_config(SandboxConfig {
+            allowed_roots: vec![td.path().to_path_buf()],
+            denied_patterns: vec!["/etc/".to_string()],
+            strict_mode: true,
+        });
+        // /etc/passwd is in the denied list, even if we somehow got past roots
+        let result = sandbox.validate(Path::new("/etc/passwd")).await;
+        assert!(result.is_err(), "Denied pattern should block access");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("restricted"),
+            "Error should mention restricted area, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_sync_path_outside_allowed_root_rejected() {
+        let sandbox = PathSandbox::with_config(SandboxConfig {
+            allowed_roots: vec![PathBuf::from("/tmp")],
+            denied_patterns: vec![],
+            strict_mode: true,
+        });
+        let result = sandbox.validate_sync(Path::new("/etc/passwd"));
+        assert!(
+            result.is_err(),
+            "Sync validate should reject path outside allowed root"
+        );
+    }
 }

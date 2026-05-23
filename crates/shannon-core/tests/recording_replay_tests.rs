@@ -322,16 +322,14 @@ fn test_all_fixtures_loadable() {
     for fixture_name in &fixtures {
         let path = dir.join(fixture_name);
         let replayer = SessionReplayer::load_from_file(&path)
-            .unwrap_or_else(|e| panic!("Failed to load {}: {e}", fixture_name));
+            .unwrap_or_else(|e| panic!("Failed to load {fixture_name}: {e}"));
         assert!(
             replayer.total_turns() > 0,
-            "{} should have at least 1 turn",
-            fixture_name
+            "{fixture_name} should have at least 1 turn"
         );
         assert!(
             !replayer.tool_calls().is_empty(),
-            "{} should have tool calls",
-            fixture_name
+            "{fixture_name} should have tool calls"
         );
     }
 }

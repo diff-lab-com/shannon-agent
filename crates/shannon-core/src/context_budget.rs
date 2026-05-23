@@ -473,7 +473,7 @@ mod tests {
         let schema = serde_json::json!({});
         let tokens = ContextBudget::estimate_schema_tokens(&schema);
         // Empty object is "{}" = 2 chars, rounds to 0 tokens
-        assert!(tokens == 0 || tokens > 0);
+        assert!(tokens >= 0);
     }
 
     #[test]

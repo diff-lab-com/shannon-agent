@@ -753,7 +753,7 @@ async fn test_concurrent_requests() {
     // Verify all responses received
     let mut response_count = 0;
     for _ in 0..5 {
-        if let Some(_) = client.receive().await {
+        if client.receive().await.is_some() {
             response_count += 1;
         }
     }

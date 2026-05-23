@@ -993,10 +993,10 @@ mod tests {
         let mut store = MemoryStore::new(dir.path().to_path_buf());
         for i in 0..5u32 {
             let mut entry = make_entry_with_timestamps(
-                &format!("{}", i),
+                &format!("{i}"),
                 "p",
                 MemoryCategory::Context,
-                &format!("entry-{}", i),
+                &format!("entry-{i}"),
                 1.0,
                 Utc::now(),
                 Utc::now() - Duration::hours(i as i64 + 1),
@@ -1143,10 +1143,10 @@ mod tests {
         let mut store = MemoryStore::new(dir.path().to_path_buf());
         for i in 0..3u32 {
             let mut entry = make_entry_with_timestamps(
-                &format!("p{}", i),
+                &format!("p{i}"),
                 "proj",
                 MemoryCategory::Preference,
-                &format!("pref {}", i),
+                &format!("pref {i}"),
                 0.8,
                 Utc::now(),
                 Utc::now(),
@@ -1263,7 +1263,7 @@ mod tests {
                 .add(make_entry(
                     "p",
                     MemoryCategory::Context,
-                    &format!("test entry number {}", i),
+                    &format!("test entry number {i}"),
                 ))
                 .unwrap();
         }

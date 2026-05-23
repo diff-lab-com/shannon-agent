@@ -453,7 +453,7 @@ async fn test_bash_tool_critical_command_rejected() {
     let result = tool.execute(input).await.unwrap();
     assert!(result.is_error);
     assert!(result.content.contains("critical security risk"));
-    assert!(result.metadata.get("security_rejected").is_some());
+    assert!(result.metadata.contains_key("security_rejected"));
 }
 
 #[tokio::test]
@@ -540,7 +540,7 @@ async fn test_tool_metadata_includes_risk_level() {
     });
 
     let result = tool.execute(input).await.unwrap();
-    assert!(result.metadata.get("risk_level").is_some());
+    assert!(result.metadata.contains_key("risk_level"));
 }
 
 #[tokio::test]
@@ -551,7 +551,7 @@ async fn test_tool_metadata_includes_destructive_flag() {
     });
 
     let result = tool.execute(input).await.unwrap();
-    assert!(result.metadata.get("is_destructive").is_some());
+    assert!(result.metadata.contains_key("is_destructive"));
     assert_eq!(
         result.metadata.get("is_destructive"),
         Some(&serde_json::json!(true))
@@ -566,7 +566,7 @@ async fn test_tool_metadata_includes_read_only_flag() {
     });
 
     let result = tool.execute(input).await.unwrap();
-    assert!(result.metadata.get("is_read_only").is_some());
+    assert!(result.metadata.contains_key("is_read_only"));
     assert_eq!(
         result.metadata.get("is_read_only"),
         Some(&serde_json::json!(true))
@@ -583,5 +583,5 @@ async fn test_tool_metadata_includes_warnings() {
     });
 
     let result = tool.execute(input).await.unwrap();
-    assert!(result.metadata.get("warnings").is_some());
+    assert!(result.metadata.contains_key("warnings"));
 }

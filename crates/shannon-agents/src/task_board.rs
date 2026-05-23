@@ -811,7 +811,7 @@ mod tests {
         board.add_dependency(t2.id, t1.id).await.unwrap();
         board.remove_dependency(t2.id, t1.id).await.unwrap();
         let deps = board.dependencies.read().await;
-        assert!(deps.get(&t2.id).map_or(true, |s| !s.contains(&t1.id)));
+        assert!(deps.get(&t2.id).is_none_or(|s| !s.contains(&t1.id)));
     }
 
     // ── Priority ordering tests ──────────────────────────────────────────

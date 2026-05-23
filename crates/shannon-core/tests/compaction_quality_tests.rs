@@ -65,7 +65,7 @@ mod compaction_quality_tests {
     fn all_text(messages: &[Message]) -> String {
         messages
             .iter()
-            .map(|m| extract_text_content(m))
+            .map(extract_text_content)
             .collect::<Vec<_>>()
             .join(" ")
     }
@@ -81,13 +81,11 @@ mod compaction_quality_tests {
         msgs.extend(old_prefix);
         for i in 0..filler_turns {
             msgs.push(user_msg(&format!(
-                "Filler question {} about general topics with extra padding words to use tokens",
-                i
+                "Filler question {i} about general topics with extra padding words to use tokens"
             )));
             msgs.push(assistant_msg(&format!(
-                "Filler answer {}: this is a generic response about the topic \
-                 with enough detail to be a realistic assistant reply",
-                i
+                "Filler answer {i}: this is a generic response about the topic \
+                 with enough detail to be a realistic assistant reply"
             )));
         }
         msgs.extend(recent_suffix);
@@ -269,23 +267,21 @@ mod compaction_quality_tests {
         // Three reads of the same file across many turns
         let mut old_turns = Vec::new();
         for i in 0..3 {
-            old_turns.push(user_msg(&format!("Read src/config.rs again (time {})", i)));
+            old_turns.push(user_msg(&format!("Read src/config.rs again (time {i})")));
             old_turns.push(tool_use_msg(
-                &format!("tu_r{}", i),
+                &format!("tu_r{i}"),
                 "Read",
                 serde_json::json!({"file_path": "src/config.rs"}),
             ));
             old_turns.push(tool_result_msg(
-                &format!("tu_r{}", i),
+                &format!("tu_r{i}"),
                 &format!(
-                    "Line 1-10 of src/config.rs (read {})\npub struct Config {{",
-                    i
+                    "Line 1-10 of src/config.rs (read {i})\npub struct Config {{"
                 ),
                 false,
             ));
             old_turns.push(assistant_msg(&format!(
-                "I see the config file, read number {}.",
-                i
+                "I see the config file, read number {i}."
             )));
         }
 
@@ -325,24 +321,21 @@ mod compaction_quality_tests {
         // Create a very large conversation: 200 turns with verbose content
         for i in 0..200 {
             messages.push(user_msg(&format!(
-                "Question {}: This is a detailed question about topic {} \
+                "Question {i}: This is a detailed question about topic {i} \
                  with lots of context and background information to consume tokens. \
-                 The user is asking about various aspects of the codebase.",
-                i, i
+                 The user is asking about various aspects of the codebase."
             )));
             messages.push(assistant_msg(&format!(
-                "Answer {}: This is a comprehensive answer with code examples, \
+                "Answer {i}: This is a comprehensive answer with code examples, \
                  explanations, and references to multiple files. \
-                 The response covers the topic in great detail with multiple paragraphs.",
-                i
+                 The response covers the topic in great detail with multiple paragraphs."
             )));
         }
 
         let original_tokens = estimate_tokens(&messages);
         assert!(
             original_tokens > 5000,
-            "test conversation should be large, got {} tokens",
-            original_tokens
+            "test conversation should be large, got {original_tokens} tokens"
         );
 
         // Set an extremely tight budget — only 1% of original tokens
@@ -396,12 +389,10 @@ mod compaction_quality_tests {
         // Many filler messages that will be targeted for removal
         for i in 0..20 {
             messages.push(user_msg(&format!(
-                "Normal question {} with padding text to fill tokens",
-                i
+                "Normal question {i} with padding text to fill tokens"
             )));
             messages.push(assistant_msg(&format!(
-                "Normal answer {} with some detail about the topic",
-                i
+                "Normal answer {i} with some detail about the topic"
             )));
         }
 
@@ -469,10 +460,7 @@ mod compaction_quality_tests {
                 let token_growth = second_tokens as i64 - first_tokens as i64;
                 assert!(
                     token_growth < 1000,
-                    "second compaction should not grow excessively: first={}, second={}, growth={}",
-                    first_tokens,
-                    second_tokens,
-                    token_growth
+                    "second compaction should not grow excessively: first={first_tokens}, second={second_tokens}, growth={token_growth}"
                 );
                 assert!(
                     (second_tokens as f64 / first_tokens as f64) < 1.5,
@@ -576,16 +564,14 @@ mod compaction_quality_tests {
         // Add many turns to guarantee compaction fires
         for i in 0..30 {
             messages.push(user_msg(&format!(
-                "Question {}: Tell me about Rust feature {} \
+                "Question {i}: Tell me about Rust feature {i} \
                  with enough detail to consume context tokens \
-                 across multiple sentences and paragraphs",
-                i, i
+                 across multiple sentences and paragraphs"
             )));
             messages.push(assistant_msg(&format!(
-                "Answer {}: Rust feature {} provides the following \
+                "Answer {i}: Rust feature {i} provides the following \
                  capabilities and is used in many production codebases \
-                 for its safety guarantees and performance characteristics",
-                i, i
+                 for its safety guarantees and performance characteristics"
             )));
         }
         messages.push(user_msg("Final question about Rust"));

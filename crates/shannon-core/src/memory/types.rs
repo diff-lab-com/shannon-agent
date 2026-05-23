@@ -307,7 +307,7 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             MemoryError::InvalidConfidence(v) => assert!((v - (-0.1)).abs() < f64::EPSILON),
-            other => panic!("expected InvalidConfidence, got {:?}", other),
+            other => panic!("expected InvalidConfidence, got {other:?}"),
         }
     }
 
@@ -318,7 +318,7 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             MemoryError::InvalidConfidence(v) => assert!((v - 1.5).abs() < f64::EPSILON),
-            other => panic!("expected InvalidConfidence, got {:?}", other),
+            other => panic!("expected InvalidConfidence, got {other:?}"),
         }
     }
 

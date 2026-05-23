@@ -3228,4 +3228,86 @@ mod tests {
         // In Suggest mode, bash commands should prompt
         assert!(result.is_ok());
     }
+
+    // ── Error boundary tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_error_boundary_rule_checker_empty_rules_returns_no_match() {
+        let rules = crate::settings::PermissionRules::default();
+        let checker = PermissionRuleChecker::from_rules(&rules);
+        assert!(checker.is_empty());
+        let decision = checker.check("Bash", "ls -la");
+        assert_eq!(decision, RuleCheckDecision::NoMatch);
+    }
+
+    #[test]
+    fn test_error_boundary_rule_checker_invalid_glob_no_panic() {
+        // Invalid glob patterns should be logged but not cause a panic.
+        // The globset crate rejects patterns like "[" (unclosed bracket).
+        let rules = crate::settings::PermissionRules {
+            deny: vec!["[".to_string()],
+            ask: vec![],
+            allow: vec![],
+        };
+        let checker = PermissionRuleChecker::from_rules(&rules);
+        // Should not panic; invalid glob is skipped
+        let decision = checker.check("[", "anything");
+        // The raw pattern "[" doesn't match tool name "[" in the structured
+        // pattern check, and the globset silently ignores it, so NoMatch.
+        assert!(
+            matches!(
+                decision,
+                RuleCheckDecision::NoMatch | RuleCheckDecision::Denied
+            ),
+            "Should not panic on invalid glob"
+        );
+    }
+
+    #[test]
+    fn test_error_boundary_ungranted_permission_returns_denied() {
+        let mgr = PermissionManager::new();
+        let sid = Uuid::new_v4();
+        let perm = Permission::new("file", "delete", PermissionLevel::Admin);
+        let result = mgr.check_permission(sid, &perm);
+        assert!(result.is_err(), "Should deny ungranted permission");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Permission denied"),
+            "Error should say Permission denied, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_error_boundary_destructive_tool_flags_prompt() {
+        let mut mgr = PermissionManager::new();
+        mgr.set_approval_mode(ApprovalMode::AutoEdit);
+        mgr.register_destructive_tool("DangerousTool".to_string());
+        assert!(mgr.is_tool_destructive("DangerousTool"));
+        // Even in AutoEdit mode, destructive tools should generate a prompt
+        // (not auto-approve). The prompt should have is_destructive = true.
+        let sid = Uuid::new_v4();
+        let prompt = mgr.create_permission_prompt(
+            "DangerousTool",
+            &serde_json::json!({"action": "nuke"}),
+            sid,
+        );
+        assert!(prompt.is_some(), "Destructive tool should require a prompt");
+        assert!(prompt.unwrap().is_destructive);
+    }
+
+    #[test]
+    fn test_error_boundary_deny_rule_wins_over_identical_allow() {
+        // Deny and allow on exact same pattern: deny must win
+        let rules = crate::settings::PermissionRules {
+            deny: vec!["Bash(rm -rf /)".to_string()],
+            ask: vec![],
+            allow: vec!["Bash(rm -rf /)".to_string()],
+        };
+        let checker = PermissionRuleChecker::from_rules(&rules);
+        assert_eq!(
+            checker.check("Bash", "rm -rf /"),
+            RuleCheckDecision::Denied,
+            "Deny should win over identical allow pattern"
+        );
+    }
 }

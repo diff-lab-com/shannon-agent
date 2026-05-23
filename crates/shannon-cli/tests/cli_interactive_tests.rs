@@ -42,7 +42,7 @@ fn spawn_repl(args: &[&str], timeout_ms: u64) -> PtySession {
 // ════════════════════════════════════════════════════════════════════════
 
 #[test]
-#[ignore]
+#[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_startup_display() {
     let mut p = spawn_repl(&[], 15_000);
 
@@ -55,7 +55,7 @@ fn test_repl_startup_display() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_help_command() {
     let mut p = spawn_repl(&[], 15_000);
 
@@ -71,7 +71,7 @@ fn test_repl_help_command() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_model_command() {
     let mut p = spawn_repl(&["--model", "test-model"], 15_000);
 
@@ -86,7 +86,7 @@ fn test_repl_model_command() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_exit_command() {
     let mut p = spawn_repl(&[], 15_000);
 
@@ -102,7 +102,7 @@ fn test_repl_exit_command() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_query_with_mock() {
     // This test uses a mock server via mockito, but rexpect doesn't
     // easily share mockito state. Instead, we test that the REPL
@@ -129,7 +129,7 @@ fn test_repl_query_with_mock() {
 // ════════════════════════════════════════════════════════════════════════
 
 #[test]
-#[ignore]
+#[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_compact_command() {
     // /compact should be recognized even with no conversation history
     let mut p = spawn_repl(&[], 15_000);
@@ -146,7 +146,7 @@ fn test_repl_compact_command() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_compact_after_query() {
     // Send a query, then /compact — verifies /compact is accepted after activity
     let mut p = spawn_repl(&[], 20_000);
@@ -173,7 +173,7 @@ fn test_repl_compact_after_query() {
 // ════════════════════════════════════════════════════════════════════════
 
 #[test]
-#[ignore]
+#[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_context_command() {
     // /context should show context status (empty context is valid)
     let mut p = spawn_repl(&[], 15_000);
@@ -194,7 +194,7 @@ fn test_repl_context_command() {
 // ════════════════════════════════════════════════════════════════════════
 
 #[test]
-#[ignore]
+#[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_version_command() {
     let mut p = spawn_repl(&[], 15_000);
 
@@ -213,7 +213,7 @@ fn test_repl_version_command() {
 // ════════════════════════════════════════════════════════════════════════
 
 #[test]
-#[ignore]
+#[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_lang_command() {
     // /lang should show current language or list available languages
     let mut p = spawn_repl(&[], 15_000);
@@ -234,7 +234,7 @@ fn test_repl_lang_command() {
 // ════════════════════════════════════════════════════════════════════════
 
 #[test]
-#[ignore]
+#[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_config_command() {
     // /config should display current configuration
     let mut p = spawn_repl(&[], 15_000);
@@ -250,7 +250,7 @@ fn test_repl_config_command() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_clear_command() {
     // /clear should be recognized (clears conversation history)
     let mut p = spawn_repl(&[], 15_000);
@@ -271,7 +271,7 @@ fn test_repl_clear_command() {
 // ════════════════════════════════════════════════════════════════════════
 
 #[test]
-#[ignore]
+#[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_unknown_command() {
     // Unknown slash commands should produce an error, not crash
     let mut p = spawn_repl(&[], 15_000);
@@ -292,7 +292,7 @@ fn test_repl_unknown_command() {
 // ════════════════════════════════════════════════════════════════════════
 
 #[test]
-#[ignore]
+#[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_multiple_commands_sequence() {
     // Execute multiple slash commands in sequence to verify state consistency
     let mut p = spawn_repl(&[], 20_000);

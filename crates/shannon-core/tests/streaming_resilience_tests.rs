@@ -419,7 +419,7 @@ async fn test_sse_cancellation_cleanup() {
     let mut server = Server::new_async().await;
 
     // Build a long SSE stream
-    let chunks: Vec<String> = (0..500).map(|i| format!("chunk-{} ", i)).collect();
+    let chunks: Vec<String> = (0..500).map(|i| format!("chunk-{i} ")).collect();
     let full_text: String = chunks.join("");
 
     let resp = text_response(&full_text);

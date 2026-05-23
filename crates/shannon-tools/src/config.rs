@@ -657,14 +657,15 @@ mod tests {
 
         manager.set("string_val".to_string(), json!("hello"));
         manager.set("int_val".to_string(), json!(42));
-        manager.set("float_val".to_string(), json!(3.14));
+        let float_val: f64 = 1.5;
+        manager.set("float_val".to_string(), json!(float_val));
         manager.set("bool_val".to_string(), json!(true));
         manager.set("array_val".to_string(), json!([1, 2, 3]));
         manager.set("object_val".to_string(), json!({"key": "value"}));
 
         assert_eq!(manager.get("string_val"), Some(json!("hello")));
         assert_eq!(manager.get("int_val"), Some(json!(42)));
-        assert_eq!(manager.get("float_val"), Some(json!(3.14)));
+        assert_eq!(manager.get("float_val"), Some(json!(float_val)));
         assert_eq!(manager.get("bool_val"), Some(json!(true)));
         assert_eq!(manager.get("array_val"), Some(json!([1, 2, 3])));
         assert_eq!(manager.get("object_val"), Some(json!({"key": "value"})));
@@ -884,7 +885,8 @@ mod tests {
     fn test_value_type_name() {
         assert_eq!(value_type_name(&json!("hello")), "string");
         assert_eq!(value_type_name(&json!(42)), "integer");
-        assert_eq!(value_type_name(&json!(3.14)), "number");
+        let float_v: f64 = 1.5;
+        assert_eq!(value_type_name(&json!(float_v)), "number");
         assert_eq!(value_type_name(&json!(true)), "boolean");
         assert_eq!(value_type_name(&json!(Value::Null)), "null");
         assert_eq!(value_type_name(&json!([1, 2])), "array");

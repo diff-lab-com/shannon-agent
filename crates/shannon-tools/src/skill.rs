@@ -475,7 +475,7 @@ mod tests {
         let output = tool.execute(json!({"skill": "inline-test"})).await.unwrap();
         assert!(!output.is_error);
         assert_eq!(output.metadata.get("status").unwrap(), "inline");
-        assert!(output.metadata.get("allowed_tools").is_some());
+        assert!(output.metadata.contains_key("allowed_tools"));
     }
 
     // ── Tool trait ──────────────────────────────────────────────────────

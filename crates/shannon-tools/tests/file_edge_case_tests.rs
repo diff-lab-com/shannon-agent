@@ -1,4 +1,5 @@
 //! File operation edge case tests for shannon-tools
+#![allow(clippy::uninlined_format_args)]
 //!
 //! Tests edge cases in file operations:
 //! - CRLF/BOM line ending preservation
