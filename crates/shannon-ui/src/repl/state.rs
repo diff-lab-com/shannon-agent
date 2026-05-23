@@ -264,6 +264,10 @@ pub struct ReplState {
     pub pending_auto_compact: bool,
     /// Persisted UI state for session restore (fold states, scroll, view mode)
     pub persisted_ui_state: Option<PersistedUiState>,
+    /// Pending undo preview (set by /undo before confirmation dialog)
+    pub undo_preview: Option<shannon_core::RevertPreview>,
+    /// Target checkpoint index for pending undo operation
+    pub undo_target_index: Option<usize>,
 }
 
 /// State for the autonomous loop iteration engine.
@@ -527,6 +531,8 @@ impl Default for ReplState {
             desktop_notified: false,
             pending_auto_compact: false,
             persisted_ui_state: None,
+            undo_preview: None,
+            undo_target_index: None,
         }
     }
 }

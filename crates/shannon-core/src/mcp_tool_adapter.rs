@@ -809,7 +809,7 @@ pub async fn discover_tools_http(
 pub type DeferredSchemaStore = Arc<std::sync::Mutex<HashMap<String, Value>>>;
 
 /// Threshold above which deferred schema loading is auto-enabled.
-pub const DEFERRED_SCHEMA_THRESHOLD: usize = 20;
+pub const DEFERRED_SCHEMA_THRESHOLD: usize = 100;
 
 /// Prepare deferred schema loading for a batch of MCP tool adapters.
 ///
@@ -854,9 +854,9 @@ impl Tool for DeferredSchemaSearchTool {
     }
 
     fn description(&self) -> &str {
-        "Search for an MCP tool's full parameter schema by tool name. \
-         Use this before calling any mcp__ tool to discover its required \
-         and optional parameters."
+        "Search MCP tools by name, description, or retrieve full schemas. \
+         Use `tool_name` for exact lookup, `query` for fuzzy search, \
+         or call with no args to list all available tools."
     }
 
     fn input_schema(&self) -> Value {
@@ -865,10 +865,13 @@ impl Tool for DeferredSchemaSearchTool {
             "properties": {
                 "tool_name": {
                     "type": "string",
-                    "description": "Full tool name (e.g., \"mcp__fetch__fetch\") to retrieve the schema for."
+                    "description": "Exact tool name (e.g., \"mcp__fetch__fetch\") to retrieve the full schema for."
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Fuzzy search term to find tools by name or description."
                 }
-            },
-            "required": ["tool_name"]
+            }
         })
     }
 
@@ -877,25 +880,64 @@ impl Tool for DeferredSchemaSearchTool {
     }
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
-        let tool_name = input
-            .get("tool_name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::InvalidInput("Missing 'tool_name' parameter".to_string()))?;
+        let tool_name = input.get("tool_name").and_then(|v| v.as_str());
+        let query = input.get("query").and_then(|v| v.as_str());
 
         let schemas = recover_lock(self.schemas.lock());
-        match schemas.get(tool_name) {
-            Some(schema) => {
-                let schema_str =
-                    serde_json::to_string_pretty(schema).unwrap_or_else(|_| schema.to_string());
-                Ok(ToolOutput::success(schema_str))
+
+        // Exact lookup
+        if let Some(name) = tool_name {
+            return match schemas.get(name) {
+                Some(schema) => {
+                    let schema_str = serde_json::to_string_pretty(schema)
+                        .unwrap_or_else(|_| schema.to_string());
+                    Ok(ToolOutput::success(schema_str))
+                }
+                None => {
+                    let available: Vec<&String> = schemas.keys().collect();
+                    Ok(ToolOutput::error(format!(
+                        "No deferred schema found for '{name}'. Available: {:?}",
+                        available.iter().take(10).collect::<Vec<_>>()
+                    )))
+                }
+            };
+        }
+
+        // Fuzzy search or list all
+        let query_lower = query.map(|q| q.to_lowercase());
+        let mut output = String::new();
+        let mut count = 0;
+        for (name, schema) in schemas.iter() {
+            if let Some(ref ql) = query_lower {
+                if !name.to_lowercase().contains(ql.as_str()) {
+                    continue;
+                }
             }
-            None => {
+            output.push_str(&format!("## {name}\n"));
+            let schema_str =
+                serde_json::to_string_pretty(schema).unwrap_or_else(|_| schema.to_string());
+            output.push_str(&schema_str);
+            output.push_str("\n\n");
+            count += 1;
+        }
+
+        if count == 0 {
+            if let Some(q) = query {
                 let available: Vec<&String> = schemas.keys().collect();
                 Ok(ToolOutput::error(format!(
-                    "No deferred schema found for '{tool_name}'. Available: {:?}",
+                    "No tools matching '{q}'. Available: {:?}",
                     available.iter().take(10).collect::<Vec<_>>()
                 )))
+            } else {
+                Ok(ToolOutput::error("No deferred tools available.".to_string()))
             }
+        } else {
+            let label = if query.is_some() {
+                format!("Found {count} tool(s)")
+            } else {
+                format!("{count} deferred MCP tools available")
+            };
+            Ok(ToolOutput::success(format!("{label}:\n\n{output}")))
         }
     }
 

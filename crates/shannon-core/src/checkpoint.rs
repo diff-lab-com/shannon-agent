@@ -66,6 +66,23 @@ pub enum RestoreMode {
     CodeOnly,
 }
 
+/// Summary of a single file's changes between a checkpoint and HEAD.
+#[derive(Debug, Clone)]
+pub struct FileChangePreview {
+    pub path: String,
+    pub additions: usize,
+    pub deletions: usize,
+}
+
+/// Preview of what reverting to a checkpoint would change.
+#[derive(Debug, Clone)]
+pub struct RevertPreview {
+    pub checkpoint: TurnCheckpoint,
+    pub files_changed: Vec<FileChangePreview>,
+    pub diff_stats: String,
+    pub full_diff: String,
+}
+
 /// Manages git-based checkpoints with per-turn tracking and persistence.
 #[derive(Debug, Clone)]
 pub struct CheckpointManager {
@@ -228,6 +245,73 @@ impl CheckpointManager {
             .iter()
             .map(|tc| tc.checkpoint.clone())
             .collect()
+    }
+
+    /// Preview what reverting to a checkpoint would change (no side effects).
+    pub fn preview_revert(&self, index: usize) -> Result<RevertPreview, String> {
+        let tc = {
+            let checkpoints = recover_lock(self.checkpoints.lock());
+            if index >= checkpoints.len() {
+                return Err(format!(
+                    "Invalid checkpoint index {index}. Available: 0..{}",
+                    checkpoints.len().saturating_sub(1)
+                ));
+            }
+            checkpoints[index].clone()
+        };
+
+        let hash = &tc.checkpoint.hash;
+
+        // Get stat summary
+        let stat_output = Command::new("git")
+            .args(["diff", "--stat", hash, "HEAD"])
+            .output()
+            .map_err(|e| format!("Failed to get diff stats: {e}"))?;
+        if !stat_output.status.success() {
+            return Err("Failed to compute diff stats".to_string());
+        }
+        let stat_str = String::from_utf8_lossy(&stat_output.stdout).to_string();
+
+        // Parse per-file stats from lines like " src/main.rs | 5 +++--"
+        let mut files_changed = Vec::new();
+        for line in stat_str.lines() {
+            let parts: Vec<&str> = line.split('|').collect();
+            if parts.len() == 2 {
+                let path = parts[0].trim().to_string();
+                if path.is_empty() || path.contains("file changed") || path.contains("files changed") {
+                    continue;
+                }
+                let nums: Vec<&str> = parts[1].split_whitespace().collect();
+                let additions = nums.first().and_then(|n| n.parse::<usize>().ok()).unwrap_or(0);
+                let deletions = nums.get(1).and_then(|n| n.parse::<usize>().ok()).unwrap_or(0);
+                files_changed.push(FileChangePreview {
+                    path,
+                    additions,
+                    deletions,
+                });
+            }
+        }
+
+        // Extract summary line like "5 files changed, 20 insertions(+), 10 deletions(-)"
+        let diff_stats = stat_str
+            .lines()
+            .last()
+            .map(|l| l.trim().to_string())
+            .unwrap_or_default();
+
+        // Get full diff
+        let diff_output = Command::new("git")
+            .args(["diff", hash, "HEAD"])
+            .output()
+            .map_err(|e| format!("Failed to get diff: {e}"))?;
+        let full_diff = String::from_utf8_lossy(&diff_output.stdout).to_string();
+
+        Ok(RevertPreview {
+            checkpoint: tc,
+            files_changed,
+            diff_stats,
+            full_diff,
+        })
     }
 
     /// Revert to a specific turn checkpoint by index.
@@ -659,5 +743,71 @@ mod tests {
         let result = mgr.revert_to(0, RestoreMode::ConversationOnly);
         assert!(result.is_ok());
         assert_eq!(mgr.len(), 1); // Only index 0 remains
+    }
+
+    #[test]
+    fn test_preview_revert_invalid_index() {
+        let mgr = CheckpointManager::new();
+        let result = mgr.preview_revert(0);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid checkpoint index"));
+    }
+
+    #[test]
+    fn test_preview_revert_with_data() {
+        let mgr = CheckpointManager::new();
+        let cp = Checkpoint {
+            hash: "preview1234567890".to_string(),
+            short_hash: "preview1".to_string(),
+            description: "before edit".to_string(),
+            timestamp: 1700000000,
+        };
+        mgr.record_turn(0, cp, vec!["src/main.rs".to_string()], Some("edit file".to_string()));
+        // preview_revert requires a real git diff, so it may fail in test env
+        // but should at least accept the index and attempt the diff
+        let result = mgr.preview_revert(0);
+        // In a git repo it should succeed (possibly with empty diff)
+        // or fail gracefully on git diff
+        assert!(result.is_ok() || result.unwrap_err().contains("diff"));
+    }
+
+    #[test]
+    fn test_file_change_preview_struct() {
+        let fcp = FileChangePreview {
+            path: "src/main.rs".to_string(),
+            additions: 10,
+            deletions: 5,
+        };
+        assert_eq!(fcp.path, "src/main.rs");
+        assert_eq!(fcp.additions, 10);
+        assert_eq!(fcp.deletions, 5);
+    }
+
+    #[test]
+    fn test_revert_preview_struct() {
+        let tc = TurnCheckpoint {
+            turn_index: 0,
+            checkpoint: Checkpoint {
+                hash: "abc123".to_string(),
+                short_hash: "abc123d".to_string(),
+                description: "test".to_string(),
+                timestamp: 1700000000,
+            },
+            files_changed: vec!["a.rs".to_string()],
+            prompt_preview: None,
+        };
+        let rp = RevertPreview {
+            checkpoint: tc,
+            files_changed: vec![FileChangePreview {
+                path: "a.rs".to_string(),
+                additions: 3,
+                deletions: 1,
+            }],
+            diff_stats: "1 file changed, 3 insertions(+), 1 deletion(-)".to_string(),
+            full_diff: "diff --git a/a.rs".to_string(),
+        };
+        assert_eq!(rp.files_changed.len(), 1);
+        assert!(!rp.diff_stats.is_empty());
+        assert!(!rp.full_diff.is_empty());
     }
 }

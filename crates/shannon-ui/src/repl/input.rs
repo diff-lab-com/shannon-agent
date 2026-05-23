@@ -1414,7 +1414,49 @@ fn handle_active_dialog_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                             super::commands::execute_pending_action(repl, &cmd)?;
                         }
                     }
-                    "cancel" | "ok" => {}
+                    "show_diff" => {
+                        if let Some(preview) = repl.state.undo_preview.take() {
+                            let mut viewer =
+                                crate::widgets::diff_viewer::DiffViewerWidget::new();
+                            viewer.load_raw_diff(&preview.full_diff);
+                            repl.state.diff_viewer = Some(viewer);
+                        }
+                    }
+                    "undo_confirm_revert" => {
+                        let index = repl.state.undo_target_index.take();
+                        let preview = repl.state.undo_preview.take();
+                        if let (Some(idx), Some(pv)) = (index, preview) {
+                            match repl
+                                .checkpoint_manager
+                                .revert_to(idx, shannon_core::RestoreMode::CodeAndConversation)
+                            {
+                                Ok(tc) => {
+                                    repl.chat.add_message(
+                                        ChatRole::System,
+                                        format!(
+                                            "Reverted to checkpoint [{}] ({})\n{}",
+                                            idx,
+                                            tc.checkpoint.short_hash,
+                                            tc.checkpoint.description
+                                        ),
+                                    );
+                                }
+                                Err(e) => {
+                                    repl.chat.add_message(
+                                        ChatRole::System,
+                                        format!("Revert failed: {e}"),
+                                    );
+                                    // Restore preview since revert failed
+                                    repl.state.undo_preview = Some(pv);
+                                    repl.state.undo_target_index = Some(idx);
+                                }
+                            }
+                        }
+                    }
+                    "cancel" | "ok" => {
+                        repl.state.undo_preview = None;
+                        repl.state.undo_target_index = None;
+                    }
                     _ => {}
                 }
             }

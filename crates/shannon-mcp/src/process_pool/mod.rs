@@ -142,6 +142,8 @@ pub struct McpProcessPool {
     /// Full input schemas keyed by tool name (e.g. "mcp__fetch__fetch").
     /// Populated during discovery when `defer_tool_schemas` is enabled.
     deferred_schemas: DashMap<String, Value>,
+    /// Tool descriptions keyed by tool name, for fuzzy search support.
+    deferred_descriptions: DashMap<String, String>,
     /// Background config watcher task handle.
     config_watcher_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     /// Callback invoked after a config hot-reload completes.
@@ -177,6 +179,7 @@ impl McpProcessPool {
             result_store: Arc::new(ToolResultStore::new()),
             defer_tool_schemas: Arc::new(AtomicBool::new(false)),
             deferred_schemas: DashMap::new(),
+            deferred_descriptions: DashMap::new(),
             config_watcher_task: Arc::new(Mutex::new(None)),
             on_config_reloaded: Arc::new(Mutex::new(None)),
         }
@@ -258,6 +261,19 @@ impl McpProcessPool {
             .iter()
             .map(|e| e.key().clone())
             .collect()
+    }
+
+    /// Store a tool description for fuzzy search.
+    pub fn store_deferred_description(&self, tool_name: &str, description: String) {
+        self.deferred_descriptions
+            .insert(tool_name.to_string(), description);
+    }
+
+    /// Get a tool's description for search display.
+    pub fn get_deferred_description(&self, tool_name: &str) -> Option<String> {
+        self.deferred_descriptions
+            .get(tool_name)
+            .map(|v| v.value().clone())
     }
 
     /// Retrieve the full stored content for a truncated tool result.
@@ -1485,6 +1501,7 @@ impl McpProcessPool {
                     .and_then(|m| m.get("timeoutSeconds"))
                     .and_then(|v| v.as_u64());
 
+                let desc_for_store = description.clone();
                 let adapter = PooledMcpToolAdapter::with_output_limit(
                     self.clone(),
                     server_name.to_string(),
@@ -1498,6 +1515,7 @@ impl McpProcessPool {
 
                 if self.is_defer_tool_schemas() {
                     self.store_deferred_schema(&adapter.tool_name, input_schema);
+                    self.store_deferred_description(&adapter.tool_name, desc_for_store);
                 }
 
                 tools.push(adapter);

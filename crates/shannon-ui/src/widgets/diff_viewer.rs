@@ -120,6 +120,31 @@ impl DiffViewerWidget {
         self.diff_cache.insert(path.to_string(), lines);
     }
 
+    /// Load raw diff text directly (e.g., from a preview_revert) into a virtual "file" entry.
+    pub fn load_raw_diff(&mut self, diff_text: &str) {
+        let key = "__undo_preview__".to_string();
+        if self.diff_cache.contains_key(&key) {
+            return;
+        }
+        let all_lines: Vec<&str> = diff_text.lines().collect();
+        let lines = if all_lines.len() > 500 {
+            let mut capped: Vec<String> =
+                all_lines[..500].iter().map(|s| s.to_string()).collect();
+            capped.push(format!(
+                "  ... diff truncated ({} more lines)",
+                all_lines.len() - 500
+            ));
+            capped
+        } else if all_lines.is_empty() {
+            vec!["(no differences)".to_string()]
+        } else {
+            all_lines.into_iter().map(String::from).collect()
+        };
+        self.diff_cache.insert(key.clone(), lines);
+        self.expanded = vec![true];
+        self.detail_file = Some(key);
+    }
+
     /// Get unique modified files from diff data
     fn unique_files(diff_data: &DiffData) -> Vec<FileChange> {
         let mut files: Vec<FileChange> = Vec::new();

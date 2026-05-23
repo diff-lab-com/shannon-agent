@@ -446,9 +446,9 @@ impl McpToolSearchTool {
     pub fn new(pool: Arc<shannon_mcp::McpProcessPool>) -> Self {
         Self {
             pool,
-            description: "Search for an MCP tool's full parameter schema by tool name. \
-                          Use this before calling any mcp__ tool to discover its required \
-                          and optional parameters. Input: {\"tool_name\": \"mcp__server__tool\"}"
+            description: "Search MCP tools by name, description, or retrieve full schemas. \
+                          Use `tool_name` for exact lookup, `query` for fuzzy search by name/description, \
+                          or call with no args to list all available tools."
                 .to_string(),
         }
     }
@@ -470,10 +470,13 @@ impl Tool for McpToolSearchTool {
             "properties": {
                 "tool_name": {
                     "type": "string",
-                    "description": "Full tool name (e.g., \"mcp__fetch__fetch\") to retrieve the schema for."
+                    "description": "Exact tool name (e.g., \"mcp__fetch__fetch\") to retrieve the full schema for."
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Fuzzy search term to find tools by name or description. Returns matching tools with their full schemas."
                 }
-            },
-            "required": ["tool_name"]
+            }
         })
     }
 
@@ -482,11 +485,30 @@ impl Tool for McpToolSearchTool {
     }
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
-        let tool_name = input
-            .get("tool_name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::InvalidInput("Missing 'tool_name' parameter".to_string()))?;
+        let tool_name = input.get("tool_name").and_then(|v| v.as_str());
+        let query = input.get("query").and_then(|v| v.as_str());
 
+        // Exact lookup by tool_name
+        if let Some(name) = tool_name {
+            return self.exact_lookup(name);
+        }
+
+        // Fuzzy search by query
+        if let Some(q) = query {
+            return self.fuzzy_search(q);
+        }
+
+        // No args: list all tools with descriptions
+        self.list_all()
+    }
+
+    fn is_read_only(&self) -> bool {
+        true
+    }
+}
+
+impl McpToolSearchTool {
+    fn exact_lookup(&self, tool_name: &str) -> ToolResult<ToolOutput> {
         match self.pool.get_deferred_schema(tool_name) {
             Some(schema) => {
                 let schema_str =
@@ -494,7 +516,6 @@ impl Tool for McpToolSearchTool {
                 Ok(ToolOutput::success(schema_str))
             }
             None => {
-                // List available tools to help the LLM discover valid names.
                 let available = self.pool.deferred_schema_tool_names();
                 if available.is_empty() {
                     Ok(ToolOutput::error(format!(
@@ -521,8 +542,84 @@ impl Tool for McpToolSearchTool {
         }
     }
 
-    fn is_read_only(&self) -> bool {
-        true
+    fn fuzzy_search(&self, query: &str) -> ToolResult<ToolOutput> {
+        let query_lower = query.to_lowercase();
+        let names = self.pool.deferred_schema_tool_names();
+        if names.is_empty() {
+            return Ok(ToolOutput::error(
+                "No deferred tools available. Deferred tool loading may not be enabled.".to_string(),
+            ));
+        }
+
+        let mut results = Vec::new();
+        for name in &names {
+            let desc = self
+                .pool
+                .get_deferred_description(name)
+                .unwrap_or_default();
+            let name_lower = name.to_lowercase();
+            let desc_lower = desc.to_lowercase();
+
+            let score = if name_lower.contains(&query_lower) {
+                100
+            } else if desc_lower.contains(&query_lower) {
+                80
+            } else if query_lower
+                .split_whitespace()
+                .all(|w| name_lower.contains(w) || desc_lower.contains(w))
+            {
+                60
+            } else {
+                continue;
+            };
+
+            if let Some(schema) = self.pool.get_deferred_schema(name) {
+                results.push((name.clone(), desc, score, schema));
+            }
+        }
+
+        results.sort_by(|a, b| b.2.cmp(&a.2));
+        results.truncate(20);
+
+        if results.is_empty() {
+            return Ok(ToolOutput::error(format!(
+                "No tools matching '{query}'. Available: {}",
+                names.iter().take(10).cloned().collect::<Vec<_>>().join(", ")
+            )));
+        }
+
+        let mut output = format!("Found {} tool(s) matching '{}':\n\n", results.len(), query);
+        for (name, desc, _score, schema) in &results {
+            output.push_str(&format!("## {name}\n"));
+            if !desc.is_empty() {
+                output.push_str(&format!("{desc}\n"));
+            }
+            let schema_str =
+                serde_json::to_string_pretty(schema).unwrap_or_else(|_| schema.to_string());
+            output.push_str(&schema_str);
+            output.push_str("\n\n");
+        }
+        Ok(ToolOutput::success(output))
+    }
+
+    fn list_all(&self) -> ToolResult<ToolOutput> {
+        let names = self.pool.deferred_schema_tool_names();
+        if names.is_empty() {
+            return Ok(ToolOutput::error(
+                "No deferred tools available. Deferred tool loading may not be enabled.".to_string(),
+            ));
+        }
+
+        let mut output = format!("{} deferred MCP tools available:\n\n", names.len());
+        for name in &names {
+            let desc = self
+                .pool
+                .get_deferred_description(name)
+                .unwrap_or_else(|| "(no description)".to_string());
+            output.push_str(&format!("- **{name}**: {desc}\n"));
+        }
+        output.push_str("\nUse tool_name parameter to get full schema for a specific tool.");
+        Ok(ToolOutput::success(output))
     }
 }
 

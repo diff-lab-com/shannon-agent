@@ -56,13 +56,12 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 ### CRITICAL — Shannon lacks entirely
 
 - **Agent view dashboard**: Claude Code shows background agent sessions in a dashboard UI. Shannon has no equivalent.
-- **File checkpointing/rewind**: `CheckpointManager` creates git commits before file-modifying tool executions, tracks per-turn file changes. `/undo` command (list, revert by index, revert last) and `/rewind` command (conversation rewind, code revert via `git reset`, or both). Four `RestoreMode` variants. Persistent checkpoint storage. 14 REPL tests for undo/rewind. Gap: no visual diff preview before reverting.
 
 ### HIGH — Shannon has partial support
 
 - **Permission auto-mode**: 9 `ApprovalMode` variants with `PermissionClassifier` (2928 lines) wired into `PermissionRuleChecker`. `LlmPermissionClassifier` wraps the rule-based classifier with async LLM fallback for ambiguous cases (confidence < 0.7, Medium+ risk). 4-tier precedence: hard_deny > soft_deny > allow > explicit intent. LLM classification disabled by default, enabled via `with_llm()`.
 - **Non-interactive/CI mode**: `--prompt` flag with FullAuto permissions (auto-approve non-critical, deny critical). NDJSON streaming, tool restrictions, exit codes. `--schema` flag accepts file path or inline JSON Schema for structured output validation — assistant is instructed to return valid JSON, response is validated before output, exit code 1 on validation failure. Gap: no deep links (`claude-cli://` URLs).
-- **MCP tool search**: `tools/list` works with deferred schema loading. Gap: Claude Code has on-demand tool search that scales to thousands of MCP tools. No MCP channel support (push webhooks/alerts into live sessions).
+- **MCP tool search**: `tools/list` works with deferred schema loading. Gap: no MCP channel support (push webhooks/alerts into live sessions).
 - **Hook system**: `HookManager` with `HookEvent`/`HookEventType`. Gap: Claude Code has 18+ hook events including `SubagentStart`, `SubagentStop`, `TaskCompleted`, `TeammateIdle`, `PreCompact`, `WorktreeCreate`, `WorktreeRemove`, `ConfigChange`. Shannon has fewer event types.
 - **LSP integration**: 6 LSP tools + `DiagnosticRegistry` + two client implementations. `DiagnosticStore.mark_stale()` called on source file changes. Background `cargo check` diagnostics auto-run via `DiagnosticWatcher` when source files change — debounce, parse, display in UI.
 - **Plugin system**: `PluginRegistry` with manifest parsing. Tool plugins fully wired (MCP discovery). Command plugins register as `PromptCommand` in `CommandRegistry` (source: `Plugin`). Skill plugins register as `PromptCommand` with trigger as slash command name and entry file as template. Loading in both REPL (`new()`) and CLI headless mode.
@@ -91,10 +90,12 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **`/batch` command**: Parallel worktree-isolated PR creation via `/batch` or `/parallel` command. Decomposes tasks, creates worktrees, spawns agents, creates PRs.
 - **LLM permission classifier wiring**: `LlmPermissionClassifier` wired into `PermissionManager` via `with_llm_classifier()`. Async `classify_and_check_with_llm()` uses LLM fallback for ambiguous cases in Auto modes.
 - **Structured JSON output for CI mode**: `StructuredOutputConfig` validates assistant responses against JSON Schema (type checking, required fields). System prompt generation for schema-aware responses.
+- **File checkpointing/rewind with diff preview**: `CheckpointManager` creates git commits before file-modifying tools, tracks per-turn changes. `/undo` shows diff preview dialog (file list, stats, full diff viewer) before reverting. `/rewind` for conversation/code/combined restore. Four `RestoreMode` variants. Persistent checkpoint storage.
+- **MCP on-demand tool search**: `mcp__tool_search` supports exact lookup (`tool_name`), fuzzy search (`query`), and listing all tools. Deferred schema loading with `deferred_descriptions` for search. Threshold raised to 100 tools for auto-activation.
 
 ### Test Coverage
 
-7723 total tests across all crates (58 e2e require API access). Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them.
+8162 total tests across all crates (58 e2e require API access). Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them.
 
 ## Competitor Feature Tiers
 
@@ -111,7 +112,7 @@ Multi-provider LLM, tool use, file read/write/edit, bash execution, MCP extensio
 - **Non-interactive/CI mode**: Claude Code `claude -p` with structured outputs. Shannon has `--prompt` with NDJSON output, `--schema` for JSON schema validation, and `StructuredOutputConfig` for programmatic use.
 
 ### Tier 3 — Quality of Life
-Multi-surface (web/desktop/CLI/IDE), computer use, file checkpointing/rewind, agent SDK (library mode), deep links, MCP channels, model switching, prompt caching, token counting UI.
+Multi-surface (web/desktop/CLI/IDE), computer use, deep links, MCP channels, prompt caching.
 
 ## Gotchas
 

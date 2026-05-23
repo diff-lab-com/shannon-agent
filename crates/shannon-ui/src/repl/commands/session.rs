@@ -456,56 +456,93 @@ pub(crate) fn handle_undo(repl: &mut Repl, args: &str) -> Result<()> {
                 i, tc.checkpoint.short_hash, time, files, preview, tc.checkpoint.description
             ));
         }
-        msg.push_str("\nUse /undo <number> to revert to a specific checkpoint.");
-        msg.push_str("\nUse /undo (no args) to revert the last checkpoint.");
+        msg.push_str("\nUse /undo <number> to preview and revert to a checkpoint.");
+        msg.push_str("\nUse /undo (no args) to preview revert of the last checkpoint.");
         repl.chat.add_message(ChatRole::System, msg);
         return Ok(());
     }
 
-    // /undo <number> — revert to specific checkpoint
-    if let Ok(index) = trimmed.parse::<usize>() {
-        match mgr.revert_to(index, shannon_core::RestoreMode::CodeAndConversation) {
-            Ok(tc) => {
-                repl.chat.add_message(
-                    ChatRole::System,
-                    format!(
-                        "Reverted to checkpoint [{}] ({})\n{}",
-                        index, tc.checkpoint.short_hash, tc.checkpoint.description
-                    ),
-                );
-            }
-            Err(e) => {
-                repl.chat
-                    .add_message(ChatRole::System, format!("Revert failed: {e}"));
-            }
+    // Resolve target index
+    let index = if trimmed.is_empty() {
+        let count = mgr.len();
+        if count == 0 {
+            repl.chat.add_message(
+                ChatRole::System,
+                "No checkpoints available.".to_string(),
+            );
+            return Ok(());
         }
+        count - 1
+    } else if let Ok(n) = trimmed.parse::<usize>() {
+        n
+    } else {
+        repl.chat.add_message(
+            ChatRole::System,
+            "Usage: /undo [list|<number>]".to_string(),
+        );
         return Ok(());
+    };
+
+    // Preview the revert
+    match mgr.preview_revert(index) {
+        Ok(preview) => {
+            let file_count = preview.files_changed.len();
+            let stats = if preview.diff_stats.is_empty() {
+                "no changes".to_string()
+            } else {
+                preview.diff_stats.clone()
+            };
+
+            let mut content_lines = Vec::new();
+            if file_count > 0 {
+                for fc in &preview.files_changed {
+                    content_lines.push(format!(
+                        "  {} (+{} -{})",
+                        fc.path, fc.additions, fc.deletions
+                    ));
+                }
+            } else {
+                content_lines.push("  (no file changes)".to_string());
+            }
+            content_lines.push(String::new());
+            content_lines.push(stats.clone());
+
+            let dialog = crate::widgets::dialog::DialogWidget::new(format!(
+                "Revert to checkpoint [{}] ({})",
+                index, preview.checkpoint.checkpoint.short_hash
+            ))
+            .with_subtitle(format!("{file_count} file(s) changed"))
+            .with_content(content_lines.join("\n"))
+            .with_button(
+                crate::widgets::dialog::DialogButton::new(
+                    "Show Diff".to_string(),
+                    "show_diff".to_string(),
+                ),
+            )
+            .with_button(
+                crate::widgets::dialog::DialogButton::new(
+                    "Revert".to_string(),
+                    "undo_confirm_revert".to_string(),
+                )
+                .dangerous(),
+            )
+            .with_button(
+                crate::widgets::dialog::DialogButton::new(
+                    "Cancel".to_string(),
+                    "cancel".to_string(),
+                ),
+            );
+
+            repl.state.undo_preview = Some(preview);
+            repl.state.undo_target_index = Some(index);
+            repl.state.active_dialog = Some(dialog);
+        }
+        Err(e) => {
+            repl.chat
+                .add_message(ChatRole::System, format!("Preview failed: {e}"));
+        }
     }
 
-    // /undo (no args) — revert last checkpoint
-    if trimmed.is_empty() {
-        match mgr.undo_last() {
-            Ok(cp) => {
-                repl.chat.add_message(
-                    ChatRole::System,
-                    format!(
-                        "Undid last checkpoint ({})\n{}",
-                        cp.short_hash, cp.description
-                    ),
-                );
-            }
-            Err(e) => {
-                repl.chat.add_message(
-                    ChatRole::System,
-                    format!("Undo failed: {e}. Use /undo list to see available checkpoints."),
-                );
-            }
-        }
-        return Ok(());
-    }
-
-    repl.chat
-        .add_message(ChatRole::System, "Usage: /undo [list|<number>]".to_string());
     Ok(())
 }
 

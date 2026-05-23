@@ -141,7 +141,9 @@ pub use bridge_service::{
     BridgeConfig, BridgeError, BridgeService, BridgeSession, BridgeStatus, MessageDirection,
     SessionMessage,
 };
-pub use checkpoint::{Checkpoint, CheckpointManager, RestoreMode, TurnCheckpoint};
+pub use checkpoint::{
+    Checkpoint, CheckpointManager, FileChangePreview, RestoreMode, RevertPreview, TurnCheckpoint,
+};
 pub use compact::{
     CompactConfig, CompactEngine, CompactError, CompactResult, CompactStrategy, MessageGroup,
     RuleBasedSummarizer, Summarizer,
