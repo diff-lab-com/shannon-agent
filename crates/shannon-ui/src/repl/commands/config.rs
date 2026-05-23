@@ -18,24 +18,15 @@ pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
         });
 
         // Sync model to query engine and resolve real context window
-        let ctx_from_registry = shannon_core::model_registry::context_window_for(args);
         let ctx = if let Some(ref mut engine) = repl.query_engine {
             engine.set_model(args.to_string());
-            // Try async context resolution; fall back to registry on failure
-            let resolved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Try async context resolution (queries Ollama /api/show for real num_ctx)
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 repl.runtime.block_on(engine.pre_resolve_context());
             }));
-            if resolved.is_err() {
-                tracing::warn!("Could not resolve context window for {args}, using registry fallback");
-            }
-            let ctx = engine.resolved_context_window();
-            if ctx == 4096 && ctx_from_registry != 4096 {
-                ctx_from_registry // prefer registry if engine couldn't resolve
-            } else {
-                ctx
-            }
+            engine.resolved_context_window()
         } else {
-            ctx_from_registry
+            shannon_core::model_registry::context_window_for(args)
         };
         repl.state.context_window = ctx;
         let ctx_label = if ctx >= 1_000_000 {

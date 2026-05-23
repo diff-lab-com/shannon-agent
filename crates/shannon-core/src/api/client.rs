@@ -757,6 +757,13 @@ impl LlmClient {
     pub fn cached_ollama_info(&self) -> Option<OllamaModelInfo> {
         self.ollama_info.read().ok().and_then(|info| info.clone())
     }
+
+    /// Clear cached Ollama model info (e.g., when switching models).
+    pub fn clear_ollama_cache(&self) {
+        if let Ok(mut cache) = self.ollama_info.write() {
+            *cache = None;
+        }
+    }
 }
 
 /// Backward-compatible alias

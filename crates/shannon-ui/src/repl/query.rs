@@ -213,6 +213,12 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
         query_engine.set_model(model.clone());
     }
 
+    // Resolve real context window for Ollama models before query starts
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        repl.runtime.block_on(query_engine.pre_resolve_context());
+    }));
+    repl.state.context_window = query_engine.resolved_context_window();
+
     // Sync effort_level and focus_area from REPL state into the query engine
     query_engine.set_effort_level(repl.state.effort_level.clone());
     query_engine.set_focus_area(repl.state.focus_area.clone());
@@ -1138,7 +1144,20 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
     });
 
     match query_result {
-        Ok((mut engine, response, thinking, thinking_duration, conversation_messages, tokens, tools, turn, _final_status, steps, stats_summary)) => {
+        Ok((mut engine, mut response, mut thinking, thinking_duration, conversation_messages, tokens, tools, turn, _final_status, steps, stats_summary)) => {
+            // Post-process <think/> tags for models that embed thinking in regular text (GLM, etc.)
+            if thinking.is_empty() {
+                if let Some(pos) = response.find("<think/>") {
+                    let rest = response[pos + 8..].to_string();
+                    if let Some(end) = rest.find("</think/>") {
+                        thinking = rest[..end].to_string();
+                        response = rest[end + 9..].to_string();
+                    } else {
+                        thinking = rest;
+                        response.clear();
+                    }
+                }
+            }
             // Use the proper conversation state from the query engine if available,
             // otherwise fall back to manual message addition
             if let Some(messages) = conversation_messages {

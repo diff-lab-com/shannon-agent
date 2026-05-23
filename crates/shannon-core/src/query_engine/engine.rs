@@ -643,6 +643,11 @@ impl QueryEngine {
 
     /// Update the model used for API calls.
     pub fn set_model(&mut self, model: String) {
+        self.effective_max_context_tokens = crate::model_registry::context_window_for(&model);
+        // Clear stale Ollama cache so pre_resolve_context() re-queries
+        if *self.client.provider() == crate::api::LlmProvider::Ollama {
+            self.client.clear_ollama_cache();
+        }
         let mut tracker = self.cost_tracker.write().unwrap_or_else(|e| e.into_inner());
         tracker.model_name = model.clone();
         self.client.set_model(model);
@@ -650,6 +655,11 @@ impl QueryEngine {
 
     /// Update the model AND switch provider (including base_url).
     pub fn set_model_for_provider(&mut self, model: String, provider: LlmProvider) {
+        self.effective_max_context_tokens = crate::model_registry::context_window_for(&model);
+        // Clear stale Ollama cache so pre_resolve_context() re-queries
+        if provider == crate::api::LlmProvider::Ollama {
+            self.client.clear_ollama_cache();
+        }
         let mut tracker = self.cost_tracker.write().unwrap_or_else(|e| e.into_inner());
         tracker.model_name = model.clone();
         self.client.set_model_for_provider(model, provider);
@@ -1009,7 +1019,7 @@ impl QueryEngine {
                         );
                         send_event!(tx, QueryEvent::Progress {
                             query_id,
-                            message: "Tools disabled for small model (context < 8K)".to_string(),
+                            message: "Tools disabled (model context under 8K)".to_string(),
                         });
                         // Replace full system prompt with minimal one to free context
                         system_blocks_opt = None;
@@ -1084,7 +1094,7 @@ impl QueryEngine {
                                             send_event!(tx, QueryEvent::Progress {
                                                 query_id,
                                                 message: format!(
-                                                    "Context compressed (3-tier): {} -> {} tokens ({:.0}% reduction, {} messages compacted)",
+                                                    "Context compressed (3-tier): {} → {} tokens ({:.0}% reduction, {} messages compacted)",
                                                     result.original_tokens,
                                                     result.compacted_tokens,
                                                     result.reduction_ratio * 100.0,
@@ -1094,7 +1104,7 @@ impl QueryEngine {
                                             send_event!(tx, QueryEvent::Info {
                                                 query_id,
                                                 message: format!(
-                                                    "compaction: {} -> {} tokens ({:.0}% reduction, {} removed, {} compacted, {:?})",
+                                                    "compaction: {} → {} tokens ({:.0}% reduction, {} removed, {} compacted, {:?})",
                                                     result.original_tokens,
                                                     result.compacted_tokens,
                                                     result.reduction_ratio * 100.0,
