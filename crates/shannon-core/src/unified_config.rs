@@ -12,6 +12,26 @@ use std::collections::HashMap;
 
 use crate::api::types::LlmProvider;
 
+/// A conversation preset with pre-configured settings.
+/// Duplicated here to avoid a circular dependency on shannon-commands.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PresetEntry {
+    /// Custom system prompt addition.
+    pub system_prompt: Option<String>,
+    /// Initial message to inject.
+    pub initial_message: Option<String>,
+    /// Model override.
+    pub model: Option<String>,
+    /// Temperature override.
+    pub temperature: Option<f32>,
+    /// Max tokens override.
+    pub max_tokens: Option<usize>,
+    /// Tools whitelist.
+    pub tools: Option<Vec<String>>,
+    /// Description for display.
+    pub description: Option<String>,
+}
+
 /// Per-provider configuration entry for `[providers.<name>]` sections.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProviderEntry {
@@ -41,6 +61,9 @@ pub struct ShannonConfig {
     /// Per-provider configuration: `[providers.deepseek]`, `[providers.zhipu]`, etc.
     #[serde(default)]
     pub providers: Option<HashMap<String, ProviderEntry>>,
+    /// User-defined conversation presets from config files.
+    #[serde(default)]
+    pub presets: Option<HashMap<String, PresetEntry>>,
 }
 
 impl ShannonConfig {
@@ -66,6 +89,20 @@ impl ShannonConfig {
             }
         };
 
+        // Merge presets: other's entries overlay on top of self's.
+        let presets = match (&self.presets, &other.presets) {
+            (None, None) => None,
+            (Some(a), None) => Some(a.clone()),
+            (None, Some(b)) => Some(b.clone()),
+            (Some(a), Some(b)) => {
+                let mut merged = a.clone();
+                for (k, v) in b {
+                    merged.insert(k.clone(), v.clone());
+                }
+                Some(merged)
+            }
+        };
+
         ShannonConfig {
             model: other.model.clone().or_else(|| self.model.clone()),
             provider: other.provider.clone().or_else(|| self.provider.clone()),
@@ -78,6 +115,7 @@ impl ShannonConfig {
             enable_tools: other.enable_tools.or(self.enable_tools),
             max_context_tokens: other.max_context_tokens.or(self.max_context_tokens),
             providers,
+            presets,
         }
     }
 

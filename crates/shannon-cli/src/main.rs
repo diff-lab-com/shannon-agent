@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::Parser;
 use clap::Subcommand;
 use futures::StreamExt;
+use shannon_commands::preset_utils::ConversationPreset;
 use shannon_core::{
     api::LlmClientConfig,
     i18n,
@@ -248,6 +249,8 @@ struct ShannonTomlConfig {
     api_key: Option<String>,
     base_url: Option<String>,
     enable_tools: Option<bool>,
+    /// User-defined conversation presets.
+    presets: HashMap<String, ConversationPreset>,
 }
 
 /// Load TOML config from disk, merging global + project-local files.
@@ -297,6 +300,10 @@ fn load_toml_config() -> ShannonTomlConfig {
                 }
                 if cfg.enable_tools.is_some() {
                     merged.enable_tools = cfg.enable_tools;
+                }
+                // Merge presets: local presets overlay on top of global
+                for (name, preset) in cfg.presets {
+                    merged.presets.insert(name, preset);
                 }
             }
             Err(e) => eprintln!("Warning: failed to parse .shannon.toml: {e}"),

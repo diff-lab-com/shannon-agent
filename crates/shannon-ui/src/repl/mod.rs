@@ -163,6 +163,9 @@ pub struct Repl {
     pub(crate) settings_watcher: Option<custom_commands::SettingsWatcher>,
     /// Source file watcher for detecting project code changes
     pub(crate) source_watcher: Option<source_watcher::SourceWatcher>,
+    /// Streaming tool result cache (shared with ToolRegistry).
+    /// Used to invalidate cached read-only tool results when source files change.
+    pub(crate) streaming_cache: Option<std::sync::Arc<shannon_core::tool_cache::ToolResultCache>>,
     /// Background diagnostic check pending flag (debounce)
     pub(crate) diagnostic_pending: std::sync::Arc<tokio::sync::Mutex<bool>>,
     /// Background diagnostic result receiver
@@ -368,6 +371,7 @@ impl Repl {
             command_watcher: None,
             settings_watcher: None,
             source_watcher: None,
+            streaming_cache: None,
             diagnostic_pending: std::sync::Arc::new(tokio::sync::Mutex::new(false)),
             diagnostic_rx: None,
             update_check_rx: None,
@@ -792,6 +796,11 @@ impl Repl {
 
         // Wrap tool registry in Arc so it can be shared with MCP callbacks
         // for dynamic tool re-registration.
+        // Attach streaming cache for read-only tool result caching.
+        let streaming_cache = std::sync::Arc::new(
+            shannon_core::tool_cache::ToolResultCache::with_default(),
+        );
+        tool_registry.set_streaming_cache(streaming_cache.clone());
         let tool_registry = std::sync::Arc::new(tool_registry);
 
         // Wire MCP sampling and elicitation providers so MCP servers can
@@ -1313,6 +1322,7 @@ impl Repl {
             source_watcher: Some(source_watcher::SourceWatcher::new(
                 std::env::current_dir().unwrap_or_default(),
             )),
+            streaming_cache: Some(streaming_cache),
             diagnostic_pending: std::sync::Arc::new(tokio::sync::Mutex::new(false)),
             diagnostic_rx: None,
             update_check_rx: None,
@@ -1589,6 +1599,13 @@ impl Repl {
                     format!("[Source changed: {preview}{suffix}]"),
                 );
                 self.state.diagnostic_store.mark_stale();
+
+                // Invalidate streaming cache entries for changed files
+                if let Some(ref cache) = self.streaming_cache {
+                    for path in &source_changes {
+                        cache.invalidate_path(path);
+                    }
+                }
             }
 
             // Trigger background diagnostic refresh when stale

@@ -34,6 +34,7 @@ mod memory;
 mod monitor;
 mod pdf;
 mod plan;
+mod preset;
 mod review;
 mod review_pr;
 mod search;
@@ -88,6 +89,7 @@ pub fn all_commands() -> Vec<Command> {
         repomap::command(),
         outline::command(),
         context::command(),
+        preset::command(),
     ];
     cmds.extend(repl::all_commands());
     cmds
@@ -191,6 +193,15 @@ pub mod doctor_utils {
 /// Re-export image utilities for REPL integration
 pub mod image_utils {
     pub use super::image::detect_media_type;
+}
+
+/// Re-export preset utilities for REPL integration
+#[allow(unused_imports)]
+pub mod preset_utils {
+    pub use super::preset::{
+        ConversationPreset, builtin_presets, format_preset_detail, format_preset_list,
+        merge_presets,
+    };
 }
 
 /// Re-export MCP command utilities for REPL integration

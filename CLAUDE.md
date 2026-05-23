@@ -95,10 +95,12 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **Vision/multimodal integration**: `AnalyzeImageTool` for image analysis (file/URL). Read tool supports image files with base64 encoding. `ToolResultEntry` converts image metadata to `ContentBlock::Image` for LLM vision. 30 new tests.
 - **Three-way merge / conflict markers**: LCS-based `three_way_merge()` algorithm. `parse_conflict_markers()` and `resolve_conflicts()`. Edit tool fallback to merge on `old_string` mismatch. `MergeResolveTool` for conflict resolution. 44 new tests.
 - **Performance benchmarks**: `criterion` benchmarks for compact engine, file edit, repomap generation, and context budget calculation across relevant crate sizes.
+- **Tool result cache**: `ToolResultCache` with TTL-based expiration (5 min default), DashMap-backed concurrent access, file-path invalidation on SourceWatcher changes. Caches read-only tool results (Read/Glob/Grep) in the query engine. 33 tests.
+- **Conversation presets**: `/preset` command with 5 built-in templates (code-review, refactor, debug, explain, test). Custom presets via `.shannon.toml` `[presets.*]` sections. Model/temperature/tools/system_prompt overrides. 16 tests.
 
 ### Test Coverage
 
-8277 total tests across all crates (58 e2e require API access). Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them. Performance benchmarks in `crates/shannon-*/benches/` run via `cargo bench`.
+8326 total tests across all crates (58 e2e require API access). Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them. Performance benchmarks in `crates/shannon-*/benches/` run via `cargo bench`.
 
 ## Competitor Feature Tiers
 

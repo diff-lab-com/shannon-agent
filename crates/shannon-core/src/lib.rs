@@ -69,6 +69,7 @@ pub mod streaming_tool_executor;
 pub mod suggestions;
 pub mod tips;
 pub mod token_estimation;
+pub mod tool_cache;
 pub mod tool_execution;
 pub mod tool_use_summary;
 pub mod tools;
@@ -213,6 +214,7 @@ pub use suggestions::{
     Suggestion, SuggestionCategory, SuggestionContext, SuggestionEngine, SuggestionRule,
 };
 pub use tips::{Tip, TipCategory, TipCondition, TipContext, TipError, TipManager};
+pub use tool_cache::{ToolCacheConfig, ToolResultCache};
 pub use tool_execution::{
     ToolExecutionResult, ToolExecutionService, ToolProgress, ToolProgressStatus,
 };

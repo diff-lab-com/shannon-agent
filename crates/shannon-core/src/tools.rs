@@ -155,6 +155,9 @@ pub struct ToolRegistry {
     defs_cache: std::sync::RwLock<Option<(u64, Vec<crate::api::ToolDefinition>)>>,
     /// Version counter for cache invalidation.
     version: std::sync::atomic::AtomicU64,
+    /// Concurrent TTL-based cache for streaming tool results.
+    /// Used by `execute_streaming` to avoid re-executing identical read-only calls.
+    streaming_cache: Option<std::sync::Arc<crate::tool_cache::ToolResultCache>>,
 }
 
 impl ToolRegistry {
@@ -177,6 +180,7 @@ impl ToolRegistry {
             schema_cache: std::sync::RwLock::new(None),
             defs_cache: std::sync::RwLock::new(None),
             version: std::sync::atomic::AtomicU64::new(0),
+            streaming_cache: None,
         }
     }
 
@@ -188,6 +192,19 @@ impl ToolRegistry {
     /// Set the max cache entries.
     pub fn set_max_cache_entries(&mut self, max: usize) {
         self.max_cache_entries = max;
+    }
+
+    /// Set the streaming cache for `execute_streaming` result caching.
+    ///
+    /// When set, `execute_streaming` will check the cache before executing
+    /// read-only tools and store successful results in the cache.
+    pub fn set_streaming_cache(&mut self, cache: std::sync::Arc<crate::tool_cache::ToolResultCache>) {
+        self.streaming_cache = Some(cache);
+    }
+
+    /// Get the streaming cache, if configured.
+    pub fn streaming_cache(&self) -> Option<&std::sync::Arc<crate::tool_cache::ToolResultCache>> {
+        self.streaming_cache.as_ref()
     }
 
     /// Restrict the registry to only allow specific tools.
@@ -478,6 +495,9 @@ impl ToolRegistry {
     /// Falls back to non-streaming `execute()` for tools that don't override
     /// `execute_streaming`. The progress sender receives incremental output
     /// lines during execution.
+    ///
+    /// When a streaming cache is configured, successful results from read-only
+    /// tools are cached and reused on subsequent calls with identical inputs.
     pub async fn execute_streaming(
         &self,
         name: &str,
@@ -488,7 +508,32 @@ impl ToolRegistry {
             .get(name)
             .ok_or_else(|| ToolError::NotFound(name.to_string()))?;
 
-        tool.execute_streaming(input, progress).await
+        let is_read_only = tool.is_read_only();
+
+        // Check streaming cache for read-only tools
+        if let Some(ref cache) = self.streaming_cache {
+            if is_read_only {
+                if let Some(cached) = cache.get(name, &input) {
+                    tracing::debug!("Streaming cache hit for tool '{}'", name);
+                    return Ok(cached);
+                }
+            }
+        }
+
+        let result = tool.execute_streaming(input.clone(), progress).await;
+
+        // Cache successful results from read-only tools
+        if let Some(ref cache) = self.streaming_cache {
+            if is_read_only {
+                if let Ok(ref output) = result {
+                    if !output.is_error {
+                        cache.put(name, &input, output, true);
+                    }
+                }
+            }
+        }
+
+        result
     }
 
     /// Check whether a registered tool is read-only.
@@ -525,6 +570,29 @@ impl ToolRegistry {
     }
 
     /// Partition a list of approved tool calls into execution batches.
+    /// Invalidate streaming cache entries for the given file paths.
+    ///
+    /// Called when source files change so stale cached read results are not
+    /// returned on subsequent tool calls.
+    pub fn invalidate_cache_paths(&self, paths: &[String]) {
+        if let Some(ref cache) = self.streaming_cache {
+            for path in paths {
+                cache.invalidate_path(path);
+            }
+        }
+        // Also invalidate the basic cache
+        let now = std::time::Instant::now();
+        self.invalidate_older_than(now);
+    }
+
+    /// Invalidate all streaming cache entries (e.g., on branch switch).
+    pub fn invalidate_cache_all(&self) {
+        if let Some(ref cache) = self.streaming_cache {
+            cache.invalidate_all();
+        }
+        self.clear_cache();
+    }
+
     ///
     /// Walks through the tools in order and groups consecutive read-only /
     /// concurrency-safe tools into parallel batches (capped at `max_parallel`).
