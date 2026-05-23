@@ -2,10 +2,11 @@
 name = "shannon-cli"
 version = "0.1.0"
 edition = "2024"
-description = "CLI interface for Shannon FPGA toolkit"
-authors = ["Shannon Project Contributors"]
+description = "AI-powered code assistant with multi-provider LLM support"
+authors = ["Shannon Code Contributors"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/shannon-project/shannon"
+repository = "https://github.com/shannon-agent/shannon-code"
+homepage = "https://github.com/shannon-agent/shannon-code"
 
 [[bin]]
 name = "shannon"
