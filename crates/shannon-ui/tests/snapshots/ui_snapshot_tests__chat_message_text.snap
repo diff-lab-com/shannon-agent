@@ -5,7 +5,7 @@ expression: "format!(\"{:#?}\", msg)"
 ChatMessage {
     role: User,
     content: "Hello, can you help me with Rust?",
-    timestamp: 2026-05-23T17:45:16.333651642Z,
+    timestamp: 2026-05-23T20:29:26.198982238Z,
     image_lines: None,
     is_error: false,
     tool_name: None,

@@ -35,7 +35,7 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 
 - **Error handling**: `thiserror` for library crates (`ApiError`, `QueryError`), `anyhow` for CLI/bin. Production code uses `expect("reason")` over `unwrap()` for panic diagnostics.
 - **Multi-provider**: `LlmClient` normalizes Anthropic/OpenAI/Ollama via adapter pattern (`crates/shannon-core/src/api/adapter.rs`).
-- **Anthropic caching**: `inject_cache_control_on_last_block()` adds `cache_control: {type: "ephemeral"}` via JSON post-processing. `SystemContentBlock` has `cache_control` field for system prompts.
+- **Anthropic caching**: Three-layer cache breakpoint injection: (1) `SystemContentBlock::cached()` for system prompts, (2) last `ToolDefinition` gets `cache_control` via adapter serialization, (3) `inject_cache_control_on_last_block()` on last user message content block. `ToolDefinition` has `cache_control` field for explicit per-tool caching.
 - **Streaming**: SSE byte stream → `SseStream` → `MessageStream` with chunk boundary buffering. Bash tool emits `ToolProgress` events for real-time output.
 - **Config priority**: CLI args > env vars (`SHANNON_*`) > `.shannon.toml` > `~/.shannon/config.toml`.
 - **Extensions**: MCP (Model Context Protocol) — Claude Code compatible. Servers configured in `.mcp.json`, `~/.claude/settings.json`, `~/.shannon/settings.json` via `mcpServers` key. Tools auto-discovered via `tools/list`.
@@ -88,6 +88,7 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **Structured JSON output for CI mode**: `StructuredOutputConfig` validates assistant responses against JSON Schema (type checking, required fields). System prompt generation for schema-aware responses.
 - **File checkpointing/rewind with diff preview**: `CheckpointManager` creates git commits before file-modifying tools, tracks per-turn changes. `/undo` shows diff preview dialog (file list, stats, full diff viewer) before reverting. `/rewind` for conversation/code/combined restore. Four `RestoreMode` variants. Persistent checkpoint storage.
 - **MCP on-demand tool search**: `mcp__tool_search` supports exact lookup (`tool_name`), fuzzy search (`query`), and listing all tools. Deferred schema loading with `deferred_descriptions` for search. Threshold raised to 100 tools for auto-activation.
+- **Prompt caching**: Three-layer Anthropic cache breakpoint injection — system prompt (`SystemContentBlock::cached()`), last tool definition (`ToolDefinition.cache_control`), last user message content block (`inject_cache_control_on_last_block()`). Enables prefix-based caching of static content across conversation turns.
 - **Agent view dashboard**: `AgentBarWidget` with 3 views (compact/expanded/detailed), `AgentsPanel` via Ctrl+A, sidebar tab. Background agent sessions displayed in real-time.
 - **Deep link support**: `shannon://prompt?text=<encoded>` and `shannon://resume?id=<uuid>` URL scheme. Linux/macOS registration via `--register-url-scheme`/`--unregister-url-scheme`. 18 unit tests for URL parsing.
 - **MCP channel/webhook**: `WebhookRegistry` with HMAC-SHA256 signing, event type filtering, JSON persistence. `EventPublisher` with non-blocking delivery, exponential backoff retry, rate limiting. 35 webhook-specific tests.
@@ -117,7 +118,7 @@ Multi-provider LLM, tool use, file read/write/edit, bash execution, MCP extensio
 - **Non-interactive/CI mode**: Claude Code `claude -p` with structured outputs. Shannon has `--prompt` with NDJSON output, `--schema` for JSON schema validation, and `StructuredOutputConfig` for programmatic use.
 
 ### Tier 3 — Quality of Life
-Multi-surface (web/desktop/CLI/IDE), computer use, prompt caching.
+Multi-surface (web/desktop/CLI/IDE), computer use.
 
 ## Gotchas
 
