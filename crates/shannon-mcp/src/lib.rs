@@ -44,6 +44,7 @@ pub mod protocol;
 pub mod resources;
 pub mod server_manager;
 pub mod transport;
+pub mod webhook;
 
 pub use auth::{
     ApiKeyProvider, AuthProvider, DcrRegistrationResult, OAuth2Provider, OAuthDiscoveryResult,
@@ -85,6 +86,9 @@ pub use server_manager::{
 };
 pub use transport::{
     HttpTransport, SseTransport, StdioTransport, Transport, TransportError, WebSocketTransport,
+};
+pub use webhook::{
+    EventPublisher, McpEvent, McpEventType, WebhookConfig, WebhookDelivery, WebhookRegistry,
 };
 
 /// Current MCP protocol version supported by this implementation

@@ -38,6 +38,10 @@ criterion = "0.5"
 name = "codegen_benchmarks"
 harness = false
 
+[[bench]]
+name = "repomap_bench"
+harness = false
+
 [features]
 default = ["rust", "python", "javascript", "typescript", "go"]
 rust = ["tree-sitter-rust"]

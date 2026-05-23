@@ -103,3 +103,11 @@ harness = false
 [[bench]]
 name = "recording_benchmarks"
 harness = false
+
+[[bench]]
+name = "compact_bench"
+harness = false
+
+[[bench]]
+name = "context_budget_bench"
+harness = false

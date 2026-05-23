@@ -572,6 +572,11 @@ impl AgentCoordinator {
                             worktree = %session.path.display(),
                             "Created isolated worktree for agent"
                         );
+                        // Fire WorktreeCreate hook
+                        self.fire_hook(HookEvent::WorktreeCreate {
+                            path: session.path.to_string_lossy().to_string(),
+                            branch: session.branch_name.clone(),
+                        });
                         // Store worktree path in teammate metadata
                         if let Some(agent) = team.members.get(&agent_name) {
                             agent
@@ -948,6 +953,13 @@ impl AgentCoordinator {
             priority: format!("{priority:?}"),
         });
 
+        // Fire TaskCreated hook (Claude Code standard)
+        self.fire_hook(HookEvent::TaskCreated {
+            task_id: task_id.to_string(),
+            subject: subject,
+            priority: format!("{priority:?}"),
+        });
+
         Ok(task_id)
     }
 
@@ -1010,6 +1022,13 @@ impl AgentCoordinator {
             team_name: team_name.to_string(),
             agent_name: None,
             subject: subject.clone(),
+            priority: format!("{priority:?}"),
+        });
+
+        // Fire TaskCreated hook (Claude Code standard)
+        self.fire_hook(HookEvent::TaskCreated {
+            task_id: task_id.to_string(),
+            subject,
             priority: format!("{priority:?}"),
         });
 
@@ -1578,6 +1597,12 @@ impl AgentCoordinator {
             task_id: task_id.to_string(),
             team_name: team_name.to_string(),
             agent_name: agent_name.to_string(),
+            subject: subject.clone(),
+        });
+
+        // Fire TaskCompleted hook (Claude Code standard)
+        self.fire_hook(HookEvent::TaskCompleted {
+            task_id: task_id.to_string(),
             subject,
         });
 
@@ -2629,8 +2654,16 @@ impl AgentCoordinator {
 
         // Cleanup worktrees if enabled
         if let Some(manager) = &self.worktree_manager {
+            // Collect session paths before cleanup for hook firing
+            let sessions = manager.list_sessions().await;
             if let Err(e) = manager.cleanup_all().await {
                 tracing::warn!(error = %e, "Failed to cleanup worktrees during shutdown");
+            }
+            // Fire WorktreeRemove hooks for each cleaned-up session
+            for session in sessions {
+                self.fire_hook(HookEvent::WorktreeRemove {
+                    path: session.path.to_string_lossy().to_string(),
+                });
             }
         }
 
@@ -2681,6 +2714,7 @@ impl AgentCoordinator {
 
         let from = reply_to.to_string();
         let agent_name_owned = agent_name.to_string();
+        let agent_type = teammate.config().agent_type.clone();
         let task_key = format!("{team_name}:{agent_name}");
         let message = AgentMessage::new_text(from.clone(), agent_name_owned.clone(), content);
 
@@ -2691,6 +2725,22 @@ impl AgentCoordinator {
         let event_sender = self.event_sender.clone();
         let team_name_owned = team_name.to_string();
         let task_key_for_cleanup = task_key.clone();
+        let hook_manager = self.hook_manager.clone();
+        let agent_id_for_hook = agent_name_owned.clone();
+        let agent_type_for_hook = agent_type.clone();
+
+        // Fire SubagentStart hook before spawning the work
+        if let Some(hm) = &hook_manager {
+            let hm = hm.clone();
+            let agent_id = agent_id_for_hook.clone();
+            let at = agent_type_for_hook.clone();
+            tokio::spawn(async move {
+                let _ = hm.run_hooks(&HookEvent::SubagentStart {
+                    agent_id,
+                    agent_type: at,
+                }).await;
+            });
+        }
 
         let handle = tokio::spawn(async move {
             // Emit started event
@@ -2716,6 +2766,17 @@ impl AgentCoordinator {
                             timeout_secs = secs,
                             "Background task timed out"
                         );
+                        // Fire SubagentStop hook (timeout)
+                        if let Some(hm) = &hook_manager {
+                            let hm = hm.clone();
+                            let aid = agent_name_owned.clone();
+                            tokio::spawn(async move {
+                                let _ = hm.run_hooks(&HookEvent::SubagentStop {
+                                    agent_id: aid,
+                                    result_summary: "timed out".to_string(),
+                                }).await;
+                            });
+                        }
                         // Clean up tracking entry
                         background_tasks.write().await.remove(&task_key_for_cleanup);
                         return;
@@ -2736,6 +2797,18 @@ impl AgentCoordinator {
                         MessageContent::Text(t) => t.clone(),
                         other => format!("{other:?}"),
                     };
+                    // Fire SubagentStop hook (success)
+                    if let Some(hm) = &hook_manager {
+                        let hm = hm.clone();
+                        let aid = agent_name_owned.clone();
+                        let summary = output.clone();
+                        tokio::spawn(async move {
+                            let _ = hm.run_hooks(&HookEvent::SubagentStop {
+                                agent_id: aid,
+                                result_summary: summary,
+                            }).await;
+                        });
+                    }
                     if let Err(e) = event_sender.send(CoordinatorEvent::AgentCompleted {
                         team: team_name_owned.clone(),
                         agent: agent_name_owned.clone(),
@@ -2751,6 +2824,18 @@ impl AgentCoordinator {
                         error = %e,
                         "Background task failed"
                     );
+                    // Fire SubagentStop hook (failure)
+                    if let Some(hm) = &hook_manager {
+                        let hm = hm.clone();
+                        let aid = agent_name_owned.clone();
+                        let summary = e.to_string();
+                        tokio::spawn(async move {
+                            let _ = hm.run_hooks(&HookEvent::SubagentStop {
+                                agent_id: aid,
+                                result_summary: summary,
+                            }).await;
+                        });
+                    }
                     if let Err(e) = event_sender.send(CoordinatorEvent::AgentCompleted {
                         team: team_name_owned.clone(),
                         agent: agent_name_owned.clone(),
@@ -2974,5 +3059,103 @@ mod tests {
         assert_send_sync::<InboxSummary>();
         assert_send_sync::<AssignmentStrategy>();
         assert_send_sync::<AgentMode>();
+    }
+
+    // ── Hook event wiring tests ──────────────────────────────────────────
+
+    #[test]
+    fn task_created_hook_event_fields() {
+        let event = HookEvent::TaskCreated {
+            task_id: "t-123".to_string(),
+            subject: "implement auth".to_string(),
+            priority: "High".to_string(),
+        };
+        assert_eq!(event.event_type(), shannon_core::hooks::HookEventType::TaskCreated);
+        assert_eq!(event.match_subject(), "implement auth");
+        // Verify JSON roundtrip
+        let json = serde_json::to_vec(&event).unwrap();
+        assert!(!json.is_empty());
+    }
+
+    #[test]
+    fn task_completed_hook_event_fields() {
+        let event = HookEvent::TaskCompleted {
+            task_id: "t-456".to_string(),
+            subject: "fix bug".to_string(),
+        };
+        assert_eq!(event.event_type(), shannon_core::hooks::HookEventType::TaskCompleted);
+        assert_eq!(event.match_subject(), "fix bug");
+        let json = serde_json::to_vec(&event).unwrap();
+        assert!(!json.is_empty());
+    }
+
+    #[test]
+    fn subagent_start_hook_event_fields() {
+        let event = HookEvent::SubagentStart {
+            agent_id: "agent-007".to_string(),
+            agent_type: "general-purpose".to_string(),
+        };
+        assert_eq!(event.event_type(), shannon_core::hooks::HookEventType::SubagentStart);
+        assert_eq!(event.match_subject(), "agent-007");
+    }
+
+    #[test]
+    fn subagent_stop_hook_event_fields() {
+        let event = HookEvent::SubagentStop {
+            agent_id: "agent-007".to_string(),
+            result_summary: "completed task".to_string(),
+        };
+        assert_eq!(event.event_type(), shannon_core::hooks::HookEventType::SubagentStop);
+        assert_eq!(event.match_subject(), "agent-007");
+    }
+
+    #[test]
+    fn worktree_create_hook_event_fields() {
+        let event = HookEvent::WorktreeCreate {
+            path: "/tmp/worktree-1".to_string(),
+            branch: "worktree/agent-1".to_string(),
+        };
+        assert_eq!(event.event_type(), shannon_core::hooks::HookEventType::WorktreeCreate);
+        assert_eq!(event.match_subject(), "/tmp/worktree-1");
+    }
+
+    #[test]
+    fn worktree_remove_hook_event_fields() {
+        let event = HookEvent::WorktreeRemove {
+            path: "/tmp/worktree-1".to_string(),
+        };
+        assert_eq!(event.event_type(), shannon_core::hooks::HookEventType::WorktreeRemove);
+        assert_eq!(event.match_subject(), "/tmp/worktree-1");
+    }
+
+    #[tokio::test]
+    async fn coordinator_fire_hook_with_no_hook_manager_does_not_panic() {
+        // Create a coordinator without a hook manager and verify fire_hook doesn't panic.
+        // We test this indirectly by creating tasks which fire hooks internally.
+        let config = CoordinatorConfig::default();
+        let coordinator = AgentCoordinator::new(config).await.unwrap();
+        // No hook_manager set — fire_hook should be a no-op
+        coordinator.fire_hook(HookEvent::TaskCreated {
+            task_id: "test".to_string(),
+            subject: "test".to_string(),
+            priority: "Low".to_string(),
+        });
+        // Give spawned task (if any) time to settle
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    #[tokio::test]
+    async fn coordinator_set_hook_manager_accepts_manager() {
+        let config = CoordinatorConfig::default();
+        let mut coordinator = AgentCoordinator::new(config).await.unwrap();
+        let hm = Arc::new(HookManager::new());
+        coordinator.set_hook_manager(hm);
+        // Hook manager is now set — fire_hook should work without panic
+        coordinator.fire_hook(HookEvent::TaskCreated {
+            task_id: "test2".to_string(),
+            subject: "test2".to_string(),
+            priority: "Medium".to_string(),
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
 }

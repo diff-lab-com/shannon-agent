@@ -41,6 +41,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::auth::OAuth2Provider;
 use crate::config::{HeaderSource, McpAuthConfig};
+use crate::webhook::{EventPublisher, McpEvent, McpEventType};
 use handle::McpServerHandle;
 use remote_handle::RemoteMcpServerHandle;
 use types::*;
@@ -149,6 +150,8 @@ pub struct McpProcessPool {
     /// Callback invoked after a config hot-reload completes.
     /// Receives a list of human-readable change descriptions.
     on_config_reloaded: Arc<Mutex<Option<Arc<dyn Fn(&[String]) + Send + Sync>>>>,
+    /// Optional event publisher for webhook notifications.
+    event_publisher: Option<Arc<EventPublisher>>,
 }
 
 impl McpProcessPool {
@@ -182,6 +185,28 @@ impl McpProcessPool {
             deferred_descriptions: DashMap::new(),
             config_watcher_task: Arc::new(Mutex::new(None)),
             on_config_reloaded: Arc::new(Mutex::new(None)),
+            event_publisher: None,
+        }
+    }
+
+    /// Set the event publisher for webhook notifications.
+    ///
+    /// When set, the pool fires MCP events (server connected/disconnected,
+    /// tool call start/complete, notifications) to registered webhooks.
+    pub fn with_event_publisher(mut self, publisher: EventPublisher) -> Self {
+        self.event_publisher = Some(Arc::new(publisher));
+        self
+    }
+
+    /// Get a reference to the event publisher, if configured.
+    pub fn event_publisher(&self) -> Option<&Arc<EventPublisher>> {
+        self.event_publisher.as_ref()
+    }
+
+    /// Fire an event to the event publisher (if configured).
+    async fn fire_event(&self, event: McpEvent) {
+        if let Some(ref publisher) = self.event_publisher {
+            publisher.publish(event).await;
         }
     }
 
@@ -341,6 +366,13 @@ impl McpProcessPool {
 
         handle.start().await?;
         self.handles.insert(name.to_string(), handle);
+        self.fire_event(McpEvent::new(
+            McpEventType::ServerConnected,
+            name.to_string(),
+            None,
+            serde_json::json!({"transport": "stdio"}),
+        ))
+        .await;
         Ok(())
     }
 
@@ -447,6 +479,13 @@ impl McpProcessPool {
 
         handle.start().await?;
         self.remote_handles.insert(name.to_string(), handle);
+        self.fire_event(McpEvent::new(
+            McpEventType::ServerConnected,
+            name.to_string(),
+            None,
+            serde_json::json!({"transport": "http"}),
+        ))
+        .await;
         Ok(())
     }
 
@@ -543,6 +582,13 @@ impl McpProcessPool {
 
         handle.start().await?;
         self.remote_handles.insert(name.to_string(), handle);
+        self.fire_event(McpEvent::new(
+            McpEventType::ServerConnected,
+            name.to_string(),
+            None,
+            serde_json::json!({"transport": "websocket"}),
+        ))
+        .await;
         Ok(())
     }
 
@@ -557,8 +603,33 @@ impl McpProcessPool {
         tool_name: &str,
         arguments: Value,
     ) -> shannon_tool_interface::ToolResult<shannon_tool_interface::ToolOutput> {
-        self.call_tool_with_limit(server_name, tool_name, arguments, self.max_output_chars)
-            .await
+        let result = self
+            .call_tool_with_limit(server_name, tool_name, arguments, self.max_output_chars)
+            .await;
+
+        // Fire ToolCallCompleted event.
+        let (status, payload) = match &result {
+            Ok(output) => (
+                "success",
+                serde_json::json!({
+                    "is_error": output.is_error,
+                    "content_length": output.content.len(),
+                }),
+            ),
+            Err(e) => (
+                "error",
+                serde_json::json!({"error": e.to_string()}),
+            ),
+        };
+        self.fire_event(McpEvent::new(
+            McpEventType::ToolCallCompleted,
+            server_name.to_string(),
+            Some(tool_name.to_string()),
+            serde_json::json!({"status": status, "result": payload}),
+        ))
+        .await;
+
+        result
     }
 
     /// Call a tool with an explicit output limit (per-tool override).
@@ -581,6 +652,15 @@ impl McpProcessPool {
                 "MCP server '{server_name}' has exceeded its result byte budget"
             )));
         }
+
+        // Fire ToolCallStarted event.
+        self.fire_event(McpEvent::new(
+            McpEventType::ToolCallStarted,
+            server_name.to_string(),
+            Some(tool_name.to_string()),
+            serde_json::json!({"arguments_preview": arguments.to_string().chars().take(200).collect::<String>()}),
+        ))
+        .await;
 
         // Check remote handles first (simpler, no process management).
         if let Some(remote) = self.remote_handles.get(server_name) {
@@ -1760,6 +1840,7 @@ impl McpProcessPool {
         let rx = self.notification_rx.clone();
         let on_tools_changed = self.on_tools_changed.clone();
         let tool_cache = self.tool_cache.clone();
+        let event_publisher = self.event_publisher.clone();
         let pool = self.clone();
 
         tokio::spawn(async move {
@@ -1768,6 +1849,17 @@ impl McpProcessPool {
                 match rx_guard.recv().await {
                     Some((server_name, notification)) => {
                         drop(rx_guard);
+
+                        // Fire notification event to webhooks.
+                        if let Some(ref publisher) = event_publisher {
+                            let event = McpEvent::new(
+                                McpEventType::NotificationReceived,
+                                server_name.clone(),
+                                None,
+                                notification.clone(),
+                            );
+                            publisher.publish(event).await;
+                        }
 
                         let method = notification
                             .get("method")
@@ -1899,10 +1991,24 @@ impl McpProcessPool {
         if let Some((_, handle)) = self.handles.remove(name) {
             handle.shutdown().await;
             info!(server = %name, "Stopped MCP server");
+            self.fire_event(McpEvent::new(
+                McpEventType::ServerDisconnected,
+                name.to_string(),
+                None,
+                serde_json::json!({"reason": "stopped"}),
+            ))
+            .await;
             return Ok(());
         }
         if self.remote_handles.remove(name).is_some() {
             info!(server = %name, "Removed remote MCP server");
+            self.fire_event(McpEvent::new(
+                McpEventType::ServerDisconnected,
+                name.to_string(),
+                None,
+                serde_json::json!({"reason": "stopped"}),
+            ))
+            .await;
             return Ok(());
         }
         Err(format!("MCP server '{name}' not found"))

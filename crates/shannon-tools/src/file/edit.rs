@@ -7,6 +7,7 @@
 //! - Comprehensive error messages with context
 
 use crate::file::diff_renderer::{DiffHunk, DiffLine, DiffLineType, DiffRenderer};
+use crate::file::merge::{self, MergeResult};
 use crate::{ToolError, ToolOutput};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -478,6 +479,73 @@ fn finalize_hunk(
     }
 }
 
+/// Result of attempting a three-way merge fallback.
+enum MergeFallbackResult {
+    /// Merge succeeded (possibly with conflicts).
+    Applied {
+        merged_content: String,
+        merge_conflicts: Vec<merge::ConflictRegion>,
+    },
+    /// Three-way merge could not be attempted (no git base available).
+    NotAvailable(String),
+}
+
+/// Attempt a three-way merge when `old_string` is not found in the current file.
+///
+/// Strategy:
+/// - `base` = git HEAD version of the file
+/// - `ours` = current file content on disk
+/// - `theirs` = what the file would look like if we applied the edit to base
+///   (i.e. `base.replace(old_string, new_string)`)
+///
+/// If the base version is available and contains `old_string`, we can construct
+/// `theirs` and perform the three-way merge.
+async fn attempt_merge_fallback(
+    file_path: &str,
+    current_content: &str,
+    old_string: &str,
+    new_string: &str,
+    replace_all: bool,
+) -> MergeFallbackResult {
+    // Get the git HEAD version of the file
+    let base = match merge::get_git_head_version(file_path).await {
+        Some(content) => content,
+        None => {
+            return MergeFallbackResult::NotAvailable(
+                "old_string not found in file content, and git HEAD version is not available for three-way merge.".to_string(),
+            );
+        }
+    };
+
+    // Check if the base version contains old_string
+    if !base.contains(old_string) {
+        return MergeFallbackResult::NotAvailable(
+            "old_string not found in file content, and it is also not present in the git HEAD version — the edit target does not exist.".to_string(),
+        );
+    }
+
+    // Construct "theirs" — what the file would look like with the edit applied to base
+    let theirs = if replace_all {
+        base.replace(old_string, new_string)
+    } else {
+        base.replacen(old_string, new_string, 1)
+    };
+
+    // Perform three-way merge
+    let result = merge::three_way_merge(&base, current_content, &theirs);
+
+    match result {
+        MergeResult::Clean(merged) => MergeFallbackResult::Applied {
+            merged_content: merged,
+            merge_conflicts: vec![],
+        },
+        MergeResult::Conflicted { merged, conflicts } => MergeFallbackResult::Applied {
+            merged_content: merged,
+            merge_conflicts: conflicts,
+        },
+    }
+}
+
 pub async fn execute(input: EditInput) -> Result<ToolOutput, ToolError> {
     use tokio::fs;
 
@@ -512,14 +580,49 @@ pub async fn execute(input: EditInput) -> Result<ToolOutput, ToolError> {
         ToolError::ExecutionFailed(format!("Failed to read file '{}': {}", input.file_path, e))
     })?;
 
-    // --- Perform the edit ---
-    let (new_content, replacements, locations) = perform_edit(
+    // --- Perform the edit (with three-way merge fallback) ---
+    let edit_result = perform_edit(
         &content,
         &input.old_string,
         &input.new_string,
         input.replace_all,
-    )
-    .map_err(|e| ToolError::InvalidInput(e.to_string()))?;
+    );
+
+    let (new_content, replacements, locations, merge_conflicts) = match edit_result {
+        Ok((nc, reps, locs)) => (nc, reps, locs, vec![]),
+        Err(EditError::NotFound(_)) => {
+            // old_string not found — try three-way merge fallback
+            let merge_result = attempt_merge_fallback(
+                &input.file_path,
+                &content,
+                &input.old_string,
+                &input.new_string,
+                input.replace_all,
+            )
+            .await;
+
+            match merge_result {
+                MergeFallbackResult::Applied {
+                    merged_content,
+                    merge_conflicts,
+                } => {
+                    let locs = if merge_conflicts.is_empty() {
+                        vec![ReplacementLocation { line: 0, column: 0 }]
+                    } else {
+                        vec![ReplacementLocation {
+                            line: merge_conflicts[0].start_line,
+                            column: 0,
+                        }]
+                    };
+                    (merged_content, 1, locs, merge_conflicts)
+                }
+                MergeFallbackResult::NotAvailable(original_error) => {
+                    return Err(ToolError::InvalidInput(original_error));
+                }
+            }
+        }
+        Err(e) => return Err(ToolError::InvalidInput(e.to_string())),
+    };
 
     // --- Generate diff preview ---
     let hunks = compute_diff_hunks(&content, &new_content);
@@ -590,6 +693,46 @@ pub async fn execute(input: EditInput) -> Result<ToolOutput, ToolError> {
                 input.file_path, e
             ))
         })?;
+
+    // If there are merge conflicts, report them as an error with the conflict info
+    if !merge_conflicts.is_empty() {
+        let conflict_report: Vec<String> = merge_conflicts
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                format!(
+                    "  Conflict {} at line {}:\n    ours:   {}\n    theirs: {}",
+                    i + 1,
+                    c.start_line,
+                    c.ours_content.lines().next().unwrap_or("(empty)"),
+                    c.theirs_content.lines().next().unwrap_or("(empty)")
+                )
+            })
+            .collect();
+
+        let message = format!(
+            "Three-way merge applied with {} conflict(s) in {}. \
+             The file has been written with conflict markers. \
+             Use MergeResolve to pick 'ours' or 'theirs' for each conflict.\n\n{}\n\n{}",
+            merge_conflicts.len(),
+            input.file_path,
+            conflict_report.join("\n"),
+            diff_preview
+        );
+
+        return Ok(ToolOutput {
+            content: message,
+            is_error: true,
+            metadata: {
+                let mut map = HashMap::new();
+                map.insert("file_path".to_string(), json!(input.file_path));
+                map.insert("replacements".to_string(), json!(replacements));
+                map.insert("locations".to_string(), json!(locations));
+                map.insert("merge_conflicts".to_string(), json!(merge_conflicts.len()));
+                map
+            },
+        });
+    }
 
     let message = if replacements == 1 {
         format!(
@@ -1074,5 +1217,301 @@ mod tests {
         assert!(output.content.contains("old"));
         assert!(output.content.contains("new"));
         cleanup_temp_file(&path);
+    }
+
+    // --- attempt_merge_fallback tests ---
+    //
+    // These tests change the process working directory (via `set_current_dir`) so
+    // that `git show HEAD:<relative-path>` inside `get_git_head_version` resolves
+    // correctly. A static mutex serialises them to avoid parallel-cwd races.
+
+    use std::sync::Mutex;
+    static CWD_MUTEX: Mutex<()> = Mutex::new(());
+
+    /// Helper: create a temp git repo, commit an initial file, return TempDir.
+    /// The repo root can be used as cwd so that `git show HEAD:<file>` works.
+    async fn init_git_repo_with_file(filename: &str, content: &str) -> tempfile::TempDir {
+        let dir = tempfile::TempDir::new().unwrap();
+        let repo_path = dir.path();
+
+        // git init
+        tokio::process::Command::new("git")
+            .arg("init")
+            .current_dir(repo_path)
+            .output()
+            .await
+            .expect("git init failed");
+
+        // git config (needed for commit)
+        tokio::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(repo_path)
+            .output()
+            .await
+            .expect("git config email failed");
+        tokio::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(repo_path)
+            .output()
+            .await
+            .expect("git config name failed");
+
+        // Write initial file
+        tokio::fs::write(repo_path.join(filename), content)
+            .await
+            .unwrap();
+
+        // git add + commit
+        tokio::process::Command::new("git")
+            .args(["add", filename])
+            .current_dir(repo_path)
+            .output()
+            .await
+            .expect("git add failed");
+        tokio::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(repo_path)
+            .output()
+            .await
+            .expect("git commit failed");
+
+        dir
+    }
+
+    #[tokio::test]
+    async fn test_attempt_merge_fallback_no_git() {
+        let _lock = CWD_MUTEX.lock().unwrap();
+
+        // Non-git temp directory — no HEAD version available
+        let dir = tempfile::TempDir::new().unwrap();
+        tokio::fs::write(dir.path().join("test.txt"), "hello world")
+            .await
+            .unwrap();
+
+        let saved_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        let result = attempt_merge_fallback(
+            "test.txt",
+            "hello world",
+            "hello",
+            "goodbye",
+            false,
+        )
+        .await;
+
+        std::env::set_current_dir(&saved_cwd).unwrap();
+
+        match result {
+            MergeFallbackResult::NotAvailable(msg) => {
+                assert!(
+                    msg.contains("git HEAD version is not available"),
+                    "expected 'git HEAD version is not available' in message, got: {msg}"
+                );
+            }
+            MergeFallbackResult::Applied { .. } => {
+                panic!("expected NotAvailable, got Applied");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_attempt_merge_fallback_base_lacks_old_string() {
+        let _lock = CWD_MUTEX.lock().unwrap();
+
+        let dir = init_git_repo_with_file("test.txt", "original content").await;
+
+        let saved_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        let result = attempt_merge_fallback(
+            "test.txt",
+            "original content",
+            "nonexistent",
+            "replacement",
+            false,
+        )
+        .await;
+
+        std::env::set_current_dir(&saved_cwd).unwrap();
+
+        match result {
+            MergeFallbackResult::NotAvailable(msg) => {
+                assert!(
+                    msg.contains("not present in the git HEAD version"),
+                    "expected message about not present in git HEAD, got: {msg}"
+                );
+            }
+            MergeFallbackResult::Applied { .. } => {
+                panic!("expected NotAvailable, got Applied");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_attempt_merge_fallback_clean_merge() {
+        let _lock = CWD_MUTEX.lock().unwrap();
+
+        // base   = "line1\nline2\nline3\n"
+        // ours   = "line1\nline2\nMODIFIED3\n"  (external change on line3)
+        // theirs = "line1\nreplaced\nline3\n"   (edit: line2 → replaced)
+        // ours changed line3, theirs changed line2 → non-overlapping → clean
+        let base_content = "line1\nline2\nline3\n";
+        let dir = init_git_repo_with_file("test.txt", base_content).await;
+
+        let disk_content = "line1\nline2\nMODIFIED3\n";
+        tokio::fs::write(dir.path().join("test.txt"), disk_content)
+            .await
+            .unwrap();
+
+        let saved_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        let result = attempt_merge_fallback(
+            "test.txt",
+            disk_content,
+            "line2",
+            "replaced",
+            false,
+        )
+        .await;
+
+        std::env::set_current_dir(&saved_cwd).unwrap();
+
+        match result {
+            MergeFallbackResult::Applied {
+                merged_content,
+                merge_conflicts,
+            } => {
+                assert!(
+                    merge_conflicts.is_empty(),
+                    "expected no merge conflicts, got {}",
+                    merge_conflicts.len()
+                );
+                assert!(
+                    merged_content.contains("replaced"),
+                    "merged content should contain 'replaced', got: {merged_content}"
+                );
+                assert!(
+                    merged_content.contains("MODIFIED3"),
+                    "merged content should contain 'MODIFIED3' from ours, got: {merged_content}"
+                );
+            }
+            MergeFallbackResult::NotAvailable(msg) => {
+                panic!("expected Applied, got NotAvailable: {msg}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_attempt_merge_fallback_conflict_merge() {
+        let _lock = CWD_MUTEX.lock().unwrap();
+
+        // base   = "line1\nline2\nline3\n"
+        // ours   = "line1\nchanged_by_us\nline3\n"
+        // theirs = "line1\nchanged_by_edit\nline3\n"
+        // Both sides change line2 to different values → conflict
+        let base_content = "line1\nline2\nline3\n";
+        let dir = init_git_repo_with_file("test.txt", base_content).await;
+
+        let disk_content = "line1\nchanged_by_us\nline3\n";
+        tokio::fs::write(dir.path().join("test.txt"), disk_content)
+            .await
+            .unwrap();
+
+        let saved_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        let result = attempt_merge_fallback(
+            "test.txt",
+            disk_content,
+            "line2",
+            "changed_by_edit",
+            false,
+        )
+        .await;
+
+        std::env::set_current_dir(&saved_cwd).unwrap();
+
+        match result {
+            MergeFallbackResult::Applied {
+                merged_content,
+                merge_conflicts,
+            } => {
+                assert!(
+                    !merge_conflicts.is_empty(),
+                    "expected merge conflicts, got none. merged_content: {merged_content}"
+                );
+                assert!(
+                    merged_content.contains("changed_by_us"),
+                    "merged content should contain ours content 'changed_by_us'"
+                );
+                assert!(
+                    merged_content.contains("changed_by_edit"),
+                    "merged content should contain theirs content 'changed_by_edit'"
+                );
+            }
+            MergeFallbackResult::NotAvailable(msg) => {
+                panic!("expected Applied, got NotAvailable: {msg}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_merge_fallback_integration() {
+        let _lock = CWD_MUTEX.lock().unwrap();
+
+        // Integration: commit a file, modify it externally, call execute() with
+        // old_string from the committed version. Direct edit fails (old_string not
+        // in current content) → merge fallback path is triggered.
+        let base_content = "line1\nline2\nline3\n";
+        let dir = init_git_repo_with_file("test.txt", base_content).await;
+
+        // Modify the file externally — change line3
+        let disk_content = "line1\nline2\nEXTERNAL_CHANGE\n";
+        tokio::fs::write(dir.path().join("test.txt"), disk_content)
+            .await
+            .unwrap();
+
+        let saved_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        let input = EditInput {
+            file_path: "test.txt".to_string(),
+            old_string: "line2".to_string(),
+            new_string: "replaced_line2".to_string(),
+            replace_all: false,
+            preview: false,
+        };
+        let result = execute(input).await;
+
+        std::env::set_current_dir(&saved_cwd).unwrap();
+
+        assert!(
+            result.is_ok(),
+            "execute should succeed via merge fallback, got error: {:?}",
+            result.err()
+        );
+        let output = result.unwrap();
+
+        // The merge should be clean (ours changed line3, theirs changed line2)
+        assert!(
+            !output.is_error,
+            "expected clean merge (is_error=false), got error output: {}",
+            output.content
+        );
+
+        // Verify the file on disk has both changes merged
+        let written = tokio::fs::read_to_string(dir.path().join("test.txt"))
+            .await
+            .unwrap();
+        assert!(
+            written.contains("replaced_line2"),
+            "file should contain 'replaced_line2', got: {written}"
+        );
+        assert!(
+            written.contains("EXTERNAL_CHANGE"),
+            "file should contain 'EXTERNAL_CHANGE' from ours, got: {written}"
+        );
     }
 }

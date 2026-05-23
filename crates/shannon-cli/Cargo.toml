@@ -36,6 +36,9 @@ shannon-agents = { path = "../shannon-agents" }
 # Internationalization
 rust-i18n = { workspace = true }
 
+# URL scheme support
+urlencoding = "2.1"
+
 [dev-dependencies]
 tokio-test = "0.4"
 assert_cmd = "2.0"

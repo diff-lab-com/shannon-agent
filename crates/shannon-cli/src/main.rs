@@ -1969,9 +1969,216 @@ fn run_team_agent_mode(
     })
 }
 
-fn main() -> Result<()> {
-    let cli = Cli::parse();
+// ── Deep Link (shannon:// URL scheme) Support ───────────────────────────
 
+/// Detect and convert a `shannon://` URL to CLI arguments.
+///
+/// Returns `Some(args)` if `arg` starts with `"shannon://"`, where `args` is
+/// a `Vec<String>` suitable for passing to `Cli::try_parse_from()`.
+/// Returns `None` for all non-shannon URLs.
+fn parse_deep_link(arg: &str) -> Option<Vec<String>> {
+    if !arg.starts_with("shannon://") {
+        return None;
+    }
+
+    // Remove "shannon://" prefix
+    let rest = &arg["shannon://".len()..];
+
+    // Split into path and query string
+    let (path, query) = match rest.split_once('?') {
+        Some((p, q)) => (p, q),
+        None => (rest, ""),
+    };
+
+    // Strip trailing slash from path (support both "prompt" and "prompt/")
+    let path = path.trim_end_matches('/');
+
+    match path {
+        "prompt" => {
+            let raw = parse_query_param(query, "text").unwrap_or_default();
+            let text = urlencoding::decode(&raw)
+                .unwrap_or_else(|_| std::borrow::Cow::Borrowed(&raw))
+                .into_owned();
+            Some(vec![
+                "shannon".to_string(),
+                "--prompt".to_string(),
+                text,
+            ])
+        }
+        "resume" => {
+            let raw_id = parse_query_param(query, "id");
+            match raw_id {
+                Some(raw) => {
+                    let id = urlencoding::decode(&raw)
+                        .unwrap_or_else(|_| std::borrow::Cow::Borrowed(&raw))
+                        .into_owned();
+                    Some(vec![
+                        "shannon".to_string(),
+                        "--resume".to_string(),
+                        id,
+                    ])
+                }
+                None => Some(vec![
+                    "shannon".to_string(),
+                    "--continue".to_string(),
+                ]),
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Extract the value of a query parameter by key from a URL query string.
+fn parse_query_param(query: &str, key: &str) -> Option<String> {
+    for pair in query.split('&') {
+        if let Some((k, v)) = pair.split_once('=') {
+            if k == key {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Register the `shannon://` URL scheme handler on Linux.
+///
+/// Creates a `.desktop` file in `~/.local/share/applications/` and registers
+/// it as the default handler for `x-scheme-handler/shannon`.
+fn register_url_scheme_linux() -> Result<()> {
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let apps_dir = home.join(".local").join("share").join("applications");
+    std::fs::create_dir_all(&apps_dir)?;
+
+    let desktop_path = apps_dir.join("shannon-url-handler.desktop");
+    let desktop_content = "\
+[Desktop Entry]
+Type=Application
+Name=Shannon URL Handler
+Exec=shannon %u
+MimeType=x-scheme-handler/shannon;
+NoDisplay=true
+";
+    std::fs::write(&desktop_path, desktop_content)?;
+
+    // Register the handler
+    let _ = std::process::Command::new("update-desktop-database")
+        .arg(&apps_dir)
+        .output();
+
+    let _ = std::process::Command::new("xdg-mime")
+        .args([
+            "default",
+            "shannon-url-handler.desktop",
+            "x-scheme-handler/shannon",
+        ])
+        .output();
+
+    println!("Registered shannon:// URL scheme handler (Linux)");
+    println!("  Desktop file: {}", desktop_path.display());
+    Ok(())
+}
+
+/// Unregister the `shannon://` URL scheme handler on Linux.
+fn unregister_url_scheme_linux() -> Result<()> {
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let desktop_path = home
+        .join(".local")
+        .join("share")
+        .join("applications")
+        .join("shannon-url-handler.desktop");
+
+    if desktop_path.exists() {
+        std::fs::remove_file(&desktop_path)?;
+    }
+
+    let apps_dir = home.join(".local").join("share").join("applications");
+    let _ = std::process::Command::new("update-desktop-database")
+        .arg(&apps_dir)
+        .output();
+
+    println!("Unregistered shannon:// URL scheme handler (Linux)");
+    Ok(())
+}
+
+/// Print macOS URL scheme registration instructions.
+fn register_url_scheme_macos() -> Result<()> {
+    println!("To register shannon:// URL scheme on macOS:");
+    println!();
+    println!("  1. Create or edit your app's Info.plist and add:");
+    println!("     <key>CFBundleURLTypes</key>");
+    println!("     <array>");
+    println!("       <dict>");
+    println!("         <key>CFBundleURLName</key>");
+    println!("         <string>com.shannon.code</string>");
+    println!("         <key>CFBundleURLSchemes</key>");
+    println!("         <array>");
+    println!("           <string>shannon</string>");
+    println!("         </array>");
+    println!("       </dict>");
+    println!("     </array>");
+    println!();
+    println!("  2. Or use the Swift CLI tool approach:");
+    println!("     swift -e '...' (programmatic registration)");
+    println!();
+    println!("For Tauri-based desktop app, add to tauri.conf.json:");
+    println!("  \"bundle\": {{ \"iOS\": {{ \"customProtocols\": [\"shannon\"] }} }}");
+    Ok(())
+}
+
+/// Print macOS URL scheme unregistration instructions.
+fn unregister_url_scheme_macos() -> Result<()> {
+    println!("To unregister shannon:// URL scheme on macOS:");
+    println!("  Remove the CFBundleURLTypes entry from your app's Info.plist.");
+    Ok(())
+}
+
+/// Detect and run URL scheme registration/unregistration for the current platform.
+fn handle_url_scheme_registration(register: bool, unregister: bool) -> Result<()> {
+    if cfg!(target_os = "linux") {
+        if register {
+            return register_url_scheme_linux();
+        }
+        if unregister {
+            return unregister_url_scheme_linux();
+        }
+    } else if cfg!(target_os = "macos") {
+        if register {
+            return register_url_scheme_macos();
+        }
+        if unregister {
+            return unregister_url_scheme_macos();
+        }
+    } else {
+        println!("URL scheme registration is not supported on this platform.");
+    }
+    Ok(())
+}
+
+fn main() -> Result<()> {
+    // Check for URL scheme registration flags first (hidden, not in Cli struct)
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 {
+        if args[1] == "--register-url-scheme" {
+            return handle_url_scheme_registration(true, false);
+        }
+        if args[1] == "--unregister-url-scheme" {
+            return handle_url_scheme_registration(false, true);
+        }
+
+        // Check for deep link URL in first positional argument
+        if let Some(transformed) = parse_deep_link(&args[1]) {
+            let cli = Cli::try_parse_from(transformed)?;
+            return run_with_cli(cli);
+        }
+    }
+
+    let cli = Cli::parse();
+    run_with_cli(cli)
+}
+
+/// Main CLI dispatch logic, factored out so it can be called from either the
+/// normal `clap::parse()` path or the deep-link transformation path.
+fn run_with_cli(cli: Cli) -> Result<()> {
     // Initialize i18n — auto-detect system language, allow --lang override
     if let Some(ref lang) = cli.lang {
         i18n::set_locale(lang);
@@ -3568,5 +3775,157 @@ mod tests {
         let config = load_schema(tmp.to_str().unwrap()).unwrap();
         assert!(config.schema["properties"]["x"]["type"].is_string());
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    // ── Deep link (shannon:// URL scheme) tests ─────────────────────────
+
+    #[test]
+    fn test_parse_deep_link_prompt() {
+        let result = parse_deep_link("shannon://prompt?text=hello%20world").unwrap();
+        assert_eq!(result, vec![
+            "shannon".to_string(),
+            "--prompt".to_string(),
+            "hello world".to_string(),
+        ]);
+    }
+
+    #[test]
+    fn test_parse_deep_link_prompt_encoded() {
+        let result =
+            parse_deep_link("shannon://prompt?text=fix%20the%20bug%20in%20main.rs").unwrap();
+        assert_eq!(result, vec![
+            "shannon".to_string(),
+            "--prompt".to_string(),
+            "fix the bug in main.rs".to_string(),
+        ]);
+    }
+
+    #[test]
+    fn test_parse_deep_link_prompt_with_trailing_slash() {
+        let result = parse_deep_link("shannon://prompt/?text=hello").unwrap();
+        assert_eq!(result, vec![
+            "shannon".to_string(),
+            "--prompt".to_string(),
+            "hello".to_string(),
+        ]);
+    }
+
+    #[test]
+    fn test_parse_deep_link_prompt_no_text() {
+        let result = parse_deep_link("shannon://prompt").unwrap();
+        assert_eq!(result, vec![
+            "shannon".to_string(),
+            "--prompt".to_string(),
+            "".to_string(),
+        ]);
+    }
+
+    #[test]
+    fn test_parse_deep_link_resume_with_id() {
+        let result = parse_deep_link(
+            "shannon://resume?id=550e8400-e29b-41d4-a716-446655440000",
+        )
+        .unwrap();
+        assert_eq!(result, vec![
+            "shannon".to_string(),
+            "--resume".to_string(),
+            "550e8400-e29b-41d4-a716-446655440000".to_string(),
+        ]);
+    }
+
+    #[test]
+    fn test_parse_deep_link_resume_no_id() {
+        let result = parse_deep_link("shannon://resume").unwrap();
+        assert_eq!(result, vec![
+            "shannon".to_string(),
+            "--continue".to_string(),
+        ]);
+    }
+
+    #[test]
+    fn test_parse_deep_link_resume_with_trailing_slash() {
+        let result = parse_deep_link("shannon://resume/").unwrap();
+        assert_eq!(result, vec![
+            "shannon".to_string(),
+            "--continue".to_string(),
+        ]);
+    }
+
+    #[test]
+    fn test_parse_deep_link_invalid() {
+        // Non-shannon URLs return None
+        assert!(parse_deep_link("https://example.com").is_none());
+        assert!(parse_deep_link("http://shannon.io").is_none());
+        assert!(parse_deep_link("ftp://files.com").is_none());
+    }
+
+    #[test]
+    fn test_parse_deep_link_unknown_path() {
+        // Unknown path returns None
+        assert!(parse_deep_link("shannon://unknown?text=test").is_none());
+        assert!(parse_deep_link("shannon://open?file=main.rs").is_none());
+    }
+
+    #[test]
+    fn test_parse_deep_link_not_url() {
+        // Regular strings return None
+        assert!(parse_deep_link("hello world").is_none());
+        assert!(parse_deep_link("--prompt").is_none());
+        assert!(parse_deep_link("").is_none());
+    }
+
+    #[test]
+    fn test_parse_query_param_basic() {
+        let query = "text=hello&lang=en";
+        assert_eq!(parse_query_param(query, "text"), Some("hello".to_string()));
+        assert_eq!(parse_query_param(query, "lang"), Some("en".to_string()));
+    }
+
+    #[test]
+    fn test_parse_query_param_empty() {
+        assert_eq!(parse_query_param("", "text"), None);
+        assert_eq!(parse_query_param("key=value", "other"), None);
+    }
+
+    #[test]
+    fn test_parse_query_param_no_value() {
+        // A param without '=' should not match
+        assert_eq!(parse_query_param("flag", "flag"), None);
+    }
+
+    #[test]
+    fn test_parse_query_param_first_match() {
+        let query = "text=first&text=second";
+        // Should return the first match
+        assert_eq!(parse_query_param(query, "text"), Some("first".to_string()));
+    }
+
+    #[test]
+    fn test_deep_link_to_cli_prompt() {
+        // Verify the transformed args parse correctly as Cli args
+        let args = parse_deep_link("shannon://prompt?text=explain%20this%20code").unwrap();
+        let cli = Cli::try_parse_from(args).unwrap();
+        assert_eq!(cli.headless_prompt.as_deref(), Some("explain this code"));
+    }
+
+    #[test]
+    fn test_deep_link_to_cli_resume_with_id() {
+        let args = parse_deep_link(
+            "shannon://resume?id=550e8400-e29b-41d4-a716-446655440000",
+        )
+        .unwrap();
+        let cli = Cli::try_parse_from(args).unwrap();
+        assert_eq!(
+            cli.resume.as_deref(),
+            Some("550e8400-e29b-41d4-a716-446655440000")
+        );
+    }
+
+    #[test]
+    fn test_deep_link_to_cli_resume_no_id() {
+        let args = parse_deep_link("shannon://resume").unwrap();
+        let cli = Cli::try_parse_from(args).unwrap();
+        // --continue is the alias for "resume most recent"
+        assert!(cli.r#continue);
     }
 }

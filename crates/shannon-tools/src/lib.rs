@@ -16,6 +16,7 @@
 //! - Git operations (GitBranch, GitDiff, GitLog, GitStash, GitSafety)
 //! - LSP operations (GoToDefinition, FindReferences, Hover, DocumentSymbol)
 //! - Grep operations (Grep for content search across files)
+//! - Image analysis operations (AnalyzeImage for LLM-powered image analysis)
 //! - Tool search operations (ToolSearch for tool discovery)
 //! - Ask user operations (AskUserQuestion for interactive confirmation and option selection)
 //! - Structured output operations (StructuredOutput for AI-returned JSON data)
@@ -33,6 +34,7 @@ pub mod file;
 pub mod git;
 pub mod github;
 pub mod grep;
+pub mod image_analysis;
 pub mod lsp;
 pub mod lsp_diagnostics;
 pub mod mcp;
@@ -82,12 +84,13 @@ pub use file::sandbox_adapter::{
     PathSandboxAdapter, SandboxAdapter, SandboxConfig as SandboxAdapterConfig, SandboxResult,
     SandboxViolation,
 };
-pub use file::{EditTool, FileOperation, GlobTool, MultiEditTool, ReadTool, WriteTool};
+pub use file::{EditTool, FileOperation, GlobTool, MergeResolveTool, MultiEditTool, ReadTool, WriteTool};
 pub use git::{
     AutoCommitTool, GitBranchTool, GitDiffTool, GitLogTool, GitSafetyTool, GitStashTool,
 };
 pub use github::{GhIssueListTool, GhIssueViewTool, GhPrCreateTool, GhPrListTool, GhPrViewTool};
 pub use grep::GrepTool;
+pub use image_analysis::{AnalyzeImageInput, AnalyzeImageTool};
 pub use lsp::{
     CodeActionItem, CodeActionsInput, CodeActionsOutput, CodeActionsTool, DocumentSymbolInput,
     DocumentSymbolItem, DocumentSymbolOutput, DocumentSymbolTool, FindReferencesInput,
@@ -167,6 +170,7 @@ pub fn register_default_tools(
     registry.register(Box::new(EditTool::new()))?;
     registry.register(Box::new(MultiEditTool::new()))?;
     registry.register(Box::new(GlobTool::new()))?;
+    registry.register(Box::new(MergeResolveTool::new()))?;
 
     // ── System operations ──────────────────────────────────────────────
     registry.register(Box::new(BashTool::new()))?;
@@ -195,6 +199,9 @@ pub fn register_default_tools(
 
     // ── Search ─────────────────────────────────────────────────────────
     registry.register(Box::new(GrepTool::new()))?;
+
+    // ── Multimodal ──────────────────────────────────────────────────────
+    registry.register(Box::new(AnalyzeImageTool::new()))?;
 
     // ── Agent & team ───────────────────────────────────────────────────
     let agent_tool = AgentTool::new();
@@ -299,6 +306,9 @@ pub fn register_default_tools_with_project_dir(
     registry.register(Box::new(MultiEditTool::with_sandbox(sandbox.clone())))?;
     registry.register(Box::new(GlobTool::with_sandbox(sandbox.clone())))?;
     registry.register(Box::new(GrepTool::with_sandbox(sandbox)))?;
+
+    // ── Multimodal ──────────────────────────────────────────────────────
+    registry.register(Box::new(AnalyzeImageTool::new()))?;
 
     // ── System operations (process sandbox for Bash) ───────────────────
     registry.register(Box::new(BashTool::with_process_sandbox(project_dir)))?;
@@ -442,6 +452,9 @@ pub fn register_default_tools_with_project_dir_ex(
     registry.register(Box::new(MultiEditTool::with_sandbox(sandbox.clone())))?;
     registry.register(Box::new(GlobTool::with_sandbox(sandbox.clone())))?;
     registry.register(Box::new(GrepTool::with_sandbox(sandbox)))?;
+
+    // ── Multimodal ──────────────────────────────────────────────────────
+    registry.register(Box::new(AnalyzeImageTool::new()))?;
 
     // ── System operations (process sandbox for Bash) ───────────────────
     registry.register(Box::new(BashTool::with_process_sandbox(project_dir)))?;

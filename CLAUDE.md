@@ -53,16 +53,12 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 
 ## Known Gaps (vs Claude Code / Codex CLI / OpenCode)
 
-### CRITICAL — Shannon lacks entirely
-
-- **Agent view dashboard**: Claude Code shows background agent sessions in a dashboard UI. Shannon has no equivalent.
-
 ### HIGH — Shannon has partial support
 
 - **Permission auto-mode**: 9 `ApprovalMode` variants with `PermissionClassifier` (2928 lines) wired into `PermissionRuleChecker`. `LlmPermissionClassifier` wraps the rule-based classifier with async LLM fallback for ambiguous cases (confidence < 0.7, Medium+ risk). 4-tier precedence: hard_deny > soft_deny > allow > explicit intent. LLM classification disabled by default, enabled via `with_llm()`.
-- **Non-interactive/CI mode**: `--prompt` flag with FullAuto permissions (auto-approve non-critical, deny critical). NDJSON streaming, tool restrictions, exit codes. `--schema` flag accepts file path or inline JSON Schema for structured output validation — assistant is instructed to return valid JSON, response is validated before output, exit code 1 on validation failure. Gap: no deep links (`claude-cli://` URLs).
-- **MCP tool search**: `tools/list` works with deferred schema loading. Gap: no MCP channel support (push webhooks/alerts into live sessions).
-- **Hook system**: `HookManager` with `HookEvent`/`HookEventType`. Gap: Claude Code has 18+ hook events including `SubagentStart`, `SubagentStop`, `TaskCompleted`, `TeammateIdle`, `PreCompact`, `WorktreeCreate`, `WorktreeRemove`, `ConfigChange`. Shannon has fewer event types.
+- **Non-interactive/CI mode**: `--prompt` flag with FullAuto permissions (auto-approve non-critical, deny critical). NDJSON streaming, tool restrictions, exit codes. `--schema` flag accepts file path or inline JSON Schema for structured output validation. Deep link support via `shannon://prompt?text=<encoded>` and `shannon://resume?id=<uuid>` URL scheme with `--register-url-scheme`/`--unregister-url-scheme` commands.
+- **MCP tool search**: `tools/list` works with deferred schema loading. MCP webhook/channel support with `WebhookRegistry` (HMAC-SHA256 signing, event filtering, persistence), `EventPublisher` (non-blocking delivery, retry with exponential backoff), and event firing from `McpProcessPool` (ServerConnected/Disconnected, ToolCallStarted/Completed, NotificationReceived).
+- **Hook system**: `HookManager` with `HookEvent`/`HookEventType`. 32 event types fully wired: SubagentStart/Stop, WorktreeCreate/Remove, PreCompact/PostCompact, ConfigChange, TaskCreated/TaskCompleted, plus all original events. Non-blocking `fire_hook()` pattern via `tokio::spawn`.
 - **LSP integration**: 6 LSP tools + `DiagnosticRegistry` + two client implementations. `DiagnosticStore.mark_stale()` called on source file changes. Background `cargo check` diagnostics auto-run via `DiagnosticWatcher` when source files change — debounce, parse, display in UI.
 - **Plugin system**: `PluginRegistry` with manifest parsing. Tool plugins fully wired (MCP discovery). Command plugins register as `PromptCommand` in `CommandRegistry` (source: `Plugin`). Skill plugins register as `PromptCommand` with trigger as slash command name and entry file as template. Loading in both REPL (`new()`) and CLI headless mode.
 - **Desktop app**: Scaffolded Tauri app with TODO stubs.
@@ -72,8 +68,8 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 
 - **Multi-surface**: Claude Code runs on CLI, VS Code, JetBrains, web, desktop. Shannon has CLI + scaffolded Tauri desktop app.
 - **File watching**: `SourceWatcher` watches project source files (.rs, .ts, .py, etc.) via `notify` crate, wired into REPL main loop — displays changed file names and marks `DiagnosticStore` as stale. `CustomCommandWatcher` watches command directories. `SettingsWatcher` watches config files. `DiagnosticStore.sync_from_registry()` bridges tool-layer diagnostics to UI display.
-- **Vision/multimodal**: Display only; no vision model integration for image analysis.
-- **Patch application**: Basic diff rendering; no three-way merge or conflict markers.
+- **Vision/multimodal**: Full image analysis pipeline. `AnalyzeImageTool` accepts file_path or URL, returns base64 image via `ToolOutput` metadata. `ToolResultEntry.to_tool_result_content()` converts image results to `ContentBlock::Image` for LLM vision. Read tool supports image file reading (PNG/JPG/GIF/WebP/BMP) with base64 encoding.
+- **Patch application**: Three-way merge with conflict markers. `three_way_merge(base, ours, theirs)` uses LCS-based algorithm. `parse_conflict_markers()` parses `<<<<<<<`/`=======`/`>>>>>>>` blocks. Edit tool falls back to merge when `old_string` not found (base from git HEAD). `MergeResolveTool` for conflict resolution.
 - **Computer use**: Claude Code can click, type, see screen on macOS. Shannon has no equivalent.
 
 ### Resolved
@@ -92,10 +88,17 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **Structured JSON output for CI mode**: `StructuredOutputConfig` validates assistant responses against JSON Schema (type checking, required fields). System prompt generation for schema-aware responses.
 - **File checkpointing/rewind with diff preview**: `CheckpointManager` creates git commits before file-modifying tools, tracks per-turn changes. `/undo` shows diff preview dialog (file list, stats, full diff viewer) before reverting. `/rewind` for conversation/code/combined restore. Four `RestoreMode` variants. Persistent checkpoint storage.
 - **MCP on-demand tool search**: `mcp__tool_search` supports exact lookup (`tool_name`), fuzzy search (`query`), and listing all tools. Deferred schema loading with `deferred_descriptions` for search. Threshold raised to 100 tools for auto-activation.
+- **Agent view dashboard**: `AgentBarWidget` with 3 views (compact/expanded/detailed), `AgentsPanel` via Ctrl+A, sidebar tab. Background agent sessions displayed in real-time.
+- **Deep link support**: `shannon://prompt?text=<encoded>` and `shannon://resume?id=<uuid>` URL scheme. Linux/macOS registration via `--register-url-scheme`/`--unregister-url-scheme`. 18 unit tests for URL parsing.
+- **MCP channel/webhook**: `WebhookRegistry` with HMAC-SHA256 signing, event type filtering, JSON persistence. `EventPublisher` with non-blocking delivery, exponential backoff retry, rate limiting. 35 webhook-specific tests.
+- **Hook event wiring**: All 32 `HookEventType` variants fully wired to actual code paths (SubagentStart/Stop, WorktreeCreate/Remove, PreCompact/PostCompact, ConfigChange, TaskCreated/TaskCompleted).
+- **Vision/multimodal integration**: `AnalyzeImageTool` for image analysis (file/URL). Read tool supports image files with base64 encoding. `ToolResultEntry` converts image metadata to `ContentBlock::Image` for LLM vision. 30 new tests.
+- **Three-way merge / conflict markers**: LCS-based `three_way_merge()` algorithm. `parse_conflict_markers()` and `resolve_conflicts()`. Edit tool fallback to merge on `old_string` mismatch. `MergeResolveTool` for conflict resolution. 44 new tests.
+- **Performance benchmarks**: `criterion` benchmarks for compact engine, file edit, repomap generation, and context budget calculation across relevant crate sizes.
 
 ### Test Coverage
 
-8162 total tests across all crates (58 e2e require API access). Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them.
+8277 total tests across all crates (58 e2e require API access). Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them. Performance benchmarks in `crates/shannon-*/benches/` run via `cargo bench`.
 
 ## Competitor Feature Tiers
 
@@ -103,7 +106,7 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 Multi-provider LLM, tool use, file read/write/edit, bash execution, MCP extensions, streaming output, session persistence, context compaction, config files, i18n, skills/commands system.
 
 ### Tier 2 — Differentiators (Shannon partially has)
-- **Subagent system**: Claude Code has 4 agent mechanisms. Shannon has teammate coordination with per-agent model/tool/worktree config, `/batch` for parallel worktree PRs. No agent view dashboard yet.
+- **Subagent system**: Claude Code has 4 agent mechanisms. Shannon has teammate coordination with per-agent model/tool/worktree config, `/batch` for parallel worktree PRs, and agent view dashboard (`AgentBarWidget`, `AgentsPanel`).
 - **Worktree isolation**: `context.working_directory` passes worktree paths to sub-agents. `/batch` creates worktrees automatically. System prompt includes isolation instructions.
 - **OS sandbox**: Codex uses macOS Seatbelt/AppArmor/Docker. Shannon uses project-dir sandboxing only.
 - **Auto-permission classifier**: Claude Code uses LLM-based 4-tier classification. Shannon has `LlmPermissionClassifier` wired into `PermissionManager` with async `classify_and_check_with_llm()`. Rule-based by default, LLM fallback for ambiguous cases when enabled via `with_llm_classifier()`.
@@ -112,7 +115,7 @@ Multi-provider LLM, tool use, file read/write/edit, bash execution, MCP extensio
 - **Non-interactive/CI mode**: Claude Code `claude -p` with structured outputs. Shannon has `--prompt` with NDJSON output, `--schema` for JSON schema validation, and `StructuredOutputConfig` for programmatic use.
 
 ### Tier 3 — Quality of Life
-Multi-surface (web/desktop/CLI/IDE), computer use, deep links, MCP channels, prompt caching.
+Multi-surface (web/desktop/CLI/IDE), computer use, prompt caching.
 
 ## Gotchas
 

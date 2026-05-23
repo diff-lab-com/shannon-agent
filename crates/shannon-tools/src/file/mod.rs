@@ -20,6 +20,8 @@ pub mod diff_renderer;
 pub mod edit;
 pub mod glob;
 pub mod history;
+pub mod merge;
+pub mod merge_tool;
 pub mod multiedit;
 pub mod read;
 pub mod sandbox;
@@ -28,6 +30,9 @@ pub mod write;
 
 // Re-export sandbox types for external use
 pub use sandbox::{PathSandbox, SandboxConfig, SandboxError};
+
+// Re-export merge resolve tool for external use
+pub use merge_tool::MergeResolveTool;
 
 /// File operation types
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,9 +1,11 @@
 //! Main compression engine for conversation context management.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::api::{Message, MessageContent};
+use crate::hooks::{HookEvent, HookManager};
 
 use super::helpers::{
     contains_tool_result_for, estimate_message_tokens, estimate_tokens, extract_tool_uses,
@@ -21,6 +23,8 @@ pub struct CompactEngine {
     pub(crate) config: CompactConfig,
     summarizer: Box<dyn Summarizer>,
     pub(crate) compacting: bool,
+    /// Optional hook manager for firing PreCompact/PostCompact events
+    hook_manager: Option<Arc<HookManager>>,
 }
 
 impl CompactEngine {
@@ -34,6 +38,7 @@ impl CompactEngine {
             config,
             summarizer,
             compacting: false,
+            hook_manager: None,
         })
     }
 
@@ -110,6 +115,12 @@ impl CompactEngine {
         Ok(())
     }
 
+    /// Set the hook manager for firing PreCompact/PostCompact events.
+    pub fn with_hook_manager(mut self, hm: Arc<HookManager>) -> Self {
+        self.hook_manager = Some(hm);
+        self
+    }
+
     // ========================================================================
     // Analysis
     // ========================================================================
@@ -180,6 +191,7 @@ impl CompactEngine {
         }
 
         let original_tokens = estimate_tokens(messages);
+        let messages_before = messages.len();
         if messages.is_empty() {
             return Err(CompactError::NoMessagesToCompact);
         }
@@ -195,6 +207,19 @@ impl CompactEngine {
             ));
         }
 
+        // Fire PreCompact hook
+        if let Some(hm) = &self.hook_manager {
+            let hm = hm.clone();
+            let count = messages.len();
+            let estimated = original_tokens;
+            tokio::spawn(async move {
+                let _ = hm.run_hooks(&HookEvent::PreCompact {
+                    messages_count: count,
+                    estimated_tokens: estimated,
+                }).await;
+            });
+        }
+
         self.compacting = true;
         let start = Instant::now();
 
@@ -207,6 +232,22 @@ impl CompactEngine {
             Ok(mut compact_result) => {
                 compact_result.duration = start.elapsed();
                 tracing::info!("{}", compact_result);
+
+                // Fire PostCompact hook
+                if let Some(hm) = &self.hook_manager {
+                    let hm = hm.clone();
+                    let before = messages_before;
+                    let after = messages.len();
+                    let tokens_freed = compact_result.original_tokens.saturating_sub(compact_result.compacted_tokens);
+                    tokio::spawn(async move {
+                        let _ = hm.run_hooks(&HookEvent::PostCompact {
+                            messages_before: before,
+                            messages_after: after,
+                            tokens_freed,
+                        }).await;
+                    });
+                }
+
                 Ok(compact_result)
             }
             Err(e) => {
@@ -1163,5 +1204,43 @@ mod tests {
     fn test_engine_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<CompactEngine>();
+    }
+
+    // ── Hook manager integration ────────────────────────────────────────
+
+    #[test]
+    fn test_engine_with_hook_manager_builder() {
+        let hm = Arc::new(HookManager::new());
+        let engine = CompactEngine::with_defaults()
+            .unwrap()
+            .with_hook_manager(hm);
+        assert!(engine.hook_manager.is_some());
+    }
+
+    #[test]
+    fn test_engine_without_hook_manager_is_none() {
+        let engine = CompactEngine::with_defaults().unwrap();
+        assert!(engine.hook_manager.is_none());
+    }
+
+    #[test]
+    fn test_pre_compact_hook_event_fields() {
+        let event = HookEvent::PreCompact {
+            messages_count: 42,
+            estimated_tokens: 80000,
+        };
+        assert_eq!(event.event_type(), crate::hooks::HookEventType::PreCompact);
+        assert_eq!(event.match_subject(), "42");
+    }
+
+    #[test]
+    fn test_post_compact_hook_event_fields() {
+        let event = HookEvent::PostCompact {
+            messages_before: 50,
+            messages_after: 12,
+            tokens_freed: 30000,
+        };
+        assert_eq!(event.event_type(), crate::hooks::HookEventType::PostCompact);
+        assert_eq!(event.match_subject(), "30000");
     }
 }
