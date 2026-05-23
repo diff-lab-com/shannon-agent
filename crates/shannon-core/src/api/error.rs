@@ -136,6 +136,7 @@ impl ApiError {
                 | LlmProvider::Ai21
                 | LlmProvider::SiliconFlow
                 | LlmProvider::Zhipu
+                | LlmProvider::Moonshot
                 | LlmProvider::Cloudflare
                 | LlmProvider::Replicate => {
                     // OpenAI-compatible: { "error": { "message": "...", "type": "...", "code": "..." } }

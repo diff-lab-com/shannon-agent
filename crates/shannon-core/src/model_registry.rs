@@ -186,6 +186,128 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_output: 2.19,
         capabilities: ModelCapabilities::reasoning().or(ModelCapabilities::cheap()),
     },
+    ModelInfo {
+        id: "deepseek-v4-flash",
+        display_name: "DeepSeek V4 Flash",
+        provider: LlmProvider::DeepSeek,
+        context_window: 1_000_000,
+        max_output: 384_000,
+        cost_per_m_input: 0.14,
+        cost_per_m_output: 0.28,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::cheap()).or(ModelCapabilities::speed()),
+    },
+    ModelInfo {
+        id: "deepseek-v4-pro",
+        display_name: "DeepSeek V4 Pro",
+        provider: LlmProvider::DeepSeek,
+        context_window: 1_000_000,
+        max_output: 384_000,
+        cost_per_m_input: 0.435,
+        cost_per_m_output: 0.87,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+    },
+    // ── GLM / Zhipu ──────────────────────────────────────────
+    ModelInfo {
+        id: "glm-4-plus",
+        display_name: "GLM-4 Plus",
+        provider: LlmProvider::Zhipu,
+        context_window: 128_000,
+        max_output: 4_096,
+        cost_per_m_input: 7.14,
+        cost_per_m_output: 7.14,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+    },
+    ModelInfo {
+        id: "glm-4-flash",
+        display_name: "GLM-4 Flash",
+        provider: LlmProvider::Zhipu,
+        context_window: 128_000,
+        max_output: 4_096,
+        cost_per_m_input: 0.14,
+        cost_per_m_output: 0.14,
+        capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
+    },
+    ModelInfo {
+        id: "glm-4-long",
+        display_name: "GLM-4 Long",
+        provider: LlmProvider::Zhipu,
+        context_window: 1_000_000,
+        max_output: 4_096,
+        cost_per_m_input: 0.14,
+        cost_per_m_output: 0.14,
+        capabilities: ModelCapabilities::cheap(),
+    },
+    ModelInfo {
+        id: "glm-4-air",
+        display_name: "GLM-4 Air",
+        provider: LlmProvider::Zhipu,
+        context_window: 128_000,
+        max_output: 4_096,
+        cost_per_m_input: 0.14,
+        cost_per_m_output: 0.14,
+        capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
+    },
+    ModelInfo {
+        id: "glm-4v-flash",
+        display_name: "GLM-4V Flash",
+        provider: LlmProvider::Zhipu,
+        context_window: 128_000,
+        max_output: 4_096,
+        cost_per_m_input: 0.14,
+        cost_per_m_output: 0.14,
+        capabilities: ModelCapabilities::vision().or(ModelCapabilities::cheap()),
+    },
+    // ── Kimi / Moonshot ──────────────────────────────────────
+    ModelInfo {
+        id: "kimi-k2.6",
+        display_name: "Kimi K2.6",
+        provider: LlmProvider::Moonshot,
+        context_window: 256_000,
+        max_output: 8_192,
+        cost_per_m_input: 0.57,
+        cost_per_m_output: 3.86,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()).or(ModelCapabilities::vision()),
+    },
+    ModelInfo {
+        id: "kimi-k2.5",
+        display_name: "Kimi K2.5",
+        provider: LlmProvider::Moonshot,
+        context_window: 256_000,
+        max_output: 8_192,
+        cost_per_m_input: 0.57,
+        cost_per_m_output: 3.00,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()).or(ModelCapabilities::vision()),
+    },
+    ModelInfo {
+        id: "moonshot-v1-128k",
+        display_name: "Moonshot V1 128K",
+        provider: LlmProvider::Moonshot,
+        context_window: 128_000,
+        max_output: 4_096,
+        cost_per_m_input: 1.43,
+        cost_per_m_output: 4.29,
+        capabilities: ModelCapabilities::cheap(),
+    },
+    ModelInfo {
+        id: "moonshot-v1-32k",
+        display_name: "Moonshot V1 32K",
+        provider: LlmProvider::Moonshot,
+        context_window: 32_000,
+        max_output: 4_096,
+        cost_per_m_input: 0.71,
+        cost_per_m_output: 2.86,
+        capabilities: ModelCapabilities::cheap(),
+    },
+    ModelInfo {
+        id: "moonshot-v1-8k",
+        display_name: "Moonshot V1 8K",
+        provider: LlmProvider::Moonshot,
+        context_window: 8_000,
+        max_output: 4_096,
+        cost_per_m_input: 0.29,
+        cost_per_m_output: 1.43,
+        capabilities: ModelCapabilities::cheap().or(ModelCapabilities::speed()),
+    },
     // ── Mistral ────────────────────────────────────────────────
     ModelInfo {
         id: "mistral-large-latest",
@@ -260,7 +382,9 @@ fn provider_order(p: &LlmProvider) -> u8 {
         LlmProvider::DeepSeek => 3,
         LlmProvider::Mistral => 4,
         LlmProvider::Groq => 5,
-        LlmProvider::Ollama => 6,
+        LlmProvider::Zhipu => 6,
+        LlmProvider::Moonshot => 7,
+        LlmProvider::Ollama => 8,
         _ => 99,
     }
 }
@@ -287,7 +411,8 @@ pub fn provider_display_name(p: &LlmProvider) -> &'static str {
         LlmProvider::Cloudflare => "Cloudflare",
         LlmProvider::Replicate => "Replicate",
         LlmProvider::SiliconFlow => "SiliconFlow",
-        LlmProvider::Zhipu => "Zhipu",
+        LlmProvider::Zhipu => "GLM (Zhipu)",
+        LlmProvider::Moonshot => "Kimi (Moonshot)",
         LlmProvider::Custom => "Custom",
     }
 }
@@ -620,6 +745,7 @@ impl ModelRouter {
 
 #[cfg(test)]
 mod tests {
+    use crate::api::types::WireFormat;
     use super::*;
 
     #[test]
@@ -642,7 +768,7 @@ mod tests {
         let ids = all_model_ids();
         assert!(ids.contains(&"claude-sonnet-4-20250514"));
         assert!(ids.contains(&"gpt-4o"));
-        assert!(ids.len() >= 14);
+        assert!(ids.len() >= 26);
     }
 
     #[test]
@@ -824,5 +950,163 @@ mod tests {
     fn test_context_window_prefix_prefers_exact() {
         // Exact match takes priority over prefix match
         assert_eq!(context_window_for("claude-3-5-sonnet-20241022"), 200_000);
+    }
+
+    // ── DeepSeek V4 tests ─────────────────────────────────────
+
+    #[test]
+    fn test_deepseek_v4_flash_registered() {
+        let info = model_info_for("deepseek-v4-flash").expect("deepseek-v4-flash should be registered");
+        assert_eq!(info.context_window, 1_000_000);
+        assert_eq!(info.max_output, 384_000);
+        assert!(info.capabilities.has(ModelCapabilities::coding()));
+        assert!(info.capabilities.has(ModelCapabilities::cheap()));
+        assert!(info.capabilities.has(ModelCapabilities::speed()));
+    }
+
+    #[test]
+    fn test_deepseek_v4_pro_registered() {
+        let info = model_info_for("deepseek-v4-pro").expect("deepseek-v4-pro should be registered");
+        assert_eq!(info.context_window, 1_000_000);
+        assert_eq!(info.max_output, 384_000);
+        assert!(info.capabilities.has(ModelCapabilities::coding()));
+        assert!(info.capabilities.has(ModelCapabilities::reasoning()));
+    }
+
+    #[test]
+    fn test_deepseek_v4_context_window_lookup() {
+        assert_eq!(context_window_for("deepseek-v4-flash"), 1_000_000);
+        assert_eq!(context_window_for("deepseek-v4-pro"), 1_000_000);
+    }
+
+    // ── GLM / Zhipu tests ─────────────────────────────────────
+
+    #[test]
+    fn test_glm_models_registered() {
+        let glm_ids = ["glm-4-plus", "glm-4-flash", "glm-4-long", "glm-4-air", "glm-4v-flash"];
+        for id in &glm_ids {
+            assert!(model_info_for(id).is_some(), "GLM model {} should be registered", id);
+        }
+    }
+
+    #[test]
+    fn test_glm_4_flash_is_cheap_and_fast() {
+        let info = model_info_for("glm-4-flash").unwrap();
+        assert!(info.capabilities.has(ModelCapabilities::cheap()));
+        assert!(info.capabilities.has(ModelCapabilities::speed()));
+        assert_eq!(info.context_window, 128_000);
+    }
+
+    #[test]
+    fn test_glm_4_long_has_1m_context() {
+        let info = model_info_for("glm-4-long").unwrap();
+        assert_eq!(info.context_window, 1_000_000);
+    }
+
+    #[test]
+    fn test_glm_4v_has_vision() {
+        let info = model_info_for("glm-4v-flash").unwrap();
+        assert!(info.capabilities.has(ModelCapabilities::vision()));
+    }
+
+    #[test]
+    fn test_glm_context_window_lookup() {
+        assert_eq!(context_window_for("glm-4-plus"), 128_000);
+        assert_eq!(context_window_for("glm-4-flash"), 128_000);
+        assert_eq!(context_window_for("glm-4-long"), 1_000_000);
+        assert_eq!(context_window_for("glm-4-air"), 128_000);
+        assert_eq!(context_window_for("glm-4v-flash"), 128_000);
+    }
+
+    #[test]
+    fn test_models_for_provider_zhipu() {
+        let glm = models_for_provider(LlmProvider::Zhipu);
+        assert!(glm.len() >= 5, "Zhipu should have at least 5 models, got {}", glm.len());
+    }
+
+    // ── Kimi / Moonshot tests ──────────────────────────────────
+
+    #[test]
+    fn test_kimi_k26_registered() {
+        let info = model_info_for("kimi-k2.6").expect("kimi-k2.6 should be registered");
+        assert_eq!(info.context_window, 256_000);
+        assert!(info.capabilities.has(ModelCapabilities::coding()));
+        assert!(info.capabilities.has(ModelCapabilities::reasoning()));
+        assert!(info.capabilities.has(ModelCapabilities::vision()));
+    }
+
+    #[test]
+    fn test_kimi_models_have_vision() {
+        for id in &["kimi-k2.6", "kimi-k2.5"] {
+            let info = model_info_for(id).unwrap();
+            assert!(info.capabilities.has(ModelCapabilities::vision()), "{} should have vision", id);
+        }
+    }
+
+    #[test]
+    fn test_moonshot_v1_context_windows() {
+        assert_eq!(context_window_for("moonshot-v1-8k"), 8_000);
+        assert_eq!(context_window_for("moonshot-v1-32k"), 32_000);
+        assert_eq!(context_window_for("moonshot-v1-128k"), 128_000);
+    }
+
+    #[test]
+    fn test_moonshot_models_for_provider() {
+        let models = models_for_provider(LlmProvider::Moonshot);
+        assert!(models.len() >= 5, "Moonshot should have at least 5 models, got {}", models.len());
+    }
+
+    #[test]
+    fn test_moonshot_provider_display_name() {
+        assert_eq!(provider_display_name(&LlmProvider::Moonshot), "Kimi (Moonshot)");
+    }
+
+    #[test]
+    fn test_zhipu_provider_display_name() {
+        assert_eq!(provider_display_name(&LlmProvider::Zhipu), "GLM (Zhipu)");
+    }
+
+    // ── Cross-provider tests ───────────────────────────────────
+
+    #[test]
+    fn test_all_three_chinese_providers_have_models() {
+        assert!(!models_for_provider(LlmProvider::DeepSeek).is_empty());
+        assert!(!models_for_provider(LlmProvider::Zhipu).is_empty());
+        assert!(!models_for_provider(LlmProvider::Moonshot).is_empty());
+    }
+
+    #[test]
+    fn test_context_window_lookup_all_new_models() {
+        // All new models should resolve to their registered context window
+        for id in &[
+            "deepseek-v4-flash", "deepseek-v4-pro",
+            "glm-4-plus", "glm-4-flash", "glm-4-long", "glm-4-air", "glm-4v-flash",
+            "kimi-k2.6", "kimi-k2.5",
+            "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k",
+        ] {
+            let ctx = context_window_for(id);
+            assert!(ctx > 0, "{} should have a positive context window", id);
+            // Verify model is in catalog (not falling back to generic 200K default)
+            let in_catalog = model_info_for(id).is_some();
+            assert!(in_catalog, "{} resolved to context {ctx} but is not in catalog — check registration", id);
+        }
+    }
+
+    #[test]
+    fn test_moonshot_wire_format() {
+        assert_eq!(LlmProvider::Moonshot.wire_format(), WireFormat::OpenAI);
+        assert!(LlmProvider::Moonshot.is_openai_compatible());
+    }
+
+    #[test]
+    fn test_moonshot_default_endpoint() {
+        assert_eq!(LlmProvider::Moonshot.default_base_url(), "https://api.moonshot.cn");
+        assert_eq!(LlmProvider::Moonshot.endpoint(), "/v1/chat/completions");
+    }
+
+    #[test]
+    fn test_moonshot_from_url() {
+        assert_eq!(LlmProvider::from_base_url("https://api.moonshot.cn"), LlmProvider::Moonshot);
+        assert_eq!(LlmProvider::from_base_url("https://api.moonshot.cn/v1"), LlmProvider::Moonshot);
     }
 }

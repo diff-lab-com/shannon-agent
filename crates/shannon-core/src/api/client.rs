@@ -99,6 +99,7 @@ impl LlmClient {
             | LlmProvider::Ai21
             | LlmProvider::SiliconFlow
             | LlmProvider::Zhipu
+            | LlmProvider::Moonshot
             | LlmProvider::Cloudflare
             | LlmProvider::Replicate => {
                 headers.push(("Authorization".to_string(), format!("Bearer {}", self.config.api_key)));

@@ -79,6 +79,8 @@ pub enum LlmProvider {
     SiliconFlow,
     /// Zhipu / BigModel (open.bigmodel.cn)
     Zhipu,
+    /// Moonshot / Kimi (api.moonshot.cn)
+    Moonshot,
 }
 
 impl LlmProvider {
@@ -137,6 +139,8 @@ impl LlmProvider {
             LlmProvider::SiliconFlow
         } else if url.contains("bigmodel.cn") || url.contains("zhipuai.cn") {
             LlmProvider::Zhipu
+        } else if url.contains("moonshot.cn") || url.contains("kimi") {
+            LlmProvider::Moonshot
         } else {
             LlmProvider::Custom
         }
@@ -168,6 +172,7 @@ impl LlmProvider {
             LlmProvider::Replicate => "/v1/predictions",
             LlmProvider::SiliconFlow => "/v1/chat/completions",
             LlmProvider::Zhipu => "/api/paas/v4/chat/completions",
+            LlmProvider::Moonshot => "/v1/chat/completions",
         }
     }
 
@@ -194,6 +199,7 @@ impl LlmProvider {
             LlmProvider::Replicate => "https://api.replicate.com",
             LlmProvider::SiliconFlow => "https://api.siliconflow.cn",
             LlmProvider::Zhipu => "https://open.bigmodel.cn",
+            LlmProvider::Moonshot => "https://api.moonshot.cn",
             LlmProvider::Custom => "http://localhost:8080",
         }
     }
@@ -221,7 +227,8 @@ impl LlmProvider {
             | Self::Cloudflare
             | Self::Replicate
             | Self::SiliconFlow
-            | Self::Zhipu => WireFormat::OpenAI,
+            | Self::Zhipu
+            | Self::Moonshot => WireFormat::OpenAI,
             Self::Ollama => WireFormat::Ollama,
             Self::Gemini => WireFormat::Gemini,
         }
@@ -261,6 +268,7 @@ impl std::fmt::Display for LlmProvider {
             LlmProvider::Replicate => write!(f, "replicate"),
             LlmProvider::SiliconFlow => write!(f, "siliconflow"),
             LlmProvider::Zhipu => write!(f, "zhipu"),
+            LlmProvider::Moonshot => write!(f, "moonshot"),
         }
     }
 }

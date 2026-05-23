@@ -2586,7 +2586,7 @@ mod tests {
             LlmProvider::OpenRouter, LlmProvider::Cohere, LlmProvider::Fireworks,
             LlmProvider::Perplexity, LlmProvider::Xai, LlmProvider::Ai21,
             LlmProvider::Cloudflare, LlmProvider::Replicate, LlmProvider::SiliconFlow,
-            LlmProvider::Zhipu,
+            LlmProvider::Zhipu, LlmProvider::Moonshot,
             LlmProvider::Ollama,
             LlmProvider::Gemini,
         ];
