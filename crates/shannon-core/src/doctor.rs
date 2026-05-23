@@ -806,7 +806,7 @@ fn get_disk_space(path: &std::path::Path) -> Option<u64> {
         // by the FFI call. We use `assume_init_read()` to move the initialized value out.
         let stat = unsafe { stat.assume_init_read() };
         // Available space = block size * available blocks
-        Some(stat.f_bsize * stat.f_bavail)
+        Some(stat.f_bsize as u64 * stat.f_bavail as u64)
     } else {
         // statvfs failed; the stat struct may be uninitialized, so we must not read it.
         // Returning None is the correct error handling path.
