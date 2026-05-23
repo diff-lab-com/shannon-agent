@@ -99,7 +99,10 @@ impl LlmClient {
             | LlmProvider::Ai21
             | LlmProvider::SiliconFlow
             | LlmProvider::Zhipu
+            | LlmProvider::ZhipuInternational
             | LlmProvider::Moonshot
+            | LlmProvider::Minimax
+            | LlmProvider::DashScope
             | LlmProvider::Cloudflare
             | LlmProvider::Replicate => {
                 headers.push(("Authorization".to_string(), format!("Bearer {}", self.config.api_key)));
@@ -513,9 +516,31 @@ impl LlmClient {
     /// configured for Anthropic).
     pub fn set_model_for_provider(&mut self, model: String, provider: LlmProvider) {
         let base_url = provider.default_base_url().to_string();
+        let api_key = provider.resolve_api_key_from_env();
         self.config.model = model;
         self.config.provider = provider;
         self.config.base_url = base_url;
+        if !api_key.is_empty() {
+            self.config.api_key = api_key;
+        }
+    }
+
+    /// Switch to a different model/provider combo, resolving the API key from
+    /// the given [`ShannonConfig`] (which may include `[providers.*]` overrides).
+    pub fn set_model_for_provider_with_config(
+        &mut self,
+        model: String,
+        provider: LlmProvider,
+        config: &crate::unified_config::ShannonConfig,
+    ) {
+        let base_url = provider.default_base_url().to_string();
+        let api_key = config.resolve_api_key_for_provider(&provider);
+        self.config.model = model;
+        self.config.provider = provider;
+        self.config.base_url = base_url;
+        if !api_key.is_empty() {
+            self.config.api_key = api_key;
+        }
     }
 
     /// Get the base URL

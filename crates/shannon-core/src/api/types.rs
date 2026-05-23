@@ -79,8 +79,14 @@ pub enum LlmProvider {
     SiliconFlow,
     /// Zhipu / BigModel (open.bigmodel.cn)
     Zhipu,
+    /// Zhipu International / BigModel (open.international.bigmodel.cn)
+    ZhipuInternational,
     /// Moonshot / Kimi (api.moonshot.cn)
     Moonshot,
+    /// MiniMax (api.minimax.chat)
+    Minimax,
+    /// Alibaba DashScope / Qwen (dashscope.aliyuncs.com)
+    DashScope,
 }
 
 impl LlmProvider {
@@ -137,10 +143,16 @@ impl LlmProvider {
             LlmProvider::Replicate
         } else if url.contains("siliconflow.cn") {
             LlmProvider::SiliconFlow
+        } else if url.contains("international.bigmodel.cn") {
+            LlmProvider::ZhipuInternational
         } else if url.contains("bigmodel.cn") || url.contains("zhipuai.cn") {
             LlmProvider::Zhipu
         } else if url.contains("moonshot.cn") || url.contains("kimi") {
             LlmProvider::Moonshot
+        } else if url.contains("minimax.chat") || url.contains("minimaxi.com") {
+            LlmProvider::Minimax
+        } else if url.contains("dashscope.aliyuncs.com") || url.contains("aliyuncs.com") {
+            LlmProvider::DashScope
         } else {
             LlmProvider::Custom
         }
@@ -172,7 +184,10 @@ impl LlmProvider {
             LlmProvider::Replicate => "/v1/predictions",
             LlmProvider::SiliconFlow => "/v1/chat/completions",
             LlmProvider::Zhipu => "/api/paas/v4/chat/completions",
+            LlmProvider::ZhipuInternational => "/api/paas/v4/chat/completions",
             LlmProvider::Moonshot => "/v1/chat/completions",
+            LlmProvider::Minimax => "/v1/text/chatcompletion_v2",
+            LlmProvider::DashScope => "/compatible-mode/v1/chat/completions",
         }
     }
 
@@ -199,7 +214,10 @@ impl LlmProvider {
             LlmProvider::Replicate => "https://api.replicate.com",
             LlmProvider::SiliconFlow => "https://api.siliconflow.cn",
             LlmProvider::Zhipu => "https://open.bigmodel.cn",
+            LlmProvider::ZhipuInternational => "https://open.international.bigmodel.cn",
             LlmProvider::Moonshot => "https://api.moonshot.cn",
+            LlmProvider::Minimax => "https://api.minimax.chat",
+            LlmProvider::DashScope => "https://dashscope.aliyuncs.com",
             LlmProvider::Custom => "http://localhost:8080",
         }
     }
@@ -228,7 +246,10 @@ impl LlmProvider {
             | Self::Replicate
             | Self::SiliconFlow
             | Self::Zhipu
-            | Self::Moonshot => WireFormat::OpenAI,
+            | Self::ZhipuInternational
+            | Self::Moonshot
+            | Self::Minimax
+            | Self::DashScope => WireFormat::OpenAI,
             Self::Ollama => WireFormat::Ollama,
             Self::Gemini => WireFormat::Gemini,
         }
@@ -241,6 +262,48 @@ impl LlmProvider {
     /// Whether this provider requires authentication
     pub fn requires_auth(&self) -> bool {
         !matches!(self, LlmProvider::Ollama)
+    }
+
+    /// Return the canonical environment variable name for this provider's API key.
+    pub fn canonical_api_key_env(&self) -> Option<&'static str> {
+        match self {
+            Self::Anthropic => Some("ANTHROPIC_API_KEY"),
+            Self::OpenAI => Some("OPENAI_API_KEY"),
+            Self::Gemini => Some("GEMINI_API_KEY"),
+            Self::Azure => Some("AZURE_OPENAI_API_KEY"),
+            Self::Bedrock => None,
+            Self::Mistral => Some("MISTRAL_API_KEY"),
+            Self::DeepSeek => Some("DEEPSEEK_API_KEY"),
+            Self::Groq => Some("GROQ_API_KEY"),
+            Self::Together => Some("TOGETHER_API_KEY"),
+            Self::OpenRouter => Some("OPENROUTER_API_KEY"),
+            Self::Cohere => Some("COHERE_API_KEY"),
+            Self::Fireworks => Some("FIREWORKS_API_KEY"),
+            Self::Perplexity => Some("PERPLEXITY_API_KEY"),
+            Self::Xai => Some("XAI_API_KEY"),
+            Self::Ai21 => Some("AI21_API_KEY"),
+            Self::SiliconFlow => Some("SILICONFLOW_API_KEY"),
+            Self::Zhipu => Some("ZHIPU_API_KEY"),
+            Self::ZhipuInternational => Some("ZHIPU_INTL_API_KEY"),
+            Self::Moonshot => Some("MOONSHOT_API_KEY"),
+            Self::Minimax => Some("MINIMAX_API_KEY"),
+            Self::DashScope => Some("DASHSCOPE_API_KEY"),
+            Self::Ollama | Self::Custom | Self::Cloudflare | Self::Replicate => None,
+        }
+    }
+
+    /// Resolve the API key for this provider from environment variables.
+    /// Chain: SHANNON_API_KEY → {PROVIDER_CANONICAL}_API_KEY → empty
+    pub fn resolve_api_key_from_env(&self) -> String {
+        if let Ok(key) = std::env::var("SHANNON_API_KEY") {
+            return key;
+        }
+        if let Some(env_var) = self.canonical_api_key_env() {
+            if let Ok(key) = std::env::var(env_var) {
+                return key;
+            }
+        }
+        String::new()
     }
 }
 
@@ -268,7 +331,10 @@ impl std::fmt::Display for LlmProvider {
             LlmProvider::Replicate => write!(f, "replicate"),
             LlmProvider::SiliconFlow => write!(f, "siliconflow"),
             LlmProvider::Zhipu => write!(f, "zhipu"),
+            LlmProvider::ZhipuInternational => write!(f, "zhipu-international"),
             LlmProvider::Moonshot => write!(f, "moonshot"),
+            LlmProvider::Minimax => write!(f, "minimax"),
+            LlmProvider::DashScope => write!(f, "dashscope"),
         }
     }
 }
@@ -307,11 +373,6 @@ pub struct LlmClientConfig {
 
 impl Default for LlmClientConfig {
     fn default() -> Self {
-        let api_key = std::env::var("SHANNON_API_KEY")
-            .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
-            .or_else(|_| std::env::var("OPENAI_API_KEY"))
-            .unwrap_or_default();
-
         let base_url = std::env::var("SHANNON_BASE_URL")
             .or_else(|_| std::env::var("ANTHROPIC_BASE_URL"))
             .or_else(|_| std::env::var("OPENAI_BASE_URL"))
@@ -323,6 +384,9 @@ impl Default for LlmClientConfig {
             .unwrap_or_else(|_| "claude-sonnet-4-20250514".to_string());
 
         let provider = LlmProvider::from_base_url(&base_url);
+
+        // Provider-aware API key resolution
+        let api_key = provider.resolve_api_key_from_env();
 
         // If no API key is configured and provider requires auth, check for Ollama
         let (api_key, base_url, model, provider) = if api_key.is_empty()
@@ -376,16 +440,10 @@ impl From<ShannonConfig> for LlmClientConfig {
         let has_explicit_model = cfg.model.is_some();
 
         // --- Resolve api_key ------------------------------------------------
-        let api_key = cfg
-            .api_key
-            .or_else(|| std::env::var("SHANNON_API_KEY").ok())
-            .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
-            .or_else(|| std::env::var("OPENAI_API_KEY").ok())
-            .unwrap_or_default();
-
         // --- Resolve base_url -----------------------------------------------
         let base_url = cfg
             .base_url
+            .clone()
             .or_else(|| std::env::var("SHANNON_BASE_URL").ok())
             .or_else(|| std::env::var("ANTHROPIC_BASE_URL").ok())
             .or_else(|| std::env::var("OPENAI_BASE_URL").ok())
@@ -394,6 +452,7 @@ impl From<ShannonConfig> for LlmClientConfig {
         // --- Resolve model --------------------------------------------------
         let model = cfg
             .model
+            .clone()
             .or_else(|| std::env::var("SHANNON_MODEL").ok())
             .or_else(|| std::env::var("ANTHROPIC_MODEL").ok())
             .or_else(|| std::env::var("OPENAI_MODEL").ok())
@@ -412,11 +471,31 @@ impl From<ShannonConfig> for LlmClientConfig {
                 "deepseek" => LlmProvider::DeepSeek,
                 "groq" => LlmProvider::Groq,
                 "together" | "together-ai" => LlmProvider::Together,
+                "openrouter" => LlmProvider::OpenRouter,
+                "cohere" => LlmProvider::Cohere,
+                "fireworks" => LlmProvider::Fireworks,
+                "perplexity" => LlmProvider::Perplexity,
+                "xai" => LlmProvider::Xai,
+                "ai21" => LlmProvider::Ai21,
+                "siliconflow" => LlmProvider::SiliconFlow,
+                "zhipu" | "zhipu-cn" => LlmProvider::Zhipu,
+                "zhipu-international" | "zhipu-intl" => LlmProvider::ZhipuInternational,
+                "moonshot" | "kimi" => LlmProvider::Moonshot,
+                "minimax" => LlmProvider::Minimax,
+                "dashscope" | "qwen" => LlmProvider::DashScope,
+                "cloudflare" => LlmProvider::Cloudflare,
+                "replicate" => LlmProvider::Replicate,
                 _ => LlmProvider::from_base_url(&base_url),
             }
         } else {
             LlmProvider::from_base_url(&base_url)
         };
+
+        // --- Resolve API key (provider-aware) --------------------------------
+        let api_key = cfg
+            .api_key
+            .clone()
+            .unwrap_or_else(|| cfg.resolve_api_key_for_provider(&provider));
 
         // --- Auto-fallback to Ollama when no key & no explicit base_url ----
         let (api_key, base_url, model, provider) = if api_key.is_empty()
@@ -1494,5 +1573,22 @@ mod tests {
         let json = serde_json::to_string(&request).unwrap();
         assert!(!json.contains("thinking_budget"));
         assert!(!json.contains("reasoning_effort"));
+    }
+
+    #[test]
+    fn test_provider_detection_dashscope() {
+        assert_eq!(LlmProvider::from_base_url("https://dashscope.aliyuncs.com"), LlmProvider::DashScope);
+    }
+
+    #[test]
+    fn test_dashscope_wire_format() {
+        assert_eq!(LlmProvider::DashScope.wire_format(), WireFormat::OpenAI);
+        assert!(LlmProvider::DashScope.is_openai_compatible());
+    }
+
+    #[test]
+    fn test_dashscope_endpoint() {
+        assert_eq!(LlmProvider::DashScope.default_base_url(), "https://dashscope.aliyuncs.com");
+        assert_eq!(LlmProvider::DashScope.endpoint(), "/compatible-mode/v1/chat/completions");
     }
 }

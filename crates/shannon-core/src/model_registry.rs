@@ -43,6 +43,8 @@ pub struct ModelInfo {
     pub id: &'static str,
     /// Human-readable display name (e.g. "Claude Sonnet 4").
     pub display_name: &'static str,
+    /// Short aliases for quick selection (e.g. "sonnet", "glm5").
+    pub aliases: &'static [&'static str],
     /// Provider that serves this model.
     pub provider: LlmProvider,
     /// Context window size in tokens.
@@ -66,6 +68,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "claude-sonnet-4-20250514",
         display_name: "Claude Sonnet 4",
+        aliases: &["sonnet", "sonnet4", "claude-sonnet"],
         provider: LlmProvider::Anthropic,
         context_window: 200_000,
         max_output: 16_384,
@@ -76,6 +79,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "claude-opus-4-20250115",
         display_name: "Claude Opus 4",
+        aliases: &["opus", "opus4", "claude-opus"],
         provider: LlmProvider::Anthropic,
         context_window: 200_000,
         max_output: 32_000,
@@ -86,6 +90,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "claude-haiku-4-5-20251001",
         display_name: "Claude Haiku 4.5",
+        aliases: &["haiku", "haiku4", "claude-haiku"],
         provider: LlmProvider::Anthropic,
         context_window: 200_000,
         max_output: 8_192,
@@ -96,6 +101,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "claude-3-5-sonnet-20241022",
         display_name: "Claude 3.5 Sonnet",
+        aliases: &[],
         provider: LlmProvider::Anthropic,
         context_window: 200_000,
         max_output: 8_192,
@@ -107,6 +113,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "gpt-4o",
         display_name: "GPT-4o",
+        aliases: &["gpt4o", "4o"],
         provider: LlmProvider::OpenAI,
         context_window: 128_000,
         max_output: 16_384,
@@ -117,6 +124,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "gpt-4o-mini",
         display_name: "GPT-4o Mini",
+        aliases: &[],
         provider: LlmProvider::OpenAI,
         context_window: 128_000,
         max_output: 16_384,
@@ -127,6 +135,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "o3-mini",
         display_name: "o3-mini",
+        aliases: &[],
         provider: LlmProvider::OpenAI,
         context_window: 200_000,
         max_output: 100_000,
@@ -137,6 +146,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "gpt-4-turbo",
         display_name: "GPT-4 Turbo",
+        aliases: &[],
         provider: LlmProvider::OpenAI,
         context_window: 128_000,
         max_output: 4_096,
@@ -148,6 +158,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "gemini-2.5-pro",
         display_name: "Gemini 2.5 Pro",
+        aliases: &[],
         provider: LlmProvider::Gemini,
         context_window: 1_000_000,
         max_output: 65_536,
@@ -158,6 +169,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "gemini-2.5-flash",
         display_name: "Gemini 2.5 Flash",
+        aliases: &[],
         provider: LlmProvider::Gemini,
         context_window: 1_000_000,
         max_output: 65_536,
@@ -169,6 +181,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "deepseek-chat",
         display_name: "DeepSeek V3",
+        aliases: &["ds-chat", "deepseek-chat", "v3"],
         provider: LlmProvider::DeepSeek,
         context_window: 128_000,
         max_output: 8_192,
@@ -179,6 +192,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "deepseek-reasoner",
         display_name: "DeepSeek R1",
+        aliases: &["ds-r1", "deepseek-reasoner", "r1"],
         provider: LlmProvider::DeepSeek,
         context_window: 128_000,
         max_output: 8_192,
@@ -189,6 +203,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "deepseek-v4-flash",
         display_name: "DeepSeek V4 Flash",
+        aliases: &[],
         provider: LlmProvider::DeepSeek,
         context_window: 1_000_000,
         max_output: 384_000,
@@ -199,6 +214,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "deepseek-v4-pro",
         display_name: "DeepSeek V4 Pro",
+        aliases: &[],
         provider: LlmProvider::DeepSeek,
         context_window: 1_000_000,
         max_output: 384_000,
@@ -210,6 +226,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "glm-4-plus",
         display_name: "GLM-4 Plus",
+        aliases: &[],
         provider: LlmProvider::Zhipu,
         context_window: 128_000,
         max_output: 4_096,
@@ -220,6 +237,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "glm-4-flash",
         display_name: "GLM-4 Flash",
+        aliases: &[],
         provider: LlmProvider::Zhipu,
         context_window: 128_000,
         max_output: 4_096,
@@ -230,6 +248,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "glm-4-long",
         display_name: "GLM-4 Long",
+        aliases: &[],
         provider: LlmProvider::Zhipu,
         context_window: 1_000_000,
         max_output: 4_096,
@@ -240,6 +259,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "glm-4-air",
         display_name: "GLM-4 Air",
+        aliases: &[],
         provider: LlmProvider::Zhipu,
         context_window: 128_000,
         max_output: 4_096,
@@ -250,6 +270,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "glm-4v-flash",
         display_name: "GLM-4V Flash",
+        aliases: &[],
         provider: LlmProvider::Zhipu,
         context_window: 128_000,
         max_output: 4_096,
@@ -257,30 +278,144 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_output: 0.14,
         capabilities: ModelCapabilities::vision().or(ModelCapabilities::cheap()),
     },
+    ModelInfo {
+        id: "glm-5",
+        display_name: "GLM-5",
+        aliases: &["glm5"],
+        provider: LlmProvider::Zhipu,
+        context_window: 198_000,
+        max_output: 16_384,
+        cost_per_m_input: 7.14,
+        cost_per_m_output: 7.14,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+    },
+    ModelInfo {
+        id: "glm-5.1",
+        display_name: "GLM-5.1",
+        aliases: &["glm51"],
+        provider: LlmProvider::Zhipu,
+        context_window: 198_000,
+        max_output: 128_000,
+        cost_per_m_input: 10.0,
+        cost_per_m_output: 10.0,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+    },
+    ModelInfo {
+        id: "glm-5-flash",
+        display_name: "GLM-5 Flash",
+        aliases: &[],
+        provider: LlmProvider::Zhipu,
+        context_window: 198_000,
+        max_output: 16_384,
+        cost_per_m_input: 0.14,
+        cost_per_m_output: 0.14,
+        capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
+    },
+    ModelInfo {
+        id: "glm-5.1-flash",
+        display_name: "GLM-5.1 Flash",
+        aliases: &[],
+        provider: LlmProvider::Zhipu,
+        context_window: 198_000,
+        max_output: 16_384,
+        cost_per_m_input: 0.14,
+        cost_per_m_output: 0.14,
+        capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
+    },
+    // ── GLM / Zhipu International ──────────────────────────────
+    ModelInfo {
+        id: "glm-4-plus-intl",
+        display_name: "GLM-4 Plus (Int'l)",
+        aliases: &[],
+        provider: LlmProvider::ZhipuInternational,
+        context_window: 128_000,
+        max_output: 4_096,
+        cost_per_m_input: 7.14,
+        cost_per_m_output: 7.14,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+    },
+    ModelInfo {
+        id: "glm-4-flash-intl",
+        display_name: "GLM-4 Flash (Int'l)",
+        aliases: &[],
+        provider: LlmProvider::ZhipuInternational,
+        context_window: 128_000,
+        max_output: 4_096,
+        cost_per_m_input: 0.14,
+        cost_per_m_output: 0.14,
+        capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
+    },
+    ModelInfo {
+        id: "glm-4-long-intl",
+        display_name: "GLM-4 Long (Int'l)",
+        aliases: &[],
+        provider: LlmProvider::ZhipuInternational,
+        context_window: 1_000_000,
+        max_output: 4_096,
+        cost_per_m_input: 0.14,
+        cost_per_m_output: 0.14,
+        capabilities: ModelCapabilities::cheap(),
+    },
+    ModelInfo {
+        id: "glm-5-intl",
+        display_name: "GLM-5 (Int'l)",
+        aliases: &[],
+        provider: LlmProvider::ZhipuInternational,
+        context_window: 198_000,
+        max_output: 16_384,
+        cost_per_m_input: 7.14,
+        cost_per_m_output: 7.14,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+    },
+    ModelInfo {
+        id: "glm-5.1-intl",
+        display_name: "GLM-5.1 (Int'l)",
+        aliases: &[],
+        provider: LlmProvider::ZhipuInternational,
+        context_window: 198_000,
+        max_output: 128_000,
+        cost_per_m_input: 10.0,
+        cost_per_m_output: 10.0,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+    },
+    ModelInfo {
+        id: "glm-5-flash-intl",
+        display_name: "GLM-5 Flash (Int'l)",
+        aliases: &[],
+        provider: LlmProvider::ZhipuInternational,
+        context_window: 198_000,
+        max_output: 16_384,
+        cost_per_m_input: 0.14,
+        cost_per_m_output: 0.14,
+        capabilities: ModelCapabilities::speed().or(ModelCapabilities::cheap()),
+    },
     // ── Kimi / Moonshot ──────────────────────────────────────
     ModelInfo {
         id: "kimi-k2.6",
         display_name: "Kimi K2.6",
+        aliases: &["kimi", "k2"],
         provider: LlmProvider::Moonshot,
         context_window: 256_000,
-        max_output: 8_192,
-        cost_per_m_input: 0.57,
-        cost_per_m_output: 3.86,
+        max_output: 96_000,
+        cost_per_m_input: 0.91,
+        cost_per_m_output: 3.78,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()).or(ModelCapabilities::vision()),
     },
     ModelInfo {
         id: "kimi-k2.5",
         display_name: "Kimi K2.5",
+        aliases: &[],
         provider: LlmProvider::Moonshot,
         context_window: 256_000,
-        max_output: 8_192,
-        cost_per_m_input: 0.57,
-        cost_per_m_output: 3.00,
+        max_output: 96_000,
+        cost_per_m_input: 0.56,
+        cost_per_m_output: 2.94,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()).or(ModelCapabilities::vision()),
     },
     ModelInfo {
         id: "moonshot-v1-128k",
         display_name: "Moonshot V1 128K",
+        aliases: &[],
         provider: LlmProvider::Moonshot,
         context_window: 128_000,
         max_output: 4_096,
@@ -291,6 +426,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "moonshot-v1-32k",
         display_name: "Moonshot V1 32K",
+        aliases: &[],
         provider: LlmProvider::Moonshot,
         context_window: 32_000,
         max_output: 4_096,
@@ -301,6 +437,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "moonshot-v1-8k",
         display_name: "Moonshot V1 8K",
+        aliases: &[],
         provider: LlmProvider::Moonshot,
         context_window: 8_000,
         max_output: 4_096,
@@ -312,6 +449,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "mistral-large-latest",
         display_name: "Mistral Large",
+        aliases: &[],
         provider: LlmProvider::Mistral,
         context_window: 128_000,
         max_output: 8_192,
@@ -322,6 +460,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "codestral-latest",
         display_name: "Codestral",
+        aliases: &[],
         provider: LlmProvider::Mistral,
         context_window: 256_000,
         max_output: 8_192,
@@ -329,10 +468,79 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         cost_per_m_output: 0.90,
         capabilities: ModelCapabilities::coding().or(ModelCapabilities::cheap()),
     },
+    // ── Qwen / DashScope ──────────────────────────────────────
+    ModelInfo {
+        id: "qwen3.7-max",
+        display_name: "Qwen 3.7 Max",
+        aliases: &["qwen", "qwen-max"],
+        provider: LlmProvider::DashScope,
+        context_window: 1_000_000,
+        max_output: 64_000,
+        cost_per_m_input: 1.43,
+        cost_per_m_output: 5.71,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+    },
+    ModelInfo {
+        id: "qwen3.6-plus",
+        display_name: "Qwen 3.6 Plus",
+        aliases: &[],
+        provider: LlmProvider::DashScope,
+        context_window: 1_000_000,
+        max_output: 64_000,
+        cost_per_m_input: 0.57,
+        cost_per_m_output: 2.29,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+    },
+    ModelInfo {
+        id: "qwen3.6-flash",
+        display_name: "Qwen 3.6 Flash",
+        aliases: &[],
+        provider: LlmProvider::DashScope,
+        context_window: 1_000_000,
+        max_output: 64_000,
+        cost_per_m_input: 0.14,
+        cost_per_m_output: 0.57,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::speed()).or(ModelCapabilities::cheap()),
+    },
+    // ── MiniMax ───────────────────────────────────────────────
+    ModelInfo {
+        id: "MiniMax-M2.7",
+        display_name: "MiniMax M2.7",
+        aliases: &[],
+        provider: LlmProvider::Minimax,
+        context_window: 1_000_000,
+        max_output: 64_000,
+        cost_per_m_input: 0.29,
+        cost_per_m_output: 1.18,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+    },
+    ModelInfo {
+        id: "MiniMax-M2.5",
+        display_name: "MiniMax M2.5",
+        aliases: &[],
+        provider: LlmProvider::Minimax,
+        context_window: 192_000,
+        max_output: 32_000,
+        cost_per_m_input: 0.29,
+        cost_per_m_output: 1.18,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::cheap()),
+    },
+    ModelInfo {
+        id: "MiniMax-M2.7-highspeed",
+        display_name: "MiniMax M2.7 Highspeed",
+        aliases: &[],
+        provider: LlmProvider::Minimax,
+        context_window: 1_000_000,
+        max_output: 64_000,
+        cost_per_m_input: 0.59,
+        cost_per_m_output: 2.35,
+        capabilities: ModelCapabilities::coding().or(ModelCapabilities::speed()),
+    },
     // ── Groq ───────────────────────────────────────────────────
     ModelInfo {
         id: "llama-3.3-70b-versatile",
         display_name: "Llama 3.3 70B",
+        aliases: &[],
         provider: LlmProvider::Groq,
         context_window: 128_000,
         max_output: 32_768,
@@ -343,6 +551,7 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "mixtral-8x7b-32768",
         display_name: "Mixtral 8x7B",
+        aliases: &[],
         provider: LlmProvider::Groq,
         context_window: 32_000,
         max_output: 4_096,
@@ -383,8 +592,11 @@ fn provider_order(p: &LlmProvider) -> u8 {
         LlmProvider::Mistral => 4,
         LlmProvider::Groq => 5,
         LlmProvider::Zhipu => 6,
-        LlmProvider::Moonshot => 7,
-        LlmProvider::Ollama => 8,
+        LlmProvider::ZhipuInternational => 7,
+        LlmProvider::Moonshot => 8,
+        LlmProvider::Minimax => 9,
+        LlmProvider::DashScope => 10,
+        LlmProvider::Ollama => 11,
         _ => 99,
     }
 }
@@ -412,7 +624,10 @@ pub fn provider_display_name(p: &LlmProvider) -> &'static str {
         LlmProvider::Replicate => "Replicate",
         LlmProvider::SiliconFlow => "SiliconFlow",
         LlmProvider::Zhipu => "GLM (Zhipu)",
+        LlmProvider::ZhipuInternational => "GLM (Zhipu Int'l)",
         LlmProvider::Moonshot => "Kimi (Moonshot)",
+        LlmProvider::Minimax => "MiniMax",
+        LlmProvider::DashScope => "Qwen (DashScope)",
         LlmProvider::Custom => "Custom",
     }
 }
@@ -445,6 +660,7 @@ pub fn detect_local_models() -> Vec<ModelInfo> {
         models.push(ModelInfo {
             id: Box::leak(name.clone().into_boxed_str()),
             display_name: Box::leak(name.into_boxed_str()),
+        aliases: &[],
             provider: LlmProvider::Ollama,
             context_window: 4096,
             max_output: 4_096,
@@ -495,6 +711,14 @@ pub fn context_window_for(model_id: &str) -> usize {
 /// Look up model info by ID.
 pub fn model_info_for(model_id: &str) -> Option<&'static ModelInfo> {
     MODEL_CATALOG.iter().find(|m| m.id == model_id)
+}
+
+/// Look up a model by ID or alias.
+pub fn model_info_for_alias(alias: &str) -> Option<&'static ModelInfo> {
+    let lower = alias.to_lowercase();
+    MODEL_CATALOG.iter().find(|m| {
+        m.id == lower || m.aliases.iter().any(|a| a == &lower)
+    }).or_else(|| model_info_for(alias))
 }
 
 // ============================================================================
@@ -768,7 +992,7 @@ mod tests {
         let ids = all_model_ids();
         assert!(ids.contains(&"claude-sonnet-4-20250514"));
         assert!(ids.contains(&"gpt-4o"));
-        assert!(ids.len() >= 26);
+        assert!(ids.len() >= 42);
     }
 
     #[test]
@@ -983,7 +1207,10 @@ mod tests {
 
     #[test]
     fn test_glm_models_registered() {
-        let glm_ids = ["glm-4-plus", "glm-4-flash", "glm-4-long", "glm-4-air", "glm-4v-flash"];
+        let glm_ids = [
+            "glm-4-plus", "glm-4-flash", "glm-4-long", "glm-4-air", "glm-4v-flash",
+            "glm-5", "glm-5.1", "glm-5-flash", "glm-5.1-flash",
+        ];
         for id in &glm_ids {
             assert!(model_info_for(id).is_some(), "GLM model {} should be registered", id);
         }
@@ -1016,12 +1243,82 @@ mod tests {
         assert_eq!(context_window_for("glm-4-long"), 1_000_000);
         assert_eq!(context_window_for("glm-4-air"), 128_000);
         assert_eq!(context_window_for("glm-4v-flash"), 128_000);
+        assert_eq!(context_window_for("glm-5"), 198_000);
+        assert_eq!(context_window_for("glm-5.1"), 198_000);
+        assert_eq!(context_window_for("glm-5-flash"), 198_000);
+        assert_eq!(context_window_for("glm-5.1-flash"), 198_000);
     }
 
     #[test]
     fn test_models_for_provider_zhipu() {
         let glm = models_for_provider(LlmProvider::Zhipu);
-        assert!(glm.len() >= 5, "Zhipu should have at least 5 models, got {}", glm.len());
+        assert!(glm.len() >= 9, "Zhipu should have at least 9 models, got {}", glm.len());
+    }
+
+    // ── Zhipu International tests ──────────────────────────────
+
+    #[test]
+    fn test_zhipu_intl_models_registered() {
+        let intl_ids = [
+            "glm-4-plus-intl", "glm-4-flash-intl", "glm-4-long-intl",
+            "glm-5-intl", "glm-5.1-intl", "glm-5-flash-intl",
+        ];
+        for id in &intl_ids {
+            assert!(model_info_for(id).is_some(), "Zhipu Intl model {} should be registered", id);
+        }
+    }
+
+    #[test]
+    fn test_zhipu_intl_models_for_provider() {
+        let models = models_for_provider(LlmProvider::ZhipuInternational);
+        assert!(models.len() >= 6, "ZhipuInternational should have at least 6 models, got {}", models.len());
+    }
+
+    #[test]
+    fn test_zhipu_intl_glm51_output() {
+        let info = model_info_for("glm-5.1-intl").expect("glm-5.1-intl should be registered");
+        assert_eq!(info.context_window, 198_000);
+        assert_eq!(info.max_output, 128_000);
+    }
+
+    #[test]
+    fn test_zhipu_intl_glm5_context() {
+        assert_eq!(context_window_for("glm-5-intl"), 198_000);
+        assert_eq!(context_window_for("glm-5.1-intl"), 198_000);
+        assert_eq!(context_window_for("glm-5-flash-intl"), 198_000);
+    }
+
+    #[test]
+    fn test_zhipu_intl_glm4_long_1m() {
+        assert_eq!(context_window_for("glm-4-long-intl"), 1_000_000);
+    }
+
+    #[test]
+    fn test_zhipu_intl_provider_display_name() {
+        assert_eq!(provider_display_name(&LlmProvider::ZhipuInternational), "GLM (Zhipu Int'l)");
+    }
+
+    #[test]
+    fn test_zhipu_intl_wire_format_openai() {
+        assert_eq!(LlmProvider::ZhipuInternational.wire_format(), WireFormat::OpenAI);
+        assert!(LlmProvider::ZhipuInternational.is_openai_compatible());
+    }
+
+    #[test]
+    fn test_zhipu_intl_default_endpoint() {
+        assert_eq!(LlmProvider::ZhipuInternational.default_base_url(), "https://open.international.bigmodel.cn");
+        assert_eq!(LlmProvider::ZhipuInternational.endpoint(), "/api/paas/v4/chat/completions");
+    }
+
+    #[test]
+    fn test_zhipu_intl_from_url() {
+        assert_eq!(LlmProvider::from_base_url("https://open.international.bigmodel.cn"), LlmProvider::ZhipuInternational);
+    }
+
+    #[test]
+    fn test_zhipu_intl_provider_order() {
+        assert!(provider_order(&LlmProvider::ZhipuInternational) > provider_order(&LlmProvider::Zhipu));
+        assert!(provider_order(&LlmProvider::ZhipuInternational) < provider_order(&LlmProvider::Moonshot));
     }
 
     // ── Kimi / Moonshot tests ──────────────────────────────────
@@ -1069,10 +1366,13 @@ mod tests {
     // ── Cross-provider tests ───────────────────────────────────
 
     #[test]
-    fn test_all_three_chinese_providers_have_models() {
+    fn test_all_six_chinese_providers_have_models() {
         assert!(!models_for_provider(LlmProvider::DeepSeek).is_empty());
         assert!(!models_for_provider(LlmProvider::Zhipu).is_empty());
+        assert!(!models_for_provider(LlmProvider::ZhipuInternational).is_empty());
         assert!(!models_for_provider(LlmProvider::Moonshot).is_empty());
+        assert!(!models_for_provider(LlmProvider::Minimax).is_empty());
+        assert!(!models_for_provider(LlmProvider::DashScope).is_empty());
     }
 
     #[test]
@@ -1081,8 +1381,13 @@ mod tests {
         for id in &[
             "deepseek-v4-flash", "deepseek-v4-pro",
             "glm-4-plus", "glm-4-flash", "glm-4-long", "glm-4-air", "glm-4v-flash",
+            "glm-5", "glm-5.1", "glm-5-flash", "glm-5.1-flash",
+            "glm-4-plus-intl", "glm-4-flash-intl", "glm-4-long-intl",
+            "glm-5-intl", "glm-5.1-intl", "glm-5-flash-intl",
             "kimi-k2.6", "kimi-k2.5",
             "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k",
+            "MiniMax-M2.7", "MiniMax-M2.5", "MiniMax-M2.7-highspeed",
+            "qwen3.7-max", "qwen3.6-plus", "qwen3.6-flash",
         ] {
             let ctx = context_window_for(id);
             assert!(ctx > 0, "{} should have a positive context window", id);
@@ -1108,5 +1413,186 @@ mod tests {
     fn test_moonshot_from_url() {
         assert_eq!(LlmProvider::from_base_url("https://api.moonshot.cn"), LlmProvider::Moonshot);
         assert_eq!(LlmProvider::from_base_url("https://api.moonshot.cn/v1"), LlmProvider::Moonshot);
+    }
+
+    // ── GLM-5 / GLM-5.1 tests ──────────────────────────────────
+
+    #[test]
+    fn test_glm5_registered() {
+        let info = model_info_for("glm-5").expect("glm-5 should be registered");
+        assert_eq!(info.context_window, 198_000);
+        assert!(info.capabilities.has(ModelCapabilities::coding()));
+        assert!(info.capabilities.has(ModelCapabilities::reasoning()));
+    }
+
+    #[test]
+    fn test_glm51_registered() {
+        let info = model_info_for("glm-5.1").expect("glm-5.1 should be registered");
+        assert_eq!(info.context_window, 198_000);
+        assert!(info.capabilities.has(ModelCapabilities::coding()));
+        assert!(info.capabilities.has(ModelCapabilities::reasoning()));
+    }
+
+    #[test]
+    fn test_glm5_flash_cheap() {
+        let info = model_info_for("glm-5-flash").expect("glm-5-flash should be registered");
+        assert!(info.capabilities.has(ModelCapabilities::cheap()));
+        assert!(info.capabilities.has(ModelCapabilities::speed()));
+    }
+
+    #[test]
+    fn test_glm51_flash_cheap() {
+        let info = model_info_for("glm-5.1-flash").expect("glm-5.1-flash should be registered");
+        assert!(info.capabilities.has(ModelCapabilities::cheap()));
+        assert!(info.capabilities.has(ModelCapabilities::speed()));
+    }
+
+    #[test]
+    fn test_glm5_output_tokens() {
+        assert_eq!(model_info_for("glm-5").unwrap().max_output, 16_384);
+        assert_eq!(model_info_for("glm-5.1").unwrap().max_output, 128_000);
+        assert_eq!(model_info_for("glm-5-flash").unwrap().max_output, 16_384);
+        assert_eq!(model_info_for("glm-5.1-flash").unwrap().max_output, 16_384);
+    }
+
+    // ── Qwen / DashScope tests ────────────────────────────────
+
+    #[test]
+    fn test_qwen_models_registered() {
+        let qwen_ids = ["qwen3.7-max", "qwen3.6-plus", "qwen3.6-flash"];
+        for id in &qwen_ids {
+            assert!(model_info_for(id).is_some(), "Qwen model {} should be registered", id);
+        }
+    }
+
+    #[test]
+    fn test_qwen_37_max_flagship() {
+        let info = model_info_for("qwen3.7-max").expect("qwen3.7-max should be registered");
+        assert_eq!(info.context_window, 1_000_000);
+        assert!(info.capabilities.has(ModelCapabilities::coding()));
+        assert!(info.capabilities.has(ModelCapabilities::reasoning()));
+    }
+
+    #[test]
+    fn test_qwen_36_flash_cheap_and_fast() {
+        let info = model_info_for("qwen3.6-flash").expect("qwen3.6-flash should be registered");
+        assert!(info.capabilities.has(ModelCapabilities::cheap()));
+        assert!(info.capabilities.has(ModelCapabilities::speed()));
+        assert_eq!(info.context_window, 1_000_000);
+    }
+
+    #[test]
+    fn test_qwen_all_have_1m_context() {
+        for id in &["qwen3.7-max", "qwen3.6-plus", "qwen3.6-flash"] {
+            assert_eq!(context_window_for(id), 1_000_000, "{} should have 1M context", id);
+        }
+    }
+
+    #[test]
+    fn test_dashscope_provider_display_name() {
+        assert_eq!(provider_display_name(&LlmProvider::DashScope), "Qwen (DashScope)");
+    }
+
+    #[test]
+    fn test_dashscope_wire_format_openai() {
+        assert_eq!(LlmProvider::DashScope.wire_format(), WireFormat::OpenAI);
+        assert!(LlmProvider::DashScope.is_openai_compatible());
+    }
+
+    #[test]
+    fn test_dashscope_default_endpoint() {
+        assert_eq!(LlmProvider::DashScope.default_base_url(), "https://dashscope.aliyuncs.com");
+        assert_eq!(LlmProvider::DashScope.endpoint(), "/compatible-mode/v1/chat/completions");
+    }
+
+    #[test]
+    fn test_dashscope_from_url() {
+        assert_eq!(LlmProvider::from_base_url("https://dashscope.aliyuncs.com"), LlmProvider::DashScope);
+    }
+
+    #[test]
+    fn test_dashscope_provider_order() {
+        assert!(provider_order(&LlmProvider::DashScope) > provider_order(&LlmProvider::Minimax));
+        assert!(provider_order(&LlmProvider::DashScope) < provider_order(&LlmProvider::Ollama));
+    }
+
+    #[test]
+    fn test_dashscope_models_for_provider() {
+        let models = models_for_provider(LlmProvider::DashScope);
+        assert!(models.len() >= 3, "DashScope should have at least 3 models, got {}", models.len());
+    }
+
+    // ── MiniMax tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_minimax_m27_registered() {
+        let info = model_info_for("MiniMax-M2.7").expect("MiniMax-M2.7 should be registered");
+        assert_eq!(info.context_window, 1_000_000);
+        assert!(info.capabilities.has(ModelCapabilities::coding()));
+        assert!(info.capabilities.has(ModelCapabilities::reasoning()));
+    }
+
+    #[test]
+    fn test_minimax_m25_registered() {
+        let info = model_info_for("MiniMax-M2.5").expect("MiniMax-M2.5 should be registered");
+        assert_eq!(info.context_window, 192_000);
+        assert!(info.capabilities.has(ModelCapabilities::coding()));
+        assert!(info.capabilities.has(ModelCapabilities::cheap()));
+    }
+
+    #[test]
+    fn test_minimax_m27_highspeed() {
+        let info = model_info_for("MiniMax-M2.7-highspeed").expect("MiniMax-M2.7-highspeed should be registered");
+        assert_eq!(info.context_window, 1_000_000);
+        assert!(info.capabilities.has(ModelCapabilities::coding()));
+        assert!(info.capabilities.has(ModelCapabilities::speed()));
+    }
+
+    #[test]
+    fn test_minimax_context_window_lookup() {
+        assert_eq!(context_window_for("MiniMax-M2.7"), 1_000_000);
+        assert_eq!(context_window_for("MiniMax-M2.5"), 192_000);
+        assert_eq!(context_window_for("MiniMax-M2.7-highspeed"), 1_000_000);
+    }
+
+    #[test]
+    fn test_minimax_models_for_provider() {
+        let models = models_for_provider(LlmProvider::Minimax);
+        assert!(models.len() >= 3, "Minimax should have at least 3 models, got {}", models.len());
+    }
+
+    #[test]
+    fn test_minimax_provider_display_name() {
+        assert_eq!(provider_display_name(&LlmProvider::Minimax), "MiniMax");
+    }
+
+    #[test]
+    fn test_minimax_wire_format() {
+        assert_eq!(LlmProvider::Minimax.wire_format(), WireFormat::OpenAI);
+        assert!(LlmProvider::Minimax.is_openai_compatible());
+    }
+
+    #[test]
+    fn test_minimax_default_endpoint() {
+        assert_eq!(LlmProvider::Minimax.default_base_url(), "https://api.minimax.chat");
+    }
+
+    #[test]
+    fn test_minimax_from_url() {
+        assert_eq!(LlmProvider::from_base_url("https://api.minimax.chat"), LlmProvider::Minimax);
+        assert_eq!(LlmProvider::from_base_url("https://api.minimaxi.com"), LlmProvider::Minimax);
+    }
+
+    #[test]
+    fn test_minimax_provider_order() {
+        assert!(provider_order(&LlmProvider::Minimax) > provider_order(&LlmProvider::Moonshot));
+        assert!(provider_order(&LlmProvider::Minimax) < provider_order(&LlmProvider::Ollama));
+    }
+
+    #[test]
+    fn test_minimax_output_tokens() {
+        assert_eq!(model_info_for("MiniMax-M2.7").unwrap().max_output, 64_000);
+        assert_eq!(model_info_for("MiniMax-M2.5").unwrap().max_output, 32_000);
+        assert_eq!(model_info_for("MiniMax-M2.7-highspeed").unwrap().max_output, 64_000);
     }
 }

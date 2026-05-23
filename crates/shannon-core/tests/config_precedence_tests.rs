@@ -259,6 +259,7 @@ broken content [[[
             debug: false,
             enable_tools: Some(true),
             max_context_tokens: Some(128_000),
+            ..Default::default()
         };
 
         // Layer 2: local config — overrides model, adds api_key, different max_context_tokens

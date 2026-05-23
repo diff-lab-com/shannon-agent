@@ -1,5 +1,7 @@
 use crate::{widgets::ChatRole, Result};
 use rust_i18n::t;
+use shannon_core::api::LlmProvider;
+use shannon_core::model_registry;
 use shannon_types::recover_lock;
 use super::super::Repl;
 
@@ -10,7 +12,19 @@ pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
         );
         repl.state.model_picker = Some(picker);
     } else {
-        repl.state.model = Some(args.to_string());
+        // Resolve aliases (e.g. "sonnet" → "claude-sonnet-4-20250514")
+        let resolved_id = model_registry::model_info_for_alias(args)
+            .map(|m| m.id.to_string())
+            .unwrap_or_else(|| args.to_string());
+
+        // If alias resolved to a different provider, switch provider too
+        if let Some(info) = model_registry::model_info_for_alias(args) {
+            if repl.state.selected_provider.as_ref() != Some(&info.provider) {
+                repl.state.selected_provider = Some(info.provider.clone());
+            }
+        }
+
+        repl.state.model = Some(resolved_id.clone());
         crate::repl::preferences::save_preferences(&crate::repl::preferences::Preferences {
             model: repl.state.model.clone(),
             provider: repl.state.selected_provider.clone(),
@@ -19,14 +33,17 @@ pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
 
         // Sync model to query engine and resolve real context window
         let ctx = if let Some(ref mut engine) = repl.query_engine {
-            engine.set_model(args.to_string());
-            // Try async context resolution (queries Ollama /api/show for real num_ctx)
+            if let Some(ref provider) = repl.state.selected_provider {
+                engine.set_model_for_provider(resolved_id.clone(), provider.clone());
+            } else {
+                engine.set_model(resolved_id.clone());
+            }
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 repl.runtime.block_on(engine.pre_resolve_context());
             }));
             engine.resolved_context_window()
         } else {
-            shannon_core::model_registry::context_window_for(args)
+            shannon_core::model_registry::context_window_for(&resolved_id)
         };
         repl.state.context_window = ctx;
         let ctx_label = if ctx >= 1_000_000 {
@@ -36,8 +53,94 @@ pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
         } else {
             ctx.to_string()
         };
-        let msg = format!("{} (context: {ctx_label})", t!("commands.model.set", name = args));
+        let msg = format!("{} (context: {ctx_label})", t!("commands.model.set", name = &resolved_id));
         repl.chat.add_message(ChatRole::System, msg);
+    }
+    Ok(())
+}
+
+/// Parse a provider name string (with aliases) into an [`LlmProvider`].
+fn parse_provider_name(name: &str) -> Result<LlmProvider> {
+    let lower = name.to_lowercase();
+    match lower.as_str() {
+        "anthropic" | "claude" => Ok(LlmProvider::Anthropic),
+        "openai" | "gpt" | "chatgpt" => Ok(LlmProvider::OpenAI),
+        "gemini" | "google" => Ok(LlmProvider::Gemini),
+        "azure" | "azure-openai" => Ok(LlmProvider::Azure),
+        "bedrock" | "aws" => Ok(LlmProvider::Bedrock),
+        "mistral" | "mistral-ai" => Ok(LlmProvider::Mistral),
+        "deepseek" | "ds" => Ok(LlmProvider::DeepSeek),
+        "groq" => Ok(LlmProvider::Groq),
+        "together" | "together-ai" => Ok(LlmProvider::Together),
+        "openrouter" => Ok(LlmProvider::OpenRouter),
+        "cohere" => Ok(LlmProvider::Cohere),
+        "fireworks" => Ok(LlmProvider::Fireworks),
+        "perplexity" => Ok(LlmProvider::Perplexity),
+        "xai" | "grok" => Ok(LlmProvider::Xai),
+        "ai21" => Ok(LlmProvider::Ai21),
+        "siliconflow" | "sf" => Ok(LlmProvider::SiliconFlow),
+        "zhipu" | "zhipu-cn" | "glm" => Ok(LlmProvider::Zhipu),
+        "zhipu-international" | "zhipu-intl" | "glm-intl" => Ok(LlmProvider::ZhipuInternational),
+        "moonshot" | "kimi" => Ok(LlmProvider::Moonshot),
+        "minimax" | "mm" => Ok(LlmProvider::Minimax),
+        "dashscope" | "qwen" | "aliyun" => Ok(LlmProvider::DashScope),
+        "ollama" | "local" => Ok(LlmProvider::Ollama),
+        "cloudflare" | "cf" => Ok(LlmProvider::Cloudflare),
+        "replicate" => Ok(LlmProvider::Replicate),
+        _ => {
+            let msg = format!("Unknown provider: {name}. Use /provider to list available providers.");
+            return Err(msg.into());
+        }
+    }
+}
+
+pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
+    if args.is_empty() {
+        // List all providers with key status
+        let providers = model_registry::all_providers();
+        let mut lines = vec!["Available providers:".to_string()];
+        for p in &providers {
+            let has_key = !p.resolve_api_key_from_env().is_empty();
+            let key_status = if p.requires_auth() {
+                if has_key { "key OK" } else { "no key" }
+            } else {
+                "no auth"
+            };
+            let current = if repl.state.selected_provider.as_ref() == Some(p) { " *" } else { "" };
+            lines.push(format!("  {} — {}{}",
+                p, key_status, current));
+        }
+        lines.push(String::new());
+        lines.push("* = current | Use /provider <name> to switch".to_string());
+        repl.chat.add_message(ChatRole::System, lines.join("\n"));
+    } else {
+        // Switch to specified provider
+        let provider = parse_provider_name(args.trim())?;
+        let models = model_registry::models_for_provider(provider.clone());
+        let default_model = models.first()
+            .map(|m| m.id.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        repl.state.model = Some(default_model.clone());
+        repl.state.selected_provider = Some(provider.clone());
+
+        // Sync to query engine
+        if let Some(ref mut engine) = repl.query_engine {
+            engine.set_model_for_provider(default_model.clone(), provider.clone());
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                repl.runtime.block_on(engine.pre_resolve_context());
+            }));
+            repl.state.context_window = engine.resolved_context_window();
+        }
+
+        crate::repl::preferences::save_preferences(&crate::repl::preferences::Preferences {
+            model: repl.state.model.clone(),
+            provider: Some(provider),
+            theme: Some(repl.state.theme.name.to_string()),
+        });
+
+        repl.chat.add_message(ChatRole::System,
+            format!("Provider: {} | Model: {}", repl.state.selected_provider.as_ref().unwrap(), default_model));
     }
     Ok(())
 }

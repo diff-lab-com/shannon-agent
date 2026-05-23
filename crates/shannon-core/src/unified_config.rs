@@ -8,6 +8,18 @@
 //! 5. Default values
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+use crate::api::types::LlmProvider;
+
+/// Per-provider configuration entry for `[providers.<name>]` sections.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProviderEntry {
+    pub api_key: Option<String>,
+    pub api_key_env: Option<String>,
+    pub base_url: Option<String>,
+    pub model: Option<String>,
+}
 
 /// Unified Shannon configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -26,6 +38,9 @@ pub struct ShannonConfig {
     /// Maximum context tokens before compression. Overrides model registry defaults.
     /// Priority: user config > Ollama num_ctx > model registry > fallback (128K).
     pub max_context_tokens: Option<usize>,
+    /// Per-provider configuration: `[providers.deepseek]`, `[providers.zhipu]`, etc.
+    #[serde(default)]
+    pub providers: Option<HashMap<String, ProviderEntry>>,
 }
 
 impl ShannonConfig {
@@ -37,6 +52,20 @@ impl ShannonConfig {
     /// Merge another config on top of this one.
     /// Values from `other` take precedence if they are `Some`.
     pub fn merge(&self, other: &ShannonConfig) -> ShannonConfig {
+        // Merge providers: other's entries overlay on top of self's.
+        let providers = match (&self.providers, &other.providers) {
+            (None, None) => None,
+            (Some(a), None) => Some(a.clone()),
+            (None, Some(b)) => Some(b.clone()),
+            (Some(a), Some(b)) => {
+                let mut merged = a.clone();
+                for (k, v) in b {
+                    merged.insert(k.clone(), v.clone());
+                }
+                Some(merged)
+            }
+        };
+
         ShannonConfig {
             model: other.model.clone().or_else(|| self.model.clone()),
             provider: other.provider.clone().or_else(|| self.provider.clone()),
@@ -48,7 +77,38 @@ impl ShannonConfig {
             debug: other.debug || self.debug,
             enable_tools: other.enable_tools.or(self.enable_tools),
             max_context_tokens: other.max_context_tokens.or(self.max_context_tokens),
+            providers,
         }
+    }
+
+    /// Resolve the API key for a given provider from config + env.
+    pub fn resolve_api_key_for_provider(&self, provider: &LlmProvider) -> String {
+        let display = provider.to_string();
+
+        // 1. Top-level api_key in config (if provider matches)
+        if let Some(ref key) = self.api_key {
+            // If config has a top-level api_key and no provider filter, use it
+            if self.provider.is_none() || self.provider.as_deref() == Some(&display) {
+                return key.clone();
+            }
+        }
+
+        // 2. Check [providers.<name>] section in config
+        if let Some(ref providers) = self.providers {
+            if let Some(entry) = providers.get(&display) {
+                if let Some(ref key) = entry.api_key {
+                    return key.clone();
+                }
+                if let Some(ref env_name) = entry.api_key_env {
+                    if let Ok(key) = std::env::var(env_name) {
+                        return key;
+                    }
+                }
+            }
+        }
+
+        // 3. Provider's own env resolution chain
+        provider.resolve_api_key_from_env()
     }
 }
 
@@ -111,6 +171,7 @@ impl ConfigBuilder {
             max_context_tokens: std::env::var("SHANNON_MAX_CONTEXT_TOKENS")
                 .ok()
                 .and_then(|v| v.parse().ok()),
+            ..Default::default()
         };
         self
     }
@@ -248,6 +309,7 @@ mod tests {
             debug: false,
             enable_tools: None,
             max_context_tokens: None,
+            ..Default::default()
         };
         let override_config = ShannonConfig {
             model: Some("override-model".to_string()),
@@ -260,6 +322,7 @@ mod tests {
             debug: true,
             enable_tools: None,
             max_context_tokens: None,
+            ..Default::default()
         };
 
         let merged = base.merge(&override_config);
